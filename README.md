@@ -41,8 +41,18 @@ Runs on Ubuntu with Docker. One command to install.
   supervisor, status breakdown, coverage by area and a map of GPS points — built
   automatically from recognised Survey Solutions column names, with no setup.
 
+**Organise it**
+- Projects group a survey round's datasets and dashboards, and decide who can
+  reach them. Anything outside a project is a shared area every user can see.
+- Membership gives a person one project and nothing else: an administrator can
+  create a user, tick "limit to assigned projects", and add them to the one
+  project they should work on.
+- A member's role on a project never exceeds their own role, so adding a viewer
+  to a project as manager does not make them an editor of anything.
+
 **Share it**
-- Dashboards with drag-and-drop widgets: charts, indicator tiles and notes.
+- Dashboards with drag-and-drop widgets: charts, saved cross-tabulations,
+  indicator tiles and notes.
 - Read-only public links for people who should not have accounts.
 - Roles: viewer, analyst, manager, administrator.
 - API keys for scripts, plus an OpenAPI spec at `/api/docs`.
@@ -197,6 +207,11 @@ More in [docs/architecture.md](docs/architecture.md).
 - Survey Solutions passwords are encrypted at rest with Fernet, because the API
   needs the real password on every call and cannot use a hash.
 - Four roles gate every write: viewer < analyst < manager < administrator.
+- Project access is enforced where a dataset, dashboard or chart is looked up,
+  not route by route, so it covers the query endpoints too - listing alone would
+  leave a dataset readable to anyone who knew its id. A resource outside your
+  reach answers 404 rather than 403, so responses cannot be used to enumerate
+  other people's projects.
 - Every query is compiled server-side. Variable names are checked against the
   dataset's registered variables and literals are always bound as parameters, so
   a query specification cannot inject SQL.
