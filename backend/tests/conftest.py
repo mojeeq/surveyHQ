@@ -1,4 +1,10 @@
-"""Shared fixtures. Tests run against SQLite and temporary storage."""
+"""Shared fixtures.
+
+Tests default to SQLite in a temporary directory, which needs no services and is
+fast. Setting DATABASE_URL_OVERRIDE before running points the same suite at a
+real PostgreSQL instead — CI does that, because some faults only appear there
+(a shared enum type emitting CREATE TYPE twice, for one).
+"""
 
 from __future__ import annotations
 
@@ -9,8 +15,8 @@ from pathlib import Path
 import pytest
 
 TMP_ROOT = Path(tempfile.mkdtemp(prefix="surveyhq-tests-"))
+os.environ.setdefault("DATABASE_URL_OVERRIDE", f"sqlite:///{TMP_ROOT / 'test.db'}")
 os.environ.update(
-    DATABASE_URL_OVERRIDE=f"sqlite:///{TMP_ROOT / 'test.db'}",
     STORAGE_DIR=str(TMP_ROOT / "storage"),
     SECRET_KEY="test-secret-key-not-for-production-use",
     FIRST_ADMIN_EMAIL="admin@example.com",
