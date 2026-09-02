@@ -57,6 +57,35 @@ if ! docker info >/dev/null 2>&1; then
 fi
 
 # --- Configuration ----------------------------------------------------------
+
+# Writes KEY=VALUE into .env. sed expands an unescaped & in the replacement to
+# the whole matched line, and an unescaped | would end the expression early, so
+# any value containing them must be escaped or it silently corrupts the file.
+set_env() {
+    local key="$1" value="$2" escaped
+    escaped=$(printf '%s' "$value" | sed -e 's/[\\&|]/\\&/g')
+    sed -i "s|^${key}=.*|${key}=${escaped}|" .env
+}
+
+# Reads one answer, falling back to a default. Re-asks until the answer matches
+# the pattern, so a mistyped or accidentally pasted line cannot reach .env.
+ask() {
+    local prompt="$1" default="$2" pattern="$3" complaint="$4" answer
+    if [[ ! -t 0 ]]; then
+        printf '%s' "$default"
+        return
+    fi
+    while true; do
+        read -rp "$prompt [$default]: " answer < /dev/tty
+        answer="${answer:-$default}"
+        if [[ "$answer" =~ $pattern ]]; then
+            printf '%s' "$answer"
+            return
+        fi
+        printf '  !\033[0m %s\n' "$complaint" >&2
+    done
+}
+
 if [[ -f .env ]]; then
     ok ".env already exists, keeping your settings"
     ADMIN_PASSWORD="$(grep -E '^FIRST_ADMIN_PASSWORD=' .env | cut -d= -f2- || true)"
@@ -68,25 +97,34 @@ else
     DB_PASSWORD="$(openssl rand -hex 16)"
     ADMIN_PASSWORD="$(openssl rand -base64 18 | tr -d '/+=')"
 
-    sed -i "s|^SECRET_KEY=.*|SECRET_KEY=${SECRET_KEY}|"                   .env
-    sed -i "s|^ENCRYPTION_KEY=.*|ENCRYPTION_KEY=${ENCRYPTION_KEY}|"       .env
-    sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=${DB_PASSWORD}|"    .env
-    sed -i "s|^FIRST_ADMIN_PASSWORD=.*|FIRST_ADMIN_PASSWORD=${ADMIN_PASSWORD}|" .env
+    set_env SECRET_KEY          "$SECRET_KEY"
+    set_env ENCRYPTION_KEY      "$ENCRYPTION_KEY"
+    set_env POSTGRES_PASSWORD   "$DB_PASSWORD"
+    set_env FIRST_ADMIN_PASSWORD "$ADMIN_PASSWORD"
 
-    read -rp "Administrator email [admin@example.com]: " ADMIN_EMAIL
-    ADMIN_EMAIL="${ADMIN_EMAIL:-admin@example.com}"
-    sed -i "s|^FIRST_ADMIN_EMAIL=.*|FIRST_ADMIN_EMAIL=${ADMIN_EMAIL}|" .env
+    ADMIN_EMAIL="$(ask "Administrator email" "admin@example.com" \
+        '^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$' \
+        "That does not look like an email address. Try again.")"
+    set_env FIRST_ADMIN_EMAIL "$ADMIN_EMAIL"
 
-    read -rp "Port to serve on [8080]: " WEB_PORT
-    WEB_PORT="${WEB_PORT:-8080}"
-    sed -i "s|^WEB_PORT=.*|WEB_PORT=${WEB_PORT}|" .env
-    sed -i "s|^PUBLIC_URL=.*|PUBLIC_URL=http://localhost:${WEB_PORT}|" .env
-    sed -i "s|^CORS_ORIGINS=.*|CORS_ORIGINS=http://localhost:${WEB_PORT}|" .env
+    WEB_PORT="$(ask "Port to serve on" "8080" \
+        '^[0-9]{1,5}$' \
+        "A port must be a number between 1 and 65535.")"
+    set_env WEB_PORT     "$WEB_PORT"
+    set_env PUBLIC_URL   "http://localhost:${WEB_PORT}"
+    set_env CORS_ORIGINS "http://localhost:${WEB_PORT}"
     chmod 600 .env
     ok "Wrote .env"
 fi
 
-WEB_PORT="$(grep -E '^WEB_PORT=' .env | cut -d= -f2 || echo 8080)"
+WEB_PORT="$(grep -E '^WEB_PORT=' .env | cut -d= -f2- || true)"
+# A bad value here surfaces from docker compose as a cryptic "invalid hostPort",
+# so catch it while we can still say what to do about it.
+if ! [[ "$WEB_PORT" =~ ^[0-9]{1,5}$ ]] || (( WEB_PORT < 1 || WEB_PORT > 65535 )); then
+    die "WEB_PORT in .env is not a valid port: '${WEB_PORT}'
+       Fix that line in .env (WEB_PORT=8080, and match PUBLIC_URL and CORS_ORIGINS),
+       or delete .env and run this script again to start over."
+fi
 
 # --- Build and start --------------------------------------------------------
 say "Building images (this takes a few minutes the first time)"
