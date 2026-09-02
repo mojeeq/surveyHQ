@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
+import json
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -26,7 +26,12 @@ class Settings(BaseSettings):
     encryption_key: str = ""
     access_token_expire_minutes: int = 60 * 24
     algorithm: str = "HS256"
-    cors_origins: list[str] = Field(default_factory=lambda: ["http://localhost:5173"])
+    # Comma separated, e.g. "https://a.example,https://b.example". Held as a
+    # plain string on purpose: pydantic-settings JSON-decodes environment values
+    # for list-typed fields before any validator runs, so a bare
+    # "http://host:8080" raises SettingsError and the process dies at start-up.
+    # Read it through cors_origin_list, never directly.
+    cors_origins: str = "http://localhost:5173"
 
     # Bootstrap admin
     first_admin_email: str = "admin@example.com"
@@ -60,12 +65,18 @@ class Settings(BaseSettings):
     sync_tick_minutes: int = 5
     monitor_tick_minutes: int = 15
 
-    @field_validator("cors_origins", mode="before")
-    @classmethod
-    def _split_origins(cls, value: object) -> object:
-        if isinstance(value, str):
-            return [item.strip() for item in value.split(",") if item.strip()]
-        return value
+    @property
+    def cors_origin_list(self) -> list[str]:
+        raw = self.cors_origins.strip()
+        # A JSON array is also accepted: it was the workaround while the plain
+        # comma separated form crashed, so deployments still carry it.
+        if raw.startswith("["):
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                return []
+            return [str(item).strip() for item in parsed if str(item).strip()]
+        return [item.strip() for item in raw.split(",") if item.strip()]
 
     @property
     def database_url(self) -> str:

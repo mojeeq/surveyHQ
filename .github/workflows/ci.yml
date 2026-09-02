@@ -89,8 +89,8 @@ jobs:
       - name: Build
         run: npm run build
 
-  docker:
-    name: Docker images
+  stack:
+    name: Stack starts
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -100,31 +100,65 @@ jobs:
       - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Validate compose file
+      # Generated the way the installer generates it, in particular the plain
+      # comma-separated CORS_ORIGINS. A bare "http://host:8080" there once
+      # killed the API at start-up and nginx answered 502 on everything; the
+      # images still built, so building them was never enough to catch it.
+      - name: Generate .env the way the installer does
         run: |
           cp .env.example .env
-          sed -i "s|^SECRET_KEY=.*|SECRET_KEY=ci-not-a-real-secret|" .env
-          sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=ci|" .env
-          sed -i "s|^FIRST_ADMIN_PASSWORD=.*|FIRST_ADMIN_PASSWORD=ci-password|" .env
+          sed -i "s|^SECRET_KEY=.*|SECRET_KEY=$(openssl rand -hex 32)|" .env
+          sed -i "s|^ENCRYPTION_KEY=.*|ENCRYPTION_KEY=$(python3 -c 'import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())')|" .env
+          sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -hex 16)|" .env
+          sed -i "s|^FIRST_ADMIN_EMAIL=.*|FIRST_ADMIN_EMAIL=ci@example.org|" .env
+          sed -i "s|^FIRST_ADMIN_PASSWORD=.*|FIRST_ADMIN_PASSWORD=ci-password-12345|" .env
+          sed -i "s|^PUBLIC_URL=.*|PUBLIC_URL=http://localhost:8080|" .env
+          sed -i "s|^CORS_ORIGINS=.*|CORS_ORIGINS=http://localhost:8080|" .env
           docker compose config --quiet
 
-      # These builds are the piece that could not be exercised while the code
-      # was written, so CI carries them.
-      - name: Build the backend image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./backend
-          push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: Build and start the whole stack
+        run: docker compose up -d --build
 
-      - name: Build the frontend image
-        uses: docker/build-push-action@v6
-        with:
-          context: ./frontend
-          push: false
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+      - name: The API answers through nginx
+        run: |
+          for _ in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/health | grep -q '"status":"ok"'; then
+              echo "health ok"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "the API never became healthy"
+          exit 1
+
+      # Proves more than a health probe: the schema was created, the bootstrap
+      # administrator exists, and nginx proxies POSTs to the API.
+      - name: The bootstrap administrator can sign in
+        run: |
+          token=$(curl -fsS -X POST http://localhost:8080/api/v1/auth/login \
+            -H 'Content-Type: application/json' \
+            -d '{"email":"ci@example.org","password":"ci-password-12345"}' \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+          test -n "$token"
+          curl -fsS http://localhost:8080/api/v1/datasets \
+            -H "Authorization: Bearer $token" > /dev/null
+          echo "signed in and read an authenticated endpoint"
+
+      - name: The single page app is served
+        run: curl -fsS http://localhost:8080/ | grep -q '<div id="root">'
+
+      - name: The worker is running
+        run: docker compose ps --services --filter status=running | grep -qx worker
+
+      - name: Container status and logs on failure
+        if: failure()
+        run: |
+          docker compose ps
+          docker compose logs --tail=120
+
+      - name: Stop the stack
+        if: always()
+        run: docker compose down -v
 
   scripts:
     name: Shell scripts
