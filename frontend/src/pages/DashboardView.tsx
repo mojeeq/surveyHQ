@@ -148,7 +148,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
                     className={editing ? 'btn-primary' : 'btn-secondary'}
                     onClick={() => setEditing(!editing)}
                   >
-                    {editing ? 'Done arranging' : 'Arrange'}
+                    {editing ? 'Done' : 'Move & resize'}
                   </button>
                   <button
                     className="btn-secondary"
@@ -212,7 +212,11 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
                 payload={rendered.data?.widgets[widget.id]}
                 loading={rendered.isLoading}
                 editing={editing && !isPublic}
-                onRemove={() => removeWidget.mutate(widget.id)}
+                canEdit={!isPublic && can('analyst')}
+                onRemove={() => {
+                  if (confirm(`Remove "${widget.title || 'this widget'}" from the dashboard?`))
+                    removeWidget.mutate(widget.id)
+                }}
               />
             </div>
           ))}
@@ -229,22 +233,34 @@ function WidgetFrame({
   payload,
   loading,
   editing,
+  canEdit,
   onRemove,
 }: {
   widget: Widget
   payload: any
   loading: boolean
   editing: boolean
+  canEdit: boolean
   onRemove: () => void
 }) {
   return (
     <div className="flex h-full flex-col">
-      <header className="widget-handle flex shrink-0 items-center justify-between gap-2 border-b border-ink-200 px-4 py-2.5">
+      <header className="widget-handle group flex shrink-0 items-center justify-between gap-2 border-b border-ink-200 px-4 py-2.5">
         <h3 className={`truncate text-sm font-semibold text-ink-800 ${editing ? 'cursor-move' : ''}`}>
           {widget.title || payload?.name || 'Widget'}
         </h3>
-        {editing && (
-          <button className="btn-ghost btn-sm text-red-600" onClick={onRemove} title="Remove">
+        {canEdit && (
+          // Removal used to live only inside Arrange mode with nothing saying
+          // so, which read as "widgets cannot be removed". It is now always
+          // reachable: visible on hover, and permanently while arranging.
+          <button
+            className={`btn-ghost btn-sm shrink-0 text-red-600 transition-opacity ${
+              editing ? 'opacity-100' : 'opacity-0 focus:opacity-100 group-hover:opacity-100'
+            }`}
+            onClick={onRemove}
+            title="Remove this widget"
+            aria-label={`Remove ${widget.title || 'widget'}`}
+          >
             ✕
           </button>
         )}

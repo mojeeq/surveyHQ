@@ -46,6 +46,8 @@ class VariableMeta:
     max_value: float | None = None
     mean_value: float | None = None
     value_labels: dict[str, str] = field(default_factory=dict)
+    missing_tags: list[str] = field(default_factory=list)
+    is_hidden: bool = False
 
 
 @dataclass
@@ -280,6 +282,11 @@ def build_metadata(
         var_type = _classify(series, bool(labels))
         non_null = series.dropna()
 
+        companion = f"{name}{MISSING_TAG_SUFFIX}"
+        tags: list[str] = []
+        if companion in frame.columns:
+            tags = sorted({str(v) for v in frame[companion].dropna().unique()})
+
         meta = VariableMeta(
             name=name,
             label=str(variable_labels.get(name, "") or "")[:1000],
@@ -289,6 +296,10 @@ def build_metadata(
             n_missing=int(total - len(non_null)),
             n_unique=int(non_null.nunique()) if total else 0,
             value_labels=labels,
+            missing_tags=tags,
+            # The companion column is an implementation detail; it should not
+            # appear in variable pickers alongside the variable it belongs to.
+            is_hidden=name.endswith(MISSING_TAG_SUFFIX),
         )
         if var_type in ("numeric", "categorical") and pd.api.types.is_numeric_dtype(series):
             meta.min_value = _safe_float(non_null.min()) if len(non_null) else None

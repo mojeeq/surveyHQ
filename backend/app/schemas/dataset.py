@@ -23,6 +23,8 @@ class VariableOut(BaseModel):
     max_value: float | None = None
     mean_value: float | None = None
     value_labels: dict[str, str] = Field(default_factory=dict)
+    missing_tags: list[str] = Field(default_factory=list)
+    is_hidden: bool = False
 
 
 class DatasetOut(BaseModel):

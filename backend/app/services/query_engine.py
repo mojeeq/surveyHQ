@@ -36,7 +36,11 @@ logger = get_logger(__name__)
 
 MAX_ROWS = 100_000
 OTHER_LABEL = "Other"
-MISSING_LABEL = "(missing)"
+# System missing. Stata's tagged missings (.a to .z) keep their own tag and are
+# reported as separate categories beside this one.
+MISSING_LABEL = "(blank)"
+# Companion column written by the ingest step; see ingest.MISSING_TAG_SUFFIX.
+MISSING_TAG_SUFFIX = "__mv"
 
 
 class QueryError(ValueError):
@@ -49,6 +53,8 @@ class VariableInfo:
     label: str = ""
     var_type: str = "text"
     value_labels: dict[str, str] = field(default_factory=dict)
+    # Stata tagged missings present on this variable, e.g. [".a", ".b"]
+    missing_tags: list[str] = field(default_factory=list)
 
     @property
     def is_numeric(self) -> bool:
@@ -75,6 +81,7 @@ class DatasetContext:
                 label=v.label or "",
                 var_type=getattr(v.var_type, "value", str(v.var_type)),
                 value_labels=v.value_labels or {},
+                missing_tags=list(v.missing_tags or []),
             )
             for v in dataset.variables
         }
@@ -120,6 +127,24 @@ class SQLBuilder:
             if width <= 0:
                 raise QueryError("bin_width must be greater than zero")
             return f"floor({col} / {width}) * {width}"
+        if info.missing_tags and f"{info.name}{MISSING_TAG_SUFFIX}" in self.ctx.variables:
+            # Grouping collapses every kind of missing into one null. Reading the
+            # companion column keeps ".a" apart from a plain blank, which is the
+            # difference between "asked and refused" and "never asked".
+            tag_col = quote_ident(f"{info.name}{MISSING_TAG_SUFFIX}")
+            # Stata only tags missings on numeric variables, so the stored column
+            # is numeric here whatever its semantic type. A whole number must
+            # render as "1", not "1.0": value label keys are written that way,
+            # and a coded variable would otherwise lose every label it had.
+            as_text = (
+                f"CASE WHEN {col} = floor({col}) "
+                f"THEN CAST(CAST({col} AS BIGINT) AS VARCHAR) "
+                f"ELSE CAST({col} AS VARCHAR) END"
+            )
+            return (
+                f"CASE WHEN {col} IS NOT NULL THEN {as_text} "
+                f"ELSE COALESCE({tag_col}, '{MISSING_LABEL}') END"
+            )
         return col
 
     def measure_expr(self, measure: Measure) -> str:
@@ -377,6 +402,14 @@ def run_sql(sql: str, params: list[Any] | None = None) -> tuple[list[str], list[
         con.close()
 
 
+def _is_missing(info: VariableInfo, value: Any) -> bool:
+    """True for a null, a blank, or one of Stata's tagged missings."""
+    if value is None:
+        return True
+    text = str(value)
+    return text == MISSING_LABEL or text in info.missing_tags
+
+
 def _label_value(info: VariableInfo, value: Any) -> Any:
     if value is None:
         return None
@@ -510,31 +543,45 @@ def execute_frequency(
     _, rows = run_sql(sql, params)
 
     total = sum(int(r[1] or 0) for r in rows)
-    missing = sum(int(r[1] or 0) for r in rows if r[0] is None)
+    missing = sum(int(r[1] or 0) for r in rows if _is_missing(info, r[0]))
     valid_total = total - missing
 
-    # Numeric-ish values sort naturally, labels sort by frequency
+    # Real answers first, then blanks and tagged missings. Numeric-looking values
+    # sort by value, everything else by frequency.
     def sort_key(row: list[Any]) -> Any:
-        return (row[0] is None, row[0] if info.is_numeric else -int(row[1] or 0))
+        blank = _is_missing(info, row[0])
+        try:
+            natural = float(row[0]) if row[0] is not None else 0.0
+        except (TypeError, ValueError):
+            natural = None
+        if blank:
+            # "(blank)" first, then .a, .b, ... rather than by count
+            return (True, 0.0, str(row[0]))
+        if natural is not None and info.is_numeric:
+            return (False, natural, "")
+        return (False, float(-int(row[1] or 0)), "")
 
     try:
         rows.sort(key=sort_key)
     except TypeError:
-        rows.sort(key=lambda r: (r[0] is None, -int(r[1] or 0)))
+        rows.sort(key=lambda r: (_is_missing(info, r[0]), str(r[0])))
 
     result_rows: list[FrequencyRow] = []
     cumulative = 0.0
     for value, count in rows:
         count = int(count or 0)
+        blank = _is_missing(info, value)
         percent = (count / total * 100) if total else 0.0
-        valid_percent = (
-            (count / valid_total * 100) if valid_total and value is not None else 0.0
-        )
-        if value is not None:
+        valid_percent = (count / valid_total * 100) if valid_total and not blank else 0.0
+        if not blank:
             cumulative += valid_percent
-        label = MISSING_LABEL if value is None else str(
-            _label_value(info, value) if use_labels else value
-        )
+        if value is None:
+            label = MISSING_LABEL
+        elif blank:
+            # A tag such as ".a" is its own answer category; show it as it is
+            label = str(value)
+        else:
+            label = str(_label_value(info, value) if use_labels else value)
         result_rows.append(
             FrequencyRow(
                 value=value,
@@ -552,7 +599,7 @@ def execute_frequency(
         rows=result_rows,
         total=total,
         missing=missing,
-        distinct=len([r for r in rows if r[0] is not None]),
+        distinct=len([r for r in rows if not _is_missing(info, r[0])]),
     )
 
 

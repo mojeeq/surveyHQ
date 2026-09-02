@@ -103,6 +103,8 @@ def load_file_into_dataset(db: Session, dataset: Dataset, file_path: Path) -> Da
                 max_value=meta.max_value,
                 mean_value=meta.mean_value,
                 value_labels=meta.value_labels,
+                missing_tags=meta.missing_tags,
+                is_hidden=meta.is_hidden,
             )
         )
 
