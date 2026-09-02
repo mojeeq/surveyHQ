@@ -448,9 +448,18 @@ def quality_suggestions(
 
 @router.get("/quality-results", response_model=list[QualityResultOut])
 def list_quality_results(
-    db: DbSession, _: CurrentUser, rule_id: str = "", limit: int = Query(default=50, le=500)
+    db: DbSession, user: CurrentUser, rule_id: str = "", limit: int = Query(default=50, le=500)
 ) -> list[QualityResult]:
-    statement = select(QualityResult).order_by(QualityResult.run_at.desc()).limit(limit)
+    # A result is reachable through the rule that produced it, and a rule
+    # through its dataset. Without this, failure counts and offending-row
+    # details from another project's data would be readable here.
+    rules = dataset_clause(db, user, QualityRule.dataset_id)
+    statement = restrict(
+        select(QualityResult).order_by(QualityResult.run_at.desc()).limit(limit),
+        None if rules is None else QualityResult.rule_id.in_(
+            select(QualityRule.id).where(rules)
+        ),
+    )
     if rule_id:
         statement = statement.where(QualityResult.rule_id == rule_id)
     return list(db.scalars(statement).all())

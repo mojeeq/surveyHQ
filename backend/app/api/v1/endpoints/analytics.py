@@ -7,7 +7,13 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Response
 from sqlalchemy import select
 
-from app.api.deps import CurrentUser, DbSession, RequireAnalyst, get_ready_dataset
+from app.api.deps import (
+    CurrentUser,
+    DbSession,
+    RequireAnalyst,
+    get_dataset,
+    get_ready_dataset,
+)
 from app.models import Dataset, SavedQuery, User
 from app.schemas.analytics import (
     QueryRequest,
@@ -28,6 +34,7 @@ from app.services.exporters import (
     query_result_to_csv,
     query_result_to_xlsx,
 )
+from app.services.projects import dataset_clause, restrict
 from app.services.query_engine import (
     DatasetContext,
     QueryError,
@@ -179,7 +186,10 @@ def summary(
 def list_saved_queries(
     db: DbSession, user: CurrentUser, dataset_id: str = ""
 ) -> list[SavedQuery]:
-    statement = select(SavedQuery).order_by(SavedQuery.created_at.desc())
+    statement = restrict(
+        select(SavedQuery).order_by(SavedQuery.created_at.desc()),
+        dataset_clause(db, user, SavedQuery.dataset_id),
+    )
     if dataset_id:
         statement = statement.where(SavedQuery.dataset_id == dataset_id)
     return list(db.scalars(statement).all())
@@ -204,10 +214,12 @@ def create_saved_query(
 
 
 @router.delete("/saved-queries/{query_id}", response_model=Message)
-def delete_saved_query(query_id: str, db: DbSession, _: RequireAnalyst) -> Message:
+def delete_saved_query(query_id: str, db: DbSession, user: RequireAnalyst) -> Message:
     saved = db.get(SavedQuery, query_id)
     if saved is None:
         raise HTTPException(status_code=404, detail="Saved query not found")
+    # It follows its dataset's project, like a chart does.
+    get_dataset(saved.dataset_id, db, user)
     db.delete(saved)
     db.commit()
     return Message(detail="Saved query deleted")

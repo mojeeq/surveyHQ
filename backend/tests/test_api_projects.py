@@ -259,3 +259,95 @@ def test_an_unrestricted_user_still_sees_everything_unassigned(client, auth_head
     headers = _headers(client, email, password)
     items = client.get("/api/v1/datasets", headers=headers).json()["items"]
     assert dataset_id in [d["id"] for d in items]
+
+
+def test_every_listing_endpoint_is_scoped(client, auth_headers, dataset_id, restricted_user):
+    """A sweep, because the leaks that matter are the endpoints nobody thought of.
+
+    Two were found this way: saved queries and quality results, both of which
+    hang off a dataset and neither of which the first pass had covered.
+    """
+    member, headers = restricted_user
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Scoping sweep"}
+    ).json()
+    client.put(
+        f"/api/v1/projects/{project['id']}/members",
+        headers=auth_headers,
+        json={"user_id": member["id"], "role": "analyst"},
+    )
+
+    # Everything below hangs off this dataset, which stays in the shared area -
+    # so a user cut off from the shared area must see none of it.
+    admin_owned = {
+        "/api/v1/analytics/saved-queries": client.post(
+            "/api/v1/analytics/saved-queries",
+            headers=auth_headers,
+            json={
+                "name": "Region counts",
+                "dataset_id": dataset_id,
+                "spec": {
+                    "dataset_id": dataset_id,
+                    "dimensions": [{"variable": "region"}],
+                    "measures": [{"agg": "count"}],
+                },
+            },
+        ),
+        "/api/v1/dashboards/charts": client.post(
+            "/api/v1/dashboards/charts",
+            headers=auth_headers,
+            json={
+                "name": "Region chart",
+                "dataset_id": dataset_id,
+                "chart_type": "bar",
+                "spec": {
+                    "query": {
+                        "dimensions": [{"variable": "region"}],
+                        "measures": [{"agg": "count"}],
+                    }
+                },
+            },
+        ),
+        "/api/v1/monitoring/indicators": client.post(
+            "/api/v1/monitoring/indicators",
+            headers=auth_headers,
+            json={
+                "name": "Interviews",
+                "dataset_id": dataset_id,
+                "spec": {"measures": [{"agg": "count"}]},
+            },
+        ),
+        "/api/v1/monitoring/quality-rules": client.post(
+            "/api/v1/monitoring/quality-rules",
+            headers=auth_headers,
+            json={
+                "name": "Age in range",
+                "dataset_id": dataset_id,
+                "check_type": "value_range",
+                "config": {"variable": "age", "min": 0, "max": 120},
+            },
+        ),
+    }
+    for path, response in admin_owned.items():
+        assert response.status_code == 201, f"{path}: {response.text}"
+
+    # Run the rule so there is a quality result to leak
+    client.post(
+        f"/api/v1/monitoring/quality-rules/{admin_owned['/api/v1/monitoring/quality-rules'].json()['id']}/run",
+        headers=auth_headers,
+    )
+
+    for path in [
+        *admin_owned,
+        "/api/v1/monitoring/quality-results",
+        "/api/v1/monitoring/alert-rules",
+        "/api/v1/dashboards",
+    ]:
+        mine = client.get(path, headers=auth_headers)
+        theirs = client.get(path, headers=headers)
+        assert mine.status_code == 200 and theirs.status_code == 200, path
+        assert theirs.json() == [], f"{path} leaked {theirs.json()}"
+
+    # And the headline counts must not give away what the listings hide
+    summary = client.get("/api/v1/monitoring/summary", headers=headers).json()
+    assert summary["total_records"] == 0, summary
