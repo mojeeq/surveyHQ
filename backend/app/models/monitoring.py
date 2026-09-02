@@ -42,6 +42,10 @@ class AlertStatus(str, enum.Enum):
     resolved = "resolved"
 
 
+# Three tables share the severity type; declare it once.
+severity_type = Enum(Severity, name="alert_severity")
+
+
 class CheckType(str, enum.Enum):
     missing_rate = "missing_rate"
     value_range = "value_range"
@@ -116,9 +120,7 @@ class AlertRule(UUIDMixin, TimestampMixin, Base):
     )
     # {"operator": "lt", "value": 100} evaluated against the indicator value
     condition: Mapped[dict] = mapped_column(JSON, default=dict)
-    severity: Mapped[Severity] = mapped_column(
-        Enum(Severity, name="alert_severity"), default=Severity.warning
-    )
+    severity: Mapped[Severity] = mapped_column(severity_type, default=Severity.warning)
     # ["in_app", "email"]
     channels: Mapped[list] = mapped_column(JSON, default=lambda: ["in_app"])
     recipients: Mapped[list] = mapped_column(JSON, default=list)
@@ -139,9 +141,7 @@ class Alert(UUIDMixin, Base):
     )
     title: Mapped[str] = mapped_column(String(300), default="")
     message: Mapped[str] = mapped_column(Text, default="")
-    severity: Mapped[Severity] = mapped_column(
-        Enum(Severity, name="alert_severity"), default=Severity.warning
-    )
+    severity: Mapped[Severity] = mapped_column(severity_type, default=Severity.warning)
     status: Mapped[AlertStatus] = mapped_column(
         Enum(AlertStatus, name="alert_status"), default=AlertStatus.open, index=True
     )
@@ -168,9 +168,7 @@ class QualityRule(UUIDMixin, TimestampMixin, Base):
     check_type: Mapped[CheckType] = mapped_column(Enum(CheckType, name="check_type"))
     # Check specific parameters, e.g. {"variable": "age", "min": 0, "max": 120}
     config: Mapped[dict] = mapped_column(JSON, default=dict)
-    severity: Mapped[Severity] = mapped_column(
-        Enum(Severity, name="alert_severity"), default=Severity.warning
-    )
+    severity: Mapped[Severity] = mapped_column(severity_type, default=Severity.warning)
     # Fail the check when the share of offending rows exceeds this fraction
     threshold: Mapped[float] = mapped_column(Float, default=0.0)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)

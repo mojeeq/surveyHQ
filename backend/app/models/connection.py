@@ -33,6 +33,10 @@ class ExportFormat(str, enum.Enum):
     spss = "SPSS"
 
 
+# Two tables share this type, so it is declared once rather than per column.
+sync_status_type = Enum(SyncStatus, name="sync_status")
+
+
 class Connection(UUIDMixin, TimestampMixin, Base):
     """Credentials and sync settings for one Survey Solutions workspace."""
 
@@ -58,7 +62,7 @@ class Connection(UUIDMixin, TimestampMixin, Base):
 
     last_sync_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     last_sync_status: Mapped[SyncStatus] = mapped_column(
-        Enum(SyncStatus, name="sync_status"), default=SyncStatus.never
+        sync_status_type, default=SyncStatus.never
     )
     last_sync_error: Mapped[str] = mapped_column(Text, default="")
     server_info: Mapped[dict] = mapped_column(JSON, default=dict)
@@ -82,7 +86,7 @@ class SyncRun(UUIDMixin, Base):
     )
     questionnaire: Mapped[str] = mapped_column(String(300), default="")
     status: Mapped[SyncStatus] = mapped_column(
-        Enum(SyncStatus, name="sync_status"), default=SyncStatus.running
+        sync_status_type, default=SyncStatus.running
     )
     started_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True))
     finished_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))

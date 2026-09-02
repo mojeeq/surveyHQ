@@ -1,0 +1,30 @@
+# Development overlay: hot reload for the API, Postgres exposed for inspection.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+#
+# The frontend is best run outside Docker for development:
+#   cd frontend && npm install && npm run dev   (http://localhost:5173)
+
+services:
+  api:
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    environment:
+      ENVIRONMENT: development
+      LOG_LEVEL: DEBUG
+      CORS_ORIGINS: http://localhost:5173,http://localhost:8080
+    volumes:
+      - ./backend/app:/app/app:ro
+      - survey-data:/data
+
+  worker:
+    volumes:
+      - ./backend/app:/app/app:ro
+      - survey-data:/data
+
+  postgres:
+    ports:
+      - "127.0.0.1:5432:5432"
+
+  redis:
+    ports:
+      - "127.0.0.1:6379:6379"

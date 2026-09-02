@@ -1,0 +1,145 @@
+# SurveyHQ - survey monitoring platform
+#
+#   cp .env.example .env   # then edit every CHANGE-ME value
+#   docker compose up -d --build
+#
+# The stack is: nginx (web) -> FastAPI (api) -> Postgres, with a Celery worker
+# and beat scheduler sharing the api image for background imports and monitoring.
+
+name: surveyhq
+
+x-backend-env: &backend-env
+  ENVIRONMENT: ${ENVIRONMENT:-production}
+  PROJECT_NAME: ${PROJECT_NAME:-SurveyHQ}
+  PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+  ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
+  FIRST_ADMIN_EMAIL: ${FIRST_ADMIN_EMAIL:-admin@example.com}
+  FIRST_ADMIN_PASSWORD: ${FIRST_ADMIN_PASSWORD:?FIRST_ADMIN_PASSWORD must be set in .env}
+  FIRST_ADMIN_NAME: ${FIRST_ADMIN_NAME:-Administrator}
+  POSTGRES_USER: ${POSTGRES_USER:-surveyhq}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+  POSTGRES_DB: ${POSTGRES_DB:-surveyhq}
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: 5432
+  REDIS_URL: redis://redis:6379/0
+  STORAGE_DIR: /data
+  MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-512}
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USER: ${SMTP_USER:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_TLS: ${SMTP_TLS:-true}
+  SMTP_FROM: ${SMTP_FROM:-SurveyHQ <no-reply@example.com>}
+  SYNC_TICK_MINUTES: ${SYNC_TICK_MINUTES:-5}
+  MONITOR_TICK_MINUTES: ${MONITOR_TICK_MINUTES:-15}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-surveyhq}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-surveyhq}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-surveyhq} -d ${POSTGRES_DB:-surveyhq}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks: [surveyhq]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [surveyhq]
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment: *backend-env
+    volumes:
+      - survey-data:/data
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    # Bound to localhost so the API is reached through nginx, not directly.
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    networks: [surveyhq]
+
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command:
+      ["celery", "-A", "app.workers.celery_app.celery_app", "worker",
+       "--loglevel=info", "--concurrency=2", "--max-tasks-per-child=50"]
+    environment: *backend-env
+    volumes:
+      - survey-data:/data
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app.celery_app inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 40s
+    networks: [surveyhq]
+
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # The schedule file lives in /tmp because the container runs as non-root.
+    command:
+      ["celery", "-A", "app.workers.celery_app.celery_app", "beat",
+       "--loglevel=info", "--schedule=/tmp/celerybeat-schedule"]
+    environment: *backend-env
+    volumes:
+      - survey-data:/data
+    depends_on:
+      redis: { condition: service_healthy }
+      postgres: { condition: service_healthy }
+    networks: [surveyhq]
+
+  web:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      - api
+    networks: [surveyhq]
+
+volumes:
+  postgres-data:
+  redis-data:
+  survey-data:
+
+networks:
+  surveyhq:
+    driver: bridge
