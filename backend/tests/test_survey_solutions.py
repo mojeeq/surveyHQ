@@ -153,3 +153,80 @@ def test_pick_main_file_falls_back_to_largest_non_system_file(tmp_path):
     system = tmp_path / "interview__actions.dta"
     system.write_bytes(b"x" * 99999)
     assert pick_main_file([system, big, small], "") == big
+
+
+# --- downloading a finished export -----------------------------------------
+#
+# A real import failed with "Downloading export 4 failed with 421". The message
+# named neither the URL nor the host, so it could not be acted on: 421 is
+# "Misdirected Request", which says something answered that does not serve that
+# address - a proxy, load balancer or CDN in front of Survey Solutions.
+
+
+@respx.mock
+def test_download_falls_back_to_the_api_route_when_the_link_is_misdirected():
+    """A refused download link must not end the attempt: the API route differs."""
+    respx.get("https://cdn.example.net/exports/4.zip").mock(
+        return_value=httpx.Response(421)
+    )
+    respx.get(f"{BASE}/primary/api/v2/export/4/file").mock(
+        return_value=httpx.Response(200, content=b"PK-zip-bytes")
+    )
+    job = ExportJob(4, "Completed", download_url="https://cdn.example.net/exports/4.zip")
+    with make_client() as client:
+        assert client.download_export(job) == b"PK-zip-bytes"
+
+
+@respx.mock
+def test_download_error_names_every_host_and_status_it_tried():
+    respx.get("https://cdn.example.net/exports/4.zip").mock(
+        return_value=httpx.Response(421)
+    )
+    respx.get(f"{BASE}/primary/api/v2/export/4/file").mock(
+        return_value=httpx.Response(403)
+    )
+    job = ExportJob(4, "Completed", download_url="https://cdn.example.net/exports/4.zip")
+    with make_client() as client, pytest.raises(SurveySolutionsError) as exc:
+        client.download_export(job)
+
+    message = str(exc.value)
+    assert "cdn.example.net returned 421" in message
+    assert "survey.example.org returned 403" in message
+    # 421 gets an explanation, because the number alone tells an operator nothing
+    assert "Misdirected Request" in message or "does not serve that address" in message
+
+
+@respx.mock
+def test_credentials_are_not_sent_to_a_different_host():
+    """Basic auth belongs to the configured server, not to wherever it points."""
+    route = respx.get("https://cdn.example.net/exports/9.zip").mock(
+        return_value=httpx.Response(200, content=b"zip")
+    )
+    job = ExportJob(9, "Completed", download_url="https://cdn.example.net/exports/9.zip")
+    with make_client() as client:
+        client.download_export(job)
+    assert "authorization" not in route.calls[0].request.headers
+
+
+@respx.mock
+def test_credentials_are_sent_to_the_configured_server():
+    route = respx.get(f"{BASE}/primary/api/v2/export/9/file").mock(
+        return_value=httpx.Response(200, content=b"zip")
+    )
+    with make_client() as client:
+        client.download_export(ExportJob(9, "Completed"))
+    assert "authorization" in route.calls[0].request.headers
+
+
+@respx.mock
+def test_download_reports_an_unreachable_host_rather_than_raising_transport_error():
+    respx.get("https://cdn.example.net/exports/5.zip").mock(
+        side_effect=httpx.ConnectError("no route to host")
+    )
+    respx.get(f"{BASE}/primary/api/v2/export/5/file").mock(
+        return_value=httpx.Response(500)
+    )
+    job = ExportJob(5, "Completed", download_url="https://cdn.example.net/exports/5.zip")
+    with make_client() as client, pytest.raises(SurveySolutionsError) as exc:
+        client.download_export(job)
+    assert "could not be reached" in str(exc.value)

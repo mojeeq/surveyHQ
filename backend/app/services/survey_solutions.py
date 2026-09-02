@@ -19,6 +19,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
+from urllib.parse import urlparse
 
 import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
@@ -122,6 +123,7 @@ class SurveySolutionsClient:
         self.workspace = (workspace or "primary").strip("/")
         self.username = username
         self.password = password
+        self.verify_ssl = verify_ssl
         self._client = httpx.Client(
             auth=(username, password),
             verify=verify_ssl,
@@ -337,17 +339,70 @@ class SurveySolutionsClient:
             f"Export job {job_id} did not finish within {max_wait_seconds} seconds."
         )
 
+    def _same_host(self, url: str) -> bool:
+        return urlparse(url).netloc.lower() == urlparse(self.base_url).netloc.lower()
+
+    def _fetch_export_file(self, url: str) -> httpx.Response:
+        """GET an export file.
+
+        Credentials go only to the configured server. Survey Solutions can hand
+        back a link to separate file storage, and sending Basic auth or an
+        ``Accept: application/json`` header to a host that did not ask for them
+        is how a download ends up rejected rather than served.
+        """
+        if self._same_host(url):
+            return self._client.get(url, headers={"Accept": "*/*"})
+        with httpx.Client(
+            verify=self.verify_ssl,
+            timeout=self._client.timeout,
+            follow_redirects=True,
+            headers={"Accept": "*/*", "User-Agent": "SurveyHQ/1.0"},
+        ) as anonymous:
+            return anonymous.get(url)
+
     def download_export(self, job: ExportJob) -> bytes:
+        """Fetch the finished export.
+
+        The link the server advertises is tried first, then the API's own file
+        endpoint. They are genuinely different routes - the link can point at
+        external storage or through a proxy - so when one is refused the other
+        is still worth attempting.
+        """
+        candidates: list[str] = []
         if job.download_url:
-            response = self._client.get(job.download_url)
-        else:
-            response = self._request("GET", f"api/v2/export/{job.job_id}/file")
-        if response.status_code >= 400:
-            raise SurveySolutionsError(
-                f"Downloading export {job.job_id} failed with {response.status_code}",
-                response.status_code,
+            candidates.append(job.download_url)
+        api_url = self._url(f"api/v2/export/{job.job_id}/file")
+        if api_url not in candidates:
+            candidates.append(api_url)
+
+        failures: list[str] = []
+        for url in candidates:
+            host = urlparse(url).netloc or "the server"
+            try:
+                response = self._fetch_export_file(url)
+            except httpx.TransportError as exc:
+                failures.append(f"{host} could not be reached ({exc})")
+                continue
+            if response.status_code < 400:
+                return response.content
+            failures.append(f"{host} returned {response.status_code}")
+
+        detail = "; ".join(failures)
+        hint = ""
+        if any("421" in failure for failure in failures):
+            # 421 is "Misdirected Request": something answered that does not
+            # serve this host. Naming the cause beats naming the number.
+            hint = (
+                " A 421 means the request reached a server that does not serve that "
+                "address - usually a reverse proxy, load balancer or CDN in front of "
+                "Survey Solutions. Check that the export download route is reachable "
+                "from this machine, and that the server URL you configured is the one "
+                "the server itself advertises."
             )
-        return response.content
+        raise SurveySolutionsError(
+            f"Could not download export {job.job_id}: {detail}.{hint}",
+            None,
+        )
 
     def export_to_directory(
         self,
