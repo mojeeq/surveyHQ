@@ -8,6 +8,7 @@ import { relativeTime } from '@/lib/format'
 
 const NAV = [
   { to: '/', label: 'Overview', icon: '◈', end: true },
+  { to: '/projects', label: 'Projects', icon: '◫' },
   { to: '/datasets', label: 'Datasets', icon: '▤' },
   { to: '/connections', label: 'Connections', icon: '⇄' },
   { to: '/explore', label: 'Explore', icon: '◱' },

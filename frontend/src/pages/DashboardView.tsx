@@ -10,6 +10,7 @@ import { useToast } from '@/hooks/useToast'
 import { STATUS_COLORS } from '@/lib/charts'
 import { formatNumber, formatValue, relativeTime } from '@/lib/format'
 import type { Chart, Dashboard, Indicator, Widget } from '@/lib/types'
+import AssignProject from '@/components/AssignProject'
 import ChartCard from '@/components/ChartCard'
 import CrosstabTable from '@/components/CrosstabTable'
 import {
@@ -140,6 +141,12 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         actions={
           !isPublic && (
             <>
+              <AssignProject
+                kind="dashboard"
+                id={dashboard.data!.id}
+                projectId={dashboard.data!.project_id}
+                canMove={can('manager')}
+              />
               {can('analyst') && (
                 <>
                   <button className="btn-secondary" onClick={() => setAdding(true)}>

@@ -7,6 +7,7 @@ import { useToast } from '@/hooks/useToast'
 import { relativeTime } from '@/lib/format'
 import type { Chart, Dashboard } from '@/lib/types'
 import ChartCard from '@/components/ChartCard'
+import ProjectPicker from '@/components/ProjectPicker'
 import {
   Badge,
   Card,
@@ -26,6 +27,7 @@ export default function Dashboards() {
   const [tab, setTab] = useState<'dashboards' | 'charts'>('dashboards')
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState('')
+  const [projectId, setProjectId] = useState('')
 
   const dashboards = useQuery({
     queryKey: ['dashboards'],
@@ -37,10 +39,12 @@ export default function Dashboards() {
   })
 
   const create = useMutation({
-    mutationFn: () => api.post<Dashboard>('/dashboards', { name }),
+    mutationFn: () =>
+      api.post<Dashboard>('/dashboards', { name, project_id: projectId || null }),
     onSuccess: () => {
       toast.push('Dashboard created', 'success')
       queryClient.invalidateQueries({ queryKey: ['dashboards'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
       setCreating(false)
       setName('')
     },
@@ -204,6 +208,7 @@ export default function Dashboards() {
             autoFocus
           />
         </Field>
+        <ProjectPicker value={projectId} onChange={setProjectId} />
       </Modal>
     </>
   )

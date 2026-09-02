@@ -6,6 +6,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { formatBytes, formatNumber, relativeTime } from '@/lib/format'
 import type { Dataset, Page } from '@/lib/types'
+import ProjectPicker from '@/components/ProjectPicker'
 import {
   Badge,
   Card,
@@ -189,6 +190,7 @@ function UploadModal({ open, onClose }: { open: boolean; onClose: () => void }) 
   const [description, setDescription] = useState('')
   const [tags, setTags] = useState('')
   const [combineAll, setCombineAll] = useState(false)
+  const [projectId, setProjectId] = useState('')
   const [isZip, setIsZip] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -207,6 +209,7 @@ function UploadModal({ open, onClose }: { open: boolean; onClose: () => void }) 
     form.append('description', description)
     form.append('tags', tags)
     form.append('combine_all', String(combineAll))
+    form.append('project_id', projectId)
     try {
       const dataset = await api.upload<Dataset>('/datasets/upload', form)
       const archive = dataset.meta?.archive
@@ -225,6 +228,7 @@ function UploadModal({ open, onClose }: { open: boolean; onClose: () => void }) 
         )
       }
       queryClient.invalidateQueries({ queryKey: ['datasets'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
       setName('')
       setDescription('')
       setTags('')
@@ -258,6 +262,8 @@ function UploadModal({ open, onClose }: { open: boolean; onClose: () => void }) 
           {error}
         </div>
       )}
+      <ProjectPicker value={projectId} onChange={setProjectId} />
+
       <Field
         label="Data file"
         hint="Stata (.dta), SPSS (.sav), CSV, tab-delimited, Excel, or a .zip of them. Variable and value labels are kept."

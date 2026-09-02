@@ -57,6 +57,7 @@ function Users() {
     email: '',
     full_name: '',
     role: 'viewer' as Role,
+    restricted_to_projects: false,
     password: '',
   })
 
@@ -71,7 +72,13 @@ function Users() {
       toast.push('User created', 'success')
       queryClient.invalidateQueries({ queryKey: ['users'] })
       setCreating(false)
-      setForm({ email: '', full_name: '', role: 'viewer', password: '' })
+      setForm({
+        email: '',
+        full_name: '',
+        role: 'viewer',
+        restricted_to_projects: false,
+        password: '',
+      })
     },
     onError: (error: Error) => toast.push(error.message, 'error'),
   })
@@ -111,6 +118,7 @@ function Users() {
             <th>Name</th>
             <th>Email</th>
             <th>Role</th>
+            <th>Access</th>
             <th>Status</th>
             <th>Last sign in</th>
             <th />
@@ -136,6 +144,24 @@ function Users() {
                     </option>
                   ))}
                 </select>
+              </td>
+              <td>
+                <label className="flex items-center gap-1.5 text-xs text-ink-600">
+                  <input
+                    type="checkbox"
+                    checked={user.restricted_to_projects}
+                    disabled={user.id === me?.id || user.role === 'admin'}
+                    onChange={(event) =>
+                      update.mutate({
+                        id: user.id,
+                        patch: { restricted_to_projects: event.target.checked },
+                      })
+                    }
+                  />
+                  {/* An administrator sees everything regardless, so saying
+                      "assigned projects only" of one would be a lie. */}
+                  {user.role === 'admin' ? 'Everything' : 'Assigned projects only'}
+                </label>
               </td>
               <td>
                 {user.is_active ? (
@@ -220,6 +246,30 @@ function Users() {
               </option>
             ))}
           </select>
+        </Field>
+        <Field
+          label="Access"
+          hint="Use this for someone who should see one project and nothing else."
+        >
+          <label className="flex items-start gap-2 text-sm text-ink-700">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={form.restricted_to_projects}
+              disabled={form.role === 'admin'}
+              onChange={(event) =>
+                setForm({ ...form, restricted_to_projects: event.target.checked })
+              }
+            />
+            <span>
+              Limit to assigned projects
+              <span className="block text-xs text-ink-500">
+                {form.role === 'admin'
+                  ? 'Administrators always see everything.'
+                  : 'Hides the shared area, leaving only projects this user is a member of. Add them to a project after creating the account.'}
+              </span>
+            </span>
+          </label>
         </Field>
         <Field label="Password" hint="At least 8 characters">
           <input

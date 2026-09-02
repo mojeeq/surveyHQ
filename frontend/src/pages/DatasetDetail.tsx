@@ -8,6 +8,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import ChartCard from '@/components/ChartCard'
 import DataTable from '@/components/DataTable'
+import AssignProject from '@/components/AssignProject'
 import {
   Badge,
   Card,
@@ -64,6 +65,12 @@ export default function DatasetDetail() {
         description={data.description || `Imported ${formatDate(data.created_at)}`}
         actions={
           <>
+            <AssignProject
+              kind="dataset"
+              id={data.id}
+              projectId={data.project_id}
+              canMove={can('manager')}
+            />
             <Link to={`/explore?dataset=${data.id}`} className="btn-primary">
               Analyse
             </Link>

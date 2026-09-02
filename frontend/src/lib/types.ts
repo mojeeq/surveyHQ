@@ -8,8 +8,39 @@ export interface User {
   full_name: string
   role: Role
   is_active: boolean
+  // Confines this user to the projects they belong to, shutting off the
+  // shared area every other user can see.
+  restricted_to_projects: boolean
   created_at: string
   last_login_at: string | null
+}
+
+export type ProjectStatus = 'active' | 'paused' | 'closed'
+
+export interface ProjectMember {
+  id: string
+  user_id: string
+  role: Role
+  email: string
+  full_name: string
+}
+
+export interface Project {
+  id: string
+  name: string
+  slug: string
+  description: string
+  status: ProjectStatus
+  starts_on: string | null
+  ends_on: string | null
+  created_at: string
+  updated_at: string
+  dataset_count: number
+  dashboard_count: number
+  member_count: number
+  // This caller's role over the project, so the UI can hide what they cannot do
+  your_role: Role | null
+  members?: ProjectMember[]
 }
 
 export type VariableType = 'numeric' | 'categorical' | 'text' | 'datetime' | 'boolean'
@@ -39,6 +70,8 @@ export interface Dataset {
   source: 'upload' | 'survey_solutions'
   source_ref: string
   connection_id: string | null
+  // Null means the shared area, visible to everyone
+  project_id: string | null
   status: DatasetStatus
   error: string
   row_count: number
@@ -271,6 +304,7 @@ export interface Dashboard {
   slug: string
   description: string
   filters: Record<string, unknown>[]
+  project_id: string | null
   is_public: boolean
   public_token: string | null
   refresh_interval_seconds: number
