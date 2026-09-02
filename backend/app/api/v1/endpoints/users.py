@@ -53,6 +53,8 @@ def create_user(payload: UserCreate, db: DbSession, admin: RequireAdmin) -> User
         is_active=payload.is_active,
         restricted_to_projects=payload.restricted_to_projects,
         hashed_password=hash_password(payload.password),
+        # An administrator chose this password, so the holder has not yet.
+        must_change_password=True,
     )
     db.add(user)
     record(db, user=admin, action="create_user", entity_type="user", detail={"email": email})
@@ -86,6 +88,8 @@ def update_user(
         user.restricted_to_projects = payload.restricted_to_projects
     if payload.password:
         user.hashed_password = hash_password(payload.password)
+        # A reset by an administrator is someone else's password again.
+        user.must_change_password = True
 
     record(db, user=admin, action="update_user", entity_type="user", entity_id=user_id)
     db.commit()

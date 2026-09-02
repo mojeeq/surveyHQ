@@ -16,6 +16,8 @@ interface AuthState {
   signIn: (email: string, password: string) => Promise<void>
   signOut: () => void
   can: (minimum: Role) => boolean
+  /** Called after a forced password change, so the gate lifts without a reload. */
+  refresh: () => Promise<void>
 }
 
 const ROLE_RANK: Record<Role, number> = { viewer: 0, analyst: 1, manager: 2, admin: 3 }
@@ -50,14 +52,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     location.href = '/login'
   }, [])
 
+  const refresh = useCallback(async () => {
+    setUser(await api.get<User>('/auth/me'))
+  }, [])
+
   const can = useCallback(
     (minimum: Role) => (user ? ROLE_RANK[user.role] >= ROLE_RANK[minimum] : false),
     [user],
   )
 
   const value = useMemo(
-    () => ({ user, loading, signIn, signOut, can }),
-    [user, loading, signIn, signOut, can],
+    () => ({ user, loading, signIn, signOut, can, refresh }),
+    [user, loading, signIn, signOut, can, refresh],
   )
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }

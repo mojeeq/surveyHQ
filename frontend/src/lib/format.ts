@@ -1,13 +1,30 @@
 // Display helpers shared across pages.
 
-export function formatNumber(value: number | null | undefined, digits = 0): string {
+/**
+ * A number for display, showing decimals only where the value has them.
+ *
+ * `digits` is a maximum, not a fixed width: a count of 153 reads "153", never
+ * "153.00", while a mean of 34.567 reads "34.57". Setting both the minimum and
+ * the maximum - which this used to do - put two decimal places on every whole
+ * number in every chart tooltip and table.
+ *
+ * Pass `fixed` for the case that genuinely wants a constant width, such as a
+ * column of percentages read down the page.
+ */
+export function formatNumber(
+  value: number | null | undefined,
+  digits = 0,
+  fixed = false,
+): string {
   if (value === null || value === undefined || Number.isNaN(value)) return '–'
+  const compact = (scaled: number, suffix: string) =>
+    `${scaled.toLocaleString(undefined, { maximumFractionDigits: 1 })}${suffix}`
   const abs = Math.abs(value)
-  if (abs >= 1_000_000_000) return `${(value / 1_000_000_000).toFixed(1)}B`
-  if (abs >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`
-  if (abs >= 10_000) return `${(value / 1_000).toFixed(1)}k`
+  if (abs >= 1_000_000_000) return compact(value / 1_000_000_000, 'B')
+  if (abs >= 1_000_000) return compact(value / 1_000_000, 'M')
+  if (abs >= 10_000) return compact(value / 1_000, 'k')
   return value.toLocaleString(undefined, {
-    minimumFractionDigits: digits,
+    minimumFractionDigits: fixed ? digits : 0,
     maximumFractionDigits: digits,
   })
 }

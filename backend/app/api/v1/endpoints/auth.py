@@ -63,6 +63,7 @@ def change_password(payload: PasswordChange, user: CurrentUser, db: DbSession) -
     if not verify_password(payload.current_password, user.hashed_password):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
     user.hashed_password = hash_password(payload.new_password)
+    user.must_change_password = False
     record(db, user=user, action="change_password")
     db.commit()
     return Message(detail="Password updated")

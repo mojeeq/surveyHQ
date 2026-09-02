@@ -11,6 +11,8 @@ export interface User {
   // Confines this user to the projects they belong to, shutting off the
   // shared area every other user can see.
   restricted_to_projects: boolean
+  /** Someone else chose this password, so the holder has to set their own. */
+  must_change_password: boolean
   created_at: string
   last_login_at: string | null
 }

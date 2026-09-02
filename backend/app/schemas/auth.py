@@ -44,6 +44,9 @@ class UserOut(UserBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    # The UI blocks on this: an account whose password someone else chose should
+    # not be usable until the holder has set their own.
+    must_change_password: bool = False
     created_at: dt.datetime
     last_login_at: dt.datetime | None = None
 

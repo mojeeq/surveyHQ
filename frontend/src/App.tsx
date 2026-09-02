@@ -17,12 +17,16 @@ import Quality from '@/pages/Quality'
 import Alerts from '@/pages/Alerts'
 import Admin from '@/pages/Admin'
 import SharedDashboard from '@/pages/SharedDashboard'
+import ChangePassword from '@/pages/ChangePassword'
 import NotFound from '@/pages/NotFound'
 
 function RequireAuth({ children }: { children: JSX.Element }) {
   const { user, loading } = useAuth()
   if (loading) return <Loading label="Signing you in" />
   if (!user) return <Navigate to="/login" replace />
+  // Placed here rather than on a route so it cannot be walked around by typing
+  // a URL: every authenticated page in the app is behind this component.
+  if (user.must_change_password) return <ChangePassword />
   return children
 }
 

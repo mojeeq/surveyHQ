@@ -16,7 +16,10 @@ export default function CrosstabTable({
   maxHeight?: number
 }) {
   const suffix = result.percentages === 'none' ? '' : '%'
-  const digits = result.percentages === 'none' ? 0 : 1
+  const showing = result.percentages !== 'none'
+  const digits = showing ? 1 : 0
+  // A column of percentages read down the page wants a constant width, so
+  // 50% stays "50.0%" beside 48.2%. Counts do not: they are whole numbers.
 
   return (
     <div className="flex flex-col">
@@ -44,7 +47,7 @@ export default function CrosstabTable({
                 <td className="sticky left-0 bg-white font-medium">{label}</td>
                 {result.values[rowIndex].map((value, cellIndex) => (
                   <td key={cellIndex} className="text-right tabular-nums">
-                    {value === null ? '–' : `${formatNumber(value, digits)}${suffix}`}
+                    {value === null ? '–' : `${formatNumber(value, digits, showing)}${suffix}`}
                   </td>
                 ))}
                 <td className="text-right font-semibold tabular-nums">
