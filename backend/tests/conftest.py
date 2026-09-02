@@ -15,7 +15,11 @@ from pathlib import Path
 import pytest
 
 TMP_ROOT = Path(tempfile.mkdtemp(prefix="surveyhq-tests-"))
-os.environ.setdefault("DATABASE_URL_OVERRIDE", f"sqlite:///{TMP_ROOT / 'test.db'}")
+# An empty value counts as unset: a CI matrix that passes DATABASE_URL_OVERRIDE=""
+# for its SQLite leg leaves the name defined, which setdefault would not replace,
+# and the app would then fall back to its default PostgreSQL host.
+if not os.environ.get("DATABASE_URL_OVERRIDE"):
+    os.environ["DATABASE_URL_OVERRIDE"] = f"sqlite:///{TMP_ROOT / 'test.db'}"
 os.environ.update(
     STORAGE_DIR=str(TMP_ROOT / "storage"),
     SECRET_KEY="test-secret-key-not-for-production-use",
