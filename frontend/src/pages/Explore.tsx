@@ -8,6 +8,7 @@ import { formatNumber } from '@/lib/format'
 import type {
   Aggregation,
   ChartType,
+  CrosstabRequest,
   CrosstabResult,
   Dataset,
   DateGrain,
@@ -19,9 +20,9 @@ import type {
   QuerySpec,
 } from '@/lib/types'
 import ChartCard from '@/components/ChartCard'
+import CrosstabTable from '@/components/CrosstabTable'
 import FilterBuilder, { emptyFilter } from '@/components/FilterBuilder'
 import {
-  Badge,
   Card,
   EmptyState,
   ErrorNote,
@@ -149,6 +150,7 @@ export default function Explore() {
           groupable={groupable}
           numeric={numeric}
           allVariables={variables}
+          canSave={can('analyst')}
         />
       )}
     </>
@@ -625,12 +627,14 @@ function CrosstabBuilder({
   groupable,
   numeric,
   allVariables,
+  canSave,
 }: {
   datasetId: string
   datasetName: string
   groupable: NonNullable<VariableList>
   numeric: NonNullable<VariableList>
   allVariables: NonNullable<VariableList>
+  canSave: boolean
 }) {
   const toast = useToast()
   const [rowVariable, setRowVariable] = useState(groupable[0]?.name ?? '')
@@ -639,6 +643,7 @@ function CrosstabBuilder({
   const [measure, setMeasure] = useState<Measure>({ agg: 'count' })
   const [filters, setFilters] = useState<FilterGroup>(emptyFilter())
   const [result, setResult] = useState<CrosstabResult | null>(null)
+  const [saveOpen, setSaveOpen] = useState(false)
 
   useEffect(() => {
     setRowVariable(groupable[0]?.name ?? '')
@@ -646,7 +651,7 @@ function CrosstabBuilder({
     setResult(null)
   }, [datasetId, groupable])
 
-  const body = {
+  const body: CrosstabRequest = {
     row_variable: rowVariable,
     column_variable: columnVariable,
     measure,
@@ -662,7 +667,6 @@ function CrosstabBuilder({
     onError: (error: Error) => toast.push(error.message, 'error'),
   })
 
-  const suffix = percentages === 'none' ? '' : '%'
 
   return (
     <div className="mt-4 grid gap-6 lg:grid-cols-[330px_1fr]">
@@ -758,18 +762,25 @@ function CrosstabBuilder({
         title={`Cross-tabulation: ${datasetName}`}
         actions={
           result && (
-            <button
-              className="btn-secondary btn-sm"
-              onClick={() =>
-                downloadFile(
-                  `/analytics/datasets/${datasetId}/crosstab/export`,
-                  body,
-                  'crosstab.csv',
-                )
-              }
-            >
-              Export CSV
-            </button>
+            <>
+              <button
+                className="btn-secondary btn-sm"
+                onClick={() =>
+                  downloadFile(
+                    `/analytics/datasets/${datasetId}/crosstab/export`,
+                    body,
+                    'crosstab.csv',
+                  )
+                }
+              >
+                Export CSV
+              </button>
+              {canSave && (
+                <button className="btn-primary btn-sm" onClick={() => setSaveOpen(true)}>
+                  Save for dashboards
+                </button>
+              )}
+            </>
           )
         }
       >
@@ -785,55 +796,7 @@ function CrosstabBuilder({
           />
         ) : (
           <>
-            <div className="overflow-auto rounded-lg border border-ink-200">
-              <table className="table-base">
-                <thead>
-                  <tr>
-                    <th className="sticky left-0 bg-ink-100">
-                      {result.row_variable} \ {result.column_variable}
-                    </th>
-                    {result.column_labels.map((label) => (
-                      <th key={label} className="text-right">
-                        {label}
-                      </th>
-                    ))}
-                    <th className="text-right">Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {result.row_labels.map((label, rowIndex) => (
-                    <tr key={label}>
-                      <td className="sticky left-0 bg-white font-medium">{label}</td>
-                      {result.values[rowIndex].map((value, cellIndex) => (
-                        <td key={cellIndex} className="text-right tabular-nums">
-                          {value === null ? '–' : `${formatNumber(value, percentages === 'none' ? 0 : 1)}${suffix}`}
-                        </td>
-                      ))}
-                      <td className="text-right font-semibold tabular-nums">
-                        {formatNumber(result.row_totals[rowIndex])}
-                      </td>
-                    </tr>
-                  ))}
-                  <tr className="bg-ink-50 font-semibold">
-                    <td className="sticky left-0 bg-ink-50">Total</td>
-                    {result.column_totals.map((total, index) => (
-                      <td key={index} className="text-right tabular-nums">
-                        {formatNumber(total)}
-                      </td>
-                    ))}
-                    <td className="text-right tabular-nums">{formatNumber(result.grand_total)}</td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-
-            {result.chi_square && (
-              <p className="mt-3 flex flex-wrap items-center gap-2 text-xs text-ink-500">
-                <Badge tone="info">Chi-square</Badge>
-                χ² = {result.chi_square.statistic.toFixed(3)}, df = {result.chi_square.dof},
-                Cramér's V = {result.chi_square.cramers_v.toFixed(3)}
-              </p>
-            )}
+            <CrosstabTable result={result} />
 
             <div className="mt-5">
               <ChartCard
@@ -873,6 +836,79 @@ function CrosstabBuilder({
           </>
         )}
       </Card>
+
+      <SaveCrosstabModal
+        open={saveOpen}
+        onClose={() => setSaveOpen(false)}
+        datasetId={datasetId}
+        datasetName={datasetName}
+        request={body}
+      />
     </div>
+  )
+}
+
+function SaveCrosstabModal({
+  open,
+  onClose,
+  datasetId,
+  datasetName,
+  request,
+}: {
+  open: boolean
+  onClose: () => void
+  datasetId: string
+  datasetName: string
+  request: CrosstabRequest
+}) {
+  const toast = useToast()
+  const [name, setName] = useState('')
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.post('/dashboards/charts', {
+        name: name || `${request.row_variable} by ${request.column_variable}`,
+        dataset_id: datasetId,
+        chart_type: 'crosstab',
+        // A crosstab spec holds the request rather than a query, and the server
+        // branches on that when rendering.
+        spec: { crosstab: request },
+      }),
+    onSuccess: () => {
+      toast.push('Cross-tabulation saved; add it to a dashboard', 'success')
+      setName('')
+      onClose()
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  return (
+    <Modal
+      open={open}
+      onClose={onClose}
+      title="Save cross-tabulation"
+      footer={
+        <>
+          <button className="btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn-primary" onClick={() => save.mutate()} disabled={save.isPending}>
+            Save
+          </button>
+        </>
+      }
+    >
+      <Field
+        label="Name"
+        hint={`Saved against ${datasetName}. It appears alongside charts when adding a dashboard widget.`}
+      >
+        <input
+          className="input"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+          placeholder={`${request.row_variable} by ${request.column_variable}`}
+        />
+      </Field>
+    </Modal>
   )
 }

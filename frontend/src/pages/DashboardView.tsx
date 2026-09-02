@@ -11,6 +11,7 @@ import { STATUS_COLORS } from '@/lib/charts'
 import { formatNumber, formatValue, relativeTime } from '@/lib/format'
 import type { Chart, Dashboard, Indicator, Widget } from '@/lib/types'
 import ChartCard from '@/components/ChartCard'
+import CrosstabTable from '@/components/CrosstabTable'
 import {
   Badge,
   Card,
@@ -276,6 +277,8 @@ function WidgetFrame({
           </p>
         ) : payload.type === 'indicator' ? (
           <IndicatorWidget payload={payload} />
+        ) : payload.type === 'crosstab' ? (
+          <CrosstabTable result={payload.result} compact maxHeight={260} />
         ) : payload.type === 'text' ? (
           <p className="whitespace-pre-wrap text-sm text-ink-700">{payload.content}</p>
         ) : payload.result ? (
@@ -389,14 +392,14 @@ function AddWidgetModal({ dashboardId, onClose }: { dashboardId: string; onClose
           value={kind}
           onChange={(event) => setKind(event.target.value as typeof kind)}
         >
-          <option value="chart">Saved chart</option>
+          <option value="chart">Saved chart or cross-tab</option>
           <option value="indicator">Indicator tile</option>
           <option value="text">Text note</option>
         </select>
       </Field>
 
       {kind === 'chart' && (
-        <Field label="Chart">
+        <Field label="Chart or cross-tab">
           <select
             className="input"
             value={chartId}
@@ -405,7 +408,9 @@ function AddWidgetModal({ dashboardId, onClose }: { dashboardId: string; onClose
             <option value="">Choose a saved chart…</option>
             {charts.data?.map((chart) => (
               <option key={chart.id} value={chart.id}>
-                {chart.name}
+                {/* Two saved items can share a name while rendering quite
+                    differently, so say which kind each one is. */}
+                {chart.name} ({chart.chart_type === 'crosstab' ? 'cross-tab' : chart.chart_type})
               </option>
             ))}
           </select>

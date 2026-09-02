@@ -146,6 +146,16 @@ export interface FrequencyResult {
   distinct: number
 }
 
+export interface CrosstabRequest {
+  row_variable: string
+  column_variable: string
+  measure: Measure
+  filters: FilterGroup
+  percentages: 'none' | 'row' | 'column' | 'total'
+  include_totals: boolean
+  use_labels: boolean
+}
+
 export interface CrosstabResult {
   row_variable: string
   column_variable: string
@@ -219,7 +229,8 @@ export interface SyncRun {
 
 export type ChartType =
   | 'bar' | 'horizontal_bar' | 'stacked_bar' | 'line' | 'area' | 'pie'
-  | 'donut' | 'scatter' | 'table' | 'kpi' | 'heatmap' | 'map' | 'gauge' | 'funnel'
+  | 'donut' | 'scatter' | 'table' | 'kpi' | 'heatmap' | 'crosstab' | 'map'
+  | 'gauge' | 'funnel'
 
 export interface Chart {
   id: string
@@ -227,7 +238,14 @@ export interface Chart {
   description: string
   dataset_id: string
   chart_type: ChartType
-  spec: { query?: QuerySpec; encoding?: Record<string, string>; options?: Record<string, unknown> }
+  // A cross-tab is saved with a crosstab request in place of a query; the
+  // server branches on which one is present when rendering it.
+  spec: {
+    query?: QuerySpec
+    crosstab?: CrosstabRequest
+    encoding?: Record<string, string>
+    options?: Record<string, unknown>
+  }
   created_at: string
   updated_at: string
 }

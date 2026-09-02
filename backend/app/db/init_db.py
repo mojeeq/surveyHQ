@@ -57,6 +57,66 @@ def ensure_columns() -> None:
             logger.info("Added missing column %s.%s", table.name, column.name)
 
 
+def ensure_enum_values() -> None:
+    """Add enum members the models declare but a PostgreSQL type lacks.
+
+    create_all creates a missing type and never alters an existing one, so a new
+    member reaches the database only as a runtime failure:
+
+        invalid input value for enum chart_type: "crosstab"
+
+    Nothing else catches this. SQLite stores enums as text and cannot reproduce
+    it, and a database built from scratch already has every member, so it
+    appears only when an existing deployment is upgraded - which is the case
+    this whole function exists for.
+    """
+    if engine.dialect.name != "postgresql":
+        return
+
+    wanted: dict[str, list[str]] = {}
+    for table in Base.metadata.sorted_tables:
+        for column in table.columns:
+            type_name = getattr(column.type, "name", None)
+            # Enum.enums is the list of labels SQLAlchemy will actually send. It
+            # is the names by default, not the values, and honours a
+            # values_callable if one is ever set. Deriving the list from the
+            # Python enum instead gets ExportFormat wrong - the database holds
+            # "stata" while the member's value is "STATA" - and since this
+            # function only ever adds, a wrong list adds junk labels that
+            # PostgreSQL will not let you remove.
+            labels = getattr(column.type, "enums", None)
+            if not type_name or not labels:
+                continue
+            wanted.setdefault(type_name, list(labels))
+
+    if not wanted:
+        return
+
+    # ALTER TYPE ... ADD VALUE cannot share a transaction with a statement that
+    # uses the new member, so run each on its own autocommitting connection.
+    with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+        for type_name, members in wanted.items():
+            rows = connection.execute(
+                text(
+                    "SELECT e.enumlabel FROM pg_enum e "
+                    "JOIN pg_type t ON t.oid = e.enumtypid WHERE t.typname = :name"
+                ),
+                {"name": type_name},
+            ).fetchall()
+            if not rows:
+                continue  # the type does not exist yet; create_all will make it
+            present = {row[0] for row in rows}
+            for member in members:
+                if member in present:
+                    continue
+                connection.execute(
+                    text(f'ALTER TYPE "{type_name}" ADD VALUE IF NOT EXISTS :value').bindparams(
+                        value=member
+                    )
+                )
+                logger.info("Added missing enum value %s.%s", type_name, member)
+
+
 def create_first_admin() -> None:
     """Create the bootstrap administrator, but only when no users exist."""
     with SessionLocal() as db:
@@ -84,4 +144,5 @@ def initialise() -> None:
     settings.ensure_directories()
     create_tables()
     ensure_columns()
+    ensure_enum_values()
     create_first_admin()

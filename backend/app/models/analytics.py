@@ -30,6 +30,7 @@ class ChartType(str, enum.Enum):
     table = "table"
     kpi = "kpi"
     heatmap = "heatmap"
+    crosstab = "crosstab"
     map = "map"
     gauge = "gauge"
     funnel = "funnel"

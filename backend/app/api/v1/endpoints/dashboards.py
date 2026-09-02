@@ -27,11 +27,22 @@ from app.schemas.analytics import (
     WidgetIn,
 )
 from app.schemas.common import Message
-from app.schemas.query import FilterGroup, QueryResult, QuerySpec
+from app.schemas.query import (
+    CrosstabRequest,
+    CrosstabResult,
+    FilterGroup,
+    QueryResult,
+    QuerySpec,
+)
 from app.services.audit import record
 from app.services.datasets import dataset_is_queryable
 from app.services.monitoring import indicator_status, progress_percent
-from app.services.query_engine import DatasetContext, QueryError, execute_query
+from app.services.query_engine import (
+    DatasetContext,
+    QueryError,
+    execute_crosstab,
+    execute_query,
+)
 
 router = APIRouter()
 
@@ -93,16 +104,18 @@ def delete_chart(chart_id: str, db: DbSession, _: RequireAnalyst) -> Message:
     return Message(detail="Chart deleted")
 
 
-@router.post("/charts/{chart_id}/data", response_model=QueryResult)
+@router.post("/charts/{chart_id}/data", response_model=QueryResult | CrosstabResult)
 def render_chart(
     chart_id: str, db: DbSession, _: CurrentUser, filters: FilterGroup | None = None
-) -> QueryResult:
-    """Execute a saved chart, optionally narrowed by dashboard-level filters."""
+) -> QueryResult | CrosstabResult:
+    """Execute a saved chart or cross-tabulation, narrowed by dashboard filters."""
     chart = _get_chart(chart_id, db)
     dataset = get_ready_dataset(chart.dataset_id, db)
-    spec = _spec_from_chart(chart, filters)
+    ctx = DatasetContext.from_model(dataset)
     try:
-        return execute_query(DatasetContext.from_model(dataset), spec)
+        if _is_crosstab(chart.spec or {}):
+            return execute_crosstab(ctx, _crosstab_from_chart(chart, filters))
+        return execute_query(ctx, _spec_from_chart(chart, filters))
     except QueryError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -114,11 +127,31 @@ def _get_chart(chart_id: str, db: DbSession) -> Chart:
     return chart
 
 
+def _is_crosstab(spec: dict[str, Any]) -> bool:
+    return bool(spec.get("crosstab"))
+
+
 def _validate_chart_spec(spec: dict[str, Any]) -> None:
     try:
-        QuerySpec.model_validate(spec.get("query", spec))
+        if _is_crosstab(spec):
+            CrosstabRequest.model_validate(spec["crosstab"])
+        else:
+            QuerySpec.model_validate(spec.get("query", spec))
     except Exception as exc:  # noqa: BLE001 - surface a readable message to the UI
         raise HTTPException(status_code=422, detail=f"Invalid chart query: {exc}") from exc
+
+
+def _crosstab_from_chart(chart: Chart, extra: FilterGroup | None) -> CrosstabRequest:
+    request = CrosstabRequest.model_validate((chart.spec or {})["crosstab"])
+    if extra and not extra.is_empty():
+        return request.model_copy(
+            update={
+                "filters": FilterGroup(
+                    op="and", conditions=[], groups=[request.filters, extra]
+                )
+            }
+        )
+    return request
 
 
 def _spec_from_chart(chart: Chart, extra: FilterGroup | None) -> QuerySpec:
@@ -370,8 +403,16 @@ def _render_widget(
         dataset = db.get(Dataset, chart.dataset_id)
         if dataset is None or not dataset_is_queryable(dataset):
             return {"error": "The chart's dataset is unavailable"}
-        spec = _spec_from_chart(chart, filters)
-        result = execute_query(DatasetContext.from_model(dataset), spec)
+        ctx = DatasetContext.from_model(dataset)
+        if _is_crosstab(chart.spec or {}):
+            crosstab = execute_crosstab(ctx, _crosstab_from_chart(chart, filters))
+            return {
+                "type": "crosstab",
+                "chart_type": "crosstab",
+                "name": chart.name,
+                "result": crosstab.model_dump(mode="json"),
+            }
+        result = execute_query(ctx, _spec_from_chart(chart, filters))
         return {
             "type": "chart",
             "chart_type": chart.chart_type.value,
