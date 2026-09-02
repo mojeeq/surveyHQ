@@ -1,0 +1,94 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html {
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    @apply bg-ink-50 text-ink-800 font-sans text-[14px] antialiased;
+  }
+  * {
+    @apply border-ink-200;
+  }
+}
+
+@layer components {
+  .card {
+    @apply bg-white rounded-xl border border-ink-200 shadow-card;
+  }
+  .card-header {
+    @apply px-5 py-4 border-b border-ink-200 flex items-center justify-between gap-3;
+  }
+  .card-body {
+    @apply p-5;
+  }
+  .label {
+    @apply block text-xs font-semibold uppercase tracking-wide text-ink-500 mb-1.5;
+  }
+  .input {
+    @apply w-full rounded-lg border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900
+           placeholder:text-ink-400 focus:border-brand-500 focus:outline-none
+           focus:ring-2 focus:ring-brand-500/20 disabled:bg-ink-100 disabled:text-ink-500;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm
+           font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed
+           focus:outline-none focus:ring-2 focus:ring-offset-1;
+  }
+  .btn-primary {
+    @apply btn bg-brand-600 text-white hover:bg-brand-700 focus:ring-brand-500;
+  }
+  .btn-secondary {
+    @apply btn bg-white text-ink-700 border border-ink-300 hover:bg-ink-50 focus:ring-ink-400;
+  }
+  .btn-danger {
+    @apply btn bg-red-600 text-white hover:bg-red-700 focus:ring-red-500;
+  }
+  .btn-ghost {
+    @apply btn text-ink-600 hover:bg-ink-100 focus:ring-ink-300;
+  }
+  .btn-sm {
+    @apply px-2.5 py-1.5 text-xs;
+  }
+  .table-base {
+    @apply w-full text-sm border-collapse;
+  }
+  .table-base thead th {
+    @apply bg-ink-100 text-left text-xs font-semibold uppercase tracking-wide
+           text-ink-600 px-3 py-2.5 border-b border-ink-200 whitespace-nowrap;
+  }
+  .table-base tbody td {
+    @apply px-3 py-2 border-b border-ink-100 align-top;
+  }
+  .table-base tbody tr:hover {
+    @apply bg-brand-50/40;
+  }
+  .chip {
+    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium;
+  }
+}
+
+/* react-grid-layout visuals */
+.react-grid-item.react-grid-placeholder {
+  @apply bg-brand-400/30 rounded-xl;
+}
+.react-grid-item > .react-resizable-handle {
+  @apply opacity-0 transition-opacity;
+}
+.react-grid-item:hover > .react-resizable-handle {
+  @apply opacity-60;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-ink-300 rounded-full border-2 border-solid border-transparent bg-clip-padding;
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-ink-400;
+}
