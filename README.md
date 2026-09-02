@@ -68,15 +68,7 @@ git clone https://github.com/mojeeq/surveyHQ.git surveyhq
 cd surveyhq
 ```
 
-**If the platform code is still on the branch rather than `main`** — that is, you
-have not merged the pull request yet — check the branch out after cloning:
-
-```bash
-git checkout claude/survey-monitoring-platform-wxsqhq
-```
-
-Once the pull request is merged, a plain `git clone` gives you everything and
-this step is unnecessary.
+That is everything — the platform lives on `main`.
 
 ### 2. Run the installer
 
