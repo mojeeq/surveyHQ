@@ -37,6 +37,7 @@ class DatasetOut(BaseModel):
     source: DatasetSource
     source_ref: str = ""
     connection_id: str | None = None
+    project_id: str | None = None
     status: DatasetStatus
     error: str = ""
     row_count: int = 0

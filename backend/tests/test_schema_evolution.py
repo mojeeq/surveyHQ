@@ -119,3 +119,39 @@ def test_the_labels_used_are_the_ones_sqlalchemy_sends():
     declared = Connection.__table__.c.export_format.type.enums
     assert declared == [member.name for member in ExportFormat]
     assert declared != [member.value for member in ExportFormat]
+
+
+def test_the_project_columns_reach_an_existing_database():
+    """Projects arrived after deployments existed, so they arrive by ALTER TABLE.
+
+    Getting this wrong is not a crash but something worse: datasets and
+    dashboards that a running server can no longer read at all.
+    """
+    with engine.begin() as connection:
+        for table in ("datasets", "dashboards"):
+            connection.execute(text(f"ALTER TABLE {table} DROP COLUMN IF EXISTS project_id"))
+        connection.execute(
+            text("ALTER TABLE users DROP COLUMN IF EXISTS restricted_to_projects")
+        )
+
+    ensure_columns()
+
+    inspector = inspect(engine)
+    for table in ("datasets", "dashboards"):
+        assert "project_id" in {c["name"] for c in inspector.get_columns(table)}
+    users = {c["name"]: c for c in inspector.get_columns("users")}
+    assert "restricted_to_projects" in users
+    # NOT NULL with no default would fail outright on a table that has rows.
+    assert users["restricted_to_projects"]["nullable"] is False
+
+
+def test_everything_that_existed_before_projects_stays_in_the_shared_area():
+    """The upgrade must not hide data behind a project nobody is a member of."""
+    with engine.connect() as connection:
+        stranded = connection.execute(
+            text(
+                "SELECT count(*) FROM datasets WHERE project_id IS NOT NULL "
+                "AND project_id NOT IN (SELECT id FROM projects)"
+            )
+        ).scalar()
+    assert stranded == 0

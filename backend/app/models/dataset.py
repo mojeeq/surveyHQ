@@ -57,6 +57,12 @@ class Dataset(UUIDMixin, TimestampMixin, Base):
     connection_id: Mapped[str | None] = mapped_column(
         ForeignKey("connections.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # Null means the shared area: visible to everyone, which is what every
+    # dataset was before projects existed. Deleting a project releases its
+    # datasets back there rather than destroying them.
+    project_id: Mapped[str | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     status: Mapped[DatasetStatus] = mapped_column(
         Enum(DatasetStatus, name="dataset_status"), default=DatasetStatus.pending
     )

@@ -83,6 +83,11 @@ class Dashboard(UUIDMixin, TimestampMixin, Base):
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     slug: Mapped[str] = mapped_column(String(220), unique=True, index=True)
     description: Mapped[str] = mapped_column(Text, default="")
+    # A dashboard's widgets can draw on several datasets, so it carries its own
+    # project rather than inferring one. Null is the shared area.
+    project_id: Mapped[str | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     # Dashboard level filter controls offered to viewers
     filters: Mapped[list] = mapped_column(JSON, default=list)
     is_public: Mapped[bool] = mapped_column(Boolean, default=False)

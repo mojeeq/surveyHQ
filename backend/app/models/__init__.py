@@ -34,6 +34,11 @@ from app.models.monitoring import (
     QualityRule,
     Severity,
 )
+from app.models.project import (
+    Project,
+    ProjectMember,
+    ProjectStatus,
+)
 from app.models.system import (
     AuditLog,
     Job,
@@ -81,4 +86,7 @@ __all__ = [
     "Notification",
     "AuditLog",
     "SystemSetting",
+    "Project",
+    "ProjectMember",
+    "ProjectStatus",
 ]

@@ -15,7 +15,7 @@ from app.api.deps import (
     get_ready_dataset,
 )
 from app.core.security import new_public_token
-from app.models import Chart, Dashboard, Dataset, Indicator, Widget
+from app.models import Chart, Dashboard, Dataset, Indicator, Role, User, Widget
 from app.schemas.analytics import (
     ChartCreate,
     ChartOut,
@@ -37,6 +37,7 @@ from app.schemas.query import (
 from app.services.audit import record
 from app.services.datasets import dataset_is_queryable
 from app.services.monitoring import indicator_status, progress_percent
+from app.services.projects import can_edit, can_view, dataset_clause, restrict, scope_for
 from app.services.query_engine import (
     DatasetContext,
     QueryError,
@@ -51,8 +52,11 @@ router = APIRouter()
 
 
 @router.get("/charts", response_model=list[ChartOut])
-def list_charts(db: DbSession, _: CurrentUser, dataset_id: str = "") -> list[Chart]:
-    statement = select(Chart).order_by(Chart.created_at.desc())
+def list_charts(db: DbSession, user: CurrentUser, dataset_id: str = "") -> list[Chart]:
+    statement = restrict(
+        select(Chart).order_by(Chart.created_at.desc()),
+        dataset_clause(db, user, Chart.dataset_id),
+    )
     if dataset_id:
         statement = statement.where(Chart.dataset_id == dataset_id)
     return list(db.scalars(statement).all())
@@ -60,7 +64,7 @@ def list_charts(db: DbSession, _: CurrentUser, dataset_id: str = "") -> list[Cha
 
 @router.post("/charts", response_model=ChartOut, status_code=201)
 def create_chart(payload: ChartCreate, db: DbSession, user: RequireAnalyst) -> Chart:
-    get_ready_dataset(payload.dataset_id, db)
+    get_ready_dataset(payload.dataset_id, db, user)
     _validate_chart_spec(payload.spec)
     chart = Chart(
         name=payload.name,
@@ -77,15 +81,15 @@ def create_chart(payload: ChartCreate, db: DbSession, user: RequireAnalyst) -> C
 
 
 @router.get("/charts/{chart_id}", response_model=ChartOut)
-def read_chart(chart_id: str, db: DbSession, _: CurrentUser) -> Chart:
-    return _get_chart(chart_id, db)
+def read_chart(chart_id: str, db: DbSession, user: CurrentUser) -> Chart:
+    return _get_chart(chart_id, db, user)
 
 
 @router.patch("/charts/{chart_id}", response_model=ChartOut)
 def update_chart(
-    chart_id: str, payload: ChartUpdate, db: DbSession, _: RequireAnalyst
+    chart_id: str, payload: ChartUpdate, db: DbSession, user: RequireAnalyst
 ) -> Chart:
-    chart = _get_chart(chart_id, db)
+    chart = _get_chart(chart_id, db, user)
     data = payload.model_dump(exclude_unset=True)
     if "spec" in data:
         _validate_chart_spec(data["spec"])
@@ -97,8 +101,8 @@ def update_chart(
 
 
 @router.delete("/charts/{chart_id}", response_model=Message)
-def delete_chart(chart_id: str, db: DbSession, _: RequireAnalyst) -> Message:
-    chart = _get_chart(chart_id, db)
+def delete_chart(chart_id: str, db: DbSession, user: RequireAnalyst) -> Message:
+    chart = _get_chart(chart_id, db, user)
     db.delete(chart)
     db.commit()
     return Message(detail="Chart deleted")
@@ -106,11 +110,11 @@ def delete_chart(chart_id: str, db: DbSession, _: RequireAnalyst) -> Message:
 
 @router.post("/charts/{chart_id}/data", response_model=QueryResult | CrosstabResult)
 def render_chart(
-    chart_id: str, db: DbSession, _: CurrentUser, filters: FilterGroup | None = None
+    chart_id: str, db: DbSession, user: CurrentUser, filters: FilterGroup | None = None
 ) -> QueryResult | CrosstabResult:
     """Execute a saved chart or cross-tabulation, narrowed by dashboard filters."""
-    chart = _get_chart(chart_id, db)
-    dataset = get_ready_dataset(chart.dataset_id, db)
+    chart = _get_chart(chart_id, db, user)
+    dataset = get_ready_dataset(chart.dataset_id, db, user)
     ctx = DatasetContext.from_model(dataset)
     try:
         if _is_crosstab(chart.spec or {}):
@@ -120,9 +124,13 @@ def render_chart(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
-def _get_chart(chart_id: str, db: DbSession) -> Chart:
+def _get_chart(chart_id: str, db: DbSession, user: User) -> Chart:
     chart = db.get(Chart, chart_id)
+    # A chart follows its dataset's project; it does not carry one of its own.
     if chart is None:
+        raise HTTPException(status_code=404, detail="Chart not found")
+    dataset = db.get(Dataset, chart.dataset_id)
+    if dataset is None or not can_view(db, user, dataset.project_id):
         raise HTTPException(status_code=404, detail="Chart not found")
     return chart
 
@@ -167,14 +175,29 @@ def _spec_from_chart(chart: Chart, extra: FilterGroup | None) -> QuerySpec:
 
 
 @router.get("", response_model=list[DashboardOut])
-def list_dashboards(db: DbSession, _: CurrentUser) -> list[Dashboard]:
-    return list(db.scalars(select(Dashboard).order_by(Dashboard.updated_at.desc())).all())
+def list_dashboards(
+    db: DbSession, user: CurrentUser, project_id: str = ""
+) -> list[Dashboard]:
+    statement = restrict(
+        select(Dashboard).order_by(Dashboard.updated_at.desc()),
+        scope_for(db, user).filter(Dashboard.project_id),
+    )
+    if project_id:
+        statement = statement.where(
+            Dashboard.project_id.is_(None)
+            if project_id == "none"
+            else Dashboard.project_id == project_id
+        )
+    return list(db.scalars(statement).all())
 
 
 @router.post("", response_model=DashboardDetail, status_code=201)
 def create_dashboard(
     payload: DashboardCreate, db: DbSession, user: RequireAnalyst
 ) -> DashboardDetail:
+    if payload.project_id and not can_edit(db, user, payload.project_id, Role.analyst):
+        # Same reasoning as everywhere else: do not confirm the project exists.
+        raise HTTPException(status_code=404, detail="Project not found")
     dashboard = Dashboard(
         name=payload.name,
         slug=_unique_slug(db, payload.name),
@@ -182,6 +205,7 @@ def create_dashboard(
         filters=payload.filters,
         refresh_interval_seconds=payload.refresh_interval_seconds,
         created_by=user.id,
+        project_id=payload.project_id,
     )
     db.add(dashboard)
     record(db, user=user, action="create_dashboard", entity_type="dashboard")
@@ -191,15 +215,15 @@ def create_dashboard(
 
 
 @router.get("/{dashboard_id}", response_model=DashboardDetail)
-def read_dashboard(dashboard_id: str, db: DbSession, _: CurrentUser) -> DashboardDetail:
-    return DashboardDetail.model_validate(_get_dashboard(dashboard_id, db))
+def read_dashboard(dashboard_id: str, db: DbSession, user: CurrentUser) -> DashboardDetail:
+    return DashboardDetail.model_validate(_get_dashboard(dashboard_id, db, user))
 
 
 @router.patch("/{dashboard_id}", response_model=DashboardDetail)
 def update_dashboard(
     dashboard_id: str, payload: DashboardUpdate, db: DbSession, user: RequireAnalyst
 ) -> DashboardDetail:
-    dashboard = _get_dashboard(dashboard_id, db)
+    dashboard = _get_dashboard(dashboard_id, db, user)
     data = payload.model_dump(exclude_unset=True)
     widgets = data.pop("widgets", None)
 
@@ -225,7 +249,7 @@ def update_dashboard(
 
 @router.delete("/{dashboard_id}", response_model=Message)
 def delete_dashboard(dashboard_id: str, db: DbSession, user: RequireAnalyst) -> Message:
-    dashboard = _get_dashboard(dashboard_id, db)
+    dashboard = _get_dashboard(dashboard_id, db, user)
     name = dashboard.name
     db.delete(dashboard)
     record(
@@ -241,9 +265,9 @@ def delete_dashboard(dashboard_id: str, db: DbSession, user: RequireAnalyst) -> 
 
 @router.post("/{dashboard_id}/widgets", response_model=DashboardDetail, status_code=201)
 def add_widget(
-    dashboard_id: str, payload: WidgetIn, db: DbSession, _: RequireAnalyst
+    dashboard_id: str, payload: WidgetIn, db: DbSession, user: RequireAnalyst
 ) -> DashboardDetail:
-    dashboard = _get_dashboard(dashboard_id, db)
+    dashboard = _get_dashboard(dashboard_id, db, user)
     widget = Widget(
         dashboard_id=dashboard.id,
         title=payload.title,
@@ -263,9 +287,9 @@ def add_widget(
 
 @router.delete("/{dashboard_id}/widgets/{widget_id}", response_model=DashboardDetail)
 def delete_widget(
-    dashboard_id: str, widget_id: str, db: DbSession, _: RequireAnalyst
+    dashboard_id: str, widget_id: str, db: DbSession, user: RequireAnalyst
 ) -> DashboardDetail:
-    dashboard = _get_dashboard(dashboard_id, db)
+    dashboard = _get_dashboard(dashboard_id, db, user)
     widget = db.get(Widget, widget_id)
     if widget is None or widget.dashboard_id != dashboard.id:
         raise HTTPException(status_code=404, detail="Widget not found")
@@ -277,10 +301,10 @@ def delete_widget(
 
 @router.post("/{dashboard_id}/data", response_model=dict)
 def render_dashboard(
-    dashboard_id: str, db: DbSession, _: CurrentUser, filters: FilterGroup | None = None
+    dashboard_id: str, db: DbSession, user: CurrentUser, filters: FilterGroup | None = None
 ) -> dict[str, Any]:
     """Render every widget in one round trip so the page loads at once."""
-    dashboard = _get_dashboard(dashboard_id, db)
+    dashboard = _get_dashboard(dashboard_id, db, user)
     return _render_widgets(db, dashboard, filters)
 
 
@@ -289,7 +313,7 @@ def share_dashboard(
     dashboard_id: str, db: DbSession, user: RequireAnalyst, enable: bool = True
 ) -> Dashboard:
     """Enable or disable a read-only public link."""
-    dashboard = _get_dashboard(dashboard_id, db)
+    dashboard = _get_dashboard(dashboard_id, db, user)
     dashboard.is_public = enable
     if enable and not dashboard.public_token:
         dashboard.public_token = new_public_token()
@@ -307,9 +331,10 @@ def share_dashboard(
     return dashboard
 
 
-def _get_dashboard(dashboard_id: str, db: DbSession) -> Dashboard:
+def _get_dashboard(dashboard_id: str, db: DbSession, user: User) -> Dashboard:
     dashboard = db.get(Dashboard, dashboard_id)
-    if dashboard is None:
+    # Out of scope reads as missing, not forbidden: see services.projects.
+    if dashboard is None or not can_view(db, user, dashboard.project_id):
         raise HTTPException(status_code=404, detail="Dashboard not found")
     return dashboard
 

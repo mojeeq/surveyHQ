@@ -18,7 +18,7 @@ from app.api.deps import (
 )
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.models import Dataset, DatasetSource, DatasetStatus, Variable
+from app.models import Dataset, DatasetSource, DatasetStatus, Role, Variable
 from app.schemas.common import Message, Page
 from app.schemas.dataset import (
     DatasetDetail,
@@ -38,6 +38,7 @@ from app.services.datasets import (
     load_file_into_dataset,
 )
 from app.services.ingest import SUPPORTED_EXTENSIONS, IngestError
+from app.services.projects import can_edit, restrict, scope_for
 from app.services.query_engine import (
     DatasetContext,
     QueryError,
@@ -53,14 +54,21 @@ router = APIRouter()
 @router.get("", response_model=Page[DatasetOut])
 def list_datasets(
     db: DbSession,
-    _: CurrentUser,
+    user: CurrentUser,
     limit: int = Query(default=50, le=200),
     offset: int = 0,
     search: str = "",
     status: DatasetStatus | None = None,
     tag: str = "",
+    project_id: str = "",
 ) -> Page[DatasetOut]:
-    statement = select(Dataset)
+    statement = restrict(select(Dataset), scope_for(db, user).filter(Dataset.project_id))
+    if project_id:
+        statement = statement.where(
+            Dataset.project_id.is_(None)
+            if project_id == "none"
+            else Dataset.project_id == project_id
+        )
     if search:
         pattern = f"%{search.lower()}%"
         statement = statement.where(
@@ -90,6 +98,7 @@ async def upload_dataset(
     description: Annotated[str, Form()] = "",
     tags: Annotated[str, Form()] = "",
     combine_all: Annotated[bool, Form()] = False,
+    project_id: Annotated[str, Form()] = "",
 ) -> DatasetDetail:
     """Upload a data file, or a zip of them, and ingest it immediately.
 
@@ -110,6 +119,11 @@ async def upload_dataset(
             ),
         )
 
+    if project_id and not can_edit(db, user, project_id, Role.manager):
+        raise HTTPException(
+            status_code=404, detail="Project not found"
+        )
+
     settings.ensure_directories()
     dataset = create_dataset_record(
         db,
@@ -119,6 +133,7 @@ async def upload_dataset(
         source_ref=filename,
         tags=[t.strip() for t in tags.split(",") if t.strip()],
         created_by=user.id,
+        project_id=project_id or None,
     )
 
     upload_path = settings.uploads_path / f"{dataset.id}{suffix}"
@@ -166,15 +181,15 @@ async def upload_dataset(
 
 
 @router.get("/{dataset_id}", response_model=DatasetDetail)
-def read_dataset(dataset_id: str, db: DbSession, _: CurrentUser) -> DatasetDetail:
-    return DatasetDetail.model_validate(get_dataset(dataset_id, db))
+def read_dataset(dataset_id: str, db: DbSession, user: CurrentUser) -> DatasetDetail:
+    return DatasetDetail.model_validate(get_dataset(dataset_id, db, user))
 
 
 @router.patch("/{dataset_id}", response_model=DatasetOut)
 def update_dataset(
     dataset_id: str, payload: DatasetUpdate, db: DbSession, user: RequireManager
 ) -> Dataset:
-    dataset = get_dataset(dataset_id, db)
+    dataset = get_dataset(dataset_id, db, user)
     if payload.name is not None:
         dataset.name = payload.name
     if payload.description is not None:
@@ -189,7 +204,7 @@ def update_dataset(
 
 @router.delete("/{dataset_id}", response_model=Message)
 def delete_dataset(dataset_id: str, db: DbSession, user: RequireManager) -> Message:
-    dataset = get_dataset(dataset_id, db)
+    dataset = get_dataset(dataset_id, db, user)
     name = dataset.name
     delete_dataset_files(dataset)
     db.delete(dataset)
@@ -213,7 +228,7 @@ async def replace_dataset_data(
     file: Annotated[UploadFile, File()],
 ) -> DatasetDetail:
     """Refresh a dataset in place from a new file, keeping charts pointed at it."""
-    dataset = get_dataset(dataset_id, db)
+    dataset = get_dataset(dataset_id, db, user)
     filename = Path(file.filename or "upload.dat").name
     suffix = Path(filename).suffix.lower()
     if suffix not in SUPPORTED_EXTENSIONS:
@@ -249,7 +264,7 @@ async def append_to_dataset(
     file: Annotated[UploadFile, File()],
 ) -> DatasetDetail:
     """Add another round's rows to a dataset rather than replacing them."""
-    dataset = get_dataset(dataset_id, db)
+    dataset = get_dataset(dataset_id, db, user)
     filename = Path(file.filename or "upload.dat").name
     suffix = Path(filename).suffix.lower()
     if suffix not in SUPPORTED_EXTENSIONS and suffix != ".zip":
@@ -286,11 +301,11 @@ async def append_to_dataset(
 def list_variables(
     dataset_id: str,
     db: DbSession,
-    _: CurrentUser,
+    user: CurrentUser,
     search: str = "",
     var_type: str = "",
 ) -> list[Variable]:
-    dataset = get_dataset(dataset_id, db)
+    dataset = get_dataset(dataset_id, db, user)
     variables = dataset.variables
     if search:
         needle = search.lower()
@@ -306,7 +321,7 @@ def list_variables(
 def preview_dataset(
     dataset_id: str,
     db: DbSession,
-    _: CurrentUser,
+    user: CurrentUser,
     limit: int = Query(default=50, le=1000),
     offset: int = 0,
     columns: str = "",
@@ -314,7 +329,7 @@ def preview_dataset(
     sort_dir: str = "asc",
 ) -> DatasetPreview:
     """Raw row browser for the data tab."""
-    dataset = get_ready_dataset(dataset_id, db)
+    dataset = get_ready_dataset(dataset_id, db, user)
     ctx = DatasetContext.from_model(dataset)
     selected = [c.strip() for c in columns.split(",") if c.strip()] or None
     sort = [(sort_by, sort_dir)] if sort_by else None
@@ -338,11 +353,11 @@ def variable_values(
     dataset_id: str,
     variable: str,
     db: DbSession,
-    _: CurrentUser,
+    user: CurrentUser,
     limit: int = Query(default=200, le=1000),
 ) -> list[dict[str, Any]]:
     """Distinct values for building filters in the UI."""
-    dataset = get_ready_dataset(dataset_id, db)
+    dataset = get_ready_dataset(dataset_id, db, user)
     ctx = DatasetContext.from_model(dataset)
     try:
         return distinct_values(ctx, variable, limit)
@@ -351,6 +366,6 @@ def variable_values(
 
 
 @router.get("/{dataset_id}/tags", response_model=list[str])
-def all_tags(dataset_id: str, db: DbSession, _: CurrentUser) -> list[str]:
-    dataset = get_dataset(dataset_id, db)
+def all_tags(dataset_id: str, db: DbSession, user: CurrentUser) -> list[str]:
+    dataset = get_dataset(dataset_id, db, user)
     return list(dataset.tags or [])

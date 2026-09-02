@@ -58,6 +58,7 @@ def create_dataset_record(
     connection_id: str | None = None,
     tags: list[str] | None = None,
     created_by: str | None = None,
+    project_id: str | None = None,
 ) -> Dataset:
     dataset = Dataset(
         name=name,
@@ -68,6 +69,7 @@ def create_dataset_record(
         connection_id=connection_id,
         tags=tags or [],
         created_by=created_by,
+        project_id=project_id,
         status=DatasetStatus.pending,
     )
     db.add(dataset)

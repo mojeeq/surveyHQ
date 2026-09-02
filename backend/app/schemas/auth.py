@@ -23,6 +23,9 @@ class UserBase(BaseModel):
     full_name: str = ""
     role: Role = Role.viewer
     is_active: bool = True
+    # Confines this user to the projects they belong to, shutting off the
+    # shared area that every user can otherwise see.
+    restricted_to_projects: bool = False
 
 
 class UserCreate(UserBase):
@@ -33,6 +36,7 @@ class UserUpdate(BaseModel):
     full_name: str | None = None
     role: Role | None = None
     is_active: bool | None = None
+    restricted_to_projects: bool | None = None
     password: str | None = Field(default=None, min_length=8, max_length=128)
 
 
