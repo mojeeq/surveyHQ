@@ -25,9 +25,9 @@ with DuckDB. Parquet is columnar and compressed, so a tabulation touches only th
 columns it needs. A 100,000-row survey answers a cross-tab in single-digit
 milliseconds, and adding a dataset is a file write, not a migration.
 
-Postgres keeps what is genuinely relational: users, datasets, variables and their
-labels, connections, charts, dashboards, indicators, snapshots, alerts, quality
-rules and results, jobs, audit entries.
+Postgres keeps what is genuinely relational: users, projects and their members,
+datasets, variables and their labels, connections, charts, dashboards,
+indicators, snapshots, alerts, quality rules and results, jobs, audit entries.
 
 ## The query specification
 
@@ -105,18 +105,52 @@ configuring a time series.
 - **Quality rule** — one of eight check types with a tolerance. The check fails
   when the share of offending rows exceeds it.
 
+## Project scope
+
+A project owns datasets and dashboards, and nothing else. Charts, indicators,
+quality rules and alert rules already reference a dataset, so they take their
+project from it - which means a resource's project is recorded in exactly one
+place and the two cannot disagree.
+
+`project_id` being null is the shared area, visible to every user. That is what
+the whole platform was before projects existed, so an upgraded database, where
+every row is null, behaves exactly as it did. `restricted_to_projects` on a user
+shuts the shared area off for them, which is what makes "this person sees one
+project and nothing else" expressible without first assigning everything else to
+a project.
+
+`services/projects.py` answers the two questions every endpoint has - which rows
+may this user see, and may they change this one - so neither is re-derived,
+slightly differently, per endpoint. Enforcement sits in the lookups
+(`get_dataset`, `_get_dashboard`, `_get_chart`) rather than in each route,
+because filtering the listings alone would leave a dataset readable to anyone who
+knew its id: the query endpoints take one directly. Anything out of scope answers
+404, never 403, so a response cannot confirm that a project exists.
+
+A member's role is capped by their own role (`effective_role` takes the lower of
+the two), so membership widens what someone can reach and never what they may do.
+
+Deleting a project nulls its datasets' and dashboards' `project_id` explicitly
+rather than relying on `ON DELETE SET NULL`. The column reaches an existing
+database through `ALTER TABLE ADD COLUMN`, which carries no foreign key, so the
+constraint would never fire there and the rows would be stranded - pointing at a
+project that no longer exists, and visible to nobody but an administrator.
+
 ## Layout of the code
 
 ```
 backend/app/
   core/         config, logging, password hashing, JWTs, secret encryption
   db/           SQLAlchemy engine, session, bootstrap
-  models/       tables: user, dataset, connection, analytics, monitoring, system
+  models/       tables: user, project, dataset, connection, analytics,
+                monitoring, system
   schemas/      pydantic request/response models, including the query spec
   api/v1/       endpoints, grouped by area
   services/     the substance:
                   ingest.py           files -> Parquet + metadata
                   query_engine.py     spec -> DuckDB SQL -> result
+                  projects.py         who may see and change what
+                  archives.py         zips -> one appended dataset
                   survey_solutions.py the CAPI server client
                   quality.py          the eight checks
                   monitoring.py       indicators, thresholds, alerts

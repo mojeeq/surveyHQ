@@ -8,8 +8,39 @@ export interface User {
   full_name: string
   role: Role
   is_active: boolean
+  // Confines this user to the projects they belong to, shutting off the
+  // shared area every other user can see.
+  restricted_to_projects: boolean
   created_at: string
   last_login_at: string | null
+}
+
+export type ProjectStatus = 'active' | 'paused' | 'closed'
+
+export interface ProjectMember {
+  id: string
+  user_id: string
+  role: Role
+  email: string
+  full_name: string
+}
+
+export interface Project {
+  id: string
+  name: string
+  slug: string
+  description: string
+  status: ProjectStatus
+  starts_on: string | null
+  ends_on: string | null
+  created_at: string
+  updated_at: string
+  dataset_count: number
+  dashboard_count: number
+  member_count: number
+  // This caller's role over the project, so the UI can hide what they cannot do
+  your_role: Role | null
+  members?: ProjectMember[]
 }
 
 export type VariableType = 'numeric' | 'categorical' | 'text' | 'datetime' | 'boolean'
@@ -39,13 +70,19 @@ export interface Dataset {
   source: 'upload' | 'survey_solutions'
   source_ref: string
   connection_id: string | null
+  // Null means the shared area, visible to everyone
+  project_id: string | null
   status: DatasetStatus
   error: string
   row_count: number
   column_count: number
   file_size: number
   tags: string[]
-  meta: { monitoring_fields?: Record<string, string>; warnings?: string[] }
+  meta: {
+    monitoring_fields?: Record<string, string>
+    warnings?: string[]
+    archive?: { files_combined: string[]; files_skipped: string[]; rows: number }
+  }
   version: number
   refreshed_at: string | null
   created_at: string
@@ -142,6 +179,16 @@ export interface FrequencyResult {
   distinct: number
 }
 
+export interface CrosstabRequest {
+  row_variable: string
+  column_variable: string
+  measure: Measure
+  filters: FilterGroup
+  percentages: 'none' | 'row' | 'column' | 'total'
+  include_totals: boolean
+  use_labels: boolean
+}
+
 export interface CrosstabResult {
   row_variable: string
   column_variable: string
@@ -215,7 +262,8 @@ export interface SyncRun {
 
 export type ChartType =
   | 'bar' | 'horizontal_bar' | 'stacked_bar' | 'line' | 'area' | 'pie'
-  | 'donut' | 'scatter' | 'table' | 'kpi' | 'heatmap' | 'map' | 'gauge' | 'funnel'
+  | 'donut' | 'scatter' | 'table' | 'kpi' | 'heatmap' | 'crosstab' | 'map'
+  | 'gauge' | 'funnel'
 
 export interface Chart {
   id: string
@@ -223,7 +271,14 @@ export interface Chart {
   description: string
   dataset_id: string
   chart_type: ChartType
-  spec: { query?: QuerySpec; encoding?: Record<string, string>; options?: Record<string, unknown> }
+  // A cross-tab is saved with a crosstab request in place of a query; the
+  // server branches on which one is present when rendering it.
+  spec: {
+    query?: QuerySpec
+    crosstab?: CrosstabRequest
+    encoding?: Record<string, string>
+    options?: Record<string, unknown>
+  }
   created_at: string
   updated_at: string
 }
@@ -249,6 +304,7 @@ export interface Dashboard {
   slug: string
   description: string
   filters: Record<string, unknown>[]
+  project_id: string | null
   is_public: boolean
   public_token: string | null
   refresh_interval_seconds: number

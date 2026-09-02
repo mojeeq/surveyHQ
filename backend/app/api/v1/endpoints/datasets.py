@@ -18,7 +18,7 @@ from app.api.deps import (
 )
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.models import Dataset, DatasetSource, DatasetStatus, Variable
+from app.models import Dataset, DatasetSource, DatasetStatus, Role, Variable
 from app.schemas.common import Message, Page
 from app.schemas.dataset import (
     DatasetDetail,
@@ -28,13 +28,17 @@ from app.schemas.dataset import (
     VariableOut,
 )
 from app.schemas.query import FilterGroup
+from app.services.archives import is_archive
 from app.services.audit import record
 from app.services.datasets import (
+    append_file_into_dataset,
     create_dataset_record,
     delete_dataset_files,
+    load_archive_into_dataset,
     load_file_into_dataset,
 )
 from app.services.ingest import SUPPORTED_EXTENSIONS, IngestError
+from app.services.projects import can_edit, restrict, scope_for
 from app.services.query_engine import (
     DatasetContext,
     QueryError,
@@ -50,14 +54,21 @@ router = APIRouter()
 @router.get("", response_model=Page[DatasetOut])
 def list_datasets(
     db: DbSession,
-    _: CurrentUser,
+    user: CurrentUser,
     limit: int = Query(default=50, le=200),
     offset: int = 0,
     search: str = "",
     status: DatasetStatus | None = None,
     tag: str = "",
+    project_id: str = "",
 ) -> Page[DatasetOut]:
-    statement = select(Dataset)
+    statement = restrict(select(Dataset), scope_for(db, user).filter(Dataset.project_id))
+    if project_id:
+        statement = statement.where(
+            Dataset.project_id.is_(None)
+            if project_id == "none"
+            else Dataset.project_id == project_id
+        )
     if search:
         pattern = f"%{search.lower()}%"
         statement = statement.where(
@@ -86,17 +97,31 @@ async def upload_dataset(
     name: Annotated[str, Form()] = "",
     description: Annotated[str, Form()] = "",
     tags: Annotated[str, Form()] = "",
+    combine_all: Annotated[bool, Form()] = False,
+    project_id: Annotated[str, Form()] = "",
 ) -> DatasetDetail:
-    """Upload a data file and ingest it immediately."""
+    """Upload a data file, or a zip of them, and ingest it immediately.
+
+    A zip is unpacked and the files inside appended into one dataset, with a
+    source_file column recording where each row came from. By default only files
+    sharing a column set are appended, because an export archive usually holds
+    one file per roster level rather than several rounds; combine_all forces
+    everything together on the union of their columns.
+    """
     filename = Path(file.filename or "upload.dat").name
     suffix = Path(filename).suffix.lower()
-    if suffix not in SUPPORTED_EXTENSIONS:
+    if suffix not in SUPPORTED_EXTENSIONS and suffix != ".zip":
         raise HTTPException(
             status_code=400,
             detail=(
-                f"'{suffix or filename}' is not a supported format. Upload one of: "
-                + ", ".join(sorted(SUPPORTED_EXTENSIONS))
+                f"'{suffix or filename}' is not a supported format. Upload a .zip "
+                "archive, or one of: " + ", ".join(sorted(SUPPORTED_EXTENSIONS))
             ),
+        )
+
+    if project_id and not can_edit(db, user, project_id, Role.manager):
+        raise HTTPException(
+            status_code=404, detail="Project not found"
         )
 
     settings.ensure_directories()
@@ -108,6 +133,7 @@ async def upload_dataset(
         source_ref=filename,
         tags=[t.strip() for t in tags.split(",") if t.strip()],
         created_by=user.id,
+        project_id=project_id or None,
     )
 
     upload_path = settings.uploads_path / f"{dataset.id}{suffix}"
@@ -131,7 +157,10 @@ async def upload_dataset(
         await file.close()
 
     try:
-        load_file_into_dataset(db, dataset, upload_path)
+        if is_archive(upload_path):
+            load_archive_into_dataset(db, dataset, upload_path, combine_all=combine_all)
+        else:
+            load_file_into_dataset(db, dataset, upload_path)
     except IngestError as exc:
         db.commit()  # keep the failed record so the user can see why
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -152,15 +181,15 @@ async def upload_dataset(
 
 
 @router.get("/{dataset_id}", response_model=DatasetDetail)
-def read_dataset(dataset_id: str, db: DbSession, _: CurrentUser) -> DatasetDetail:
-    return DatasetDetail.model_validate(get_dataset(dataset_id, db))
+def read_dataset(dataset_id: str, db: DbSession, user: CurrentUser) -> DatasetDetail:
+    return DatasetDetail.model_validate(get_dataset(dataset_id, db, user))
 
 
 @router.patch("/{dataset_id}", response_model=DatasetOut)
 def update_dataset(
     dataset_id: str, payload: DatasetUpdate, db: DbSession, user: RequireManager
 ) -> Dataset:
-    dataset = get_dataset(dataset_id, db)
+    dataset = get_dataset(dataset_id, db, user)
     if payload.name is not None:
         dataset.name = payload.name
     if payload.description is not None:
@@ -175,7 +204,7 @@ def update_dataset(
 
 @router.delete("/{dataset_id}", response_model=Message)
 def delete_dataset(dataset_id: str, db: DbSession, user: RequireManager) -> Message:
-    dataset = get_dataset(dataset_id, db)
+    dataset = get_dataset(dataset_id, db, user)
     name = dataset.name
     delete_dataset_files(dataset)
     db.delete(dataset)
@@ -199,7 +228,7 @@ async def replace_dataset_data(
     file: Annotated[UploadFile, File()],
 ) -> DatasetDetail:
     """Refresh a dataset in place from a new file, keeping charts pointed at it."""
-    dataset = get_dataset(dataset_id, db)
+    dataset = get_dataset(dataset_id, db, user)
     filename = Path(file.filename or "upload.dat").name
     suffix = Path(filename).suffix.lower()
     if suffix not in SUPPORTED_EXTENSIONS:
@@ -227,15 +256,56 @@ async def replace_dataset_data(
     return DatasetDetail.model_validate(dataset)
 
 
+@router.post("/{dataset_id}/append", response_model=DatasetDetail)
+async def append_to_dataset(
+    dataset_id: str,
+    db: DbSession,
+    user: RequireManager,
+    file: Annotated[UploadFile, File()],
+) -> DatasetDetail:
+    """Add another round's rows to a dataset rather than replacing them."""
+    dataset = get_dataset(dataset_id, db, user)
+    filename = Path(file.filename or "upload.dat").name
+    suffix = Path(filename).suffix.lower()
+    if suffix not in SUPPORTED_EXTENSIONS and suffix != ".zip":
+        raise HTTPException(status_code=400, detail=f"Unsupported format '{suffix}'")
+
+    settings.ensure_directories()
+    upload_path = settings.uploads_path / f"{dataset.id}-append{suffix}"
+    with open(upload_path, "wb") as handle:
+        shutil.copyfileobj(file.file, handle)
+    await file.close()
+
+    try:
+        append_file_into_dataset(db, dataset, upload_path, source_name=filename)
+    except IngestError as exc:
+        db.commit()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        upload_path.unlink(missing_ok=True)
+
+    record(
+        db,
+        user=user,
+        action="append_dataset",
+        entity_type="dataset",
+        entity_id=dataset.id,
+        detail={"filename": filename, "rows": dataset.row_count},
+    )
+    db.commit()
+    db.refresh(dataset)
+    return DatasetDetail.model_validate(dataset)
+
+
 @router.get("/{dataset_id}/variables", response_model=list[VariableOut])
 def list_variables(
     dataset_id: str,
     db: DbSession,
-    _: CurrentUser,
+    user: CurrentUser,
     search: str = "",
     var_type: str = "",
 ) -> list[Variable]:
-    dataset = get_dataset(dataset_id, db)
+    dataset = get_dataset(dataset_id, db, user)
     variables = dataset.variables
     if search:
         needle = search.lower()
@@ -251,7 +321,7 @@ def list_variables(
 def preview_dataset(
     dataset_id: str,
     db: DbSession,
-    _: CurrentUser,
+    user: CurrentUser,
     limit: int = Query(default=50, le=1000),
     offset: int = 0,
     columns: str = "",
@@ -259,7 +329,7 @@ def preview_dataset(
     sort_dir: str = "asc",
 ) -> DatasetPreview:
     """Raw row browser for the data tab."""
-    dataset = get_ready_dataset(dataset_id, db)
+    dataset = get_ready_dataset(dataset_id, db, user)
     ctx = DatasetContext.from_model(dataset)
     selected = [c.strip() for c in columns.split(",") if c.strip()] or None
     sort = [(sort_by, sort_dir)] if sort_by else None
@@ -283,11 +353,11 @@ def variable_values(
     dataset_id: str,
     variable: str,
     db: DbSession,
-    _: CurrentUser,
+    user: CurrentUser,
     limit: int = Query(default=200, le=1000),
 ) -> list[dict[str, Any]]:
     """Distinct values for building filters in the UI."""
-    dataset = get_ready_dataset(dataset_id, db)
+    dataset = get_ready_dataset(dataset_id, db, user)
     ctx = DatasetContext.from_model(dataset)
     try:
         return distinct_values(ctx, variable, limit)
@@ -296,6 +366,6 @@ def variable_values(
 
 
 @router.get("/{dataset_id}/tags", response_model=list[str])
-def all_tags(dataset_id: str, db: DbSession, _: CurrentUser) -> list[str]:
-    dataset = get_dataset(dataset_id, db)
+def all_tags(dataset_id: str, db: DbSession, user: CurrentUser) -> list[str]:
+    dataset = get_dataset(dataset_id, db, user)
     return list(dataset.tags or [])

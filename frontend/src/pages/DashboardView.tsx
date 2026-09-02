@@ -10,7 +10,9 @@ import { useToast } from '@/hooks/useToast'
 import { STATUS_COLORS } from '@/lib/charts'
 import { formatNumber, formatValue, relativeTime } from '@/lib/format'
 import type { Chart, Dashboard, Indicator, Widget } from '@/lib/types'
+import AssignProject from '@/components/AssignProject'
 import ChartCard from '@/components/ChartCard'
+import CrosstabTable from '@/components/CrosstabTable'
 import {
   Badge,
   Card,
@@ -139,6 +141,12 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         actions={
           !isPublic && (
             <>
+              <AssignProject
+                kind="dashboard"
+                id={dashboard.data!.id}
+                projectId={dashboard.data!.project_id}
+                canMove={can('manager')}
+              />
               {can('analyst') && (
                 <>
                   <button className="btn-secondary" onClick={() => setAdding(true)}>
@@ -148,7 +156,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
                     className={editing ? 'btn-primary' : 'btn-secondary'}
                     onClick={() => setEditing(!editing)}
                   >
-                    {editing ? 'Done arranging' : 'Arrange'}
+                    {editing ? 'Done' : 'Move & resize'}
                   </button>
                   <button
                     className="btn-secondary"
@@ -212,7 +220,11 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
                 payload={rendered.data?.widgets[widget.id]}
                 loading={rendered.isLoading}
                 editing={editing && !isPublic}
-                onRemove={() => removeWidget.mutate(widget.id)}
+                canEdit={!isPublic && can('analyst')}
+                onRemove={() => {
+                  if (confirm(`Remove "${widget.title || 'this widget'}" from the dashboard?`))
+                    removeWidget.mutate(widget.id)
+                }}
               />
             </div>
           ))}
@@ -229,22 +241,34 @@ function WidgetFrame({
   payload,
   loading,
   editing,
+  canEdit,
   onRemove,
 }: {
   widget: Widget
   payload: any
   loading: boolean
   editing: boolean
+  canEdit: boolean
   onRemove: () => void
 }) {
   return (
     <div className="flex h-full flex-col">
-      <header className="widget-handle flex shrink-0 items-center justify-between gap-2 border-b border-ink-200 px-4 py-2.5">
+      <header className="widget-handle group flex shrink-0 items-center justify-between gap-2 border-b border-ink-200 px-4 py-2.5">
         <h3 className={`truncate text-sm font-semibold text-ink-800 ${editing ? 'cursor-move' : ''}`}>
           {widget.title || payload?.name || 'Widget'}
         </h3>
-        {editing && (
-          <button className="btn-ghost btn-sm text-red-600" onClick={onRemove} title="Remove">
+        {canEdit && (
+          // Removal used to live only inside Arrange mode with nothing saying
+          // so, which read as "widgets cannot be removed". It is now always
+          // reachable: visible on hover, and permanently while arranging.
+          <button
+            className={`btn-ghost btn-sm shrink-0 text-red-600 transition-opacity ${
+              editing ? 'opacity-100' : 'opacity-0 focus:opacity-100 group-hover:opacity-100'
+            }`}
+            onClick={onRemove}
+            title="Remove this widget"
+            aria-label={`Remove ${widget.title || 'widget'}`}
+          >
             ✕
           </button>
         )}
@@ -260,6 +284,8 @@ function WidgetFrame({
           </p>
         ) : payload.type === 'indicator' ? (
           <IndicatorWidget payload={payload} />
+        ) : payload.type === 'crosstab' ? (
+          <CrosstabTable result={payload.result} compact maxHeight={260} />
         ) : payload.type === 'text' ? (
           <p className="whitespace-pre-wrap text-sm text-ink-700">{payload.content}</p>
         ) : payload.result ? (
@@ -373,14 +399,14 @@ function AddWidgetModal({ dashboardId, onClose }: { dashboardId: string; onClose
           value={kind}
           onChange={(event) => setKind(event.target.value as typeof kind)}
         >
-          <option value="chart">Saved chart</option>
+          <option value="chart">Saved chart or cross-tab</option>
           <option value="indicator">Indicator tile</option>
           <option value="text">Text note</option>
         </select>
       </Field>
 
       {kind === 'chart' && (
-        <Field label="Chart">
+        <Field label="Chart or cross-tab">
           <select
             className="input"
             value={chartId}
@@ -389,7 +415,9 @@ function AddWidgetModal({ dashboardId, onClose }: { dashboardId: string; onClose
             <option value="">Choose a saved chart…</option>
             {charts.data?.map((chart) => (
               <option key={chart.id} value={chart.id}>
-                {chart.name}
+                {/* Two saved items can share a name while rendering quite
+                    differently, so say which kind each one is. */}
+                {chart.name} ({chart.chart_type === 'crosstab' ? 'cross-tab' : chart.chart_type})
               </option>
             ))}
           </select>

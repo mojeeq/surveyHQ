@@ -159,9 +159,16 @@ make update      # git pull + rebuild + restart
 make logs        # watch the rollout
 ```
 
-New tables are created automatically at start-up. Column changes to existing
-tables are not applied automatically; check the release notes before upgrading
-across a schema change.
+The schema is brought up to date at start-up: new tables are created, new
+nullable columns are added to existing tables, and new values are added to
+existing PostgreSQL enum types. Between them these cover every change the schema
+has needed so far, and the API logs each one it applies.
+
+What is *not* automatic is anything destructive - dropping, renaming or retyping
+a column, or adding one that is `NOT NULL` with no default. Those need a real
+migration, so check the release notes before upgrading across one. A column that
+cannot be added safely is logged as an error at start-up rather than crashing
+the server, so look for it in `make logs` after an upgrade.
 
 ## Monitoring the platform itself
 

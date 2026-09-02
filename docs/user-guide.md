@@ -9,6 +9,46 @@
 | **Manager** | Everything above, plus upload data, manage connections, indicators and quality rules |
 | **Administrator** | Everything, plus manage users and see the audit log |
 
+A role is what someone may *do*. What they may *reach* is decided separately, by
+projects.
+
+## Projects
+
+A project groups one survey round's datasets and dashboards, and controls who
+can see them. Anything not in a project sits in the **shared area**, which every
+user can see - that is where everything lives until you decide otherwise, so
+projects are something you opt into rather than something you must set up first.
+
+To create one: **Projects → New project**. You are added as its manager, so it
+stays visible to you.
+
+To put data in it, either choose the project when uploading, or open a dataset
+or dashboard and click the project button in its header to move it. Moving needs
+manager rights on *both* projects, so nobody can take a dataset out of a project
+they have no say over.
+
+### Giving someone one project only
+
+This is the point of projects, and it takes two steps:
+
+1. **Administration → Add user**. Set their role, then tick **Limit to assigned
+   projects**. This hides the shared area from them; without it they would still
+   see everything not in a project.
+2. **Projects → (the project) → Members → Add member**. Choose their role on
+   this project.
+
+They now see that project and nothing else - not in listings, and not by typing
+a URL or calling the API directly. A dataset outside their reach answers "not
+found" rather than "forbidden", so they cannot even tell that other projects
+exist.
+
+A member's role on a project never exceeds their own role. Adding a viewer to a
+project as manager does not make them an editor of anything; membership widens
+what someone can reach, never what they are allowed to do.
+
+Deleting a project does not delete its data. Its datasets and dashboards move
+back to the shared area.
+
 ## Getting data in
 
 ### Uploading a file
@@ -80,6 +120,10 @@ row, column, or percent of total. Row and column totals are always shown.
 Underneath, chi-square and Cramér's V are reported so you can see whether an
 apparent association is worth anything.
 
+**Save for dashboards** keeps the table itself, not a picture of it. It reruns
+against current data wherever it appears, and dashboard filters narrow it like
+any other widget.
+
 ## Charts and dashboards
 
 Any Explore result can be saved as a chart. Saved charts live under
@@ -87,9 +131,13 @@ Any Explore result can be saved as a chart. Saved charts live under
 
 To build a dashboard:
 
-1. **Dashboards → New dashboard**.
-2. **Add widget** — a saved chart, an indicator tile, or a text note.
-3. **Arrange** — drag widgets around and resize them; the layout saves itself.
+1. **Dashboards → New dashboard**. Choose the project it belongs to, or leave it
+   in the shared area.
+2. **Add widget** — a saved chart, a saved cross-tabulation, an indicator tile,
+   or a text note.
+3. **Move & resize** — drag widgets around and resize them; the layout saves
+   itself. Removing a widget does not need this: hover over it and use the ✕ in
+   its corner.
 4. **Share link** — generates a read-only public URL, copied to your clipboard.
    Anyone with the link can view the dashboard without an account. Press again
    to revoke it.

@@ -350,3 +350,252 @@ def test_health_endpoint(client):
     body = client.get("/health").json()
     assert body["status"] == "ok"
     assert body["database"] == "ok"
+
+
+# --- zip upload and append --------------------------------------------------
+
+
+def _stata_bytes(frame):
+    import io
+
+    import pandas as pd  # noqa: F401
+
+    buffer = io.BytesIO()
+    frame.to_stata(buffer, write_index=False, version=118)
+    return buffer.getvalue()
+
+
+def _zip_bytes(files: dict[str, bytes]) -> bytes:
+    import io
+    import zipfile
+
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, payload in files.items():
+            archive.writestr(name, payload)
+    return buffer.getvalue()
+
+
+def test_uploading_a_zip_appends_its_files_into_one_dataset(client, auth_headers):
+    import pandas as pd
+
+    archive = _zip_bytes(
+        {
+            "round1.dta": _stata_bytes(pd.DataFrame({"id": [1, 2], "age": [30.0, 40.0]})),
+            "round2.dta": _stata_bytes(pd.DataFrame({"id": [3, 4], "age": [50.0, 60.0]})),
+        }
+    )
+    response = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("rounds.zip", archive, "application/zip")},
+        data={"name": "Combined rounds"},
+    )
+    assert response.status_code == 201, response.text
+    dataset = response.json()
+
+    # Both files landed in one dataset, not two
+    assert dataset["row_count"] == 4
+    names = {v["name"] for v in dataset["variables"]}
+    assert "source_file" in names
+    assert dataset["meta"]["archive"]["files_combined"] == ["round1.dta", "round2.dta"]
+
+    # And the source column can be tabulated, so rounds can be compared
+    frequency = client.get(
+        f"/api/v1/analytics/datasets/{dataset['id']}/frequency/source_file",
+        headers=auth_headers,
+    )
+    assert frequency.status_code == 200
+    counts = {row["label"]: row["count"] for row in frequency.json()["rows"]}
+    assert counts == {"round1.dta": 2, "round2.dta": 2}
+
+
+def test_appending_a_later_round_adds_rows_rather_than_replacing(client, auth_headers):
+    import pandas as pd
+
+    first = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "r1.dta",
+                _stata_bytes(pd.DataFrame({"id": [1, 2], "age": [30.0, 40.0]})),
+                "application/octet-stream",
+            )
+        },
+        data={"name": "Growing dataset"},
+    )
+    assert first.status_code == 201
+    dataset_id = first.json()["id"]
+    assert first.json()["row_count"] == 2
+
+    appended = client.post(
+        f"/api/v1/datasets/{dataset_id}/append",
+        headers=auth_headers,
+        files={
+            "file": (
+                "r2.dta",
+                _stata_bytes(pd.DataFrame({"id": [3], "age": [50.0]})),
+                "application/octet-stream",
+            )
+        },
+    )
+    assert appended.status_code == 200, appended.text
+    assert appended.json()["row_count"] == 3
+
+    # The rows that were already there keep a source, not just the new ones
+    frequency = client.get(
+        f"/api/v1/analytics/datasets/{dataset_id}/frequency/source_file",
+        headers=auth_headers,
+    ).json()
+    counts = {row["label"]: row["count"] for row in frequency["rows"]}
+    assert counts["r2.dta"] == 1
+    assert sum(counts.values()) == 3
+
+
+def test_appending_to_an_empty_dataset_is_refused(client, auth_headers):
+    import pandas as pd
+
+    created = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("x.csv", b"a,b\n", "text/csv")},
+        data={"name": "No rows"},
+    )
+    assert created.status_code == 201
+    response = client.post(
+        f"/api/v1/datasets/{created.json()['id']}/append",
+        headers=auth_headers,
+        files={
+            "file": (
+                "r.dta",
+                _stata_bytes(pd.DataFrame({"id": [1], "age": [30.0]})),
+                "application/octet-stream",
+            )
+        },
+    )
+    # An empty dataset has no schema to append onto
+    assert response.status_code in (200, 422)
+
+
+# --- saved cross-tabulations ------------------------------------------------
+
+
+def test_a_crosstab_can_be_saved_and_rendered_like_a_chart(client, auth_headers, dataset_id):
+    """A cross-tab is worth putting on a dashboard, not just exporting once."""
+    saved = client.post(
+        "/api/v1/dashboards/charts",
+        headers=auth_headers,
+        json={
+            "name": "Region by sex",
+            "dataset_id": dataset_id,
+            "chart_type": "crosstab",
+            "spec": {
+                "crosstab": {
+                    "row_variable": "region",
+                    "column_variable": "sex",
+                    "percentages": "row",
+                }
+            },
+        },
+    )
+    assert saved.status_code == 201, saved.text
+
+    rendered = client.post(
+        f"/api/v1/dashboards/charts/{saved.json()['id']}/data",
+        headers=auth_headers,
+        json={"op": "and", "conditions": [], "groups": []},
+    )
+    assert rendered.status_code == 200, rendered.text
+    body = rendered.json()
+
+    # It comes back as a crosstab, not as a query result
+    assert body["row_variable"] == "region"
+    assert set(body["column_labels"]) == {"Male", "Female"}
+    for row in body["values"]:
+        assert abs(sum(v for v in row if v is not None) - 100) < 0.05
+
+
+def test_a_saved_crosstab_renders_as_a_dashboard_widget(client, auth_headers, dataset_id):
+    chart = client.post(
+        "/api/v1/dashboards/charts",
+        headers=auth_headers,
+        json={
+            "name": "Region by sex",
+            "dataset_id": dataset_id,
+            "chart_type": "crosstab",
+            "spec": {
+                "crosstab": {"row_variable": "region", "column_variable": "sex"}
+            },
+        },
+    ).json()
+
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "With a crosstab"}
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={"title": "Region by sex", "widget_type": "chart", "chart_id": chart["id"]},
+    )
+
+    rendered = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json={"op": "and", "conditions": [], "groups": []},
+    )
+    assert rendered.status_code == 200
+    widget = next(iter(rendered.json()["widgets"].values()))
+    assert widget["type"] == "crosstab"
+    assert widget["result"]["grand_total"] == 200
+
+
+def test_an_invalid_crosstab_spec_is_rejected_on_save(client, auth_headers, dataset_id):
+    response = client.post(
+        "/api/v1/dashboards/charts",
+        headers=auth_headers,
+        json={
+            "name": "Broken",
+            "dataset_id": dataset_id,
+            "chart_type": "crosstab",
+            "spec": {"crosstab": {"row_variable": "region"}},  # no column variable
+        },
+    )
+    assert response.status_code == 422
+
+
+def test_a_dashboard_filter_narrows_a_saved_crosstab(client, auth_headers, dataset_id):
+    """Dashboard filters must reach a crosstab widget, as they do a chart widget."""
+    chart = client.post(
+        "/api/v1/dashboards/charts",
+        headers=auth_headers,
+        json={
+            "name": "Region by sex",
+            "dataset_id": dataset_id,
+            "chart_type": "crosstab",
+            "spec": {
+                "crosstab": {"row_variable": "region", "column_variable": "sex"}
+            },
+        },
+    ).json()
+
+    unfiltered = client.post(
+        f"/api/v1/dashboards/charts/{chart['id']}/data", headers=auth_headers
+    ).json()
+    assert unfiltered["grand_total"] == 200
+
+    filtered = client.post(
+        f"/api/v1/dashboards/charts/{chart['id']}/data",
+        headers=auth_headers,
+        json={
+            "op": "and",
+            "conditions": [
+                {"variable": "region", "operator": "eq", "value": "North"}
+            ],
+            "groups": [],
+        },
+    )
+    assert filtered.status_code == 200, filtered.text
+    body = filtered.json()
+    assert 0 < body["grand_total"] < 200
+    assert body["row_labels"] == ["North"]

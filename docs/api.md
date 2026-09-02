@@ -35,11 +35,40 @@ An API key carries the role of the user who created it.
 
 ## Endpoints
 
+Every listing returns only what the caller may reach. A dataset, dashboard or
+chart outside their projects answers `404`, not `403`, so responses cannot be
+used to enumerate other people's projects.
+
+### Projects
+
+```
+GET    /projects                          projects you can reach
+POST   /projects                          create; you become its manager [manager]
+GET    /projects/{id}                     detail, with members
+PATCH  /projects/{id}                     rename, describe, set dates  [project manager]
+DELETE /projects/{id}                     delete; its data returns to the shared
+                                          area rather than being deleted
+                                                                       [project manager]
+GET    /projects/{id}/members             members and their roles
+PUT    /projects/{id}/members             add a member, or change a role
+                                          {"user_id": "...", "role": "analyst"}
+                                          "admin" is rejected: administration is
+                                          global, not per project     [project manager]
+DELETE /projects/{id}/members/{user_id}   remove a member             [project manager]
+PUT    /projects/assign/dataset/{id}      {"project_id": "..."} or null for the
+                                          shared area; needs manager rights on
+                                          both the source and the target
+PUT    /projects/assign/dashboard/{id}    the same, for a dashboard
+```
+
 ### Datasets
 
 ```
-GET    /datasets                          list (search, status, limit, offset)
-POST   /datasets/upload                   multipart upload      [manager]
+GET    /datasets                          list (search, status, project_id, limit,
+                                          offset). project_id=none returns only
+                                          what is in the shared area.
+POST   /datasets/upload                   multipart upload; project_id puts it
+                                          straight into a project [manager]
 GET    /datasets/{id}                     detail with variables
 PATCH  /datasets/{id}                     rename, describe, tag [manager]
 DELETE /datasets/{id}                                            [manager]

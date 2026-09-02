@@ -57,6 +57,12 @@ class Dataset(UUIDMixin, TimestampMixin, Base):
     connection_id: Mapped[str | None] = mapped_column(
         ForeignKey("connections.id", ondelete="SET NULL"), nullable=True, index=True
     )
+    # Null means the shared area: visible to everyone, which is what every
+    # dataset was before projects existed. Deleting a project releases its
+    # datasets back there rather than destroying them.
+    project_id: Mapped[str | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
     status: Mapped[DatasetStatus] = mapped_column(
         Enum(DatasetStatus, name="dataset_status"), default=DatasetStatus.pending
     )
@@ -100,6 +106,8 @@ class Variable(UUIDMixin, Base):
     max_value: Mapped[float | None] = mapped_column(Float)
     mean_value: Mapped[float | None] = mapped_column(Float)
     value_labels: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Stata tagged missings present on this variable, e.g. [".a", ".b"]
+    missing_tags: Mapped[list] = mapped_column(JSON, default=list, nullable=True)
     is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
 
     dataset: Mapped[Dataset] = relationship(back_populates="variables")

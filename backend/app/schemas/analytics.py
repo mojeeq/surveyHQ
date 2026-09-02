@@ -88,6 +88,7 @@ class DashboardCreate(BaseModel):
     description: str = ""
     filters: list[dict[str, Any]] = Field(default_factory=list)
     refresh_interval_seconds: int = 0
+    project_id: str | None = None
 
 
 class DashboardUpdate(BaseModel):
@@ -107,6 +108,7 @@ class DashboardOut(BaseModel):
     slug: str
     description: str = ""
     filters: list[dict[str, Any]] = Field(default_factory=list)
+    project_id: str | None = None
     is_public: bool = False
     public_token: str | None = None
     refresh_interval_seconds: int = 0

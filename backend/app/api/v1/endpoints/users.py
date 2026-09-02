@@ -51,6 +51,7 @@ def create_user(payload: UserCreate, db: DbSession, admin: RequireAdmin) -> User
         full_name=payload.full_name,
         role=payload.role,
         is_active=payload.is_active,
+        restricted_to_projects=payload.restricted_to_projects,
         hashed_password=hash_password(payload.password),
     )
     db.add(user)
@@ -81,6 +82,8 @@ def update_user(
         user.role = payload.role
     if payload.is_active is not None:
         user.is_active = payload.is_active
+    if payload.restricted_to_projects is not None:
+        user.restricted_to_projects = payload.restricted_to_projects
     if payload.password:
         user.hashed_password = hash_password(payload.password)
 

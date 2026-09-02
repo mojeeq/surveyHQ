@@ -4,6 +4,8 @@ import { Loading } from '@/components/ui'
 import Layout from '@/components/Layout'
 import Login from '@/pages/Login'
 import Overview from '@/pages/Overview'
+import Projects from '@/pages/Projects'
+import ProjectDetail from '@/pages/ProjectDetail'
 import Datasets from '@/pages/Datasets'
 import DatasetDetail from '@/pages/DatasetDetail'
 import Connections from '@/pages/Connections'
@@ -45,6 +47,8 @@ export default function App() {
         }
       >
         <Route index element={<Overview />} />
+        <Route path="projects" element={<Projects />} />
+        <Route path="projects/:id" element={<ProjectDetail />} />
         <Route path="datasets" element={<Datasets />} />
         <Route path="datasets/:id" element={<DatasetDetail />} />
         <Route path="connections" element={<Connections />} />

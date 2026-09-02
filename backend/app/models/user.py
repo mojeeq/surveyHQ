@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import enum
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDMixin
@@ -36,6 +36,12 @@ class User(UUIDMixin, TimestampMixin, Base):
     hashed_password: Mapped[str] = mapped_column(String(200), nullable=False)
     role: Mapped[Role] = mapped_column(Enum(Role, name="user_role"), default=Role.viewer)
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # When set, this user sees only the projects they belong to - not the shared
+    # area. This is what makes "a user who can view only certain projects"
+    # possible without giving every existing user a membership first.
+    restricted_to_projects: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
     last_login_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
 
     api_keys: Mapped[list[ApiKey]] = relationship(

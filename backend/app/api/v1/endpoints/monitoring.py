@@ -52,6 +52,12 @@ from app.services.monitoring import (
     progress_percent,
     refresh_indicator,
 )
+from app.services.projects import (
+    alert_rule_clause,
+    dataset_clause,
+    restrict,
+    scope_for,
+)
 from app.services.quality import execute_rule, suggested_rules
 
 router = APIRouter()
@@ -62,9 +68,12 @@ router = APIRouter()
 
 @router.get("/indicators", response_model=list[IndicatorOut])
 def list_indicators(
-    db: DbSession, _: CurrentUser, dataset_id: str = "", active_only: bool = False
+    db: DbSession, user: CurrentUser, dataset_id: str = "", active_only: bool = False
 ) -> list[Indicator]:
-    statement = select(Indicator).order_by(Indicator.display_order, Indicator.created_at)
+    statement = restrict(
+        select(Indicator).order_by(Indicator.display_order, Indicator.created_at),
+        dataset_clause(db, user, Indicator.dataset_id),
+    )
     if dataset_id:
         statement = statement.where(Indicator.dataset_id == dataset_id)
     if active_only:
@@ -76,7 +85,7 @@ def list_indicators(
 def create_indicator(
     payload: IndicatorCreate, db: DbSession, user: RequireManager
 ) -> Indicator:
-    get_ready_dataset(payload.dataset_id, db)
+    get_ready_dataset(payload.dataset_id, db, user)
     indicator = Indicator(
         name=payload.name,
         description=payload.description,
@@ -129,13 +138,16 @@ def delete_indicator(indicator_id: str, db: DbSession, _: RequireManager) -> Mes
 @router.get("/indicators/values", response_model=list[IndicatorValue])
 def indicator_values(
     db: DbSession,
-    _: CurrentUser,
+    user: CurrentUser,
     dataset_id: str = "",
     refresh: bool = False,
     trend_points: int = Query(default=30, le=365),
 ) -> list[IndicatorValue]:
     """Current values for the monitoring scoreboard, with recent history."""
-    statement = select(Indicator).where(Indicator.is_active.is_(True))
+    statement = restrict(
+        select(Indicator).where(Indicator.is_active.is_(True)),
+        dataset_clause(db, user, Indicator.dataset_id),
+    )
     if dataset_id:
         statement = statement.where(Indicator.dataset_id == dataset_id)
     indicators = list(
@@ -218,8 +230,12 @@ def _get_indicator(indicator_id: str, db: DbSession) -> Indicator:
 
 
 @router.get("/alert-rules", response_model=list[AlertRuleOut])
-def list_alert_rules(db: DbSession, _: CurrentUser) -> list[AlertRule]:
-    return list(db.scalars(select(AlertRule).order_by(AlertRule.created_at.desc())).all())
+def list_alert_rules(db: DbSession, user: CurrentUser) -> list[AlertRule]:
+    statement = restrict(
+        select(AlertRule).order_by(AlertRule.created_at.desc()),
+        alert_rule_clause(db, user),
+    )
+    return list(db.scalars(statement).all())
 
 
 @router.post("/alert-rules", response_model=AlertRuleOut, status_code=201)
@@ -281,12 +297,18 @@ def test_alert_rule(rule_id: str, db: DbSession, _: RequireManager) -> dict[str,
 @router.get("/alerts", response_model=list[AlertOut])
 def list_alerts(
     db: DbSession,
-    _: CurrentUser,
+    user: CurrentUser,
     status: AlertStatus | None = None,
     severity: Severity | None = None,
     limit: int = Query(default=100, le=500),
 ) -> list[Alert]:
-    statement = select(Alert).order_by(Alert.created_at.desc()).limit(limit)
+    # An alert is visible through the rule that raised it. One whose rule has
+    # been deleted has nothing left to scope it by, so only an admin sees it.
+    clause = alert_rule_clause(db, user)
+    statement = restrict(
+        select(Alert).order_by(Alert.created_at.desc()).limit(limit),
+        None if clause is None else Alert.rule_id.in_(select(AlertRule.id).where(clause)),
+    )
     if status:
         statement = statement.where(Alert.status == status)
     if severity:
@@ -324,9 +346,12 @@ def resolve_alert(alert_id: str, db: DbSession, _: CurrentUser) -> Alert:
 
 @router.get("/quality-rules", response_model=list[QualityRuleWithResult])
 def list_quality_rules(
-    db: DbSession, _: CurrentUser, dataset_id: str = ""
+    db: DbSession, user: CurrentUser, dataset_id: str = ""
 ) -> list[QualityRuleWithResult]:
-    statement = select(QualityRule).order_by(QualityRule.created_at.desc())
+    statement = restrict(
+        select(QualityRule).order_by(QualityRule.created_at.desc()),
+        dataset_clause(db, user, QualityRule.dataset_id),
+    )
     if dataset_id:
         statement = statement.where(QualityRule.dataset_id == dataset_id)
     rules = list(db.scalars(statement).all())
@@ -349,7 +374,7 @@ def list_quality_rules(
 def create_quality_rule(
     payload: QualityRuleCreate, db: DbSession, user: RequireManager
 ) -> QualityRule:
-    get_ready_dataset(payload.dataset_id, db)
+    get_ready_dataset(payload.dataset_id, db, user)
     rule = QualityRule(**payload.model_dump())
     db.add(rule)
     db.flush()
@@ -397,9 +422,9 @@ def run_quality_rule(rule_id: str, db: DbSession, _: CurrentUser) -> QualityResu
 
 @router.post("/datasets/{dataset_id}/quality/run-all", response_model=list[QualityResultOut])
 def run_all_quality_rules(
-    dataset_id: str, db: DbSession, _: CurrentUser
+    dataset_id: str, db: DbSession, user: CurrentUser
 ) -> list[QualityResult]:
-    get_dataset(dataset_id, db)
+    get_dataset(dataset_id, db, user)
     rules = db.scalars(
         select(QualityRule).where(
             QualityRule.dataset_id == dataset_id, QualityRule.is_active.is_(True)
@@ -414,18 +439,27 @@ def run_all_quality_rules(
 
 @router.get("/datasets/{dataset_id}/quality/suggestions", response_model=list[dict])
 def quality_suggestions(
-    dataset_id: str, db: DbSession, _: CurrentUser
+    dataset_id: str, db: DbSession, user: CurrentUser
 ) -> list[dict[str, Any]]:
     """Checks the platform recommends for this dataset, ready to accept."""
-    dataset = get_dataset(dataset_id, db)
+    dataset = get_dataset(dataset_id, db, user)
     return suggested_rules(dataset)
 
 
 @router.get("/quality-results", response_model=list[QualityResultOut])
 def list_quality_results(
-    db: DbSession, _: CurrentUser, rule_id: str = "", limit: int = Query(default=50, le=500)
+    db: DbSession, user: CurrentUser, rule_id: str = "", limit: int = Query(default=50, le=500)
 ) -> list[QualityResult]:
-    statement = select(QualityResult).order_by(QualityResult.run_at.desc()).limit(limit)
+    # A result is reachable through the rule that produced it, and a rule
+    # through its dataset. Without this, failure counts and offending-row
+    # details from another project's data would be readable here.
+    rules = dataset_clause(db, user, QualityRule.dataset_id)
+    statement = restrict(
+        select(QualityResult).order_by(QualityResult.run_at.desc()).limit(limit),
+        None if rules is None else QualityResult.rule_id.in_(
+            select(QualityRule.id).where(rules)
+        ),
+    )
     if rule_id:
         statement = statement.where(QualityResult.rule_id == rule_id)
     return list(db.scalars(statement).all())
@@ -438,29 +472,46 @@ def list_quality_results(
 def field_progress(
     dataset_id: str,
     db: DbSession,
-    _: CurrentUser,
+    user: CurrentUser,
     filters: FilterGroup | None = None,
     grain: str = Query(default="day", pattern="^(day|week|month|quarter|year)$"),
 ) -> dict[str, Any]:
     """Ready-made field monitoring views derived from the dataset's own columns."""
-    dataset = get_ready_dataset(dataset_id, db)
+    dataset = get_ready_dataset(dataset_id, db, user)
     return build_overview(dataset, filters, grain)
 
 
 @router.get("/summary", response_model=dict)
-def monitoring_summary(db: DbSession, _: CurrentUser) -> dict[str, Any]:
-    """Headline numbers for the landing page."""
+def monitoring_summary(db: DbSession, user: CurrentUser) -> dict[str, Any]:
+    """Headline numbers for the landing page, counting only what this user sees."""
+    rules = alert_rule_clause(db, user)
     open_alerts = db.scalars(
-        select(Alert).where(Alert.status == AlertStatus.open).limit(500)
+        restrict(
+            select(Alert).where(Alert.status == AlertStatus.open).limit(500),
+            None if rules is None else Alert.rule_id.in_(select(AlertRule.id).where(rules)),
+        )
     ).all()
-    indicators = db.scalars(select(Indicator).where(Indicator.is_active.is_(True))).all()
-    datasets = db.scalars(select(Dataset)).all()
+    indicators = db.scalars(
+        restrict(
+            select(Indicator).where(Indicator.is_active.is_(True)),
+            dataset_clause(db, user, Indicator.dataset_id),
+        )
+    ).all()
+    datasets = db.scalars(
+        restrict(select(Dataset), scope_for(db, user).filter(Dataset.project_id))
+    ).all()
 
+    quality = dataset_clause(db, user, QualityRule.dataset_id)
     failing_checks = db.scalars(
-        select(QualityResult)
-        .where(QualityResult.passed.is_(False))
-        .order_by(QualityResult.run_at.desc())
-        .limit(100)
+        restrict(
+            select(QualityResult)
+            .where(QualityResult.passed.is_(False))
+            .order_by(QualityResult.run_at.desc())
+            .limit(100),
+            None
+            if quality is None
+            else QualityResult.rule_id.in_(select(QualityRule.id).where(quality)),
+        )
     ).all()
 
     statuses = [indicator_status(i, i.last_value) for i in indicators]

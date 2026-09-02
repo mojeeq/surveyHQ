@@ -43,3 +43,6 @@ Thumbs.db
 # Logs
 *.log
 logs/
+
+# TypeScript incremental build state - a build artifact, not source
+frontend/tsconfig.tsbuildinfo

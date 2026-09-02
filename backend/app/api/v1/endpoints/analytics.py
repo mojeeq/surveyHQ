@@ -7,8 +7,14 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Response
 from sqlalchemy import select
 
-from app.api.deps import CurrentUser, DbSession, RequireAnalyst, get_ready_dataset
-from app.models import Dataset, SavedQuery
+from app.api.deps import (
+    CurrentUser,
+    DbSession,
+    RequireAnalyst,
+    get_dataset,
+    get_ready_dataset,
+)
+from app.models import Dataset, SavedQuery, User
 from app.schemas.analytics import (
     QueryRequest,
     SavedQueryCreate,
@@ -28,6 +34,7 @@ from app.services.exporters import (
     query_result_to_csv,
     query_result_to_xlsx,
 )
+from app.services.projects import dataset_clause, restrict
 from app.services.query_engine import (
     DatasetContext,
     QueryError,
@@ -40,15 +47,15 @@ from app.services.query_engine import (
 router = APIRouter()
 
 
-def _context(dataset_id: str, db: DbSession) -> tuple[Dataset, DatasetContext]:
-    dataset = get_ready_dataset(dataset_id, db)
+def _context(dataset_id: str, db: DbSession, user: User) -> tuple[Dataset, DatasetContext]:
+    dataset = get_ready_dataset(dataset_id, db, user)
     return dataset, DatasetContext.from_model(dataset)
 
 
 @router.post("/query", response_model=QueryResult)
-def run_query(payload: QueryRequest, db: DbSession, _: CurrentUser) -> QueryResult:
+def run_query(payload: QueryRequest, db: DbSession, user: CurrentUser) -> QueryResult:
     """Run an aggregate query - the engine behind every chart and table."""
-    _, ctx = _context(payload.dataset_id, db)
+    _, ctx = _context(payload.dataset_id, db, user)
     try:
         return execute_query(ctx, payload.spec)
     except QueryError as exc:
@@ -59,10 +66,10 @@ def run_query(payload: QueryRequest, db: DbSession, _: CurrentUser) -> QueryResu
 def export_query(
     payload: QueryRequest,
     db: DbSession,
-    _: CurrentUser,
+    user: CurrentUser,
     format: str = Query(default="csv", pattern="^(csv|xlsx)$"),
 ) -> Response:
-    dataset, ctx = _context(payload.dataset_id, db)
+    dataset, ctx = _context(payload.dataset_id, db, user)
     spec = payload.spec.model_copy(update={"limit": min(payload.spec.limit, 100_000)})
     try:
         result = execute_query(ctx, spec)
@@ -92,12 +99,12 @@ def frequency(
     dataset_id: str,
     variable: str,
     db: DbSession,
-    _: CurrentUser,
+    user: CurrentUser,
     limit: int = Query(default=200, le=1000),
     use_labels: bool = True,
 ) -> FrequencyResult:
     """One-way frequency table with valid and cumulative percentages."""
-    _, ctx = _context(dataset_id, db)
+    _, ctx = _context(dataset_id, db, user)
     try:
         return execute_frequency(ctx, variable, FilterGroup(), limit, use_labels)
     except QueryError as exc:
@@ -110,11 +117,11 @@ def frequency_filtered(
     variable: str,
     filters: FilterGroup,
     db: DbSession,
-    _: CurrentUser,
+    user: CurrentUser,
     limit: int = Query(default=200, le=1000),
     use_labels: bool = True,
 ) -> FrequencyResult:
-    _, ctx = _context(dataset_id, db)
+    _, ctx = _context(dataset_id, db, user)
     try:
         return execute_frequency(ctx, variable, filters, limit, use_labels)
     except QueryError as exc:
@@ -123,10 +130,10 @@ def frequency_filtered(
 
 @router.post("/datasets/{dataset_id}/crosstab", response_model=CrosstabResult)
 def crosstab(
-    dataset_id: str, payload: CrosstabRequest, db: DbSession, _: CurrentUser
+    dataset_id: str, payload: CrosstabRequest, db: DbSession, user: CurrentUser
 ) -> CrosstabResult:
     """Two-way tabulation with row/column/total percentages and chi-square."""
-    _, ctx = _context(dataset_id, db)
+    _, ctx = _context(dataset_id, db, user)
     try:
         return execute_crosstab(ctx, payload)
     except QueryError as exc:
@@ -135,9 +142,9 @@ def crosstab(
 
 @router.post("/datasets/{dataset_id}/crosstab/export")
 def export_crosstab(
-    dataset_id: str, payload: CrosstabRequest, db: DbSession, _: CurrentUser
+    dataset_id: str, payload: CrosstabRequest, db: DbSession, user: CurrentUser
 ) -> Response:
-    dataset, ctx = _context(dataset_id, db)
+    dataset, ctx = _context(dataset_id, db, user)
     try:
         result = execute_crosstab(ctx, payload)
     except QueryError as exc:
@@ -158,14 +165,14 @@ def summary(
     dataset_id: str,
     variables: list[str],
     db: DbSession,
-    _: CurrentUser,
+    user: CurrentUser,
 ) -> list[SummaryStats]:
     """Descriptive statistics for one or more numeric variables."""
     if not variables:
         raise HTTPException(status_code=400, detail="Provide at least one variable")
     if len(variables) > 50:
         raise HTTPException(status_code=400, detail="At most 50 variables per request")
-    _, ctx = _context(dataset_id, db)
+    _, ctx = _context(dataset_id, db, user)
     try:
         return execute_summary(ctx, variables, FilterGroup())
     except QueryError as exc:
@@ -177,9 +184,12 @@ def summary(
 
 @router.get("/saved-queries", response_model=list[SavedQueryOut])
 def list_saved_queries(
-    db: DbSession, _: CurrentUser, dataset_id: str = ""
+    db: DbSession, user: CurrentUser, dataset_id: str = ""
 ) -> list[SavedQuery]:
-    statement = select(SavedQuery).order_by(SavedQuery.created_at.desc())
+    statement = restrict(
+        select(SavedQuery).order_by(SavedQuery.created_at.desc()),
+        dataset_clause(db, user, SavedQuery.dataset_id),
+    )
     if dataset_id:
         statement = statement.where(SavedQuery.dataset_id == dataset_id)
     return list(db.scalars(statement).all())
@@ -189,7 +199,7 @@ def list_saved_queries(
 def create_saved_query(
     payload: SavedQueryCreate, db: DbSession, user: RequireAnalyst
 ) -> SavedQuery:
-    get_ready_dataset(payload.dataset_id, db)
+    get_ready_dataset(payload.dataset_id, db, user)
     saved = SavedQuery(
         name=payload.name,
         description=payload.description,
@@ -204,19 +214,21 @@ def create_saved_query(
 
 
 @router.delete("/saved-queries/{query_id}", response_model=Message)
-def delete_saved_query(query_id: str, db: DbSession, _: RequireAnalyst) -> Message:
+def delete_saved_query(query_id: str, db: DbSession, user: RequireAnalyst) -> Message:
     saved = db.get(SavedQuery, query_id)
     if saved is None:
         raise HTTPException(status_code=404, detail="Saved query not found")
+    # It follows its dataset's project, like a chart does.
+    get_dataset(saved.dataset_id, db, user)
     db.delete(saved)
     db.commit()
     return Message(detail="Saved query deleted")
 
 
 @router.post("/datasets/{dataset_id}/suggest", response_model=list[dict])
-def suggest_analyses(dataset_id: str, db: DbSession, _: CurrentUser) -> list[dict[str, Any]]:
+def suggest_analyses(dataset_id: str, db: DbSession, user: CurrentUser) -> list[dict[str, Any]]:
     """Propose useful starting charts based on the dataset's variables."""
-    dataset = get_ready_dataset(dataset_id, db)
+    dataset = get_ready_dataset(dataset_id, db, user)
     suggestions: list[dict[str, Any]] = []
     fields = (dataset.meta or {}).get("monitoring_fields", {})
 
