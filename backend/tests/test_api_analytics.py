@@ -376,7 +376,192 @@ def _zip_bytes(files: dict[str, bytes]) -> bytes:
     return buffer.getvalue()
 
 
-def test_uploading_a_zip_appends_its_files_into_one_dataset(client, auth_headers):
+def test_an_archive_becomes_one_dataset_per_roster_level(client, auth_headers):
+    """A Survey Solutions export holds one file per level, not one per round.
+
+    A real VN_LF2024 export contains VN_LF2024.dta (the interview),
+    R_demographics.dta (one row per person) and abroad_roster.dta. Appending
+    those three together would be nonsense, so each becomes its own dataset.
+    """
+    import pandas as pd
+
+    archive = _zip_bytes(
+        {
+            "survey.dta": _stata_bytes(
+                pd.DataFrame({"interview__key": ["a", "b"], "province": [1.0, 2.0]})
+            ),
+            "members.dta": _stata_bytes(
+                pd.DataFrame(
+                    {
+                        "interview__key": ["a", "a", "b"],
+                        "members__id": [1.0, 2.0, 1.0],
+                        "age": [30.0, 8.0, 44.0],
+                    }
+                )
+            ),
+        }
+    )
+    response = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("export.zip", archive, "application/zip")},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+
+    by_name = {d["name"]: d for d in body["datasets"]}
+    assert set(by_name) == {"survey", "members"}
+    assert by_name["survey"]["row_count"] == 2
+    assert by_name["members"]["row_count"] == 3
+
+
+def test_a_later_archive_appends_each_file_to_its_match(client, auth_headers):
+    """Rounds arrive as separate archives carrying the same member names.
+
+    Member names are unique to this test: matching is by member name within a
+    scope, so reusing a name another test uploaded would append onto its data.
+    That is the intended behaviour, but it makes for an order-dependent test.
+    """
+    import pandas as pd
+
+    def archive(keys, provinces, member_keys, ages):
+        return _zip_bytes(
+            {
+                "lfs_main.dta": _stata_bytes(
+                    pd.DataFrame({"interview__key": keys, "province": provinces})
+                ),
+                "lfs_persons.dta": _stata_bytes(
+                    pd.DataFrame({"interview__key": member_keys, "age": ages})
+                ),
+            }
+        )
+
+    first = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "sept.zip",
+                archive(["a", "b"], [1.0, 2.0], ["a", "a", "b"], [30.0, 8.0, 44.0]),
+                "application/zip",
+            )
+        },
+    )
+    assert first.status_code == 201, first.text
+    assert len(first.json()["created"]) == 2
+
+    second = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "oct.zip",
+                archive(["c"], [3.0], ["c", "c"], [55.0, 12.0]),
+                "application/zip",
+            )
+        },
+    )
+    assert second.status_code == 201, second.text
+    body = second.json()
+    # Appended, not duplicated into a second pair of datasets
+    assert body["created"] == [], body["created"]
+    assert len(body["appended"]) == 2
+
+    by_name = {d["name"]: d for d in body["datasets"]}
+    assert by_name["lfs_main"]["row_count"] == 3      # 2 + 1
+    assert by_name["lfs_persons"]["row_count"] == 5   # 3 + 2
+
+    # The rounds stay distinguishable, which is what source_file is for
+    frequency = client.get(
+        f"/api/v1/analytics/datasets/{by_name['lfs_main']['id']}/frequency/source_file",
+        headers=auth_headers,
+    )
+    counts = {row["label"]: row["count"] for row in frequency.json()["rows"]}
+    assert counts == {"sept.zip": 2, "oct.zip": 1}
+
+
+def test_a_same_named_file_from_another_survey_is_not_appended(client, auth_headers):
+    """Name alone is not enough: the columns have to match too.
+
+    Two unrelated surveys can each export a "roster.dta". Appending one onto the
+    other would produce a dataset whose row count means nothing.
+    """
+    import pandas as pd
+
+    client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "survey-a.zip",
+                _zip_bytes(
+                    {
+                        "shared_name.dta": _stata_bytes(
+                            pd.DataFrame({"crops": [1.0], "hectares": [2.0]})
+                        )
+                    }
+                ),
+                "application/zip",
+            )
+        },
+    )
+    other = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "survey-b.zip",
+                _zip_bytes(
+                    {
+                        "shared_name.dta": _stata_bytes(
+                            pd.DataFrame({"vaccine": [1.0], "doses": [3.0]})
+                        )
+                    }
+                ),
+                "application/zip",
+            )
+        },
+    )
+    assert other.status_code == 201, other.text
+    body = other.json()
+    assert body["appended"] == [], body["appended"]
+    assert len(body["created"]) == 1
+
+
+def test_re_uploading_the_same_archive_warns_that_interviews_are_doubled(
+    client, auth_headers
+):
+    """Survey Solutions can export cumulatively; appending two such exports
+    duplicates every interview they share, and the row count alone hides it."""
+    import pandas as pd
+
+    payload = _zip_bytes(
+        {
+            "survey.dta": _stata_bytes(
+                pd.DataFrame({"interview__key": ["x", "y"], "province": [1.0, 2.0]})
+            )
+        }
+    )
+    client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("cumulative-1.zip", payload, "application/zip")},
+    )
+    again = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("cumulative-2.zip", payload, "application/zip")},
+    )
+    assert again.status_code == 201, again.text
+    warnings = " ".join(again.json()["warnings"])
+    assert "counted twice" in warnings, again.json()["warnings"]
+    assert "interview__key" in warnings
+
+
+def test_combine_all_still_appends_an_archive_of_rounds_into_one_dataset(
+    client, auth_headers
+):
+    """The other shape: an archive that really does hold rounds of one table."""
     import pandas as pd
 
     archive = _zip_bytes(
@@ -389,25 +574,12 @@ def test_uploading_a_zip_appends_its_files_into_one_dataset(client, auth_headers
         "/api/v1/datasets/upload",
         headers=auth_headers,
         files={"file": ("rounds.zip", archive, "application/zip")},
-        data={"name": "Combined rounds"},
+        data={"name": "Combined rounds", "combine_all": "true"},
     )
     assert response.status_code == 201, response.text
-    dataset = response.json()
-
-    # Both files landed in one dataset, not two
-    assert dataset["row_count"] == 4
-    names = {v["name"] for v in dataset["variables"]}
-    assert "source_file" in names
-    assert dataset["meta"]["archive"]["files_combined"] == ["round1.dta", "round2.dta"]
-
-    # And the source column can be tabulated, so rounds can be compared
-    frequency = client.get(
-        f"/api/v1/analytics/datasets/{dataset['id']}/frequency/source_file",
-        headers=auth_headers,
-    )
-    assert frequency.status_code == 200
-    counts = {row["label"]: row["count"] for row in frequency.json()["rows"]}
-    assert counts == {"round1.dta": 2, "round2.dta": 2}
+    body = response.json()
+    assert len(body["datasets"]) == 1
+    assert body["datasets"][0]["row_count"] == 4
 
 
 def test_appending_a_later_round_adds_rows_rather_than_replacing(client, auth_headers):

@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import shutil
 import tempfile
+from dataclasses import dataclass
+from dataclasses import field as dc_field
 from pathlib import Path
 
 import pandas as pd
@@ -17,12 +19,14 @@ from app.db.base import utcnow
 from app.models import Dataset, DatasetSource, DatasetStatus, Variable, VariableType
 from app.services.archives import (
     SOURCE_COLUMN,
+    by_member_name,
     combine,
     extract_members,
     group_by_schema,
     is_archive,
 )
 from app.services.ingest import (
+    MISSING_TAG_SUFFIX,
     IngestError,
     IngestResult,
     detect_monitoring_fields,
@@ -172,59 +176,6 @@ def dataset_is_queryable(dataset: Dataset) -> bool:
     )
 
 
-def load_archive_into_dataset(
-    db: Session, dataset: Dataset, archive_path: Path, combine_all: bool = False
-) -> tuple[Dataset, dict]:
-    """Ingest a zip, appending the files inside it into one dataset.
-
-    An export archive usually holds several tables - one per roster level - not
-    several rounds of the same one, so by default only the largest group of files
-    sharing a column set is appended. combine_all forces every file together on
-    the union of their columns, which is what you want when rounds genuinely
-    differ.
-    """
-    workdir = Path(tempfile.mkdtemp(prefix="surveyhq-archive-"))
-    try:
-        members = extract_members(archive_path, workdir)
-        groups = group_by_schema(members)
-        chosen = members if combine_all else groups[0]
-
-        skipped = [m.name for m in members if m not in chosen]
-        result = combine(chosen)
-        warnings = list(result.warnings)
-        if skipped:
-            warnings.append(
-                f"{len(skipped)} file(s) had a different set of columns and were "
-                f"not appended: {', '.join(skipped[:5])}"
-                + ("..." if len(skipped) > 5 else "")
-                + ". Upload them separately, or choose to combine everything."
-            )
-
-        _apply_ingest(
-            db,
-            dataset,
-            ingest_frame(
-                result.frame,
-                result.variable_labels,
-                result.value_labels,
-                dataset_directory(dataset.id),
-                warnings,
-            ),
-        )
-        summary = {
-            "files_combined": result.members,
-            "files_skipped": skipped,
-            "rows": dataset.row_count,
-        }
-        meta = dict(dataset.meta or {})
-        meta["archive"] = summary
-        dataset.meta = meta
-        db.flush()
-        return dataset, summary
-    finally:
-        shutil.rmtree(workdir, ignore_errors=True)
-
-
 def append_file_into_dataset(
     db: Session, dataset: Dataset, file_path: Path, source_name: str | None = None
 ) -> Dataset:
@@ -244,7 +195,6 @@ def append_file_into_dataset(
             f"'{dataset.name}' has no data to append to yet. Upload into it first."
         )
 
-    existing = pd.read_parquet(dataset.storage_path)
     if is_archive(file_path):
         workdir = Path(tempfile.mkdtemp(prefix="surveyhq-append-"))
         try:
@@ -262,6 +212,27 @@ def append_file_into_dataset(
         frame = frame.copy()
         frame[SOURCE_COLUMN] = label
 
+    return append_frame_into_dataset(db, dataset, frame, variable_labels, value_labels)
+
+
+def append_frame_into_dataset(
+    db: Session,
+    dataset: Dataset,
+    frame: pd.DataFrame,
+    variable_labels: dict[str, str],
+    value_labels: dict[str, dict[str, str]],
+) -> Dataset:
+    """Append rows onto a dataset that already holds data.
+
+    The frame is expected to carry its own SOURCE_COLUMN already, since only the
+    caller knows what the rows should be attributed to.
+    """
+    if not dataset_is_queryable(dataset):
+        raise IngestError(
+            f"'{dataset.name}' has no data to append to yet. Upload into it first."
+        )
+    existing = pd.read_parquet(dataset.storage_path)
+
     if SOURCE_COLUMN not in existing.columns:
         # The dataset predates this column; label what is already there rather
         # than leaving half the rows with no provenance.
@@ -271,8 +242,13 @@ def append_file_into_dataset(
     combined = pd.concat([existing, frame], ignore_index=True, sort=False)
 
     warnings: list[str] = []
-    added = set(frame.columns) - set(existing.columns)
-    dropped = set(existing.columns) - set(frame.columns)
+    warnings.extend(_duplicate_key_warnings(existing, frame))
+    # The "__mv" companions are this platform's own bookkeeping for Stata tagged
+    # missings, created only for columns that actually carry a tag. A round with
+    # no ".a" in a column simply has no companion for it, which is not a
+    # difference in the data and not something to report as one.
+    added = _reportable(set(frame.columns) - set(existing.columns))
+    dropped = _reportable(set(existing.columns) - set(frame.columns))
     if added:
         warnings.append(
             f"The appended file adds {len(added)} new variable(s), blank for "
@@ -307,3 +283,212 @@ def append_file_into_dataset(
         len(combined),
     )
     return dataset
+
+
+# Records which file inside an archive a dataset holds, so a later archive knows
+# which dataset each of its members belongs to. Without it the match would have
+# to be made on the dataset's display name, which users rename.
+ARCHIVE_MEMBER_KEY = "archive_member"
+
+
+@dataclass
+class ArchiveImport:
+    """What one archive upload did, per member file."""
+
+    datasets: list[Dataset] = dc_field(default_factory=list)
+    created: list[str] = dc_field(default_factory=list)
+    appended: list[str] = dc_field(default_factory=list)
+    skipped: list[str] = dc_field(default_factory=list)
+    warnings: list[str] = dc_field(default_factory=list)
+    rows: int = 0
+
+
+# A member file only appends onto a dataset whose columns it largely shares.
+# The name alone is not enough: two unrelated surveys can both export a
+# "members.dta", and in the shared area they would otherwise silently merge into
+# one dataset whose row count means nothing.
+MIN_COLUMN_OVERLAP = 0.5
+
+
+def find_archive_sibling(
+    db: Session,
+    key: str,
+    project_id: str | None,
+    columns: set[str] | None = None,
+) -> Dataset | None:
+    """The dataset already holding this member file, if there is one.
+
+    Scoped to the project, so two projects can each hold their own
+    "members.dta". Within that scope the candidate must also share most of its
+    columns with the incoming file, which is what stops a same-named file from a
+    different survey being appended onto it.
+    """
+    statement = select(Dataset).where(
+        Dataset.project_id.is_(None) if project_id is None else Dataset.project_id == project_id
+    )
+    for candidate in db.scalars(statement):
+        if (candidate.meta or {}).get(ARCHIVE_MEMBER_KEY) != key:
+            continue
+        if columns is None:
+            return candidate
+        known = {v.name for v in candidate.variables}
+        if not known:
+            return candidate
+        shared = len(known & columns) / len(known)
+        if shared >= MIN_COLUMN_OVERLAP:
+            return candidate
+        logger.info(
+            "Not appending %s onto '%s': only %.0f%% of its columns match",
+            key,
+            candidate.name,
+            shared * 100,
+        )
+    return None
+
+
+def load_archive_as_datasets(
+    db: Session,
+    *,
+    archive_path: Path,
+    archive_name: str,
+    project_id: str | None = None,
+    created_by: str | None = None,
+    combine_all: bool = False,
+    name_prefix: str = "",
+) -> ArchiveImport:
+    """Import an archive as one dataset per member file.
+
+    An export holds one file per roster level - interview, household member,
+    person abroad - so each becomes its own dataset. A second archive from a
+    later round carries the same member names, and each of its files is appended
+    to the dataset holding that name rather than creating a duplicate.
+
+    combine_all is the escape hatch for an archive that really does hold several
+    rounds of one table: every member is appended into a single dataset instead.
+    """
+    workdir = Path(tempfile.mkdtemp(prefix="surveyhq-archive-"))
+    outcome = ArchiveImport()
+    try:
+        members = extract_members(archive_path, workdir)
+
+        if combine_all:
+            result = combine(members)
+            dataset = create_dataset_record(
+                db,
+                name=archive_name,
+                source=DatasetSource.upload,
+                source_ref=archive_name,
+                created_by=created_by,
+                project_id=project_id,
+            )
+            _apply_ingest(
+                db,
+                dataset,
+                ingest_frame(
+                    result.frame,
+                    result.variable_labels,
+                    result.value_labels,
+                    dataset_directory(dataset.id),
+                    list(result.warnings),
+                ),
+            )
+            outcome.datasets.append(dataset)
+            outcome.created.append(dataset.name)
+            outcome.warnings.extend(result.warnings)
+            outcome.rows = dataset.row_count
+            return outcome
+
+        for key, member in sorted(by_member_name(members).items()):
+            frame = member.frame.copy()
+            # Every row records the archive it arrived in, not the member file:
+            # the member name is the same in every round, so it would say nothing
+            # about which round a row came from.
+            frame[SOURCE_COLUMN] = archive_name
+
+            existing = find_archive_sibling(
+                db, key, project_id, {str(c) for c in frame.columns}
+            )
+            if existing is not None and dataset_is_queryable(existing):
+                before = existing.row_count
+                append_frame_into_dataset(
+                    db, existing, frame, member.variable_labels, member.value_labels
+                )
+                outcome.datasets.append(existing)
+                outcome.appended.append(
+                    f"{member.name} -> {existing.name} "
+                    f"({before} + {len(frame)} = {existing.row_count} rows)"
+                )
+                outcome.rows += len(frame)
+                continue
+
+            stem = Path(member.name).stem
+            dataset = existing or create_dataset_record(
+                db,
+                # The member stem is the useful name - VN_LF2024, R_demographics -
+                # but two surveys in one project can share one, so a prefix is
+                # offered for telling them apart.
+                name=f"{name_prefix} {stem}".strip() if name_prefix else stem,
+                description=f"From {archive_name}",
+                source=DatasetSource.upload,
+                source_ref=member.name,
+                created_by=created_by,
+                project_id=project_id,
+            )
+            labels = dict(member.variable_labels)
+            labels.setdefault(SOURCE_COLUMN, "Archive this row was imported from")
+            _apply_ingest(
+                db,
+                dataset,
+                ingest_frame(
+                    frame,
+                    labels,
+                    member.value_labels,
+                    dataset_directory(dataset.id),
+                    [],
+                ),
+            )
+            meta = dict(dataset.meta or {})
+            meta[ARCHIVE_MEMBER_KEY] = key
+            dataset.meta = meta
+            db.flush()
+            outcome.datasets.append(dataset)
+            outcome.created.append(f"{member.name} -> {dataset.name} ({dataset.row_count} rows)")
+            outcome.rows += dataset.row_count
+
+        return outcome
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+# Survey Solutions can be set to export everything collected so far rather than
+# only what is new. Appending two such exports duplicates every interview they
+# have in common, and nothing about the row counts makes that obvious - the
+# dataset just quietly reports twice the fieldwork. So say it plainly.
+IDENTITY_COLUMNS = ("interview__key", "interview__id")
+
+
+def _reportable(columns: set[str]) -> set[str]:
+    """Drop internal companion columns from anything shown to a user."""
+    return {c for c in columns if not c.endswith(MISSING_TAG_SUFFIX)}
+
+
+def _duplicate_key_warnings(
+    existing: pd.DataFrame, incoming: pd.DataFrame
+) -> list[str]:
+    """Report interviews that appear in both the existing data and the new rows."""
+    warnings: list[str] = []
+    for column in IDENTITY_COLUMNS:
+        if column not in existing.columns or column not in incoming.columns:
+            continue
+        overlap = set(existing[column].dropna()) & set(incoming[column].dropna())
+        if not overlap:
+            continue
+        warnings.append(
+            f"{len(overlap)} value(s) of '{column}' appear in both the existing "
+            f"data and the appended rows, so those interviews are now counted "
+            f"twice. This usually means the export was cumulative rather than "
+            f"incremental. Examples: "
+            + ", ".join(str(v) for v in sorted(overlap)[:3])
+        )
+        break  # one identity column is enough; the second would say the same
+    return warnings

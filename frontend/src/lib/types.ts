@@ -81,7 +81,9 @@ export interface Dataset {
   meta: {
     monitoring_fields?: Record<string, string>
     warnings?: string[]
-    archive?: { files_combined: string[]; files_skipped: string[]; rows: number }
+    /** Which file inside an export archive this dataset holds, and so which
+     *  file a later archive's rows get appended to. */
+    archive_member?: string
   }
   version: number
   refreshed_at: string | null
@@ -281,6 +283,17 @@ export interface Chart {
   }
   created_at: string
   updated_at: string
+}
+
+export interface ArchiveImport {
+  datasets: Dataset[]
+  /** "R_demographics.dta -> R_demographics (401 rows)" */
+  created: string[]
+  /** "R_demographics.dta -> R_demographics (401 + 381 = 782 rows)" */
+  appended: string[]
+  skipped: string[]
+  warnings: string[]
+  rows: number
 }
 
 export type WidgetType = 'chart' | 'table' | 'kpi' | 'indicator' | 'text' | 'crosstab'

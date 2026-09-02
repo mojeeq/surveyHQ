@@ -55,6 +55,22 @@ class DatasetDetail(DatasetOut):
     variables: list[VariableOut] = Field(default_factory=list)
 
 
+class ArchiveImportOut(BaseModel):
+    """What uploading one export archive did.
+
+    An archive yields several datasets, so this reports per member file rather
+    than describing a single one: which were created, which were appended to,
+    and anything the import wants the user to know before trusting the numbers.
+    """
+
+    datasets: list[DatasetOut] = Field(default_factory=list)
+    created: list[str] = Field(default_factory=list)
+    appended: list[str] = Field(default_factory=list)
+    skipped: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    rows: int = 0
+
+
 class DatasetUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
