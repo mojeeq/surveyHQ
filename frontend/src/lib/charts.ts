@@ -69,7 +69,12 @@ function valueAxis(name = '') {
     axisLabel: {
       color: INK.muted,
       ...BASE_TEXT,
-      formatter: (value: number) => formatNumber(value),
+      // Small ranges (coordinates, rates) need decimals, or consecutive ticks
+      // round to the same label. Large ones get the compact k/M form.
+      formatter: (value: number) =>
+        Math.abs(value) < 10 && !Number.isInteger(value)
+          ? value.toLocaleString(undefined, { maximumFractionDigits: 2 })
+          : formatNumber(value),
     },
     // Recessive hairline grid
     splitLine: { lineStyle: { color: INK.grid, width: 1 } },
@@ -193,26 +198,29 @@ export function buildChartOption(
           formatter: (params: any) =>
             `${params.marker} ${params.name}<br/><b>${formatNumber(params.value)}</b> (${params.percent}%)`,
         },
+        // Legend along the bottom: a side legend collides with the slice labels.
         legend: {
           type: 'scroll',
-          orient: 'vertical',
-          right: 0,
-          top: 'middle',
+          orient: 'horizontal',
+          bottom: 0,
+          left: 'center',
           icon: 'roundRect',
           itemWidth: 10,
           itemHeight: 10,
+          itemGap: 16,
           textStyle: { color: '#52514e', ...BASE_TEXT },
         },
         series: [
           {
             type: 'pie',
-            radius: chartType === 'donut' ? ['52%', '76%'] : ['0%', '74%'],
-            center: ['38%', '50%'],
+            radius: chartType === 'donut' ? ['48%', '70%'] : ['0%', '68%'],
+            center: ['50%', '45%'],
             avoidLabelOverlap: true,
             // 2px surface gap between adjacent segments
             itemStyle: { borderColor: INK.surface, borderWidth: 2, borderRadius: 3 },
-            label: { color: '#52514e', ...BASE_TEXT, formatter: '{b}: {d}%' },
-            labelLine: { lineStyle: { color: INK.axis } },
+            // The legend carries the names, so the slice label is the value only
+            label: { color: '#52514e', ...BASE_TEXT, formatter: '{d}%' },
+            labelLine: { length: 8, length2: 8, lineStyle: { color: INK.axis } },
             data: values,
           },
         ],
@@ -230,8 +238,10 @@ export function buildChartOption(
             `${params.marker} ${categories[params.dataIndex] ?? ''}<br/>` +
             `${formatNumber(params.value[0], 2)} / ${formatNumber(params.value[1], 2)}`,
         },
-        xAxis: { ...valueAxis(x?.name ?? '') },
-        yAxis: valueAxis(y?.name ?? ''),
+        // scale: true keeps the axes on the data's own range. Forcing zero on a
+        // coordinate pair squashes every point into a corner.
+        xAxis: { ...valueAxis(x?.name ?? ''), scale: true },
+        yAxis: { ...valueAxis(y?.name ?? ''), scale: true },
         series: [
           {
             type: 'scatter',

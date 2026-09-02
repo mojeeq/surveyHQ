@@ -348,28 +348,48 @@ function ProgressPanel({ datasetId }: { datasetId: string }) {
 
   return (
     <div className="grid gap-6 lg:grid-cols-2">
+      {/* Daily counts and the running total have very different scales, so they
+          get a chart each rather than being squashed onto one axis. */}
       {data.submissions_over_time?.length > 0 && (
-        <Card title="Submissions over time" className="lg:col-span-2">
-          <ChartCard
-            result={{
-              columns: [
-                { name: 'period', label: 'Date', type: 'dimension', data_type: 'datetime' },
-                { name: 'count', label: 'Interviews', type: 'measure', data_type: 'number' },
-                { name: 'cumulative', label: 'Cumulative', type: 'measure', data_type: 'number' },
-              ],
-              rows: data.submissions_over_time.map((row: any) => [
-                row.period,
-                row.count,
-                row.cumulative,
-              ]),
-              row_count: data.submissions_over_time.length,
-              truncated: false,
-              sql: '',
-              duration_ms: 0,
-            }}
-            chartType="line"
-          />
-        </Card>
+        <>
+          <Card title="Submissions per period">
+            <ChartCard
+              chartType="bar"
+              result={{
+                columns: [
+                  { name: 'period', label: 'Date', type: 'dimension', data_type: 'datetime' },
+                  { name: 'count', label: 'Interviews', type: 'measure', data_type: 'number' },
+                ],
+                rows: data.submissions_over_time.map((row: any) => [row.period, row.count]),
+                row_count: data.submissions_over_time.length,
+                truncated: false,
+                sql: '',
+                duration_ms: 0,
+              }}
+            />
+          </Card>
+          <Card title="Cumulative submissions">
+            <ChartCard
+              chartType="area"
+              result={{
+                columns: [
+                  { name: 'period', label: 'Date', type: 'dimension', data_type: 'datetime' },
+                  {
+                    name: 'cumulative',
+                    label: 'Interviews to date',
+                    type: 'measure',
+                    data_type: 'number',
+                  },
+                ],
+                rows: data.submissions_over_time.map((row: any) => [row.period, row.cumulative]),
+                row_count: data.submissions_over_time.length,
+                truncated: false,
+                sql: '',
+                duration_ms: 0,
+              }}
+            />
+          </Card>
+        </>
       )}
       {data.status_breakdown?.length > 0 && (
         <Card title="Interviews by status">

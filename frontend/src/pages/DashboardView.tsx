@@ -284,7 +284,9 @@ function IndicatorWidget({ payload }: { payload: any }) {
       </p>
       {payload.target_value !== null && payload.target_value !== undefined && (
         <>
-          <div className="mt-3 h-2 overflow-hidden rounded-full bg-ink-100">
+          {/* shrink-0: this sits in a column flex container, which would otherwise
+              compress the track to zero height in a short widget. */}
+          <div className="mt-3 h-2 shrink-0 overflow-hidden rounded-full bg-ink-100">
             <div
               className="h-full rounded-full"
               style={{
