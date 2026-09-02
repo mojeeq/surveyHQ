@@ -7,6 +7,8 @@ to know exactly which interviews to look at.
 
 from __future__ import annotations
 
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from typing import Any
 
@@ -15,10 +17,12 @@ from sqlalchemy.orm import Session
 from app.core.logging import get_logger
 from app.db.base import utcnow
 from app.models import CheckType, Dataset, QualityResult, QualityRule
+from app.schemas.query import FilterGroup
 from app.services.datasets import dataset_is_queryable
 from app.services.query_engine import (
     DatasetContext,
     QueryError,
+    SQLBuilder,
     _quote_path,
     quote_ident,
     run_sql,
@@ -40,17 +44,68 @@ class CheckOutcome:
         return self.failed_rows / self.total_rows if self.total_rows else 0.0
 
 
+# A rule's filters restrict every count it makes. Holding them here rather than
+# passing them to each of the eight checks means a new check cannot forget them:
+# the only two ways a check counts rows both go through this.
+_scope: ContextVar[tuple[str, list[Any]]] = ContextVar("quality_scope", default=("", []))
+
+
+@contextmanager
+def scoped(ctx: DatasetContext, filters: FilterGroup | None):
+    """Apply a rule's filters to every count taken inside this block."""
+    if filters is None or filters.is_empty():
+        yield
+        return
+    builder = SQLBuilder(ctx)
+    where = builder.filter_sql(filters)
+    token = _scope.set((where, list(builder.params)) if where else ("", []))
+    try:
+        yield
+    finally:
+        _scope.reset(token)
+
+
+def _scope_sql() -> tuple[str, list[Any]]:
+    return _scope.get()
+
+
 def _total_rows(ctx: DatasetContext) -> int:
-    _, rows = run_sql(f"SELECT COUNT(*) FROM read_parquet({_quote_path(ctx.parquet_path)})")
+    where, params = _scope_sql()
+    sql = f"SELECT COUNT(*) FROM read_parquet({_quote_path(ctx.parquet_path)})"
+    if where:
+        sql += f" WHERE {where}"
+    _, rows = run_sql(sql, params)
     return int(rows[0][0]) if rows else 0
 
 
 def _count_where(ctx: DatasetContext, where: str, params: list[Any] | None = None) -> int:
+    scope_where, scope_params = _scope_sql()
+    # The rule's own condition is wrapped, so an OR inside it cannot escape the
+    # scope and count rows the filter excluded.
+    clause = f"({where})" if scope_where else where
+    if scope_where:
+        clause = f"{scope_where} AND {clause}"
     sql = (
-        f"SELECT COUNT(*) FROM read_parquet({_quote_path(ctx.parquet_path)}) WHERE {where}"
+        f"SELECT COUNT(*) FROM read_parquet({_quote_path(ctx.parquet_path)}) WHERE {clause}"
     )
-    _, rows = run_sql(sql, params or [])
+    _, rows = run_sql(sql, scope_params + (params or []))
     return int(rows[0][0]) if rows else 0
+
+
+def _rule_filters(rule: QualityRule) -> FilterGroup | None:
+    """A rule's stored filters, ignoring anything that will not parse.
+
+    A filter referring to a variable a later round dropped should make the check
+    run unfiltered and be visible in the log, not make the check fail.
+    """
+    raw = rule.filters or {}
+    if not raw:
+        return None
+    try:
+        return FilterGroup.model_validate(raw)
+    except Exception:  # noqa: BLE001 - a stored filter is not worth a 500
+        logger.warning("Ignoring unreadable filters on quality rule %s", rule.id)
+        return None
 
 
 def run_check(ctx: DatasetContext, rule: QualityRule) -> CheckOutcome:
@@ -333,7 +388,8 @@ def execute_rule(db: Session, rule: QualityRule) -> QualityResult:
 
     ctx = DatasetContext.from_model(dataset)
     try:
-        outcome = run_check(ctx, rule)
+        with scoped(ctx, _rule_filters(rule)):
+            outcome = run_check(ctx, rule)
         passed = outcome.passed and outcome.failure_rate <= (rule.threshold or 0.0)
         result = QualityResult(
             rule_id=rule.id,

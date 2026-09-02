@@ -422,6 +422,8 @@ export interface QualityRule {
   severity: Severity
   threshold: number
   is_active: boolean
+  /** Restricts the check to part of the dataset; empty means all of it. */
+  filters: FilterGroup
   created_at: string
   latest_result: QualityResult | null
 }

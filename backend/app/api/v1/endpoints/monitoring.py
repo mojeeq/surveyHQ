@@ -26,6 +26,7 @@ from app.models import (
     QualityResult,
     QualityRule,
     Severity,
+    User,
 )
 from app.schemas.common import Message
 from app.schemas.monitoring import (
@@ -113,9 +114,9 @@ def create_indicator(
 
 @router.patch("/indicators/{indicator_id}", response_model=IndicatorOut)
 def update_indicator(
-    indicator_id: str, payload: IndicatorUpdate, db: DbSession, _: RequireManager
+    indicator_id: str, payload: IndicatorUpdate, db: DbSession, user: RequireManager
 ) -> Indicator:
-    indicator = _get_indicator(indicator_id, db)
+    indicator = _get_indicator(indicator_id, db, user)
     data = payload.model_dump(exclude_unset=True)
     if "spec" in data and data["spec"] is not None:
         data["spec"] = payload.spec.model_dump(mode="json") if payload.spec else {}
@@ -128,8 +129,8 @@ def update_indicator(
 
 
 @router.delete("/indicators/{indicator_id}", response_model=Message)
-def delete_indicator(indicator_id: str, db: DbSession, _: RequireManager) -> Message:
-    indicator = _get_indicator(indicator_id, db)
+def delete_indicator(indicator_id: str, db: DbSession, user: RequireManager) -> Message:
+    indicator = _get_indicator(indicator_id, db, user)
     db.delete(indicator)
     db.commit()
     return Message(detail="Indicator deleted")
@@ -197,9 +198,9 @@ def indicator_values(
 
 @router.post("/indicators/{indicator_id}/refresh", response_model=IndicatorValue)
 def refresh_single_indicator(
-    indicator_id: str, db: DbSession, _: CurrentUser
+    indicator_id: str, db: DbSession, user: CurrentUser
 ) -> IndicatorValue:
-    indicator = _get_indicator(indicator_id, db)
+    indicator = _get_indicator(indicator_id, db, user)
     outcome = refresh_indicator(db, indicator)
     db.commit()
     db.refresh(indicator)
@@ -219,10 +220,17 @@ def refresh_single_indicator(
     )
 
 
-def _get_indicator(indicator_id: str, db: DbSession) -> Indicator:
+def _get_indicator(indicator_id: str, db: DbSession, user: User) -> Indicator:
+    """An indicator the caller may reach, by way of its dataset.
+
+    Filtering the listing is not enough on its own: these routes take an id
+    directly, so without this an indicator on another project's dataset stays
+    readable and editable to anyone who knows its id.
+    """
     indicator = db.get(Indicator, indicator_id)
     if indicator is None:
         raise HTTPException(status_code=404, detail="Indicator not found")
+    get_dataset(indicator.dataset_id, db, user)
     return indicator
 
 
@@ -243,7 +251,7 @@ def create_alert_rule(
     payload: AlertRuleCreate, db: DbSession, user: RequireManager
 ) -> AlertRule:
     if payload.indicator_id:
-        _get_indicator(payload.indicator_id, db)
+        _get_indicator(payload.indicator_id, db, user)
     rule = AlertRule(**payload.model_dump())
     db.add(rule)
     record(db, user=user, action="create_alert_rule", entity_type="alert_rule")
@@ -387,33 +395,53 @@ def create_quality_rule(
 
 @router.patch("/quality-rules/{rule_id}", response_model=QualityRuleOut)
 def update_quality_rule(
-    rule_id: str, payload: QualityRuleUpdate, db: DbSession, _: RequireManager
+    rule_id: str, payload: QualityRuleUpdate, db: DbSession, user: RequireManager
 ) -> QualityRule:
     rule = db.get(QualityRule, rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="Quality rule not found")
+    # A rule is reachable through its dataset, like everything else that hangs
+    # off one; without this, a rule on a dataset the caller cannot see is still
+    # editable by id.
+    get_dataset(rule.dataset_id, db, user)
+
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(rule, field, value)
+    db.flush()
+    # Re-run it: the stored result describes the old definition, and leaving it
+    # there would report a pass or a failure for a check that no longer exists.
+    execute_rule(db, rule)
+    record(
+        db,
+        user=user,
+        action="update_quality_rule",
+        entity_type="quality_rule",
+        entity_id=rule.id,
+    )
     db.commit()
     db.refresh(rule)
     return rule
 
 
 @router.delete("/quality-rules/{rule_id}", response_model=Message)
-def delete_quality_rule(rule_id: str, db: DbSession, _: RequireManager) -> Message:
+def delete_quality_rule(rule_id: str, db: DbSession, user: RequireManager) -> Message:
     rule = db.get(QualityRule, rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="Quality rule not found")
+    get_dataset(rule.dataset_id, db, user)
     db.delete(rule)
     db.commit()
     return Message(detail="Quality rule deleted")
 
 
 @router.post("/quality-rules/{rule_id}/run", response_model=QualityResultOut)
-def run_quality_rule(rule_id: str, db: DbSession, _: CurrentUser) -> QualityResult:
+def run_quality_rule(rule_id: str, db: DbSession, user: CurrentUser) -> QualityResult:
     rule = db.get(QualityRule, rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="Quality rule not found")
+    # Running a check reports failing rows and examples from the data, so this
+    # is a read of the dataset and scoped like one.
+    get_dataset(rule.dataset_id, db, user)
     result = execute_rule(db, rule)
     db.commit()
     db.refresh(result)

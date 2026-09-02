@@ -5,7 +5,15 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { formatNumber, relativeTime, titleCase } from '@/lib/format'
-import type { CheckType, Dataset, Page, QualityRule, Severity } from '@/lib/types'
+import type {
+  CheckType,
+  Dataset,
+  FilterGroup,
+  Page,
+  QualityRule,
+  Severity,
+} from '@/lib/types'
+import FilterBuilder, { emptyFilter } from '@/components/FilterBuilder'
 import {
   Badge,
   Card,
@@ -67,6 +75,7 @@ export default function Quality() {
   const toast = useToast()
   const queryClient = useQueryClient()
   const [creating, setCreating] = useState(false)
+  const [editing, setEditing] = useState<QualityRule | null>(null)
 
   const datasets = useQuery({
     queryKey: ['datasets', 'ready'],
@@ -271,6 +280,11 @@ export default function Quality() {
                       Run
                     </button>
                     {can('manager') && (
+                      <button className="btn-secondary btn-sm" onClick={() => setEditing(rule)}>
+                        Edit
+                      </button>
+                    )}
+                    {can('manager') && (
                       <button
                         className="btn-ghost btn-sm text-red-600"
                         onClick={() => {
@@ -289,6 +303,14 @@ export default function Quality() {
       )}
 
       {creating && <CheckModal datasetId={datasetId} onClose={() => setCreating(false)} />}
+      {editing && (
+        <CheckModal
+          key={editing.id}
+          datasetId={datasetId}
+          rule={editing}
+          onClose={() => setEditing(null)}
+        />
+      )}
     </>
   )
 }
@@ -306,14 +328,25 @@ function SeverityBadge({ severity }: { severity: Severity }) {
   )
 }
 
-function CheckModal({ datasetId, onClose }: { datasetId: string; onClose: () => void }) {
+function CheckModal({
+  datasetId,
+  rule,
+  onClose,
+}: {
+  datasetId: string
+  /** Editing an existing check rather than adding one. */
+  rule?: QualityRule
+  onClose: () => void
+}) {
   const toast = useToast()
   const queryClient = useQueryClient()
-  const [checkType, setCheckType] = useState<CheckType>('missing_rate')
-  const [name, setName] = useState('')
-  const [severity, setSeverity] = useState<Severity>('warning')
-  const [threshold, setThreshold] = useState('0')
-  const [config, setConfig] = useState<Record<string, unknown>>({})
+  const editing = Boolean(rule)
+  const [checkType, setCheckType] = useState<CheckType>(rule?.check_type ?? 'missing_rate')
+  const [name, setName] = useState(rule?.name ?? '')
+  const [severity, setSeverity] = useState<Severity>(rule?.severity ?? 'warning')
+  const [threshold, setThreshold] = useState(String((rule?.threshold ?? 0) * 100))
+  const [config, setConfig] = useState<Record<string, unknown>>(rule?.config ?? {})
+  const [filters, setFilters] = useState<FilterGroup>(rule?.filters ?? emptyFilter())
 
   const dataset = useQuery({
     queryKey: ['dataset', datasetId],
@@ -323,17 +356,26 @@ function CheckModal({ datasetId, onClose }: { datasetId: string; onClose: () => 
   const numeric = variables.filter((v) => v.var_type === 'numeric')
 
   const create = useMutation({
-    mutationFn: () =>
-      api.post('/monitoring/quality-rules', {
+    mutationFn: () => {
+      const body = {
         name: name || CHECKS.find((c) => c.value === checkType)?.label,
-        dataset_id: datasetId,
-        check_type: checkType,
         config,
         severity,
         threshold: Number(threshold) / 100,
-      }),
+        filters,
+      }
+      // check_type and dataset_id define what the check *is*; changing either
+      // would make it a different check, so an edit leaves them alone.
+      return rule
+        ? api.patch(`/monitoring/quality-rules/${rule.id}`, body)
+        : api.post('/monitoring/quality-rules', {
+            ...body,
+            dataset_id: datasetId,
+            check_type: checkType,
+          })
+    },
     onSuccess: () => {
-      toast.push('Check created and run', 'success')
+      toast.push(editing ? 'Check updated and re-run' : 'Check created and run', 'success')
       queryClient.invalidateQueries({ queryKey: ['quality-rules'] })
       onClose()
     },
@@ -364,7 +406,7 @@ function CheckModal({ datasetId, onClose }: { datasetId: string; onClose: () => 
     <Modal
       open
       onClose={onClose}
-      title="Add a data quality check"
+      title={editing ? `Edit "${rule!.name}"` : 'Add a data quality check'}
       wide
       footer={
         <>
@@ -373,7 +415,7 @@ function CheckModal({ datasetId, onClose }: { datasetId: string; onClose: () => 
           </button>
           <button className="btn-primary" onClick={() => create.mutate()} disabled={create.isPending}>
             {create.isPending && <Spinner className="h-4 w-4 text-white" />}
-            Create and run
+            {editing ? 'Save and re-run' : 'Create and run'}
           </button>
         </>
       }
@@ -381,6 +423,7 @@ function CheckModal({ datasetId, onClose }: { datasetId: string; onClose: () => 
       <Field label="Check type" hint={definition.description}>
         <select
           className="input"
+          disabled={editing}
           value={checkType}
           onChange={(event) => {
             setCheckType(event.target.value as CheckType)
@@ -537,6 +580,13 @@ function CheckModal({ datasetId, onClose }: { datasetId: string; onClose: () => 
 
       <Field label="Name" hint="Defaults to the check type">
         <input className="input" value={name} onChange={(event) => setName(event.target.value)} />
+      </Field>
+
+      <Field
+        label="Only check part of the dataset"
+        hint="Both the flagged rows and the total are counted inside the filter, so the failure rate stays a rate of what was checked."
+      >
+        <FilterBuilder variables={variables} value={filters} onChange={setFilters} />
       </Field>
     </Modal>
   )

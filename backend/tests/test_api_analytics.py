@@ -771,3 +771,56 @@ def test_a_dashboard_filter_narrows_a_saved_crosstab(client, auth_headers, datas
     body = filtered.json()
     assert 0 < body["grand_total"] < 200
     assert body["row_labels"] == ["North"]
+
+
+def test_a_quality_rule_can_be_restricted_to_part_of_the_dataset(
+    client, auth_headers, dataset_id
+):
+    """A check on one region should count rows in that region, not all of them."""
+
+    def make(name, filters):
+        response = client.post(
+            "/api/v1/monitoring/quality-rules",
+            headers=auth_headers,
+            json={
+                "name": name,
+                "dataset_id": dataset_id,
+                "check_type": "missing_rate",
+                "config": {"variable": "income"},
+                "filters": filters,
+            },
+        )
+        assert response.status_code == 201, response.text
+        run = client.post(
+            f"/api/v1/monitoring/quality-rules/{response.json()['id']}/run",
+            headers=auth_headers,
+        )
+        assert run.status_code == 200, run.text
+        return response.json()["id"], run.json()
+
+    _, everything = make("Income missing, everywhere", {"op": "and", "conditions": []})
+    rule_id, north = make(
+        "Income missing, North only",
+        {
+            "op": "and",
+            "conditions": [{"variable": "region", "operator": "eq", "value": "North"}],
+            "groups": [],
+        },
+    )
+
+    # The denominator is what was checked, not the whole dataset
+    assert everything["total_rows"] == 200
+    assert 0 < north["total_rows"] < 200
+    assert north["failed_rows"] <= everything["failed_rows"]
+
+    # Editing a rule re-runs it, so the stored result never describes the old one
+    widened = client.patch(
+        f"/api/v1/monitoring/quality-rules/{rule_id}",
+        headers=auth_headers,
+        json={"filters": {"op": "and", "conditions": [], "groups": []}},
+    )
+    assert widened.status_code == 200, widened.text
+    latest = client.get(
+        f"/api/v1/monitoring/quality-results?rule_id={rule_id}", headers=auth_headers
+    ).json()
+    assert latest[0]["total_rows"] == 200

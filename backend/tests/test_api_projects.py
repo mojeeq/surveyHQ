@@ -351,3 +351,86 @@ def test_every_listing_endpoint_is_scoped(client, auth_headers, dataset_id, rest
     # And the headline counts must not give away what the listings hide
     summary = client.get("/api/v1/monitoring/summary", headers=headers).json()
     assert summary["total_records"] == 0, summary
+
+
+def test_by_id_access_is_scoped_too_not_only_listings(client, auth_headers, dataset_id, restricted_user):
+    """Filtering the listings is not enough on its own.
+
+    The first sweep here only checked that listings come back empty, which a
+    resource reachable by a known id passes while still being readable. Every
+    one of these routes takes an id directly.
+    """
+    member, _ = restricted_user
+    # A manager, so the role check cannot answer first: these routes require one,
+    # and a 403 for insufficient role would pass this test without proving that
+    # project scope is enforced. (That 403 leaks nothing - it is returned for any
+    # id, real or not, because the role check precedes the lookup.)
+    client.patch(
+        f"/api/v1/users/{member['id']}", headers=auth_headers, json={"role": "manager"}
+    )
+    headers = _headers(client, "restricted@example.com", "restricted-password-123")
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Id access sweep"}
+    ).json()
+    client.put(
+        f"/api/v1/projects/{project['id']}/members",
+        headers=auth_headers,
+        json={"user_id": member["id"], "role": "manager"},
+    )
+
+    indicator = client.post(
+        "/api/v1/monitoring/indicators",
+        headers=auth_headers,
+        json={
+            "name": "Hidden indicator",
+            "dataset_id": dataset_id,
+            "spec": {"measures": [{"agg": "count"}]},
+        },
+    )
+    assert indicator.status_code == 201, indicator.text
+    indicator_id = indicator.json()["id"]
+
+    rule = client.post(
+        "/api/v1/monitoring/quality-rules",
+        headers=auth_headers,
+        json={
+            "name": "Hidden rule",
+            "dataset_id": dataset_id,
+            "check_type": "missing_rate",
+            "config": {"variable": "age"},
+        },
+    )
+    assert rule.status_code == 201, rule.text
+    rule_id = rule.json()["id"]
+
+    # Every one of these names a resource on a dataset in the shared area, which
+    # this user is cut off from.
+    forbidden = [
+        ("post", f"/api/v1/monitoring/indicators/{indicator_id}/refresh", None),
+        ("patch", f"/api/v1/monitoring/indicators/{indicator_id}", {"name": "renamed"}),
+        ("delete", f"/api/v1/monitoring/indicators/{indicator_id}", None),
+        ("patch", f"/api/v1/monitoring/quality-rules/{rule_id}", {"name": "renamed"}),
+        ("delete", f"/api/v1/monitoring/quality-rules/{rule_id}", None),
+        ("post", f"/api/v1/monitoring/quality-rules/{rule_id}/run", None),
+    ]
+    for method, path, body in forbidden:
+        response = getattr(client, method)(
+            path, headers=headers, **({"json": body} if body else {})
+        )
+        assert response.status_code == 404, f"{method.upper()} {path} -> {response.status_code}"
+
+    # ...and the owner can still use every one of them
+    assert (
+        client.patch(
+            f"/api/v1/monitoring/quality-rules/{rule_id}",
+            headers=auth_headers,
+            json={"name": "still mine"},
+        ).status_code
+        == 200
+    )
+
+    # Restore, since the account is shared with the other tests here
+    client.patch(
+        f"/api/v1/users/{member['id']}", headers=auth_headers, json={"role": "analyst"}
+    )

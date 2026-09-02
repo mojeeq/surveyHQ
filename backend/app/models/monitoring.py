@@ -168,6 +168,10 @@ class QualityRule(UUIDMixin, TimestampMixin, Base):
     check_type: Mapped[CheckType] = mapped_column(Enum(CheckType, name="check_type"))
     # Check specific parameters, e.g. {"variable": "age", "min": 0, "max": 120}
     config: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Restricts the check to part of the dataset - one region, completed
+    # interviews only, one round. Both the failing rows and the total are
+    # counted within it, so the failure rate stays a rate of what was checked.
+    filters: Mapped[dict] = mapped_column(JSON, default=dict)
     severity: Mapped[Severity] = mapped_column(severity_type, default=Severity.warning)
     # Fail the check when the share of offending rows exceeds this fraction
     threshold: Mapped[float] = mapped_column(Float, default=0.0)
