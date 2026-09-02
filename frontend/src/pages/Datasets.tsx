@@ -18,7 +18,7 @@ import {
   Spinner,
 } from '@/components/ui'
 
-const ACCEPTED = '.dta,.sav,.csv,.tab,.tsv,.txt,.xlsx,.xls'
+const ACCEPTED = '.dta,.sav,.csv,.tab,.tsv,.txt,.xlsx,.xls,.zip'
 
 export default function Datasets() {
   const { can } = useAuth()
@@ -188,6 +188,8 @@ function UploadModal({ open, onClose }: { open: boolean; onClose: () => void }) 
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
   const [tags, setTags] = useState('')
+  const [combineAll, setCombineAll] = useState(false)
+  const [isZip, setIsZip] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
 
@@ -204,12 +206,24 @@ function UploadModal({ open, onClose }: { open: boolean; onClose: () => void }) 
     form.append('name', name || file.name.replace(/\.[^.]+$/, ''))
     form.append('description', description)
     form.append('tags', tags)
+    form.append('combine_all', String(combineAll))
     try {
       const dataset = await api.upload<Dataset>('/datasets/upload', form)
+      const archive = dataset.meta?.archive
       toast.push(
-        `Imported ${formatNumber(dataset.row_count)} rows and ${dataset.column_count} variables`,
+        archive
+          ? `Combined ${archive.files_combined.length} file(s) into ${formatNumber(
+              dataset.row_count,
+            )} rows`
+          : `Imported ${formatNumber(dataset.row_count)} rows and ${dataset.column_count} variables`,
         'success',
       )
+      if (archive?.files_skipped?.length) {
+        toast.push(
+          `${archive.files_skipped.length} file(s) had different columns and were not appended`,
+          'info',
+        )
+      }
       queryClient.invalidateQueries({ queryKey: ['datasets'] })
       setName('')
       setDescription('')
@@ -246,10 +260,44 @@ function UploadModal({ open, onClose }: { open: boolean; onClose: () => void }) 
       )}
       <Field
         label="Data file"
-        hint="Stata (.dta), SPSS (.sav), CSV, tab-delimited or Excel. Variable and value labels are kept."
+        hint="Stata (.dta), SPSS (.sav), CSV, tab-delimited, Excel, or a .zip of them. Variable and value labels are kept."
       >
-        <input ref={fileRef} type="file" accept={ACCEPTED} className="input py-1.5" />
+        <input
+          ref={fileRef}
+          type="file"
+          accept={ACCEPTED}
+          className="input py-1.5"
+          onChange={(event) =>
+            setIsZip(Boolean(event.target.files?.[0]?.name.toLowerCase().endsWith('.zip')))
+          }
+        />
       </Field>
+
+      {isZip && (
+        <div className="mb-4 rounded-lg border border-brand-200 bg-brand-50 p-3">
+          <p className="text-sm text-brand-900">
+            The files inside will be appended into one dataset, with a{' '}
+            <code className="text-xs">source_file</code> column recording which file each
+            row came from.
+          </p>
+          <label className="mt-2 flex items-start gap-2 text-sm text-brand-900">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={combineAll}
+              onChange={(event) => setCombineAll(event.target.checked)}
+            />
+            <span>
+              Combine every file, even where columns differ
+              <span className="block text-xs text-brand-700">
+                Leave this off for a Survey Solutions export, which holds one file per
+                roster level rather than several rounds. Only files sharing a column set
+                are appended.
+              </span>
+            </span>
+          </label>
+        </div>
+      )}
       <Field label="Name" hint="Defaults to the file name">
         <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
       </Field>

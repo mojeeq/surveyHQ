@@ -1,18 +1,22 @@
-import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { formatBytes, formatNumber, formatDate, titleCase } from '@/lib/format'
 import type { Dataset, FrequencyResult, SummaryStats, Variable } from '@/lib/types'
+import { useAuth } from '@/hooks/useAuth'
+import { useToast } from '@/hooks/useToast'
 import ChartCard from '@/components/ChartCard'
 import DataTable from '@/components/DataTable'
 import {
   Badge,
   Card,
   ErrorNote,
+  Field,
   Loading,
   Modal,
   PageHeader,
+  Spinner,
   Stat,
   Tabs,
 } from '@/components/ui'
@@ -29,9 +33,11 @@ const TYPE_TONE = {
 
 export default function DatasetDetail() {
   const { id = '' } = useParams()
+  const { can } = useAuth()
   const [tab, setTab] = useState<TabId>('variables')
   const [search, setSearch] = useState('')
   const [inspecting, setInspecting] = useState<Variable | null>(null)
+  const [appending, setAppending] = useState(false)
 
   const dataset = useQuery({
     queryKey: ['dataset', id],
@@ -64,6 +70,11 @@ export default function DatasetDetail() {
             <Link to={`/quality?dataset=${data.id}`} className="btn-secondary">
               Quality checks
             </Link>
+            {can('manager') && (
+              <button className="btn-secondary" onClick={() => setAppending(true)}>
+                Append data
+              </button>
+            )}
           </>
         }
       />
@@ -189,6 +200,8 @@ export default function DatasetDetail() {
         {tab === 'summary' && <SummaryPanel datasetId={id} variables={variables} />}
         {tab === 'progress' && <ProgressPanel datasetId={id} />}
       </div>
+
+      {appending && <AppendModal datasetId={id} onClose={() => setAppending(false)} />}
 
       {inspecting && (
         <FrequencyModal
@@ -519,6 +532,77 @@ function FrequencyModal({
           </div>
         </>
       )}
+    </Modal>
+  )
+}
+
+
+function AppendModal({ datasetId, onClose }: { datasetId: string; onClose: () => void }) {
+  const toast = useToast()
+  const queryClient = useQueryClient()
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [error, setError] = useState('')
+
+  const append = useMutation({
+    mutationFn: async () => {
+      const file = fileRef.current?.files?.[0]
+      if (!file) throw new Error('Choose a file to append.')
+      const form = new FormData()
+      form.append('file', file)
+      return api.upload<Dataset>(`/datasets/${datasetId}/append`, form)
+    },
+    onSuccess: (dataset) => {
+      toast.push(`Dataset now holds ${formatNumber(dataset.row_count)} rows`, 'success')
+      queryClient.invalidateQueries({ queryKey: ['dataset', datasetId] })
+      queryClient.invalidateQueries({ queryKey: ['preview', datasetId] })
+      onClose()
+    },
+    onError: (err: Error) => setError(err.message),
+  })
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Append another round"
+      footer={
+        <>
+          <button className="btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="btn-primary"
+            onClick={() => append.mutate()}
+            disabled={append.isPending}
+          >
+            {append.isPending && <Spinner className="h-4 w-4 text-white" />}
+            Append
+          </button>
+        </>
+      }
+    >
+      {error && (
+        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+          {error}
+        </div>
+      )}
+      <p className="mb-4 text-sm text-ink-500">
+        The rows are added to what is already here rather than replacing it. A{' '}
+        <code className="text-xs">source_file</code> column records which file each row
+        came from, so rounds can be compared. Charts and indicators built on this dataset
+        keep working.
+      </p>
+      <Field
+        label="File to append"
+        hint="A data file, or a .zip of them. A variable the new file does not contain is left blank for its rows."
+      >
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".dta,.sav,.csv,.tab,.tsv,.txt,.xlsx,.xls,.zip"
+          className="input py-1.5"
+        />
+      </Field>
     </Modal>
   )
 }

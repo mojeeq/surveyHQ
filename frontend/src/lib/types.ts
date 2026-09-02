@@ -45,7 +45,11 @@ export interface Dataset {
   column_count: number
   file_size: number
   tags: string[]
-  meta: { monitoring_fields?: Record<string, string>; warnings?: string[] }
+  meta: {
+    monitoring_fields?: Record<string, string>
+    warnings?: string[]
+    archive?: { files_combined: string[]; files_skipped: string[]; rows: number }
+  }
   version: number
   refreshed_at: string | null
   created_at: string

@@ -28,10 +28,13 @@ from app.schemas.dataset import (
     VariableOut,
 )
 from app.schemas.query import FilterGroup
+from app.services.archives import is_archive
 from app.services.audit import record
 from app.services.datasets import (
+    append_file_into_dataset,
     create_dataset_record,
     delete_dataset_files,
+    load_archive_into_dataset,
     load_file_into_dataset,
 )
 from app.services.ingest import SUPPORTED_EXTENSIONS, IngestError
@@ -86,16 +89,24 @@ async def upload_dataset(
     name: Annotated[str, Form()] = "",
     description: Annotated[str, Form()] = "",
     tags: Annotated[str, Form()] = "",
+    combine_all: Annotated[bool, Form()] = False,
 ) -> DatasetDetail:
-    """Upload a data file and ingest it immediately."""
+    """Upload a data file, or a zip of them, and ingest it immediately.
+
+    A zip is unpacked and the files inside appended into one dataset, with a
+    source_file column recording where each row came from. By default only files
+    sharing a column set are appended, because an export archive usually holds
+    one file per roster level rather than several rounds; combine_all forces
+    everything together on the union of their columns.
+    """
     filename = Path(file.filename or "upload.dat").name
     suffix = Path(filename).suffix.lower()
-    if suffix not in SUPPORTED_EXTENSIONS:
+    if suffix not in SUPPORTED_EXTENSIONS and suffix != ".zip":
         raise HTTPException(
             status_code=400,
             detail=(
-                f"'{suffix or filename}' is not a supported format. Upload one of: "
-                + ", ".join(sorted(SUPPORTED_EXTENSIONS))
+                f"'{suffix or filename}' is not a supported format. Upload a .zip "
+                "archive, or one of: " + ", ".join(sorted(SUPPORTED_EXTENSIONS))
             ),
         )
 
@@ -131,7 +142,10 @@ async def upload_dataset(
         await file.close()
 
     try:
-        load_file_into_dataset(db, dataset, upload_path)
+        if is_archive(upload_path):
+            load_archive_into_dataset(db, dataset, upload_path, combine_all=combine_all)
+        else:
+            load_file_into_dataset(db, dataset, upload_path)
     except IngestError as exc:
         db.commit()  # keep the failed record so the user can see why
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -221,6 +235,47 @@ async def replace_dataset_data(
 
     record(
         db, user=user, action="replace_dataset", entity_type="dataset", entity_id=dataset.id
+    )
+    db.commit()
+    db.refresh(dataset)
+    return DatasetDetail.model_validate(dataset)
+
+
+@router.post("/{dataset_id}/append", response_model=DatasetDetail)
+async def append_to_dataset(
+    dataset_id: str,
+    db: DbSession,
+    user: RequireManager,
+    file: Annotated[UploadFile, File()],
+) -> DatasetDetail:
+    """Add another round's rows to a dataset rather than replacing them."""
+    dataset = get_dataset(dataset_id, db)
+    filename = Path(file.filename or "upload.dat").name
+    suffix = Path(filename).suffix.lower()
+    if suffix not in SUPPORTED_EXTENSIONS and suffix != ".zip":
+        raise HTTPException(status_code=400, detail=f"Unsupported format '{suffix}'")
+
+    settings.ensure_directories()
+    upload_path = settings.uploads_path / f"{dataset.id}-append{suffix}"
+    with open(upload_path, "wb") as handle:
+        shutil.copyfileobj(file.file, handle)
+    await file.close()
+
+    try:
+        append_file_into_dataset(db, dataset, upload_path, source_name=filename)
+    except IngestError as exc:
+        db.commit()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        upload_path.unlink(missing_ok=True)
+
+    record(
+        db,
+        user=user,
+        action="append_dataset",
+        entity_type="dataset",
+        entity_id=dataset.id,
+        detail={"filename": filename, "rows": dataset.row_count},
     )
     db.commit()
     db.refresh(dataset)

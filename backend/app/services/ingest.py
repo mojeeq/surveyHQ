@@ -309,13 +309,20 @@ def build_metadata(
     return metas
 
 
-def ingest_file(source: Path, destination_dir: Path) -> IngestResult:
-    """Read a data file, normalise it, and persist it as Parquet."""
-    if not source.exists():
-        raise IngestError(f"File not found: {source}")
+def ingest_frame(
+    frame: pd.DataFrame,
+    variable_labels: dict[str, str],
+    value_labels: dict[str, dict[str, str]],
+    destination_dir: Path,
+    warnings: list[str] | None = None,
+) -> IngestResult:
+    """Normalise an already-read frame and persist it as Parquet.
 
-    frame, variable_labels, value_labels = read_source(source)
-    warnings: list[str] = []
+    Shared by every route data can arrive on - a single file, a zip of several
+    files appended together, or an append onto an existing dataset - so all of
+    them clean names, detect types and write storage the same way.
+    """
+    warnings = list(warnings or [])
 
     if frame.empty:
         warnings.append("The file contains no data rows.")
@@ -364,6 +371,14 @@ def ingest_file(source: Path, destination_dir: Path) -> IngestResult:
         variables=metas,
         warnings=warnings,
     )
+
+
+def ingest_file(source: Path, destination_dir: Path) -> IngestResult:
+    """Read one data file and persist it."""
+    if not source.exists():
+        raise IngestError(f"File not found: {source}")
+    frame, variable_labels, value_labels = read_source(source)
+    return ingest_frame(frame, variable_labels, value_labels, destination_dir)
 
 
 def detect_monitoring_fields(variables: list[VariableMeta]) -> dict[str, str]:
