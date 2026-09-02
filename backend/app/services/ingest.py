@@ -98,12 +98,52 @@ def read_source(path: Path) -> tuple[pd.DataFrame, dict[str, str], dict[str, dic
     return _read_delimited(path)
 
 
+# Columns holding Stata's tagged missing values get a companion column with this
+# suffix, so ".a" survives without turning a numeric column into text.
+MISSING_TAG_SUFFIX = "__mv"
+
+
+def _split_missing_tags(
+    frame: pd.DataFrame, missing_user_values: dict[str, list[str]] | None
+) -> pd.DataFrame:
+    """Separate Stata tagged missings from the values they are mixed in with.
+
+    Reading with user_missing=True returns a column like [25.0, nan, 'a', 33.0]:
+    the tag is preserved but the column is now object dtype, so means and sums
+    stop working. Split it into a clean numeric column plus a companion column
+    holding the tag, and both survive.
+    """
+    if not missing_user_values:
+        return frame
+
+    for column in list(missing_user_values):
+        if column not in frame.columns:
+            continue
+        series = frame[column]
+        if not pd.api.types.is_object_dtype(series):
+            continue
+        is_tag = series.map(lambda v: isinstance(v, str) and len(v) == 1 and v.isalpha())
+        if not is_tag.any():
+            continue
+        frame[f"{column}{MISSING_TAG_SUFFIX}"] = series.where(is_tag).map(
+            lambda v: f".{v}" if isinstance(v, str) else None
+        )
+        frame[column] = pd.to_numeric(series.where(~is_tag), errors="coerce")
+    return frame
+
+
 def _read_stata(path: Path) -> tuple[pd.DataFrame, dict[str, str], dict[str, dict[str, str]]]:
     """pyreadstat keeps labels intact; pandas is the fallback for odd versions."""
     try:
         import pyreadstat
 
-        frame, meta = pyreadstat.read_dta(str(path), apply_value_formats=False)
+        # user_missing=True keeps Stata's tagged missing values (.a to .z) instead
+        # of flattening every kind of missing into NaN. Survey Solutions uses them
+        # for answers like "don't know", so losing them loses real information.
+        frame, meta = pyreadstat.read_dta(
+            str(path), apply_value_formats=False, user_missing=True
+        )
+        frame = _split_missing_tags(frame, getattr(meta, "missing_user_values", None))
         variable_labels = dict(meta.column_names_to_labels or {})
         value_labels = {
             variable: {str(k): str(v) for k, v in labels.items()}
