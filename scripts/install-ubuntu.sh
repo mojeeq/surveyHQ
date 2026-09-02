@@ -43,6 +43,19 @@ fi
 
 docker compose version >/dev/null 2>&1 || die "The Docker Compose plugin is missing. Install docker-compose-plugin."
 
+# Group membership from usermod does not apply to the shell that ran it, so a
+# freshly added user still cannot reach the daemon socket until they log back
+# in. Fall back to sudo for this run rather than failing.
+DC="docker compose"
+if ! docker info >/dev/null 2>&1; then
+    if sudo -n docker info >/dev/null 2>&1 || sudo docker info >/dev/null 2>&1; then
+        DC="sudo docker compose"
+        warn "Using sudo for Docker this run. Log out and back in to drop the sudo."
+    else
+        die "Cannot reach the Docker daemon. Is it running? Try: sudo systemctl start docker"
+    fi
+fi
+
 # --- Configuration ----------------------------------------------------------
 if [[ -f .env ]]; then
     ok ".env already exists, keeping your settings"
@@ -77,10 +90,10 @@ WEB_PORT="$(grep -E '^WEB_PORT=' .env | cut -d= -f2 || echo 8080)"
 
 # --- Build and start --------------------------------------------------------
 say "Building images (this takes a few minutes the first time)"
-docker compose build
+$DC build
 
 say "Starting services"
-docker compose up -d
+$DC up -d
 
 say "Waiting for the API to become healthy"
 for _ in $(seq 1 60); do

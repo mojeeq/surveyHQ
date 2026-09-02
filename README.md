@@ -52,18 +52,46 @@ Runs on Ubuntu with Docker. One command to install.
 ## Install on Ubuntu
 
 Ubuntu 22.04 or 24.04, 4 GB RAM minimum (8 GB recommended for large surveys).
+Nothing else is needed — the installer adds Docker if it is missing.
+
+### 1. Get the code onto the server
+
+The repository is private, so the server needs to authenticate. The simplest way
+is a GitHub personal access token with `repo` scope
+([create one here](https://github.com/settings/tokens)):
 
 ```bash
-git clone <your-repository-url> surveyhq
+sudo apt update && sudo apt install -y git
+git clone https://github.com/mojeeq/surveyHQ.git surveyhq
+# Username: mojeeq
+# Password: paste the personal access token (not your GitHub password)
 cd surveyhq
+```
+
+That is everything — the platform lives on `main`.
+
+### 2. Run the installer
+
+```bash
 ./scripts/install-ubuntu.sh
 ```
 
-The installer installs Docker if it is missing, generates `.env` with fresh
-secrets, builds the images and starts everything. It prints the URL and the
-administrator password at the end — write the password down.
+It installs Docker if needed, generates `.env` with fresh secrets, asks for an
+administrator email and a port, builds the images and starts everything.
 
-Then open `http://your-server:8080` and sign in.
+It prints the URL, the administrator email and the generated password when it
+finishes. **Write the password down** — it is stored only in `.env`.
+
+### 3. Open it
+
+```
+http://your-server-ip:8080
+```
+
+Sign in with the administrator account the installer printed.
+
+> First run builds several images and takes about five to ten minutes. Later
+> starts take seconds.
 
 ### Manual install
 
