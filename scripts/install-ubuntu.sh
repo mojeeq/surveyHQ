@@ -133,17 +133,45 @@ $DC build
 say "Starting services"
 $DC up -d
 
-say "Waiting for the API to become healthy"
-for _ in $(seq 1 60); do
-    if curl -fsS "http://localhost:${WEB_PORT}/health" >/dev/null 2>&1; then
+# curl is only installed by the Docker branch above, so a server that already had
+# Docker may not have it. Probe with whatever is present, and fall back to asking
+# the api container itself, which always has curl.
+probe_health() {
+    if command -v curl >/dev/null 2>&1; then
+        curl -fsS "http://localhost:${WEB_PORT}/health" >/dev/null 2>&1
+    elif command -v wget >/dev/null 2>&1; then
+        wget -q -O /dev/null "http://localhost:${WEB_PORT}/health" 2>/dev/null
+    else
+        $DC exec -T api curl -fsS http://localhost:8000/health >/dev/null 2>&1
+    fi
+}
+
+say "Waiting for the API to become healthy (up to 2 minutes)"
+API_READY=0
+for _ in $(seq 1 40); do
+    if probe_health; then
+        API_READY=1
+        printf '\n'
         ok "API is responding"
         break
     fi
+    printf '.'
     sleep 3
 done
 
 echo
-echo -e "${GREEN}SurveyHQ is running.${NC}"
+if [[ "$API_READY" -eq 1 ]]; then
+    echo -e "${GREEN}SurveyHQ is running.${NC}"
+else
+    # Never claim success we did not observe.
+    printf '\n'
+    warn "The containers started, but the API did not answer on port ${WEB_PORT} in time."
+    warn "It may still be finishing its first boot. Check with:"
+    echo "    docker compose ps"
+    echo "    docker compose logs api --tail=50"
+    echo
+    echo -e "${YELLOW}Details below are correct once the API comes up.${NC}"
+fi
 echo
 echo "  URL:      http://localhost:${WEB_PORT}"
 echo "  Email:    $(grep -E '^FIRST_ADMIN_EMAIL=' .env | cut -d= -f2-)"
