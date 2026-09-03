@@ -9,7 +9,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { STATUS_COLORS } from '@/lib/charts'
 import { formatNumber, formatValue, relativeTime } from '@/lib/format'
-import type { Chart, Dashboard, Indicator, Widget } from '@/lib/types'
+import type { Chart, Dashboard, Dataset, Indicator, Page, Widget } from '@/lib/types'
 import AssignProject from '@/components/AssignProject'
 import ChartCard from '@/components/ChartCard'
 import CrosstabTable from '@/components/CrosstabTable'
@@ -34,6 +34,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
   const queryClient = useQueryClient()
   const [editing, setEditing] = useState(false)
   const [adding, setAdding] = useState(false)
+  const [activePage, setActivePage] = useState(0)
   const [width, setWidth] = useState(1200)
 
   const isPublic = Boolean(publicToken)
@@ -71,6 +72,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
           config: widget.config,
           layout: widget.layout,
           position: widget.position,
+          page: widget.page ?? 0,
         })),
       }),
     onSuccess: () => {
@@ -95,6 +97,12 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
     },
   })
 
+  const savePages = useMutation({
+    mutationFn: (pages: { name: string }[]) => api.patch(`/dashboards/${id}`, { pages }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['dashboard', id] }),
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
   const removeWidget = useMutation({
     mutationFn: (widgetId: string) => api.delete(`/dashboards/${id}/widgets/${widgetId}`),
     onSuccess: () => {
@@ -103,7 +111,16 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
     },
   })
 
-  const widgets = dashboard.data?.widgets ?? []
+  const allWidgets = dashboard.data?.widgets ?? []
+  const pages = dashboard.data?.pages ?? []
+  // A dashboard with no named pages is one unnamed page, which is what every
+  // dashboard made before this feature is.
+  const pageCount = Math.max(1, pages.length)
+  const page = Math.min(activePage, pageCount - 1)
+  const widgets = useMemo(
+    () => allWidgets.filter((widget) => (widget.page ?? 0) === page),
+    [allWidgets, page],
+  )
 
   const layout: Layout[] = useMemo(
     () =>
@@ -124,7 +141,9 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
 
   const onLayoutChange = (next: Layout[]) => {
     if (!editing) return
-    const updated = widgets.map((widget) => {
+    // Every widget goes back, not just this page's: the PATCH replaces the whole
+    // list, so omitting the other pages would delete them.
+    const updated = allWidgets.map((widget) => {
       const position = next.find((item) => item.i === widget.id)
       return position
         ? { ...widget, layout: { x: position.x, y: position.y, w: position.w, h: position.h } }
@@ -183,6 +202,16 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         </div>
       )}
 
+      <PageTabs
+        pages={pages}
+        active={page}
+        count={pageCount}
+        canEdit={!isPublic && can('analyst')}
+        widgetsOnPage={widgets.length}
+        onSelect={setActivePage}
+        onChange={(next) => savePages.mutate(next)}
+      />
+
       {!widgets.length ? (
         <Card>
           <EmptyState
@@ -231,7 +260,9 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         </GridLayout>
       )}
 
-      {adding && <AddWidgetModal dashboardId={id} onClose={() => setAdding(false)} />}
+      {adding && (
+        <AddWidgetModal dashboardId={id} page={page} onClose={() => setAdding(false)} />
+      )}
     </div>
   )
 }
@@ -284,6 +315,8 @@ function WidgetFrame({
           </p>
         ) : payload.type === 'indicator' ? (
           <IndicatorWidget payload={payload} />
+        ) : payload.type === 'quality' ? (
+          <QualityWidget payload={payload} />
         ) : payload.type === 'crosstab' ? (
           <CrosstabTable result={payload.result} compact maxHeight={260} />
         ) : payload.type === 'text' ? (
@@ -297,6 +330,151 @@ function WidgetFrame({
           />
         ) : null}
       </div>
+    </div>
+  )
+}
+
+/**
+ * The state of a dataset's data quality checks.
+ *
+ * Failing checks are listed first and in full; passing ones are a count. A
+ * panel that lists thirty green rows buries the one red one, which is the only
+ * row anybody opened the dashboard to see.
+ */
+/**
+ * Pages across a dashboard.
+ *
+ * Hidden entirely until there is more than one, so a dashboard that does not
+ * use pages does not grow a tab strip saying "Page 1". Adding the second page
+ * has to name the first as well, since an unnamed page cannot be labelled.
+ */
+function PageTabs({
+  pages,
+  active,
+  count,
+  canEdit,
+  widgetsOnPage,
+  onSelect,
+  onChange,
+}: {
+  pages: { name?: string }[]
+  active: number
+  count: number
+  canEdit: boolean
+  widgetsOnPage: number
+  onSelect: (index: number) => void
+  onChange: (pages: { name: string }[]) => void
+}) {
+  const named = Array.from({ length: count }, (_, index) => ({
+    name: pages[index]?.name || `Page ${index + 1}`,
+  }))
+
+  const addPage = () => {
+    const name = prompt('Name for the new page')?.trim()
+    if (!name) return
+    onChange([...named, { name }])
+    onSelect(count)
+  }
+
+  const renamePage = (index: number) => {
+    const name = prompt('Rename this page', named[index].name)?.trim()
+    if (!name) return
+    onChange(named.map((page, i) => (i === index ? { name } : page)))
+  }
+
+  const removePage = (index: number) => {
+    if (widgetsOnPage > 0) {
+      alert('Move or remove this page\u2019s widgets before deleting it.')
+      return
+    }
+    if (!confirm(`Delete the page "${named[index].name}"?`)) return
+    onChange(named.filter((_, i) => i !== index))
+    onSelect(Math.max(0, index - 1))
+  }
+
+  if (count <= 1 && !canEdit) return null
+
+  return (
+    <div className="mb-4 flex flex-wrap items-center gap-1 border-b border-ink-200">
+      {count > 1 &&
+        named.map((page, index) => (
+          <button
+            key={index}
+            onClick={() => onSelect(index)}
+            onDoubleClick={() => canEdit && renamePage(index)}
+            title={canEdit ? 'Double-click to rename' : undefined}
+            className={`whitespace-nowrap border-b-2 px-3.5 py-2.5 text-sm font-medium transition-colors ${
+              active === index
+                ? 'border-brand-600 text-brand-700'
+                : 'border-transparent text-ink-500 hover:text-ink-800'
+            }`}
+          >
+            {page.name}
+          </button>
+        ))}
+      {canEdit && (
+        <>
+          <button className="btn-ghost btn-sm text-ink-500" onClick={addPage}>
+            + Page
+          </button>
+          {count > 1 && (
+            <button
+              className="btn-ghost btn-sm text-red-600"
+              onClick={() => removePage(active)}
+            >
+              Delete page
+            </button>
+          )}
+        </>
+      )}
+    </div>
+  )
+}
+
+function QualityWidget({ payload }: { payload: any }) {
+  const failing = payload.checks.filter((c: any) => c.passed === false)
+  const stale = payload.oldest_run_at
+  return (
+    <div className="flex h-full flex-col">
+      <div className="mb-3 flex flex-wrap items-center gap-2">
+        <Badge tone={payload.failing ? 'danger' : 'success'}>
+          {payload.failing ? `${payload.failing} failing` : 'All passing'}
+        </Badge>
+        {payload.passing > 0 && <Badge tone="neutral">{payload.passing} passing</Badge>}
+        {payload.never_run > 0 && (
+          <Badge tone="warning">{payload.never_run} never run</Badge>
+        )}
+      </div>
+
+      {!payload.checks.length ? (
+        <p className="text-sm text-ink-500">
+          No active checks on {payload.name}.
+        </p>
+      ) : (
+        <ul className="min-h-0 flex-1 space-y-2 overflow-auto">
+          {failing.map((check: any) => (
+            <li
+              key={check.id}
+              className="rounded-lg border border-red-200 bg-red-50 px-3 py-2"
+            >
+              <p className="text-sm font-medium text-red-900">{check.name}</p>
+              <p className="text-xs text-red-800">{check.message}</p>
+            </li>
+          ))}
+          {!failing.length && (
+            <li className="text-sm text-ink-500">
+              Every active check on {payload.name} passed.
+            </li>
+          )}
+        </ul>
+      )}
+
+      {stale && (
+        <p className="mt-2 text-[11px] text-ink-400">
+          {/* Results are shown as last run, not recomputed on open, so say when. */}
+          Oldest result {relativeTime(stale)}
+        </p>
+      )}
     </div>
   )
 }
@@ -335,10 +513,20 @@ function IndicatorWidget({ payload }: { payload: any }) {
   )
 }
 
-function AddWidgetModal({ dashboardId, onClose }: { dashboardId: string; onClose: () => void }) {
+function AddWidgetModal({
+  dashboardId,
+  page,
+  onClose,
+}: {
+  dashboardId: string
+  /** The page being looked at, which is where a new widget belongs. */
+  page: number
+  onClose: () => void
+}) {
   const toast = useToast()
   const queryClient = useQueryClient()
-  const [kind, setKind] = useState<'chart' | 'indicator' | 'text'>('chart')
+  const [kind, setKind] = useState<'chart' | 'indicator' | 'quality' | 'text'>('chart')
+  const [datasetId, setDatasetId] = useState('')
   const [chartId, setChartId] = useState('')
   const [indicatorId, setIndicatorId] = useState('')
   const [title, setTitle] = useState('')
@@ -349,6 +537,11 @@ function AddWidgetModal({ dashboardId, onClose }: { dashboardId: string; onClose
     queryKey: ['indicators'],
     queryFn: () => api.get<Indicator[]>('/monitoring/indicators'),
   })
+  const datasets = useQuery({
+    queryKey: ['datasets'],
+    queryFn: () => api.get<Page<Dataset>>('/datasets?limit=200'),
+    enabled: kind === 'quality',
+  })
 
   const add = useMutation({
     mutationFn: () =>
@@ -357,11 +550,15 @@ function AddWidgetModal({ dashboardId, onClose }: { dashboardId: string; onClose
           title ||
           (kind === 'chart'
             ? charts.data?.find((c) => c.id === chartId)?.name
-            : indicators.data?.find((i) => i.id === indicatorId)?.name) ||
+            : kind === 'quality'
+              ? `Data quality: ${datasets.data?.items.find((d) => d.id === datasetId)?.name ?? ''}`
+              : indicators.data?.find((i) => i.id === indicatorId)?.name) ||
           'Widget',
         widget_type: kind,
         chart_id: kind === 'chart' ? chartId : null,
         indicator_id: kind === 'indicator' ? indicatorId : null,
+        dataset_id: kind === 'quality' ? datasetId : null,
+        page,
         config: kind === 'text' ? { content } : {},
         layout: kind === 'indicator' ? { w: 3, h: 3 } : { w: 6, h: 4 },
       }),
@@ -375,7 +572,10 @@ function AddWidgetModal({ dashboardId, onClose }: { dashboardId: string; onClose
   })
 
   const canAdd =
-    (kind === 'chart' && chartId) || (kind === 'indicator' && indicatorId) || (kind === 'text' && content)
+    (kind === 'chart' && chartId) ||
+    (kind === 'indicator' && indicatorId) ||
+    (kind === 'quality' && datasetId) ||
+    (kind === 'text' && content)
 
   return (
     <Modal
@@ -401,6 +601,7 @@ function AddWidgetModal({ dashboardId, onClose }: { dashboardId: string; onClose
         >
           <option value="chart">Saved chart or cross-tab</option>
           <option value="indicator">Indicator tile</option>
+          <option value="quality">Data quality panel</option>
           <option value="text">Text note</option>
         </select>
       </Field>
@@ -418,6 +619,26 @@ function AddWidgetModal({ dashboardId, onClose }: { dashboardId: string; onClose
                 {/* Two saved items can share a name while rendering quite
                     differently, so say which kind each one is. */}
                 {chart.name} ({chart.chart_type === 'crosstab' ? 'cross-tab' : chart.chart_type})
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+
+      {kind === 'quality' && (
+        <Field
+          label="Dataset"
+          hint="Shows the state of that dataset's active checks as of their last run."
+        >
+          <select
+            className="input"
+            value={datasetId}
+            onChange={(event) => setDatasetId(event.target.value)}
+          >
+            <option value="">Choose a dataset…</option>
+            {datasets.data?.items.map((dataset) => (
+              <option key={dataset.id} value={dataset.id}>
+                {dataset.name}
               </option>
             ))}
           </select>

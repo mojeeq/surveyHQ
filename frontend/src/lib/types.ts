@@ -298,7 +298,14 @@ export interface ArchiveImport {
   rows: number
 }
 
-export type WidgetType = 'chart' | 'table' | 'kpi' | 'indicator' | 'text' | 'crosstab'
+export type WidgetType =
+  | 'chart'
+  | 'table'
+  | 'kpi'
+  | 'indicator'
+  | 'text'
+  | 'crosstab'
+  | 'quality'
 
 export interface Widget {
   id: string
@@ -309,6 +316,8 @@ export interface Widget {
   indicator_id: string | null
   dataset_id: string | null
   config: Record<string, unknown>
+  /** Index into Dashboard.pages; 0 is the first page. */
+  page: number
   layout: { x?: number; y?: number; w?: number; h?: number }
   position: number
 }
@@ -320,6 +329,8 @@ export interface Dashboard {
   description: string
   filters: Record<string, unknown>[]
   project_id: string | null
+  /** Named pages; empty means the dashboard is a single unnamed page. */
+  pages: { name: string }[]
   is_public: boolean
   public_token: string | null
   refresh_interval_seconds: number

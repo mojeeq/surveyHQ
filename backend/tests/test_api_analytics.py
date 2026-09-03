@@ -824,3 +824,47 @@ def test_a_quality_rule_can_be_restricted_to_part_of_the_dataset(
         f"/api/v1/monitoring/quality-results?rule_id={rule_id}", headers=auth_headers
     ).json()
     assert latest[0]["total_rows"] == 200
+
+
+def test_a_data_quality_panel_can_go_on_a_dashboard(client, auth_headers, dataset_id):
+    """Checks belong where people look, which is the dashboard."""
+    rule = client.post(
+        "/api/v1/monitoring/quality-rules",
+        headers=auth_headers,
+        json={
+            "name": "Income should rarely be blank",
+            "dataset_id": dataset_id,
+            "check_type": "missing_rate",
+            "config": {"variable": "income"},
+            "threshold": 0.0,  # 10 of 200 are blank, so this fails
+        },
+    )
+    assert rule.status_code == 201, rule.text
+
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "With quality"}
+    ).json()
+    added = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={
+            "title": "Data quality",
+            "widget_type": "quality",
+            "dataset_id": dataset_id,
+        },
+    )
+    assert added.status_code == 201, added.text
+
+    rendered = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json={"op": "and", "conditions": [], "groups": []},
+    )
+    assert rendered.status_code == 200, rendered.text
+    panel = next(iter(rendered.json()["widgets"].values()))
+    assert panel["type"] == "quality"
+    assert panel["failing"] >= 1
+    failing = [c for c in panel["checks"] if c["passed"] is False]
+    # Failing checks sort first, so the one worth seeing is not buried
+    assert panel["checks"][0]["passed"] is False
+    assert any("income" in c["message"] for c in failing)
