@@ -42,6 +42,12 @@ class User(UUIDMixin, TimestampMixin, Base):
     restricted_to_projects: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default=text("false")
     )
+    # Set whenever someone other than the account holder chose the password: at
+    # first-run bootstrap, and every time an administrator creates or resets an
+    # account. Cleared the moment they set one of their own.
+    must_change_password: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
     last_login_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
 
     api_keys: Mapped[list[ApiKey]] = relationship(

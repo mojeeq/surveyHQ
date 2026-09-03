@@ -11,7 +11,7 @@ from app.models.monitoring import (
     Direction,
     Severity,
 )
-from app.schemas.query import QuerySpec
+from app.schemas.query import FilterGroup, QuerySpec
 
 
 class IndicatorCreate(BaseModel):
@@ -145,6 +145,10 @@ class QualityRuleCreate(BaseModel):
     config: dict[str, Any] = Field(default_factory=dict)
     severity: Severity = Severity.warning
     threshold: float = 0.0
+    # Restricts the check to part of the dataset. Both the failing rows and the
+    # total are counted inside it, so the failure rate stays a rate of what the
+    # check actually looked at.
+    filters: FilterGroup = Field(default_factory=FilterGroup)
 
 
 class QualityRuleUpdate(BaseModel):
@@ -153,6 +157,7 @@ class QualityRuleUpdate(BaseModel):
     severity: Severity | None = None
     threshold: float | None = None
     is_active: bool | None = None
+    filters: FilterGroup | None = None
 
 
 class QualityRuleOut(BaseModel):
@@ -166,6 +171,7 @@ class QualityRuleOut(BaseModel):
     severity: Severity
     threshold: float
     is_active: bool
+    filters: FilterGroup = Field(default_factory=FilterGroup)
     created_at: dt.datetime
 
 

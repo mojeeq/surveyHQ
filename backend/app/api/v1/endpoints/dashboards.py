@@ -15,7 +15,17 @@ from app.api.deps import (
     get_ready_dataset,
 )
 from app.core.security import new_public_token
-from app.models import Chart, Dashboard, Dataset, Indicator, Role, User, Widget
+from app.models import (
+    Chart,
+    Dashboard,
+    Dataset,
+    Indicator,
+    QualityResult,
+    QualityRule,
+    Role,
+    User,
+    Widget,
+)
 from app.schemas.analytics import (
     ChartCreate,
     ChartOut,
@@ -206,6 +216,7 @@ def create_dashboard(
         refresh_interval_seconds=payload.refresh_interval_seconds,
         created_by=user.id,
         project_id=payload.project_id,
+        theme=payload.theme,
     )
     db.add(dashboard)
     record(db, user=user, action="create_dashboard", entity_type="dashboard")
@@ -276,8 +287,9 @@ def add_widget(
         indicator_id=payload.indicator_id,
         dataset_id=payload.dataset_id,
         config=payload.config,
-        layout=payload.layout or _next_layout(dashboard),
+        layout=payload.layout or _next_layout(dashboard, payload.page),
         position=payload.position or len(dashboard.widgets),
+        page=payload.page,
     )
     db.add(widget)
     db.commit()
@@ -348,9 +360,17 @@ def _unique_slug(db: DbSession, name: str) -> str:
     return candidate
 
 
-def _next_layout(dashboard: Dashboard) -> dict[str, int]:
+def _next_layout(dashboard: Dashboard, page: int = 0) -> dict[str, int]:
+    """Space below what is already on that page.
+
+    Pages have independent layouts, so a widget added to the second page must
+    not be placed below the first page's content - it would open on an empty
+    screen with the widget somewhere far down it.
+    """
     bottom = 0
     for widget in dashboard.widgets:
+        if (widget.page or 0) != page:
+            continue
         layout = widget.layout or {}
         bottom = max(bottom, int(layout.get("y", 0)) + int(layout.get("h", 4)))
     return {"x": 0, "y": bottom, "w": 6, "h": 4}
@@ -375,6 +395,7 @@ def _replace_widgets(db: DbSession, dashboard: Dashboard, widgets: list[WidgetIn
         widget.config = incoming.config
         widget.layout = incoming.layout
         widget.position = position
+        widget.page = incoming.page
     for widget_id, widget in existing.items():
         if widget_id not in seen:
             db.delete(widget)
@@ -395,6 +416,64 @@ def _render_widgets(
             detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
             payload["widgets"][widget.id] = {"error": str(detail)}
     return payload
+
+
+def _render_quality(db: DbSession, widget: Widget) -> dict[str, Any]:
+    """The state of a dataset's data quality checks.
+
+    Reports what the last run found rather than running the checks now: a
+    dashboard opening should not set eight full-table scans going, and the
+    results are already stored by the run that produced them. The age of the
+    oldest one is reported so a stale panel cannot pass for a fresh one.
+    """
+    dataset_id = widget.dataset_id or (widget.config or {}).get("dataset_id")
+    if not dataset_id:
+        return {"error": "This panel is not pointed at a dataset"}
+    dataset = db.get(Dataset, dataset_id)
+    if dataset is None:
+        return {"error": "The dataset no longer exists"}
+
+    rules = list(
+        db.scalars(
+            select(QualityRule).where(
+                QualityRule.dataset_id == dataset_id, QualityRule.is_active.is_(True)
+            )
+        )
+    )
+    checks: list[dict[str, Any]] = []
+    for rule in rules:
+        latest = db.scalar(
+            select(QualityResult)
+            .where(QualityResult.rule_id == rule.id)
+            .order_by(QualityResult.run_at.desc())
+            .limit(1)
+        )
+        checks.append(
+            {
+                "id": rule.id,
+                "name": rule.name,
+                "severity": rule.severity.value,
+                "passed": latest.passed if latest else None,
+                "failed_rows": latest.failed_rows if latest else 0,
+                "total_rows": latest.total_rows if latest else 0,
+                "failure_rate": latest.failure_rate if latest else 0.0,
+                "message": latest.message if latest else "Not run yet",
+                "run_at": latest.run_at.isoformat() if latest else None,
+            }
+        )
+
+    checks.sort(key=lambda c: (c["passed"] is not False, -c["failure_rate"]))
+    runs = [c["run_at"] for c in checks if c["run_at"]]
+    return {
+        "type": "quality",
+        "name": dataset.name,
+        "dataset_id": dataset_id,
+        "checks": checks,
+        "failing": sum(1 for c in checks if c["passed"] is False),
+        "passing": sum(1 for c in checks if c["passed"] is True),
+        "never_run": sum(1 for c in checks if c["passed"] is None),
+        "oldest_run_at": min(runs) if runs else None,
+    }
 
 
 def _render_widget(
@@ -420,6 +499,9 @@ def _render_widget(
                 indicator.last_computed_at.isoformat() if indicator.last_computed_at else None
             ),
         }
+
+    if widget.widget_type.value == "quality":
+        return _render_quality(db, widget)
 
     if widget.chart_id:
         chart = db.get(Chart, widget.chart_id)

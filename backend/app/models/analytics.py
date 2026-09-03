@@ -12,6 +12,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -43,6 +44,7 @@ class WidgetType(str, enum.Enum):
     indicator = "indicator"
     text = "text"
     crosstab = "crosstab"
+    quality = "quality"
 
 
 class SavedQuery(UUIDMixin, TimestampMixin, Base):
@@ -90,6 +92,19 @@ class Dashboard(UUIDMixin, TimestampMixin, Base):
     )
     # Dashboard level filter controls offered to viewers
     filters: Mapped[list] = mapped_column(JSON, default=list)
+    # Named pages, e.g. [{"name": "Fieldwork"}, {"name": "Data quality"}]. A
+    # dashboard with none behaves as one unnamed page, which is what every
+    # dashboard created before pages existed is.
+    # A server default so this can be added to a table that already has rows;
+    # without one it is NOT NULL with nothing to fill in, and the upgrade has to
+    # skip it - which start-up reports as an error rather than silently ignoring.
+    pages: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
+    # Which categorical ordering the charts on this dashboard use. The orders
+    # live in the frontend, which is what draws them; the server only remembers
+    # the choice, so adding one needs no migration.
+    theme: Mapped[str] = mapped_column(
+        String(40), default="default", server_default=text("'default'")
+    )
     is_public: Mapped[bool] = mapped_column(Boolean, default=False)
     public_token: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
     refresh_interval_seconds: Mapped[int] = mapped_column(Integer, default=0)
@@ -128,5 +143,8 @@ class Widget(UUIDMixin, TimestampMixin, Base):
     # {"x": 0, "y": 0, "w": 6, "h": 4}
     layout: Mapped[dict] = mapped_column(JSON, default=dict)
     position: Mapped[int] = mapped_column(Integer, default=0)
+    # Index into Dashboard.pages. Zero is the first page, and the page every
+    # widget that predates this feature is already on.
+    page: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
 
     dashboard: Mapped[Dashboard] = relationship(back_populates="widgets")

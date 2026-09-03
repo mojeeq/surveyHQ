@@ -5,6 +5,7 @@ from __future__ import annotations
 import shutil
 from pathlib import Path
 from typing import Annotated, Any
+from uuid import uuid4
 
 from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
 from sqlalchemy import func, or_, select
@@ -21,6 +22,7 @@ from app.core.logging import get_logger
 from app.models import Dataset, DatasetSource, DatasetStatus, Role, Variable
 from app.schemas.common import Message, Page
 from app.schemas.dataset import (
+    ArchiveImportOut,
     DatasetDetail,
     DatasetOut,
     DatasetPreview,
@@ -28,13 +30,12 @@ from app.schemas.dataset import (
     VariableOut,
 )
 from app.schemas.query import FilterGroup
-from app.services.archives import is_archive
 from app.services.audit import record
 from app.services.datasets import (
     append_file_into_dataset,
     create_dataset_record,
     delete_dataset_files,
-    load_archive_into_dataset,
+    load_archive_as_datasets,
     load_file_into_dataset,
 )
 from app.services.ingest import SUPPORTED_EXTENSIONS, IngestError
@@ -89,7 +90,7 @@ def list_datasets(
     return Page(items=items, total=total, limit=limit, offset=offset)
 
 
-@router.post("/upload", response_model=DatasetDetail, status_code=201)
+@router.post("/upload", response_model=DatasetDetail | ArchiveImportOut, status_code=201)
 async def upload_dataset(
     db: DbSession,
     user: RequireManager,
@@ -99,14 +100,18 @@ async def upload_dataset(
     tags: Annotated[str, Form()] = "",
     combine_all: Annotated[bool, Form()] = False,
     project_id: Annotated[str, Form()] = "",
-) -> DatasetDetail:
-    """Upload a data file, or a zip of them, and ingest it immediately.
+) -> DatasetDetail | ArchiveImportOut:
+    """Upload a data file, or an export archive, and ingest it immediately.
 
-    A zip is unpacked and the files inside appended into one dataset, with a
-    source_file column recording where each row came from. By default only files
-    sharing a column set are appended, because an export archive usually holds
-    one file per roster level rather than several rounds; combine_all forces
-    everything together on the union of their columns.
+    A single file becomes one dataset. An archive becomes one dataset per file
+    inside it, because a Survey Solutions export holds one file per roster level
+    - the interview, the household members, the people abroad - and those are
+    different tables, not different rounds.
+
+    Uploading a later round's archive appends each of its files to the dataset
+    already holding that file name, so the rounds meet where they belong. Pass
+    combine_all for the other case: an archive that really does hold several
+    rounds of one table, which is appended into a single dataset instead.
     """
     filename = Path(file.filename or "upload.dat").name
     suffix = Path(filename).suffix.lower()
@@ -125,18 +130,26 @@ async def upload_dataset(
         )
 
     settings.ensure_directories()
-    dataset = create_dataset_record(
-        db,
-        name=name.strip() or Path(filename).stem,
-        description=description,
-        source=DatasetSource.upload,
-        source_ref=filename,
-        tags=[t.strip() for t in tags.split(",") if t.strip()],
-        created_by=user.id,
-        project_id=project_id or None,
+    archive = suffix == ".zip"
+    # An archive creates its own datasets, one per member file, so there is no
+    # single record to make up front - and making one would leave an empty
+    # dataset behind whenever the archive turned out to hold several tables.
+    dataset = (
+        None
+        if archive
+        else create_dataset_record(
+            db,
+            name=name.strip() or Path(filename).stem,
+            description=description,
+            source=DatasetSource.upload,
+            source_ref=filename,
+            tags=[t.strip() for t in tags.split(",") if t.strip()],
+            created_by=user.id,
+            project_id=project_id or None,
+        )
     )
 
-    upload_path = settings.uploads_path / f"{dataset.id}{suffix}"
+    upload_path = settings.uploads_path / f"{dataset.id if dataset else uuid4().hex}{suffix}"
     max_bytes = settings.max_upload_mb * 1024 * 1024
     written = 0
     try:
@@ -157,8 +170,16 @@ async def upload_dataset(
         await file.close()
 
     try:
-        if is_archive(upload_path):
-            load_archive_into_dataset(db, dataset, upload_path, combine_all=combine_all)
+        if archive:
+            outcome = load_archive_as_datasets(
+                db,
+                archive_path=upload_path,
+                archive_name=filename,
+                project_id=project_id or None,
+                created_by=user.id,
+                combine_all=combine_all,
+                name_prefix=name.strip(),
+            )
         else:
             load_file_into_dataset(db, dataset, upload_path)
     except IngestError as exc:
@@ -166,6 +187,28 @@ async def upload_dataset(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     finally:
         upload_path.unlink(missing_ok=True)
+
+    if archive:
+        record(
+            db,
+            user=user,
+            action="upload_archive",
+            entity_type="dataset",
+            detail={"filename": filename, "datasets": len(outcome.datasets)},
+        )
+        db.commit()
+        for item in outcome.datasets:
+            db.refresh(item)
+        return ArchiveImportOut(
+            datasets=[DatasetOut.model_validate(d) for d in outcome.datasets],
+            created=outcome.created,
+            appended=outcome.appended,
+            skipped=outcome.skipped,
+            warnings=sorted(
+                {w for d in outcome.datasets for w in (d.meta or {}).get("warnings", [])}
+            ),
+            rows=outcome.rows,
+        )
 
     record(
         db,

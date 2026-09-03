@@ -5,7 +5,7 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { formatBytes, formatNumber, relativeTime } from '@/lib/format'
-import type { Dataset, Page } from '@/lib/types'
+import type { ArchiveImport, Dataset, Page } from '@/lib/types'
 import ProjectPicker from '@/components/ProjectPicker'
 import {
   Badge,
@@ -194,6 +194,7 @@ function UploadModal({ open, onClose }: { open: boolean; onClose: () => void }) 
   const [isZip, setIsZip] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [result, setResult] = useState<ArchiveImport | null>(null)
 
   const submit = async () => {
     const file = fileRef.current?.files?.[0]
@@ -205,30 +206,27 @@ function UploadModal({ open, onClose }: { open: boolean; onClose: () => void }) 
     setError('')
     const form = new FormData()
     form.append('file', file)
-    form.append('name', name || file.name.replace(/\.[^.]+$/, ''))
+    form.append('name', name || (isZip ? '' : file.name.replace(/\.[^.]+$/, '')))
     form.append('description', description)
     form.append('tags', tags)
     form.append('combine_all', String(combineAll))
     form.append('project_id', projectId)
     try {
-      const dataset = await api.upload<Dataset>('/datasets/upload', form)
-      const archive = dataset.meta?.archive
-      toast.push(
-        archive
-          ? `Combined ${archive.files_combined.length} file(s) into ${formatNumber(
-              dataset.row_count,
-            )} rows`
-          : `Imported ${formatNumber(dataset.row_count)} rows and ${dataset.column_count} variables`,
-        'success',
-      )
-      if (archive?.files_skipped?.length) {
-        toast.push(
-          `${archive.files_skipped.length} file(s) had different columns and were not appended`,
-          'info',
-        )
-      }
+      const body = await api.upload<Dataset | ArchiveImport>('/datasets/upload', form)
       queryClient.invalidateQueries({ queryKey: ['datasets'] })
       queryClient.invalidateQueries({ queryKey: ['projects'] })
+
+      if ('datasets' in body) {
+        // An archive produces several datasets and may have something important
+        // to say about them - that rows are double counted, most of all. A toast
+        // disappears; this stays until the user closes it.
+        setResult(body)
+        return
+      }
+      toast.push(
+        `Imported ${formatNumber(body.row_count)} rows and ${body.column_count} variables`,
+        'success',
+      )
       setName('')
       setDescription('')
       setTags('')
@@ -238,6 +236,28 @@ function UploadModal({ open, onClose }: { open: boolean; onClose: () => void }) 
     } finally {
       setBusy(false)
     }
+  }
+
+  const close = () => {
+    setResult(null)
+    onClose()
+  }
+
+  if (result) {
+    return (
+      <Modal
+        open={open}
+        onClose={close}
+        title="Import finished"
+        footer={
+          <button className="btn-primary" onClick={close}>
+            Done
+          </button>
+        }
+      >
+        <ArchiveResult result={result} />
+      </Modal>
+    )
   }
 
   return (
@@ -282,9 +302,15 @@ function UploadModal({ open, onClose }: { open: boolean; onClose: () => void }) 
       {isZip && (
         <div className="mb-4 rounded-lg border border-brand-200 bg-brand-50 p-3">
           <p className="text-sm text-brand-900">
-            The files inside will be appended into one dataset, with a{' '}
-            <code className="text-xs">source_file</code> column recording which file each
-            row came from.
+            Each file inside becomes its own dataset, because an export holds one
+            file per roster level — the interview, the household members, the
+            people abroad — and those are different tables.
+          </p>
+          <p className="mt-1.5 text-sm text-brand-900">
+            Upload a later round&rsquo;s archive and each of its files is{' '}
+            <strong>appended</strong> to the dataset already holding that file name.
+            A <code className="text-xs">source_file</code> column records which
+            archive each row arrived in.
           </p>
           <label className="mt-2 flex items-start gap-2 text-sm text-brand-900">
             <input
@@ -304,7 +330,14 @@ function UploadModal({ open, onClose }: { open: boolean; onClose: () => void }) 
           </label>
         </div>
       )}
-      <Field label="Name" hint="Defaults to the file name">
+      <Field
+        label="Name"
+        hint={
+          isZip
+            ? "Optional prefix for the datasets this archive creates, for telling two surveys apart in one project."
+            : "Defaults to the file name"
+        }
+      >
         <input className="input" value={name} onChange={(e) => setName(e.target.value)} />
       </Field>
       <Field label="Description">
@@ -319,5 +352,55 @@ function UploadModal({ open, onClose }: { open: boolean; onClose: () => void }) 
         <input className="input" value={tags} onChange={(e) => setTags(e.target.value)} />
       </Field>
     </Modal>
+  )
+}
+
+
+/**
+ * What one archive upload did, per file inside it.
+ *
+ * An export holds one file per roster level, so this is several datasets rather
+ * than one - and whether each was created or appended to is the thing worth
+ * seeing. Warnings are shown first and cannot be dismissed by a timer, because
+ * the one that matters says the data is counted twice.
+ */
+function ArchiveResult({ result }: { result: ArchiveImport }) {
+  return (
+    <div className="space-y-4">
+      {result.warnings.map((warning) => (
+        <p
+          key={warning}
+          className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+        >
+          ⚠ {warning}
+        </p>
+      ))}
+
+      <p className="text-sm text-ink-600">
+        {formatNumber(result.rows)} rows across {result.datasets.length} dataset
+        {result.datasets.length === 1 ? '' : 's'}.
+      </p>
+
+      {[
+        ['Created', result.created] as const,
+        ['Appended to existing datasets', result.appended] as const,
+        ['Skipped', result.skipped] as const,
+      ]
+        .filter(([, lines]) => lines.length > 0)
+        .map(([label, lines]) => (
+          <div key={label}>
+            <p className="text-xs font-semibold uppercase tracking-wide text-ink-500">
+              {label}
+            </p>
+            <ul className="mt-1 space-y-1">
+              {lines.map((line) => (
+                <li key={line} className="font-mono text-xs text-ink-700">
+                  {line}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ))}
+    </div>
   )
 }

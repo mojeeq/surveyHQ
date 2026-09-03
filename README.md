@@ -44,6 +44,11 @@ Runs on Ubuntu with Docker. One command to install.
 **Organise it**
 - Projects group a survey round's datasets and dashboards, and decide who can
   reach them. Anything outside a project is a shared area every user can see.
+- An export archive becomes one dataset per roster level, and a later round's
+  archive is appended file by file to the datasets it already matches.
+- Relationships between a project's datasets are detected from the data, shown
+  as a model diagram, and correctable. Two related datasets can be merged into a
+  new one, and that merge re-runs on demand when its sources change.
 - Membership gives a person one project and nothing else: an administrator can
   create a user, tick "limit to assigned projects", and add them to the one
   project they should work on.
@@ -51,8 +56,10 @@ Runs on Ubuntu with Docker. One command to install.
   to a project as manager does not make them an editor of anything.
 
 **Share it**
-- Dashboards with drag-and-drop widgets: charts, saved cross-tabulations,
-  indicator tiles and notes.
+- Dashboards with drag-and-drop widgets across named pages: charts, saved
+  cross-tabulations, indicator tiles, data quality panels and notes.
+- A choice of chart palettes, each an ordering of the same validated hues,
+  ranked by how far apart neighbouring series stay for colour-blind readers.
 - Read-only public links for people who should not have accounts.
 - Roles: viewer, analyst, manager, administrator.
 - API keys for scripts, plus an OpenAPI spec at `/api/docs`.

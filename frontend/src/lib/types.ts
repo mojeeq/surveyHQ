@@ -11,8 +11,44 @@ export interface User {
   // Confines this user to the projects they belong to, shutting off the
   // shared area every other user can see.
   restricted_to_projects: boolean
+  /** Someone else chose this password, so the holder has to set their own. */
+  must_change_password: boolean
   created_at: string
   last_login_at: string | null
+}
+
+export type Cardinality =
+  | 'one_to_one'
+  | 'one_to_many'
+  | 'many_to_one'
+  | 'many_to_many'
+
+export interface Relationship {
+  id: string
+  project_id: string | null
+  left_dataset_id: string
+  right_dataset_id: string
+  left_variable: string
+  right_variable: string
+  cardinality: Cardinality
+  is_active: boolean
+  /** Still as detected, i.e. nobody has corrected it. */
+  detected: boolean
+  created_at: string
+  left_name: string
+  right_name: string
+}
+
+export interface DetectedRelationship {
+  left_dataset_id: string
+  right_dataset_id: string
+  left_name: string
+  right_name: string
+  left_variable: string
+  right_variable: string
+  cardinality: Cardinality
+  /** Share of the right side's keys present on the left. */
+  overlap: number
 }
 
 export type ProjectStatus = 'active' | 'paused' | 'closed'
@@ -58,6 +94,10 @@ export interface Variable {
   max_value: number | null
   mean_value: number | null
   value_labels: Record<string, string>
+  /** Stata tagged missings this variable carries, e.g. [".a", ".b"]. */
+  missing_tags: string[]
+  /** Internal bookkeeping columns, which should not be offered for analysis. */
+  is_hidden: boolean
 }
 
 export type DatasetStatus = 'pending' | 'processing' | 'ready' | 'failed'
@@ -67,7 +107,7 @@ export interface Dataset {
   name: string
   slug: string
   description: string
-  source: 'upload' | 'survey_solutions'
+  source: 'upload' | 'survey_solutions' | 'derived'
   source_ref: string
   connection_id: string | null
   // Null means the shared area, visible to everyone
@@ -78,10 +118,14 @@ export interface Dataset {
   column_count: number
   file_size: number
   tags: string[]
+  /** Non-empty when built from other datasets; it can then be rebuilt. */
+  derivation: Record<string, unknown>
   meta: {
     monitoring_fields?: Record<string, string>
     warnings?: string[]
-    archive?: { files_combined: string[]; files_skipped: string[]; rows: number }
+    /** Which file inside an export archive this dataset holds, and so which
+     *  file a later archive's rows get appended to. */
+    archive_member?: string
   }
   version: number
   refreshed_at: string | null
@@ -283,7 +327,25 @@ export interface Chart {
   updated_at: string
 }
 
-export type WidgetType = 'chart' | 'table' | 'kpi' | 'indicator' | 'text' | 'crosstab'
+export interface ArchiveImport {
+  datasets: Dataset[]
+  /** "R_demographics.dta -> R_demographics (401 rows)" */
+  created: string[]
+  /** "R_demographics.dta -> R_demographics (401 + 381 = 782 rows)" */
+  appended: string[]
+  skipped: string[]
+  warnings: string[]
+  rows: number
+}
+
+export type WidgetType =
+  | 'chart'
+  | 'table'
+  | 'kpi'
+  | 'indicator'
+  | 'text'
+  | 'crosstab'
+  | 'quality'
 
 export interface Widget {
   id: string
@@ -294,6 +356,8 @@ export interface Widget {
   indicator_id: string | null
   dataset_id: string | null
   config: Record<string, unknown>
+  /** Index into Dashboard.pages; 0 is the first page. */
+  page: number
   layout: { x?: number; y?: number; w?: number; h?: number }
   position: number
 }
@@ -305,6 +369,10 @@ export interface Dashboard {
   description: string
   filters: Record<string, unknown>[]
   project_id: string | null
+  /** Named pages; empty means the dashboard is a single unnamed page. */
+  pages: { name: string }[]
+  /** Which categorical ordering its charts use; see CHART_THEMES. */
+  theme: string
   is_public: boolean
   public_token: string | null
   refresh_interval_seconds: number
@@ -407,6 +475,8 @@ export interface QualityRule {
   severity: Severity
   threshold: number
   is_active: boolean
+  /** Restricts the check to part of the dataset; empty means all of it. */
+  filters: FilterGroup
   created_at: string
   latest_result: QualityResult | null
 }

@@ -1,9 +1,18 @@
 """Reading survey data out of ZIP archives.
 
-Survey Solutions exports arrive as a zip, and a round of data collection often
-means several of them. Uploading each file separately and analysing them one at
-a time is not what anyone wants: the useful object is one dataset covering every
-round, with a column saying which file each row came from.
+A Survey Solutions export archive holds one file per roster level, not one file
+per round. A labour force survey export contains, say:
+
+    VN_LF2024.dta        the interview level
+    R_demographics.dta   one row per person in the household
+    abroad_roster.dta    one row per person living abroad
+
+Those are three different tables and appending them together would be nonsense.
+So an archive yields one dataset per member file, keyed by that file's name.
+
+Rounds arrive as separate archives with the same member names, which is what
+makes the name the right key: the September and October exports both contain
+VN_LF2024.dta, and those two do belong appended together.
 """
 
 from __future__ import annotations
@@ -208,11 +217,33 @@ def combine(members: list[ExtractedMember], strict: bool = False) -> CombineResu
 def group_by_schema(members: list[ExtractedMember]) -> list[list[ExtractedMember]]:
     """Group files that share a column set, largest group first.
 
-    An export holds one file per roster level, so a zip is often several
-    unrelated tables rather than several rounds of one. Grouping by schema keeps
-    those apart instead of appending a household file onto a person file.
+    Only used by the "combine everything" escape hatch now that each member
+    becomes its own dataset. Kept for archives that really do hold several
+    rounds of one table rather than several levels of one round.
     """
     groups: dict[tuple[str, ...], list[ExtractedMember]] = {}
     for member in members:
         groups.setdefault(tuple(sorted(member.columns)), []).append(member)
     return sorted(groups.values(), key=lambda g: (-len(g), g[0].name))
+
+
+def member_key(name: str) -> str:
+    """The name a member file is matched by across archives.
+
+    The stem, lowercased: September's VN_LF2024.dta and October's must resolve
+    to the same key or the two rounds never meet. Extension is dropped so an
+    export that switches format between rounds still matches.
+    """
+    return Path(name).stem.lower()
+
+
+def by_member_name(members: list[ExtractedMember]) -> dict[str, ExtractedMember]:
+    """One member per name, which is how an archive's levels are told apart.
+
+    Names are unique inside a zip, so a collision here means two files differing
+    only by extension; the first wins and the second is reported by the caller.
+    """
+    grouped: dict[str, ExtractedMember] = {}
+    for member in members:
+        grouped.setdefault(member_key(member.name), member)
+    return grouped

@@ -40,9 +40,21 @@ export default function DatasetDetail() {
   const [inspecting, setInspecting] = useState<Variable | null>(null)
   const [appending, setAppending] = useState(false)
 
+  const toast = useToast()
+  const queryClient = useQueryClient()
+
   const dataset = useQuery({
     queryKey: ['dataset', id],
     queryFn: () => api.get<Dataset>(`/datasets/${id}`),
+  })
+
+  const rebuild = useMutation({
+    mutationFn: () => api.post<Dataset>(`/relationships/rebuild/${id}`),
+    onSuccess: (rebuilt) => {
+      toast.push(`Rebuilt: ${rebuilt.row_count.toLocaleString()} rows`, 'success')
+      queryClient.invalidateQueries({ queryKey: ['dataset', id] })
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
   })
 
   if (dataset.isLoading) return <Loading />
@@ -77,7 +89,19 @@ export default function DatasetDetail() {
             <Link to={`/quality?dataset=${data.id}`} className="btn-secondary">
               Quality checks
             </Link>
-            {can('manager') && (
+            {can('manager') && data.derivation?.type === 'merge' && (
+              // A derived dataset is defined by its recipe, so it is refreshed
+              // by re-running that rather than by uploading anything.
+              <button
+                className="btn-secondary"
+                onClick={() => rebuild.mutate()}
+                disabled={rebuild.isPending}
+                title="Re-run the merge against the current source datasets"
+              >
+                {rebuild.isPending ? 'Rebuilding…' : 'Rebuild from sources'}
+              </button>
+            )}
+            {can('manager') && !data.derivation?.type && (
               <button className="btn-secondary" onClick={() => setAppending(true)}>
                 Append data
               </button>

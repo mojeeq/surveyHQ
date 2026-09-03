@@ -129,6 +129,10 @@ def create_first_admin() -> None:
             role=Role.admin,
             is_active=True,
             hashed_password=hash_password(settings.first_admin_password),
+            # The bootstrap password comes from .env, so it is written down
+            # somewhere and often shared. Make setting a real one the first
+            # thing that happens.
+            must_change_password=True,
         )
         db.add(admin)
         db.commit()

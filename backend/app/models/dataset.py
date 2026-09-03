@@ -16,6 +16,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -32,6 +33,7 @@ class DatasetStatus(str, enum.Enum):
 class DatasetSource(str, enum.Enum):
     upload = "upload"
     survey_solutions = "survey_solutions"
+    derived = "derived"
 
 
 class VariableType(str, enum.Enum):
@@ -72,6 +74,13 @@ class Dataset(UUIDMixin, TimestampMixin, Base):
     row_count: Mapped[int] = mapped_column(BigInteger, default=0)
     column_count: Mapped[int] = mapped_column(Integer, default=0)
     tags: Mapped[list] = mapped_column(JSON, default=list)
+    # How this dataset was derived from others, when it was not uploaded:
+    # {"type": "merge", "relationship_id": ..., "how": "left", ...}. Empty for
+    # an uploaded dataset. Holding the recipe rather than only the result is
+    # what lets the merge be re-run when its sources change.
+    derivation: Mapped[dict] = mapped_column(
+        JSON, default=dict, server_default=text("'{}'")
+    )
     # Variables the platform recognises as meaningful for monitoring
     meta: Mapped[dict] = mapped_column(JSON, default=dict)
     version: Mapped[int] = mapped_column(Integer, default=1)
