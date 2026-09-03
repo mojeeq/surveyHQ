@@ -28,6 +28,7 @@ from app.schemas.dataset import (
     DatasetPreview,
     DatasetUpdate,
     VariableOut,
+    VariableUpdate,
 )
 from app.schemas.query import FilterGroup
 from app.services.audit import record
@@ -38,6 +39,7 @@ from app.services.datasets import (
     load_archive_as_datasets,
     load_file_into_dataset,
 )
+from app.services.derived import propagate_labels, rebuild_dependents
 from app.services.ingest import SUPPORTED_EXTENSIONS, IngestError
 from app.services.projects import can_edit, restrict, scope_for
 from app.services.query_engine import (
@@ -199,6 +201,16 @@ async def upload_dataset(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     finally:
         upload_path.unlink(missing_ok=True)
+
+    # Whatever was merged out of the replaced files is holding the previous
+    # export's join until it is re-run. Nothing on a dashboard would say so:
+    # the merged dataset keeps its id, its name and its old row count.
+    rebuilt = rebuild_dependents(db, outcome.replaced_ids if archive else [])
+    if rebuilt:
+        names = [d.name for d in (db.get(Dataset, i) for i in rebuilt) if d]
+        outcome.warnings.append(
+            "Rebuilt from the new data: " + ", ".join(sorted(names))
+        )
 
     if archive:
         record(
@@ -403,6 +415,78 @@ def preview_dataset(
         limit=limit,
         offset=offset,
     )
+
+
+@router.patch("/{dataset_id}/variables/{variable}", response_model=VariableOut)
+def update_variable(
+    dataset_id: str,
+    variable: str,
+    payload: VariableUpdate,
+    db: DbSession,
+    user: RequireManager,
+) -> Variable:
+    """Name a variable, and name its codes.
+
+    An export often arrives with neither: a column called DEM_SEX holding 1 and
+    2, which a table then prints as "1.0" and "2.0". Nothing about the data is
+    changed here - only what the platform calls it, everywhere it is shown.
+
+    Kept on the dataset as well as on the variable row, because the variable
+    rows are rebuilt from the file every time a newer export replaces it, and
+    labels written by hand are not in the file.
+    """
+    dataset = get_dataset(dataset_id, db, user)
+    if dataset.project_id and not can_edit(db, user, dataset.project_id, Role.manager):
+        # Same as everywhere else: a dataset the caller cannot edit is reported
+        # as missing rather than forbidden.
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    row = next((v for v in dataset.variables if v.name == variable), None)
+    if row is None:
+        raise HTTPException(
+            status_code=404, detail=f"'{dataset.name}' has no variable called '{variable}'"
+        )
+
+    data = payload.model_dump(exclude_unset=True)
+    meta = dict(dataset.meta or {})
+    overrides = dict(meta.get("variable_labels") or {})
+    stored = dict(overrides.get(variable) or {})
+
+    if "label" in data:
+        row.label = data["label"] or ""
+        stored["label"] = row.label
+    if "value_labels" in data:
+        # Replaces rather than merges: removing a label has to be possible, and
+        # the editor sends the whole set it is showing.
+        cleaned = {
+            str(code): str(text)
+            for code, text in (data["value_labels"] or {}).items()
+            if str(text).strip()
+        }
+        row.value_labels = cleaned
+        stored["value_labels"] = cleaned
+    if "is_hidden" in data:
+        row.is_hidden = bool(data["is_hidden"])
+        stored["is_hidden"] = row.is_hidden
+
+    overrides[variable] = stored
+    meta["variable_labels"] = overrides
+    dataset.meta = meta
+
+    # A merge holds its own copy of the labels as they were when it was built,
+    # and a merged dataset is usually the one a dashboard points at.
+    propagate_labels(db, dataset.id, variable, stored)
+
+    record(
+        db,
+        user=user,
+        action="update_variable",
+        entity_type="dataset",
+        entity_id=dataset.id,
+        detail={"variable": variable},
+    )
+    db.commit()
+    db.refresh(row)
+    return row
 
 
 @router.get("/{dataset_id}/variables/{variable}/values", response_model=list[dict])

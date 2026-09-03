@@ -21,12 +21,14 @@ import type {
 import AssignProject from '@/components/AssignProject'
 import ChartCard from '@/components/ChartCard'
 import DashboardFilters, {
+  controlsForPage,
   filterableVariables,
   toFilterGroup,
   useDashboardDatasets,
   type FilterControl,
 } from '@/components/DashboardFilters'
 import CrosstabTable from '@/components/CrosstabTable'
+import MapWidget, { DEFAULT_TILES } from '@/components/MapWidget'
 import AppearanceModal, {
   canvasStyle,
   isDark,
@@ -70,14 +72,27 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
   const filterControls: FilterControl[] = (dashboard.data?.filters ??
     []) as unknown as FilterControl[]
 
+  const pages = (dashboard.data?.pages ?? []) as { name?: string }[]
+  // A dashboard with no named pages is one unnamed page, which is what every
+  // dashboard made before this feature is.
+  const pageCount = Math.max(1, pages.length)
+  const page = Math.min(activePage, pageCount - 1)
+  const pageNames = Array.from(
+    { length: pageCount },
+    (_, index) => pages[index]?.name || `Page ${index + 1}`,
+  )
+  // Pages ask different questions, so each carries its own filters.
+  const pageControls = controlsForPage(filterControls, page)
+
   const rendered = useQuery({
     // The values are part of the key, so changing a filter refetches rather
-    // than showing the previous selection's numbers under the new label.
-    queryKey: ['dashboard-data', id, publicToken, filterValues],
+    // than showing the previous selection's numbers under the new label. So is
+    // the page, whose filters are its own.
+    queryKey: ['dashboard-data', id, publicToken, activePage, filterValues],
     queryFn: () =>
       api.post<{ widgets: Record<string, any> }>(
         `${basePath}/data`,
-        toFilterGroup(filterControls, filterValues),
+        toFilterGroup(pageControls, filterValues),
       ),
     enabled: Boolean(dashboard.data),
     refetchInterval: dashboard.data?.refresh_interval_seconds
@@ -159,15 +174,6 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
   })
 
   const allWidgets = dashboard.data?.widgets ?? []
-  const pages = dashboard.data?.pages ?? []
-  // A dashboard with no named pages is one unnamed page, which is what every
-  // dashboard made before this feature is.
-  const pageCount = Math.max(1, pages.length)
-  const pageNames = Array.from(
-    { length: Math.max(1, pages.length) },
-    (_, index) => pages[index]?.name || `Page ${index + 1}`,
-  )
-  const page = Math.min(activePage, pageCount - 1)
   const widgets = useMemo(
     () => allWidgets.filter((widget) => (widget.page ?? 0) === page),
     [allWidgets, page],
@@ -285,7 +291,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         data-testid="dashboard-canvas"
       >
       <DashboardFilters
-        controls={filterControls}
+        controls={pageControls}
         value={filterValues}
         onChange={setFilterValues}
       />
@@ -366,7 +372,9 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
       {editingFilters && (
         <FilterControlsModal
           dashboardId={id}
-          widgets={allWidgets}
+          page={page}
+          pageName={pageNames[page]}
+          widgets={widgets}
           controls={filterControls}
           onClose={() => setEditingFilters(false)}
         />
@@ -442,6 +450,16 @@ function WidgetFrame({
         </div>
       </header>
       <div className="flex min-h-0 flex-1 flex-col overflow-auto p-4">
+        {/* A filter the widget's dataset has no column for is dropped rather
+            than failing the query - which otherwise looks like a broken
+            filter, since the widget goes on showing every row in silence. */}
+        {payload?.filters_ignored?.length > 0 && (
+          <p className="mb-2 shrink-0 text-[11px] text-amber-700">
+            Not filtered by {payload.filters_ignored.join(', ')} — this widget's
+            dataset does not have {payload.filters_ignored.length > 1 ? 'those' : 'that'}{' '}
+            {payload.filters_ignored.length > 1 ? 'variables' : 'variable'}.
+          </p>
+        )}
         {loading ? (
           <Loading />
         ) : !payload ? (
@@ -456,6 +474,16 @@ function WidgetFrame({
           <QualityWidget payload={payload} />
         ) : payload.type === 'crosstab' ? (
           <CrosstabTable result={payload.result} compact fill />
+        ) : payload.type === 'map' ? (
+          <MapWidget
+            points={payload.points ?? []}
+            detail={payload.detail ?? []}
+            measure={payload.measure}
+            tiles={widget.config?.tiles as string | undefined}
+            truncated={payload.truncated}
+          />
+        ) : payload.type === 'html' ? (
+          <HtmlWidget html={payload.html ?? ''} />
         ) : payload.type === 'countdown' ? (
           <CountdownWidget payload={payload} />
         ) : payload.type === 'text' ? (
@@ -512,16 +540,28 @@ function PageTabs({
     name: pages[index]?.name || `Page ${index + 1}`,
   }))
 
+  /** Two tabs reading the same word cannot be told apart. */
+  const taken = (name: string, except = -1) =>
+    named.some((page, i) => i !== except && page.name.toLowerCase() === name.toLowerCase())
+
   const addPage = () => {
     const name = prompt('Name for the new page')?.trim()
     if (!name) return
+    if (taken(name)) {
+      alert(`This dashboard already has a page called "${name}".`)
+      return
+    }
     onChange([...named, { name }])
     onSelect(count)
   }
 
   const renamePage = (index: number) => {
     const name = prompt('Rename this page', named[index].name)?.trim()
-    if (!name) return
+    if (!name || name === named[index].name) return
+    if (taken(name, index)) {
+      alert(`This dashboard already has a page called "${name}".`)
+      return
+    }
     onChange(named.map((page, i) => (i === index ? { name } : page)))
   }
 
@@ -543,7 +583,7 @@ function PageTabs({
         onDark ? 'border-white/25' : 'border-ink-200'
       }`}
     >
-      {count > 1 &&
+      {(count > 1 || canEdit) &&
         named.map((page, index) => (
           <button
             key={index}
@@ -593,6 +633,30 @@ function PageTabs({
  * of that time is left. The number is computed in the browser rather than sent
  * by the server, so it goes on counting down on a screen nobody is touching.
  */
+/**
+ * Whatever markup the dashboard's author pasted in.
+ *
+ * It runs in a sandboxed frame with no same-origin privilege, so scripts in it
+ * execute in an opaque origin: they cannot read this page, its storage or its
+ * session, which is what makes accepting arbitrary markup from one user and
+ * showing it to another safe to do at all. That is also why it is a frame
+ * rather than dangerouslySetInnerHTML, which would run it right here.
+ */
+function HtmlWidget({ html }: { html: string }) {
+  if (!html.trim()) {
+    return <p className="py-6 text-center text-sm text-ink-400">This embed is empty</p>
+  }
+  return (
+    <iframe
+      title="Embedded content"
+      srcDoc={html}
+      sandbox="allow-scripts allow-popups allow-forms"
+      referrerPolicy="no-referrer"
+      className="h-full min-h-[120px] w-full border-0"
+    />
+  )
+}
+
 function CountdownWidget({ payload }: { payload: any }) {
   const target = payload.target ? new Date(payload.target).getTime() : NaN
   const [now, setNow] = useState(() => Date.now())
@@ -780,7 +844,7 @@ function AddWidgetModal({
   const toast = useToast()
   const queryClient = useQueryClient()
   const [kind, setKind] = useState<
-    'chart' | 'indicator' | 'quality' | 'text' | 'countdown'
+    'chart' | 'indicator' | 'quality' | 'text' | 'countdown' | 'map' | 'html'
   >('chart')
   const [datasetId, setDatasetId] = useState('')
   const [chartId, setChartId] = useState('')
@@ -790,6 +854,13 @@ function AddWidgetModal({
   const [deadline, setDeadline] = useState('')
   const [deadlineLabel, setDeadlineLabel] = useState('')
   const [showBreakdown, setShowBreakdown] = useState(true)
+  const [latitude, setLatitude] = useState('')
+  const [longitude, setLongitude] = useState('')
+  const [measureAgg, setMeasureAgg] = useState('count')
+  const [measureVariable, setMeasureVariable] = useState('')
+  const [detail, setDetail] = useState<string[]>([])
+  const [tiles, setTiles] = useState('')
+  const [html, setHtml] = useState('')
 
   const charts = useQuery({ queryKey: ['charts'], queryFn: () => api.get<Chart[]>('/dashboards/charts') })
   const indicators = useQuery({
@@ -799,7 +870,13 @@ function AddWidgetModal({
   const datasets = useQuery({
     queryKey: ['datasets'],
     queryFn: () => api.get<Page<Dataset>>('/datasets?limit=200'),
-    enabled: kind === 'quality',
+    enabled: kind === 'quality' || kind === 'map',
+  })
+  // The map needs the variables, to know which column holds the coordinates.
+  const chosenDataset = useQuery({
+    queryKey: ['dataset', datasetId],
+    queryFn: () => api.get<Dataset>(`/datasets/${datasetId}`),
+    enabled: kind === 'map' && Boolean(datasetId),
   })
 
   const add = useMutation({
@@ -811,6 +888,10 @@ function AddWidgetModal({
             ? charts.data?.find((c) => c.id === chartId)?.name
             : kind === 'quality'
               ? `Data quality: ${datasets.data?.items.find((d) => d.id === datasetId)?.name ?? ''}`
+              : kind === 'map'
+                ? 'Interview locations'
+                : kind === 'html'
+                  ? 'Embedded content'
               : kind === 'countdown'
                 ? deadlineLabel || 'Countdown'
                 : indicators.data?.find((i) => i.id === indicatorId)?.name) ||
@@ -818,11 +899,22 @@ function AddWidgetModal({
         widget_type: kind,
         chart_id: kind === 'chart' ? chartId : null,
         indicator_id: kind === 'indicator' ? indicatorId : null,
-        dataset_id: kind === 'quality' ? datasetId : null,
+        dataset_id: kind === 'quality' || kind === 'map' ? datasetId : null,
         page,
         config:
-          kind === 'indicator'
-            ? { show_breakdown: showBreakdown }
+          kind === 'map'
+            ? {
+                latitude,
+                longitude,
+                measure_agg: measureAgg,
+                measure_variable: measureAgg === 'count' ? '' : measureVariable,
+                detail,
+                ...(tiles.trim() ? { tiles: tiles.trim() } : {}),
+              }
+            : kind === 'html'
+              ? { html }
+            : kind === 'indicator'
+              ? { show_breakdown: showBreakdown }
             : kind === 'text'
             ? { content }
             : kind === 'countdown'
@@ -831,7 +923,9 @@ function AddWidgetModal({
                 { target: new Date(deadline).toISOString(), label: deadlineLabel }
               : {},
         layout:
-          kind === 'countdown'
+          kind === 'map'
+            ? { w: 6, h: 6 }
+            : kind === 'countdown'
             ? { w: 3, h: 3 }
             : kind === 'indicator'
               ? // A tile with a chart under it needs the room for one.
@@ -850,13 +944,18 @@ function AddWidgetModal({
   })
 
   const chosenIndicator = indicators.data?.find((i) => i.id === indicatorId)
+  const numericVariables = (chosenDataset.data?.variables ?? []).filter(
+    (v) => v.var_type === 'numeric',
+  )
 
   const canAdd =
     (kind === 'chart' && chartId) ||
     (kind === 'indicator' && indicatorId) ||
     (kind === 'quality' && datasetId) ||
     (kind === 'text' && content) ||
-    (kind === 'countdown' && deadline && !Number.isNaN(Date.parse(deadline)))
+    (kind === 'countdown' && deadline && !Number.isNaN(Date.parse(deadline))) ||
+    (kind === 'map' && datasetId && latitude && longitude) ||
+    (kind === 'html' && html.trim())
 
   return (
     <Modal
@@ -885,6 +984,8 @@ function AddWidgetModal({
           <option value="quality">Data quality panel</option>
           <option value="text">Text note</option>
           <option value="countdown">Countdown to a date</option>
+          <option value="map">Map of interview locations</option>
+          <option value="html">Embedded HTML</option>
         </select>
       </Field>
 
@@ -956,6 +1057,161 @@ function AddWidgetModal({
         </>
       )}
 
+      {kind === 'map' && (
+        <>
+          <Field
+            label="Dataset"
+            hint="The one holding the GPS question - usually the interview level."
+          >
+            <select
+              className="input"
+              value={datasetId}
+              onChange={(event) => {
+                setDatasetId(event.target.value)
+                setLatitude('')
+                setLongitude('')
+                setDetail([])
+              }}
+            >
+              <option value="">Choose a dataset…</option>
+              {datasets.data?.items.map((dataset) => (
+                <option key={dataset.id} value={dataset.id}>
+                  {dataset.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          {chosenDataset.isLoading ? (
+            <Loading />
+          ) : chosenDataset.data ? (
+            <>
+              <div className="grid gap-x-4 sm:grid-cols-2">
+                <Field label="Latitude">
+                  <select
+                    className="input"
+                    value={latitude}
+                    onChange={(event) => setLatitude(event.target.value)}
+                  >
+                    <option value="">Choose…</option>
+                    {numericVariables.map((v) => (
+                      <option key={v.name} value={v.name}>
+                        {v.label ? `${v.name} — ${v.label}` : v.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Longitude">
+                  <select
+                    className="input"
+                    value={longitude}
+                    onChange={(event) => setLongitude(event.target.value)}
+                  >
+                    <option value="">Choose…</option>
+                    {numericVariables.map((v) => (
+                      <option key={v.name} value={v.name}>
+                        {v.label ? `${v.name} — ${v.label}` : v.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
+
+              <Field
+                label="What each pin counts"
+                hint="Records at the same coordinate are one pin. This is the number it carries."
+              >
+                <div className="flex gap-2">
+                  <select
+                    className="input w-56"
+                    value={measureAgg}
+                    onChange={(event) => setMeasureAgg(event.target.value)}
+                  >
+                    <option value="count">How many records</option>
+                    <option value="sum">Total of</option>
+                    <option value="mean">Average of</option>
+                    <option value="max">Highest</option>
+                    <option value="min">Lowest</option>
+                  </select>
+                  {measureAgg !== 'count' && (
+                    <select
+                      className="input"
+                      value={measureVariable}
+                      onChange={(event) => setMeasureVariable(event.target.value)}
+                    >
+                      <option value="">Choose a variable…</option>
+                      {numericVariables.map((v) => (
+                        <option key={v.name} value={v.name}>
+                          {v.label ? `${v.name} — ${v.label}` : v.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </Field>
+
+              <Field
+                label="Map tiles"
+                hint="Leave blank for OpenStreetMap. A server with no internet can point this at its own tile service."
+              >
+                <input
+                  className="input font-mono text-xs"
+                  value={tiles}
+                  onChange={(event) => setTiles(event.target.value)}
+                  placeholder={DEFAULT_TILES}
+                />
+              </Field>
+
+              <Field
+                label="Show on click"
+                hint="Up to six variables, listed in the popup when a pin is clicked."
+              >
+                <div className="grid max-h-40 gap-1 overflow-auto sm:grid-cols-2">
+                  {(chosenDataset.data.variables ?? [])
+                    .filter((v) => !v.is_hidden)
+                    .slice(0, 300)
+                    .map((v) => (
+                      <label
+                        key={v.name}
+                        className="flex items-center gap-2 text-sm text-ink-700"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={detail.includes(v.name)}
+                          disabled={!detail.includes(v.name) && detail.length >= 6}
+                          onChange={() =>
+                            setDetail(
+                              detail.includes(v.name)
+                                ? detail.filter((name) => name !== v.name)
+                                : [...detail, v.name],
+                            )
+                          }
+                        />
+                        <span className="truncate">{v.label || v.name}</span>
+                      </label>
+                    ))}
+                </div>
+              </Field>
+            </>
+          ) : null}
+        </>
+      )}
+
+      {kind === 'html' && (
+        <Field
+          label="HTML"
+          hint="Rendered in a sandboxed frame, so it cannot reach the rest of the page."
+        >
+          <textarea
+            className="input font-mono text-xs"
+            rows={8}
+            value={html}
+            onChange={(event) => setHtml(event.target.value)}
+            placeholder={'<h2>Round 3</h2>\n<p>Enumeration closes on Friday.</p>'}
+          />
+        </Field>
+      )}
+
       {kind === 'countdown' && (
         <>
           <Field label="Counting down to" hint="Fieldwork closing, a reporting deadline.">
@@ -1006,18 +1262,27 @@ function AddWidgetModal({
  */
 function FilterControlsModal({
   dashboardId,
+  page,
+  pageName,
   widgets,
   controls,
   onClose,
 }: {
   dashboardId: string
+  /** The page whose filters are being chosen; each page has its own. */
+  page: number
+  pageName: string
+  /** This page's widgets - the candidates come from what is actually on it. */
   widgets: Widget[]
+  /** Every control on the dashboard, so the other pages' are kept on save. */
   controls: FilterControl[]
   onClose: () => void
 }) {
   const toast = useToast()
   const queryClient = useQueryClient()
-  const [chosen, setChosen] = useState<FilterControl[]>(controls)
+  const [chosen, setChosen] = useState<FilterControl[]>(() =>
+    controlsForPage(controls, page),
+  )
 
   const charts = useQuery({
     queryKey: ['charts'],
@@ -1044,7 +1309,15 @@ function FilterControlsModal({
   })
 
   const save = useMutation({
-    mutationFn: () => api.patch(`/dashboards/${dashboardId}`, { filters: chosen }),
+    mutationFn: () =>
+      api.patch(`/dashboards/${dashboardId}`, {
+        // Only this page's controls are being edited; the other pages keep
+        // theirs, which is the whole point of filters being per page.
+        filters: [
+          ...controls.filter((control) => (control.page ?? 0) !== page),
+          ...chosen.map((control) => ({ ...control, page })),
+        ],
+      }),
     onSuccess: () => {
       toast.push('Filters saved', 'success')
       queryClient.invalidateQueries({ queryKey: ['dashboard', dashboardId] })
@@ -1066,7 +1339,7 @@ function FilterControlsModal({
     <Modal
       open
       onClose={onClose}
-      title="Dashboard filters"
+      title={`Filters on "${pageName}"`}
       wide
       footer={
         <>
@@ -1080,16 +1353,18 @@ function FilterControlsModal({
       }
     >
       <p className="mb-3 text-sm text-ink-500">
-        A filter narrows every widget whose dataset carries that variable, and
-        leaves the others as they are — so it is still useful when only part of
-        the page has it.
+        These filters appear on this page only; every page has its own. A filter
+        narrows each widget whose dataset carries the variable and says so on
+        any widget it could not reach — the variables below are the ones this
+        page's own datasets have.
       </p>
 
       {details.isLoading || datasets.isLoading ? (
         <Loading />
       ) : !details.data?.length ? (
         <p className="text-sm text-ink-500">
-          Add a widget first; the filters come from the datasets it uses.
+          Add a widget to this page first; the filters come from the datasets it
+          uses.
         </p>
       ) : (
         <div className="space-y-4">

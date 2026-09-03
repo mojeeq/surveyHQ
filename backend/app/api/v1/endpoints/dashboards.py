@@ -56,6 +56,7 @@ from app.services.dashboard_assets import (
     save_background,
 )
 from app.services.datasets import dataset_is_queryable
+from app.services.geo import points as geo_points
 from app.services.monitoring import (
     evaluate_indicator,
     indicator_status,
@@ -182,6 +183,28 @@ def _applicable(filters: FilterGroup | None, ctx: DatasetContext) -> FilterGroup
 
     pruned = prune(filters)
     return None if pruned.is_empty() else pruned
+
+
+def _ignored(filters: FilterGroup | None, ctx: DatasetContext) -> list[str]:
+    """The variables a dashboard filter names that this dataset cannot honour.
+
+    Dropping them silently is what makes a filter look broken: the widget goes
+    on showing every row and nothing says why. Reported so the widget can.
+    """
+    if filters is None or filters.is_empty():
+        return []
+    known = set(ctx.variables)
+    missing: list[str] = []
+
+    def walk(group: FilterGroup) -> None:
+        for condition in group.conditions:
+            if condition.variable not in known and condition.variable not in missing:
+                missing.append(condition.variable)
+        for nested in group.groups:
+            walk(nested)
+
+    walk(filters)
+    return missing
 
 
 def _is_crosstab(spec: dict[str, Any]) -> bool:
@@ -661,6 +684,33 @@ def _render_widget(
             "computed_at": computed_at.isoformat() if computed_at else None,
         }
 
+    if widget.widget_type.value == "html":
+        # Sent as written and rendered by the browser in a sandboxed frame, so
+        # what it contains is between its author and that frame - it cannot
+        # reach the page around it. See the widget component.
+        return {"type": "html", "html": (widget.config or {}).get("html", "")}
+
+    if widget.widget_type.value == "map":
+        config = widget.config or {}
+        dataset = db.get(Dataset, widget.dataset_id or config.get("dataset_id") or "")
+        if dataset is None or not dataset_is_queryable(dataset):
+            return {"error": "The map's dataset is unavailable"}
+        ctx = DatasetContext.from_model(dataset)
+        ignored = _ignored(filters, ctx)
+        try:
+            found = geo_points(
+                ctx,
+                latitude=config.get("latitude", ""),
+                longitude=config.get("longitude", ""),
+                detail=config.get("detail") or [],
+                measure_agg=config.get("measure_agg", "count"),
+                measure_variable=config.get("measure_variable", ""),
+                filters=_applicable(filters, ctx),
+            )
+        except QueryError as exc:
+            return {"error": str(exc)}
+        return {"type": "map", "filters_ignored": ignored, **found}
+
     if widget.widget_type.value == "countdown":
         config = widget.config or {}
         return {
@@ -681,6 +731,7 @@ def _render_widget(
         if dataset is None or not dataset_is_queryable(dataset):
             return {"error": "The chart's dataset is unavailable"}
         ctx = DatasetContext.from_model(dataset)
+        ignored = _ignored(filters, ctx)
         filters = _applicable(filters, ctx)
         if _is_crosstab(chart.spec or {}):
             crosstab = execute_crosstab(ctx, _crosstab_from_chart(chart, filters))
@@ -688,6 +739,7 @@ def _render_widget(
                 "type": "crosstab",
                 "chart_type": "crosstab",
                 "name": chart.name,
+                "filters_ignored": ignored,
                 "result": crosstab.model_dump(mode="json"),
             }
         result = execute_query(ctx, _spec_from_chart(chart, filters))
@@ -695,6 +747,7 @@ def _render_widget(
             "type": "chart",
             "chart_type": chart.chart_type.value,
             "name": chart.name,
+            "filters_ignored": ignored,
             "result": result.model_dump(mode="json"),
         }
 
@@ -706,6 +759,9 @@ def _render_widget(
     dataset = db.get(Dataset, dataset_id)
     if dataset is None or not dataset_is_queryable(dataset):
         return {"error": "The widget's dataset is unavailable"}
+    ctx = DatasetContext.from_model(dataset)
+    ignored = _ignored(filters, ctx)
+    filters = _applicable(filters, ctx)
     spec = QuerySpec.model_validate(config.get("query", {}))
     if filters and not filters.is_empty():
         spec = spec.model_copy(
@@ -713,9 +769,10 @@ def _render_widget(
                 "filters": FilterGroup(op="and", groups=[spec.filters, filters], conditions=[])
             }
         )
-    result = execute_query(DatasetContext.from_model(dataset), spec)
+    result = execute_query(ctx, spec)
     return {
         "type": widget.widget_type.value,
         "chart_type": config.get("chart_type", "bar"),
+        "filters_ignored": ignored,
         "result": result.model_dump(mode="json"),
     }

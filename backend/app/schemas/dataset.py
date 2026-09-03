@@ -27,6 +27,16 @@ class VariableOut(BaseModel):
     is_hidden: bool = False
 
 
+class VariableUpdate(BaseModel):
+    """Labels a person writes for a variable the export did not label."""
+
+    label: str | None = None
+    # Code -> what to show for it. Codes are strings because that is how a JSON
+    # object keys them, and how the stored labels from the file are keyed too.
+    value_labels: dict[str, str] | None = None
+    is_hidden: bool | None = None
+
+
 class DatasetOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

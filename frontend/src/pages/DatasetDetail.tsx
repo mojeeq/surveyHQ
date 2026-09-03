@@ -38,6 +38,7 @@ export default function DatasetDetail() {
   const [tab, setTab] = useState<TabId>('variables')
   const [search, setSearch] = useState('')
   const [inspecting, setInspecting] = useState<Variable | null>(null)
+  const [labelling, setLabelling] = useState<Variable | null>(null)
   const [appending, setAppending] = useState(false)
 
   const toast = useToast()
@@ -211,7 +212,16 @@ export default function DatasetDetail() {
                           ? `${formatNumber(variable.min_value, 1)} – ${formatNumber(variable.max_value, 1)}`
                           : '–'}
                       </td>
-                      <td className="text-right">
+                      <td className="text-right whitespace-nowrap">
+                        {can('manager') && (
+                          <button
+                            className="btn-ghost btn-sm"
+                            onClick={() => setLabelling(variable)}
+                            title="Name this variable and its codes"
+                          >
+                            Labels
+                          </button>
+                        )}
                         <button
                           className="btn-ghost btn-sm"
                           onClick={() => setInspecting(variable)}
@@ -239,6 +249,14 @@ export default function DatasetDetail() {
           datasetId={id}
           variable={inspecting}
           onClose={() => setInspecting(null)}
+        />
+      )}
+
+      {labelling && (
+        <LabelModal
+          datasetId={id}
+          variable={labelling}
+          onClose={() => setLabelling(null)}
         />
       )}
     </>
@@ -633,6 +651,130 @@ function AppendModal({ datasetId, onClose }: { datasetId: string; onClose: () =>
           accept=".dta,.sav,.csv,.tab,.tsv,.txt,.xlsx,.xls,.zip"
           className="input py-1.5"
         />
+      </Field>
+    </Modal>
+  )
+}
+
+
+/**
+ * Naming a variable, and naming its codes.
+ *
+ * An export often ships neither: a column called DEM_SEX holding 1 and 2,
+ * which every table then prints as "1.0" and "2.0". Nothing about the data is
+ * changed here - only what the platform calls it, in every chart and table
+ * that shows it. The names are kept on the dataset as well as the variable, so
+ * the next export replacing the file does not take them with it.
+ */
+function LabelModal({
+  datasetId,
+  variable,
+  onClose,
+}: {
+  datasetId: string
+  variable: Variable
+  onClose: () => void
+}) {
+  const toast = useToast()
+  const queryClient = useQueryClient()
+  const [label, setLabel] = useState(variable.label ?? '')
+  const [labels, setLabels] = useState<Record<string, string>>(variable.value_labels ?? {})
+
+  // The codes actually present, so there is something to label even when the
+  // file carried no labels at all - which is the case this exists for.
+  const values = useQuery({
+    queryKey: ['values', datasetId, variable.name],
+    queryFn: () =>
+      api.get<{ value: string; label: string; count: number }[]>(
+        `/datasets/${datasetId}/variables/${encodeURIComponent(variable.name)}/values?limit=200`,
+      ),
+  })
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.patch(`/datasets/${datasetId}/variables/${encodeURIComponent(variable.name)}`, {
+        label,
+        value_labels: labels,
+      }),
+    onSuccess: () => {
+      toast.push('Labels saved', 'success')
+      queryClient.invalidateQueries({ queryKey: ['dataset', datasetId] })
+      queryClient.invalidateQueries({ queryKey: ['values', datasetId, variable.name] })
+      onClose()
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  // The values endpoint orders by frequency, which is right for a chart and
+  // wrong for a form: 1, 2, 3 is the order the codes are being read off in.
+  const rows = [...(values.data ?? [])].sort((a, b) => {
+    const [x, y] = [Number(a.value), Number(b.value)]
+    if (Number.isFinite(x) && Number.isFinite(y)) return x - y
+    return String(a.value).localeCompare(String(b.value))
+  })
+  const codes = rows.map((row) => String(row.value))
+  const labellable = codes.length > 0 && codes.length <= 200
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`Labels for ${variable.name}`}
+      footer={
+        <>
+          <button className="btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn-primary" onClick={() => save.mutate()} disabled={save.isPending}>
+            Save labels
+          </button>
+        </>
+      }
+    >
+      <Field label="Variable label" hint="Shown instead of the column name on charts and tables.">
+        <input
+          className="input"
+          value={label}
+          onChange={(event) => setLabel(event.target.value)}
+          placeholder={variable.name}
+        />
+      </Field>
+
+      <Field
+        label="Value labels"
+        hint="What each code should read as. Leave one blank to show the code itself."
+      >
+        {values.isLoading ? (
+          <Loading />
+        ) : !labellable ? (
+          <p className="text-sm text-ink-400">
+            {codes.length ? 'Too many distinct values to label.' : 'This variable has no values.'}
+          </p>
+        ) : (
+          <div className="max-h-72 space-y-1 overflow-auto pr-1">
+            {rows.map((row) => {
+              const code = String(row.value)
+              return (
+                <div key={code} className="flex items-center gap-2">
+                  <span className="w-24 shrink-0 truncate font-mono text-xs text-ink-500">
+                    {code}
+                  </span>
+                  <input
+                    className="input py-1 text-sm"
+                    value={labels[code] ?? ''}
+                    placeholder={code}
+                    onChange={(event) =>
+                      setLabels({ ...labels, [code]: event.target.value })
+                    }
+                  />
+                  <span className="w-16 shrink-0 text-right text-xs text-ink-400">
+                    {row.count}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        )}
       </Field>
     </Modal>
   )

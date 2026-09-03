@@ -1382,3 +1382,277 @@ def test_an_indicator_widget_without_a_breakdown_stays_a_single_number(
     payload = next(iter(rendered["widgets"].values()))
     assert payload["breakdown"] == {}
     assert payload["value"] == 200
+
+
+def test_a_widget_says_which_dashboard_filters_it_could_not_apply(
+    client, auth_headers, dataset_id
+):
+    """Silence is what makes a filter look broken.
+
+    A filter on a variable the widget's dataset has no column for is dropped so
+    the query still runs, and the widget goes on showing every row. Reported, so
+    the widget can say that is what happened.
+    """
+    chart = client.post(
+        "/api/v1/dashboards/charts",
+        headers=auth_headers,
+        json={
+            "name": "By region",
+            "dataset_id": dataset_id,
+            "chart_type": "bar",
+            "spec": {
+                "query": {
+                    "dimensions": [{"variable": "region"}],
+                    "measures": [{"agg": "count"}],
+                }
+            },
+        },
+    ).json()
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Filter reporting"}
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={"widget_type": "chart", "chart_id": chart["id"]},
+    )
+
+    rendered = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json={
+            "op": "and",
+            "conditions": [
+                {"variable": "region", "operator": "eq", "value": "North"},
+                {"variable": "not_here", "operator": "eq", "value": "x"},
+            ],
+            "groups": [],
+        },
+    ).json()
+    payload = next(iter(rendered["widgets"].values()))
+    # The filter it could honour still narrowed it
+    assert sum(row[1] for row in payload["result"]["rows"]) < 200
+    assert payload["filters_ignored"] == ["not_here"]
+
+
+def test_labels_written_by_hand_show_up_and_survive_a_replacement(client, auth_headers):
+    """An export often ships codes with no labels: DEM_SEX holding 1 and 2.
+
+    A table then prints "1.0" and "2.0", which is nobody's question. Labels
+    written here have to reach the charts, and to still be there after the next
+    export replaces the file - they are not in the file, so a rebuild of the
+    variable rows would otherwise drop them every time.
+    """
+    import pandas as pd
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Unlabelled codes"}
+    ).json()
+
+    def archive(rows: int):
+        return _zip_bytes(
+            {
+                "coded.dta": _stata_bytes(
+                    pd.DataFrame(
+                        {
+                            "interview__key": [f"k{i}" for i in range(rows)],
+                            "DEM_SEX": [1.0 if i % 2 else 2.0 for i in range(rows)],
+                        }
+                    )
+                )
+            }
+        )
+
+    first = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("codes.zip", archive(4), "application/zip")},
+        data={"project_id": project["id"]},
+    ).json()
+    dataset_id = first["datasets"][0]["id"]
+
+    named = client.patch(
+        f"/api/v1/datasets/{dataset_id}/variables/DEM_SEX",
+        headers=auth_headers,
+        json={"label": "Sex of respondent", "value_labels": {"1": "Male", "2": "Female"}},
+    )
+    assert named.status_code == 200, named.text
+    assert named.json()["value_labels"] == {"1": "Male", "2": "Female"}
+
+    # The names reach the numbers, which is the point of writing them
+    frequency = client.get(
+        f"/api/v1/analytics/datasets/{dataset_id}/frequency/DEM_SEX", headers=auth_headers
+    ).json()
+    assert {row["label"] for row in frequency["rows"]} == {"Male", "Female"}
+
+    # A newer export replaces the file; the labels are still there
+    later = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("codes-again.zip", archive(6), "application/zip")},
+        data={"project_id": project["id"]},
+    )
+    assert later.status_code == 201, later.text
+    after = client.get(f"/api/v1/datasets/{dataset_id}", headers=auth_headers).json()
+    assert after["row_count"] == 6
+    variable = next(v for v in after["variables"] if v["name"] == "DEM_SEX")
+    assert variable["label"] == "Sex of respondent"
+    assert variable["value_labels"] == {"1": "Male", "2": "Female"}
+
+
+def test_a_label_cannot_be_written_on_a_variable_that_is_not_there(client, auth_headers, dataset_id):
+    response = client.patch(
+        f"/api/v1/datasets/{dataset_id}/variables/nothing_like_this",
+        headers=auth_headers,
+        json={"label": "Nope"},
+    )
+    assert response.status_code == 404
+
+
+def test_a_map_widget_groups_interviews_by_where_they_happened(client, auth_headers):
+    """A pin is a place, not a row: several interviews at one household are one
+    pin carrying a number, which is what clicking it is for."""
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        {
+            "interview__key": ["a", "b", "c", "d"],
+            "gps__latitude": [-17.74, -17.74, -15.5, 0.0],
+            "gps__longitude": [168.31, 168.31, 167.2, 0.0],
+            "people": [4.0, 6.0, 3.0, 9.0],
+            "region": ["Shefa", "Shefa", "Sanma", "Nowhere"],
+        }
+    )
+    archive = _zip_bytes({"located.dta": _stata_bytes(frame)})
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("located.zip", archive, "application/zip")},
+    ).json()
+    dataset_id = uploaded["datasets"][0]["id"]
+
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Where the work is"}
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={
+            "title": "Interview locations",
+            "widget_type": "map",
+            "dataset_id": dataset_id,
+            "config": {
+                "latitude": "gps__latitude",
+                "longitude": "gps__longitude",
+                "measure_agg": "sum",
+                "measure_variable": "people",
+                "detail": ["region"],
+            },
+        },
+    )
+
+    rendered = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json={"op": "and", "conditions": [], "groups": []},
+    ).json()
+    payload = next(iter(rendered["widgets"].values()))
+    assert payload["type"] == "map"
+
+    # 0,0 is what a device with no fix records, and is dropped
+    assert len(payload["points"]) == 2
+    busiest = payload["points"][0]
+    assert (busiest["lat"], busiest["lon"]) == (-17.74, 168.31)
+    assert busiest["rows"] == 2
+    assert busiest["value"] == 10  # the two households' people, summed
+    assert busiest["region"] == "Shefa"
+
+
+def test_a_dashboard_filter_narrows_the_map(client, auth_headers):
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        {
+            "gps__latitude": [-17.74, -15.5],
+            "gps__longitude": [168.31, 167.2],
+            "region": ["Shefa", "Sanma"],
+        }
+    )
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("map2.zip", _zip_bytes({"map2.dta": _stata_bytes(frame)}), "application/zip")},
+    ).json()
+    dataset_id = uploaded["datasets"][0]["id"]
+
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Filtered map"}
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={
+            "widget_type": "map",
+            "dataset_id": dataset_id,
+            "config": {"latitude": "gps__latitude", "longitude": "gps__longitude"},
+        },
+    )
+
+    rendered = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json={
+            "op": "and",
+            "conditions": [{"variable": "region", "operator": "eq", "value": "Shefa"}],
+            "groups": [],
+        },
+    ).json()
+    payload = next(iter(rendered["widgets"].values()))
+    assert len(payload["points"]) == 1
+    assert payload["points"][0]["lon"] == 168.31
+
+
+def test_a_map_on_a_variable_that_is_not_there_says_so(client, auth_headers, dataset_id):
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Bad map"}
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={
+            "widget_type": "map",
+            "dataset_id": dataset_id,
+            "config": {"latitude": "nope", "longitude": "also_nope"},
+        },
+    )
+    rendered = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json={"op": "and", "conditions": [], "groups": []},
+    ).json()
+    payload = next(iter(rendered["widgets"].values()))
+    assert "nope" in payload["error"]
+
+
+def test_an_html_widget_carries_its_markup_through(client, auth_headers):
+    """It is rendered in a sandboxed frame, so it is passed through as written."""
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Embedded"}
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={
+            "title": "A note from the field office",
+            "widget_type": "html",
+            "config": {"html": "<h1>Round 3</h1><p>Enumeration closes Friday.</p>"},
+        },
+    )
+    rendered = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json={"op": "and", "conditions": [], "groups": []},
+    ).json()
+    payload = next(iter(rendered["widgets"].values()))
+    assert payload["type"] == "html"
+    assert payload["html"] == "<h1>Round 3</h1><p>Enumeration closes Friday.</p>"

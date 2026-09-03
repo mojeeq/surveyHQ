@@ -740,3 +740,124 @@ def test_a_replacement_that_drops_a_variable_says_what_it_broke(client, auth_hea
     warnings = " ".join(second.json()["warnings"])
     assert "no longer has" in warnings and "income" in warnings, warnings
     assert "Mean income" in warnings, warnings
+
+
+def test_a_merged_dataset_is_rebuilt_when_its_sources_are_replaced(client, auth_headers):
+    """The bug this fixes: a merge holds last month's join and says nothing.
+
+    A merged dataset keeps its id, its name and its row count, so a dashboard
+    built on it goes on showing the previous export's figures after a
+    replacement - and looks live while doing it.
+    """
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Merged and replaced"}
+    ).json()
+
+    def archive(keys, provinces, person_keys, ages):
+        return _zip_bytes(
+            {
+                "merge_main.dta": _stata_bytes(
+                    pd.DataFrame({"interview__id": keys, "province": provinces})
+                ),
+                "merge_people.dta": _stata_bytes(
+                    pd.DataFrame({"interview__id": person_keys, "age": ages})
+                ),
+            }
+        )
+
+    first = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("first.zip", archive(["i1", "i2"], [1.0, 2.0], ["i1", "i2"], [30.0, 40.0]), "application/zip")},
+        data={"project_id": project["id"]},
+    )
+    assert first.status_code == 201, first.text
+
+    client.post(f"/api/v1/relationships/detect?project_id={project['id']}", headers=auth_headers)
+    relationship = client.get(
+        f"/api/v1/relationships?project_id={project['id']}", headers=auth_headers
+    ).json()[0]
+    merged = client.post(
+        "/api/v1/relationships/merge",
+        headers=auth_headers,
+        json={"name": "People with interviews", "relationship_id": relationship["id"], "how": "inner"},
+    ).json()
+    assert merged["row_count"] == 2
+    version = merged["version"]
+
+    # A later export with a third interview and a third person
+    second = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "second.zip",
+                archive(["i1", "i2", "i3"], [1.0, 2.0, 3.0], ["i1", "i2", "i3"], [30.0, 40.0, 22.0]),
+                "application/zip",
+            )
+        },
+        data={"project_id": project["id"]},
+    )
+    assert second.status_code == 201, second.text
+    assert any("People with interviews" in w for w in second.json()["warnings"]), second.json()
+
+    # Same dataset, same id, new figures - without anyone re-running the merge
+    again = client.get(f"/api/v1/datasets/{merged['id']}", headers=auth_headers).json()
+    assert again["id"] == merged["id"]
+    assert again["row_count"] == 3
+    assert again["version"] > version
+
+
+def test_a_label_written_on_a_source_reaches_the_merge_built_on_it(client, auth_headers):
+    """A merged dataset holds its own copy of the labels, and is usually the one
+    a dashboard points at - so a label written on the source and left behind is
+    invisible exactly where it was wanted."""
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Labels through a merge"}
+    ).json()
+    archive = _zip_bytes(
+        {
+            "label_main.dta": _stata_bytes(
+                pd.DataFrame({"interview__id": ["i1", "i2"], "DEM_SEX": [1.0, 2.0]})
+            ),
+            "label_people.dta": _stata_bytes(
+                pd.DataFrame({"interview__id": ["i1", "i2"], "age": [30.0, 40.0]})
+            ),
+        }
+    )
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("labels.zip", archive, "application/zip")},
+        data={"project_id": project["id"]},
+    ).json()
+    main_id = next(d["id"] for d in uploaded["datasets"] if d["name"] == "label_main")
+
+    client.post(f"/api/v1/relationships/detect?project_id={project['id']}", headers=auth_headers)
+    relationship = client.get(
+        f"/api/v1/relationships?project_id={project['id']}", headers=auth_headers
+    ).json()[0]
+    merged = client.post(
+        "/api/v1/relationships/merge",
+        headers=auth_headers,
+        json={"name": "Merged for labels", "relationship_id": relationship["id"]},
+    ).json()
+
+    client.patch(
+        f"/api/v1/datasets/{main_id}/variables/DEM_SEX",
+        headers=auth_headers,
+        json={"label": "Sex", "value_labels": {"1": "Male", "2": "Female"}},
+    )
+
+    downstream = client.get(f"/api/v1/datasets/{merged['id']}", headers=auth_headers).json()
+    variable = next(v for v in downstream["variables"] if v["name"] == "DEM_SEX")
+    assert variable["label"] == "Sex"
+    assert variable["value_labels"] == {"1": "Male", "2": "Female"}
