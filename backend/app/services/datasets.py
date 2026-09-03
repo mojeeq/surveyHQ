@@ -301,6 +301,8 @@ class ArchiveImport:
     created: list[str] = dc_field(default_factory=list)
     appended: list[str] = dc_field(default_factory=list)
     replaced: list[str] = dc_field(default_factory=list)
+    # The ids behind `replaced`, for whatever was built on top of them.
+    replaced_ids: list[str] = dc_field(default_factory=list)
     skipped: list[str] = dc_field(default_factory=list)
     warnings: list[str] = dc_field(default_factory=list)
     rows: int = 0
@@ -453,6 +455,7 @@ def load_archive_as_datasets(
                         f"{member.name} -> {existing.name} "
                         f"({before} rows replaced by {existing.row_count})"
                     )
+                    outcome.replaced_ids.append(existing.id)
                     outcome.rows += existing.row_count
                     outcome.warnings.extend(
                         _lost_variable_warnings(

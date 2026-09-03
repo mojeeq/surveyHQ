@@ -38,6 +38,7 @@ from app.services.datasets import (
     load_archive_as_datasets,
     load_file_into_dataset,
 )
+from app.services.derived import rebuild_dependents
 from app.services.ingest import SUPPORTED_EXTENSIONS, IngestError
 from app.services.projects import can_edit, restrict, scope_for
 from app.services.query_engine import (
@@ -199,6 +200,16 @@ async def upload_dataset(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     finally:
         upload_path.unlink(missing_ok=True)
+
+    # Whatever was merged out of the replaced files is holding the previous
+    # export's join until it is re-run. Nothing on a dashboard would say so:
+    # the merged dataset keeps its id, its name and its old row count.
+    rebuilt = rebuild_dependents(db, outcome.replaced_ids if archive else [])
+    if rebuilt:
+        names = [d.name for d in (db.get(Dataset, i) for i in rebuilt) if d]
+        outcome.warnings.append(
+            "Rebuilt from the new data: " + ", ".join(sorted(names))
+        )
 
     if archive:
         record(

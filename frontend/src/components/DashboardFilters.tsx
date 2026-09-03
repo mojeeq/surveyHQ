@@ -9,6 +9,12 @@ export interface FilterControl {
   /** Which dataset's values populate the dropdown. */
   dataset_id: string
   label?: string
+  /**
+   * Which page of the dashboard offers this control. Pages ask different
+   * questions, so they get different filters. Absent on controls saved before
+   * filters were per page; those belong to the first page.
+   */
+  page?: number
 }
 
 /**
@@ -103,6 +109,12 @@ export function toFilterGroup(
       })),
     groups: [],
   }
+}
+
+/** The controls belonging to one page. A control saved before filters were
+ *  per page has no page of its own and stays on the first one. */
+export function controlsForPage(controls: FilterControl[], page: number): FilterControl[] {
+  return controls.filter((control) => (control.page ?? 0) === page)
 }
 
 /** Variables worth offering as a filter: few enough values to pick from. */

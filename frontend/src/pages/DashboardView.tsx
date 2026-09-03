@@ -21,6 +21,7 @@ import type {
 import AssignProject from '@/components/AssignProject'
 import ChartCard from '@/components/ChartCard'
 import DashboardFilters, {
+  controlsForPage,
   filterableVariables,
   toFilterGroup,
   useDashboardDatasets,
@@ -70,14 +71,27 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
   const filterControls: FilterControl[] = (dashboard.data?.filters ??
     []) as unknown as FilterControl[]
 
+  const pages = (dashboard.data?.pages ?? []) as { name?: string }[]
+  // A dashboard with no named pages is one unnamed page, which is what every
+  // dashboard made before this feature is.
+  const pageCount = Math.max(1, pages.length)
+  const page = Math.min(activePage, pageCount - 1)
+  const pageNames = Array.from(
+    { length: pageCount },
+    (_, index) => pages[index]?.name || `Page ${index + 1}`,
+  )
+  // Pages ask different questions, so each carries its own filters.
+  const pageControls = controlsForPage(filterControls, page)
+
   const rendered = useQuery({
     // The values are part of the key, so changing a filter refetches rather
-    // than showing the previous selection's numbers under the new label.
-    queryKey: ['dashboard-data', id, publicToken, filterValues],
+    // than showing the previous selection's numbers under the new label. So is
+    // the page, whose filters are its own.
+    queryKey: ['dashboard-data', id, publicToken, activePage, filterValues],
     queryFn: () =>
       api.post<{ widgets: Record<string, any> }>(
         `${basePath}/data`,
-        toFilterGroup(filterControls, filterValues),
+        toFilterGroup(pageControls, filterValues),
       ),
     enabled: Boolean(dashboard.data),
     refetchInterval: dashboard.data?.refresh_interval_seconds
@@ -159,15 +173,6 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
   })
 
   const allWidgets = dashboard.data?.widgets ?? []
-  const pages = dashboard.data?.pages ?? []
-  // A dashboard with no named pages is one unnamed page, which is what every
-  // dashboard made before this feature is.
-  const pageCount = Math.max(1, pages.length)
-  const pageNames = Array.from(
-    { length: Math.max(1, pages.length) },
-    (_, index) => pages[index]?.name || `Page ${index + 1}`,
-  )
-  const page = Math.min(activePage, pageCount - 1)
   const widgets = useMemo(
     () => allWidgets.filter((widget) => (widget.page ?? 0) === page),
     [allWidgets, page],
@@ -285,7 +290,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         data-testid="dashboard-canvas"
       >
       <DashboardFilters
-        controls={filterControls}
+        controls={pageControls}
         value={filterValues}
         onChange={setFilterValues}
       />
@@ -366,7 +371,9 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
       {editingFilters && (
         <FilterControlsModal
           dashboardId={id}
-          widgets={allWidgets}
+          page={page}
+          pageName={pageNames[page]}
+          widgets={widgets}
           controls={filterControls}
           onClose={() => setEditingFilters(false)}
         />
@@ -442,6 +449,16 @@ function WidgetFrame({
         </div>
       </header>
       <div className="flex min-h-0 flex-1 flex-col overflow-auto p-4">
+        {/* A filter the widget's dataset has no column for is dropped rather
+            than failing the query - which otherwise looks like a broken
+            filter, since the widget goes on showing every row in silence. */}
+        {payload?.filters_ignored?.length > 0 && (
+          <p className="mb-2 shrink-0 text-[11px] text-amber-700">
+            Not filtered by {payload.filters_ignored.join(', ')} — this widget's
+            dataset does not have {payload.filters_ignored.length > 1 ? 'those' : 'that'}{' '}
+            {payload.filters_ignored.length > 1 ? 'variables' : 'variable'}.
+          </p>
+        )}
         {loading ? (
           <Loading />
         ) : !payload ? (
@@ -512,16 +529,28 @@ function PageTabs({
     name: pages[index]?.name || `Page ${index + 1}`,
   }))
 
+  /** Two tabs reading the same word cannot be told apart. */
+  const taken = (name: string, except = -1) =>
+    named.some((page, i) => i !== except && page.name.toLowerCase() === name.toLowerCase())
+
   const addPage = () => {
     const name = prompt('Name for the new page')?.trim()
     if (!name) return
+    if (taken(name)) {
+      alert(`This dashboard already has a page called "${name}".`)
+      return
+    }
     onChange([...named, { name }])
     onSelect(count)
   }
 
   const renamePage = (index: number) => {
     const name = prompt('Rename this page', named[index].name)?.trim()
-    if (!name) return
+    if (!name || name === named[index].name) return
+    if (taken(name, index)) {
+      alert(`This dashboard already has a page called "${name}".`)
+      return
+    }
     onChange(named.map((page, i) => (i === index ? { name } : page)))
   }
 
@@ -543,7 +572,7 @@ function PageTabs({
         onDark ? 'border-white/25' : 'border-ink-200'
       }`}
     >
-      {count > 1 &&
+      {(count > 1 || canEdit) &&
         named.map((page, index) => (
           <button
             key={index}
@@ -1006,18 +1035,27 @@ function AddWidgetModal({
  */
 function FilterControlsModal({
   dashboardId,
+  page,
+  pageName,
   widgets,
   controls,
   onClose,
 }: {
   dashboardId: string
+  /** The page whose filters are being chosen; each page has its own. */
+  page: number
+  pageName: string
+  /** This page's widgets - the candidates come from what is actually on it. */
   widgets: Widget[]
+  /** Every control on the dashboard, so the other pages' are kept on save. */
   controls: FilterControl[]
   onClose: () => void
 }) {
   const toast = useToast()
   const queryClient = useQueryClient()
-  const [chosen, setChosen] = useState<FilterControl[]>(controls)
+  const [chosen, setChosen] = useState<FilterControl[]>(() =>
+    controlsForPage(controls, page),
+  )
 
   const charts = useQuery({
     queryKey: ['charts'],
@@ -1044,7 +1082,15 @@ function FilterControlsModal({
   })
 
   const save = useMutation({
-    mutationFn: () => api.patch(`/dashboards/${dashboardId}`, { filters: chosen }),
+    mutationFn: () =>
+      api.patch(`/dashboards/${dashboardId}`, {
+        // Only this page's controls are being edited; the other pages keep
+        // theirs, which is the whole point of filters being per page.
+        filters: [
+          ...controls.filter((control) => (control.page ?? 0) !== page),
+          ...chosen.map((control) => ({ ...control, page })),
+        ],
+      }),
     onSuccess: () => {
       toast.push('Filters saved', 'success')
       queryClient.invalidateQueries({ queryKey: ['dashboard', dashboardId] })
@@ -1066,7 +1112,7 @@ function FilterControlsModal({
     <Modal
       open
       onClose={onClose}
-      title="Dashboard filters"
+      title={`Filters on "${pageName}"`}
       wide
       footer={
         <>
@@ -1080,16 +1126,18 @@ function FilterControlsModal({
       }
     >
       <p className="mb-3 text-sm text-ink-500">
-        A filter narrows every widget whose dataset carries that variable, and
-        leaves the others as they are — so it is still useful when only part of
-        the page has it.
+        These filters appear on this page only; every page has its own. A filter
+        narrows each widget whose dataset carries the variable and says so on
+        any widget it could not reach — the variables below are the ones this
+        page's own datasets have.
       </p>
 
       {details.isLoading || datasets.isLoading ? (
         <Loading />
       ) : !details.data?.length ? (
         <p className="text-sm text-ink-500">
-          Add a widget first; the filters come from the datasets it uses.
+          Add a widget to this page first; the filters come from the datasets it
+          uses.
         </p>
       ) : (
         <div className="space-y-4">

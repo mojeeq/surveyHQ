@@ -25,14 +25,12 @@ from app.schemas.relationship import (
 )
 from app.services.audit import record
 from app.services.datasets import (
-    _apply_ingest,
     create_dataset_record,
-    dataset_directory,
     dataset_is_queryable,
 )
-from app.services.ingest import ingest_frame
+from app.services.derived import run_merge
 from app.services.projects import scope_for
-from app.services.relationships import detect, merge_frames, store
+from app.services.relationships import detect, store
 
 router = APIRouter()
 
@@ -210,7 +208,7 @@ def merge_datasets(payload: MergeIn, db: DbSession, user: RequireManager) -> Dat
         project_id=left.project_id,
     )
     merged.derivation = derivation
-    _run_merge(db, merged, relationship, left, right)
+    _merge_into(db, merged, relationship, left, right)
     record(
         db,
         user=user,
@@ -244,7 +242,7 @@ def rebuild_derived_dataset(
         )
     left = get_dataset(relationship.left_dataset_id, db, user)
     right = get_dataset(relationship.right_dataset_id, db, user)
-    _run_merge(db, dataset, relationship, left, right)
+    _merge_into(db, dataset, relationship, left, right)
     db.commit()
     db.refresh(dataset)
     return DatasetDetail.model_validate(dataset)
@@ -253,50 +251,18 @@ def rebuild_derived_dataset(
 # --- helpers ----------------------------------------------------------------
 
 
-def _run_merge(
+def _merge_into(
     db: DbSession,
     target: Dataset,
     relationship: DatasetRelationship,
     left: Dataset,
     right: Dataset,
 ) -> None:
-    derivation = target.derivation or {}
+    """run_merge, with its one expected failure turned into a 422."""
     try:
-        frame = merge_frames(
-            left,
-            right,
-            relationship.left_variable,
-            relationship.right_variable,
-            how=derivation.get("how", "left"),
-            columns=derivation.get("columns") or None,
-            prefix=derivation.get("prefix", ""),
-        )
+        run_merge(db, target, relationship, left, right)
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    labels = {v.name: v.label for v in left.variables if v.label}
-    value_labels = {v.name: v.value_labels for v in left.variables if v.value_labels}
-    prefix = derivation.get("prefix", "")
-    for variable in right.variables:
-        alias = f"{prefix}{variable.name}" if prefix else variable.name
-        if variable.label:
-            labels.setdefault(alias, variable.label)
-        if variable.value_labels:
-            value_labels.setdefault(alias, variable.value_labels)
-
-    warnings: list[str] = []
-    if derivation.get("how") == "left" and len(frame) > left.row_count:
-        # A left join that grows the row count means the right side had several
-        # matches per key, which is a fact about the data worth stating.
-        warnings.append(
-            f"The join produced {len(frame):,} rows from {left.row_count:,}, because "
-            f"'{right.name}' has more than one row per key. Each left row is repeated."
-        )
-    _apply_ingest(
-        db,
-        target,
-        ingest_frame(frame, labels, value_labels, dataset_directory(target.id), warnings),
-    )
 
 
 def _require_column(dataset: Dataset | None, column: str) -> None:

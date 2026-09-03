@@ -1382,3 +1382,54 @@ def test_an_indicator_widget_without_a_breakdown_stays_a_single_number(
     payload = next(iter(rendered["widgets"].values()))
     assert payload["breakdown"] == {}
     assert payload["value"] == 200
+
+
+def test_a_widget_says_which_dashboard_filters_it_could_not_apply(
+    client, auth_headers, dataset_id
+):
+    """Silence is what makes a filter look broken.
+
+    A filter on a variable the widget's dataset has no column for is dropped so
+    the query still runs, and the widget goes on showing every row. Reported, so
+    the widget can say that is what happened.
+    """
+    chart = client.post(
+        "/api/v1/dashboards/charts",
+        headers=auth_headers,
+        json={
+            "name": "By region",
+            "dataset_id": dataset_id,
+            "chart_type": "bar",
+            "spec": {
+                "query": {
+                    "dimensions": [{"variable": "region"}],
+                    "measures": [{"agg": "count"}],
+                }
+            },
+        },
+    ).json()
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Filter reporting"}
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={"widget_type": "chart", "chart_id": chart["id"]},
+    )
+
+    rendered = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json={
+            "op": "and",
+            "conditions": [
+                {"variable": "region", "operator": "eq", "value": "North"},
+                {"variable": "not_here", "operator": "eq", "value": "x"},
+            ],
+            "groups": [],
+        },
+    ).json()
+    payload = next(iter(rendered["widgets"].values()))
+    # The filter it could honour still narrowed it
+    assert sum(row[1] for row in payload["result"]["rows"]) < 200
+    assert payload["filters_ignored"] == ["not_here"]
