@@ -61,6 +61,28 @@ PUT    /projects/assign/dataset/{id}      {"project_id": "..."} or null for the
 PUT    /projects/assign/dashboard/{id}    the same, for a dashboard
 ```
 
+### Relationships and merges
+
+```
+GET    /relationships                     links whose datasets you can see
+                                          (project_id filters; "none" = shared)
+POST   /relationships/detect              propose links by reading the data;
+                                          stores the new ones      [manager]
+POST   /relationships                     declare one by hand      [manager]
+PATCH  /relationships/{id}                correct keys, cardinality, or turn it
+                                          off; marks it no longer detected
+                                                                   [manager]
+DELETE /relationships/{id}                                         [manager]
+POST   /relationships/merge               join two related datasets into a new
+                                          one; the recipe is stored on it
+                                                                   [manager]
+POST   /relationships/rebuild/{id}        re-run that merge against the current
+                                          sources                  [manager]
+```
+
+A many-to-many link is refused by `/merge`: joining two rosters on the interview
+multiplies rows rather than adding columns.
+
 ### Datasets
 
 ```
@@ -68,7 +90,9 @@ GET    /datasets                          list (search, status, project_id, limi
                                           offset). project_id=none returns only
                                           what is in the shared area.
 POST   /datasets/upload                   multipart upload; project_id puts it
-                                          straight into a project [manager]
+                                          straight into a project. A .zip answers
+                                          with a per-file report rather than one
+                                          dataset - see below      [manager]
 GET    /datasets/{id}                     detail with variables
 PATCH  /datasets/{id}                     rename, describe, tag [manager]
 DELETE /datasets/{id}                                            [manager]
@@ -76,6 +100,19 @@ POST   /datasets/{id}/replace             refresh in place      [manager]
 GET    /datasets/{id}/variables           variable list
 GET    /datasets/{id}/preview             raw rows
 GET    /datasets/{id}/variables/{v}/values  distinct values
+```
+
+Uploading an archive returns:
+
+```json
+{
+  "datasets": [ ... ],
+  "created":  ["R_demographics.dta -> R_demographics (401 rows)"],
+  "appended": ["VN_LF2024.dta -> VN_LF2024 (99 + 91 = 190 rows)"],
+  "skipped":  [],
+  "warnings": ["... appear in both ... so those interviews are now counted twice"],
+  "rows": 519
+}
 ```
 
 ### Analysis

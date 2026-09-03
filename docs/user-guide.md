@@ -49,12 +49,61 @@ what someone can reach, never what they are allowed to do.
 Deleting a project does not delete its data. Its datasets and dashboards move
 back to the shared area.
 
+## Relating and merging datasets
+
+A Survey Solutions export is several tables, not one. A labour force export
+holds the interview, the household members and the people living abroad, and
+each becomes its own dataset when you upload the archive.
+
+**Projects → (a project) → Relationships → Detect relationships** reads the data
+and proposes the links between them. It reads values, not column names: whether
+a key is unique on each side is what tells one-to-many from many-to-many. It
+also reports the overlap, so you can see that (say) only 18% of interviews have
+someone living abroad — a real link that covers little of the data.
+
+Click a link to correct it. Changing anything marks it as yours, and detecting
+again never reverts it.
+
+**Merge into a new dataset** joins two related datasets, letting you choose
+which columns to bring across and whether to keep every row of the left dataset
+or only matching ones. Watch the row count: joining 190 interviews to their 782
+people gives 789 rows, because each interview is repeated once per person. The
+platform says so when it happens.
+
+Two rosters are many-to-many on the interview, so joining them would multiply
+rows rather than add columns. Those links are recorded but cannot be merged.
+
+The merge is saved with the dataset it produces, so **Rebuild from sources** on
+that dataset re-runs it after a later round arrives. That is the point of saving
+it rather than repeating it by hand.
+
 ## Getting data in
 
 ### Uploading a file
 
 **Datasets → Upload data**. Supported: Stata (`.dta`), SPSS (`.sav`), CSV,
-tab-delimited (`.tab`, `.tsv`) and Excel.
+tab-delimited (`.tab`, `.tsv`), Excel, and `.zip` archives of them.
+
+**An export archive becomes one dataset per file inside it**, because a Survey
+Solutions export holds one file per roster level — the interview, the household
+members, the people abroad — and those are different tables, not different
+rounds.
+
+Upload a later round's archive and each of its files is *appended* to the
+dataset already holding that file name, so September and October meet where they
+belong. A `source_file` column records which archive each row came from, so the
+rounds stay distinguishable.
+
+Two things it will tell you rather than let pass quietly:
+
+- If an interview appears in both the existing data and the new rows, they are
+  now counted twice. That usually means the export was set to cumulative rather
+  than incremental.
+- If a same-named file from a different survey does not share enough columns, it
+  is not appended onto yours; it becomes its own dataset.
+
+A file too large to hold in memory is read in chunks automatically. Nothing
+changes for you except that the import reports it.
 
 Stata and SPSS are the best choice because they carry variable labels and value
 labels; those are read and used everywhere in the interface.
@@ -134,11 +183,16 @@ To build a dashboard:
 1. **Dashboards → New dashboard**. Choose the project it belongs to, or leave it
    in the shared area.
 2. **Add widget** — a saved chart, a saved cross-tabulation, an indicator tile,
-   or a text note.
+   a data quality panel, or a text note.
 3. **Move & resize** — drag widgets around and resize them; the layout saves
    itself. Removing a widget does not need this: hover over it and use the ✕ in
    its corner.
-4. **Share link** — generates a read-only public URL, copied to your clipboard.
+4. **Pages** — **+ Page** adds one; double-click a tab to rename it. Each page
+   lays out on its own, and the tab strip only appears once there are two.
+5. **Colours** — the picker in the header sets which palette this dashboard's
+   charts use. The alternatives are the same hues in a different order, chosen
+   for how far apart neighbouring series stay for colour-blind readers.
+6. **Share link** — generates a read-only public URL, copied to your clipboard.
    Anyone with the link can view the dashboard without an account. Press again
    to revoke it.
 
@@ -203,7 +257,19 @@ Each check has a **tolerance**: the share of flagged rows it will accept before
 reporting a failure. Zero means any occurrence fails — right for duplicate
 interview keys. A few percent is more sensible for short interviews.
 
-Checks run every six hours, and on demand with **Run** or **Run all**.
+**Edit** changes a check and re-runs it, so the stored result never describes a
+definition that no longer exists. The check type is fixed — changing that would
+make it a different check.
+
+A check can also be restricted to part of the dataset. The filter narrows the
+total as well as the flagged rows, so the failure rate stays a rate of what was
+actually checked: "3% of interviews in Shefa", not "3% of everything, some of
+which was in Shefa".
+
+Checks run every six hours, and on demand with **Run** or **Run all**. Add a
+**data quality panel** to a dashboard to keep the results where people look;
+it shows the last run rather than re-running eight full scans every time
+somebody opens the page, and says how old the oldest result is.
 
 ## API keys
 
