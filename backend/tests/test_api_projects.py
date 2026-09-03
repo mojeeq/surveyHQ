@@ -861,3 +861,139 @@ def test_a_label_written_on_a_source_reaches_the_merge_built_on_it(client, auth_
     variable = next(v for v in downstream["variables"] if v["name"] == "DEM_SEX")
     assert variable["label"] == "Sex"
     assert variable["value_labels"] == {"1": "Male", "2": "Female"}
+
+
+def test_a_project_s_datasets_can_be_deleted_in_one_go(client, auth_headers):
+    """An export makes eight datasets at once; clearing them one at a time is
+    eight confirmations for one decision."""
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Bulk delete"}
+    ).json()
+    other = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Left alone"}
+    ).json()
+
+    archive = _zip_bytes(
+        {
+            "bulk_main.dta": _stata_bytes(pd.DataFrame({"id": ["i1"], "age": [30.0]})),
+            "bulk_people.dta": _stata_bytes(pd.DataFrame({"pid": ["p1"], "sex": [1.0]})),
+        }
+    )
+    client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("bulk.zip", archive, "application/zip")},
+        data={"project_id": project["id"]},
+    )
+    keeper = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("keeper.zip", archive, "application/zip")},
+        data={"project_id": other["id"]},
+    ).json()["datasets"]
+
+    response = client.post(
+        "/api/v1/datasets/delete", headers=auth_headers, json={"project_id": project["id"]}
+    )
+    assert response.status_code == 200, response.text
+    assert "2 dataset(s)" in response.json()["detail"]
+
+    listed = client.get("/api/v1/datasets?limit=200", headers=auth_headers).json()["items"]
+    assert not [d for d in listed if d["project_id"] == project["id"]]
+    # The other project is untouched
+    assert len([d for d in listed if d["project_id"] == other["id"]]) == len(keeper)
+
+
+def test_several_chosen_datasets_can_be_deleted_together(client, auth_headers):
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Pick and choose"}
+    ).json()
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "choose.zip",
+                _zip_bytes(
+                    {
+                        "choose_a.dta": _stata_bytes(pd.DataFrame({"id": ["a"], "v": [1.0]})),
+                        "choose_b.dta": _stata_bytes(pd.DataFrame({"pid": ["b"], "w": [2.0]})),
+                    }
+                ),
+                "application/zip",
+            )
+        },
+        data={"project_id": project["id"]},
+    ).json()["datasets"]
+
+    doomed = uploaded[0]
+    response = client.post(
+        "/api/v1/datasets/delete", headers=auth_headers, json={"ids": [doomed["id"]]}
+    )
+    assert response.status_code == 200, response.text
+
+    remaining = client.get("/api/v1/datasets?limit=200", headers=auth_headers).json()["items"]
+    names = {d["id"] for d in remaining if d["project_id"] == project["id"]}
+    assert doomed["id"] not in names
+    assert len(names) == len(uploaded) - 1
+
+
+def test_deleting_nothing_says_so_rather_than_reporting_success(client, auth_headers):
+    response = client.post(
+        "/api/v1/datasets/delete", headers=auth_headers, json={"ids": ["not-a-real-id"]}
+    )
+    assert response.status_code == 404
+
+
+def test_a_viewer_cannot_bulk_delete(client, auth_headers):
+    """The same rule as deleting one, which the bulk route must not slip past."""
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Viewer bulk"}
+    ).json()
+    client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "viewerbulk.zip",
+                _zip_bytes({"vb.dta": _stata_bytes(pd.DataFrame({"id": ["a"], "v": [1.0]}))}),
+                "application/zip",
+            )
+        },
+        data={"project_id": project["id"]},
+    )
+
+    created = client.post(
+        "/api/v1/users",
+        headers=auth_headers,
+        json={
+            "email": "bulkviewer@example.com",
+            "full_name": "Bulk Viewer",
+            "role": "viewer",
+            "password": "viewer-password-1",
+        },
+    )
+    assert created.status_code == 201, created.text
+    token = client.post(
+        "/api/v1/auth/login",
+        json={"email": "bulkviewer@example.com", "password": "viewer-password-1"},
+    ).json()["access_token"]
+
+    refused = client.post(
+        "/api/v1/datasets/delete",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"project_id": project["id"]},
+    )
+    assert refused.status_code == 403

@@ -252,3 +252,75 @@ def test_the_history_can_be_cleared_without_undoing_the_work(client, auth_header
 
     dataset = client.get(f"/api/v1/datasets/{workbench}", headers=auth_headers).json()
     assert "adult" in {v["name"] for v in dataset["variables"]}
+
+
+def test_a_script_runs_its_lines_in_order(client, auth_headers, workbench):
+    """A do-file, not a prompt: several commands, top to bottom."""
+    script = """
+* Age bands, as anybody would write them
+gen band = 1 if age < 18
+replace band = 2 if age >= 18 & age < 60
+replace band = 3 if age >= 60
+label define bandlbl 1 "Child" 2 "Adult" 3 "Older"  // three of them
+label values band bandlbl
+"""
+    response = command(client, auth_headers, workbench, script)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["error"] is None
+    assert [step["command"] for step in body["results"]] == [
+        "gen band = 1 if age < 18",
+        "replace band = 2 if age >= 18 & age < 60",
+        "replace band = 3 if age >= 60",
+        'label define bandlbl 1 "Child" 2 "Adult" 3 "Older"',
+        "label values band bandlbl",
+    ]
+    assert values(client, auth_headers, workbench, "band") == [1, 2, 2, 3, 1, None]
+
+    dataset = client.get(f"/api/v1/datasets/{workbench}", headers=auth_headers).json()
+    variable = next(v for v in dataset["variables"] if v["name"] == "band")
+    assert variable["value_labels"] == {"1": "Child", "2": "Adult", "3": "Older"}
+
+
+def test_a_line_that_fails_stops_the_script_and_says_which(client, auth_headers, workbench):
+    """What ran above it has already changed the data, as in a do-file."""
+    script = "gen ok = 1\ngen bad = height + 1\ngen never = 2"
+    response = command(client, auth_headers, workbench, script)
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert "Line 2" in body["error"]
+    assert "'height' is not a variable" in body["error"]
+    assert [step["command"] for step in body["results"]] == ["gen ok = 1"]
+
+    names = {
+        v["name"]
+        for v in client.get(f"/api/v1/datasets/{workbench}", headers=auth_headers).json()[
+            "variables"
+        ]
+    }
+    assert "ok" in names and "never" not in names
+
+
+def test_a_script_whose_first_line_fails_changes_nothing(client, auth_headers, workbench):
+    before = client.get(f"/api/v1/datasets/{workbench}", headers=auth_headers).json()
+    response = command(client, auth_headers, workbench, "gen bad = height + 1\ngen ok = 1")
+    assert response.status_code == 422
+    after = client.get(f"/api/v1/datasets/{workbench}", headers=auth_headers).json()
+    assert after["column_count"] == before["column_count"]
+
+
+def test_a_long_line_can_be_continued(client, auth_headers, workbench):
+    """/// joins a line to the next, so a long generate needs no scrollbar."""
+    script = "gen wealthy = 1 if income > 250 ///\n    & age > 18"
+    assert command(client, auth_headers, workbench, script).status_code == 200
+    # Only the row with both: income 500 belongs to a 12-year-old, and the
+    # 600 to a row with no age at all.
+    assert values(client, auth_headers, workbench, "wealthy") == [
+        None, None, 1, None, None, None
+    ]
+
+
+def test_only_the_lines_that_ran_are_kept_for_replay(client, auth_headers, workbench):
+    command(client, auth_headers, workbench, "gen a = 1\ngen b = nope\ngen c = 3")
+    kept = client.get(f"/api/v1/datasets/{workbench}/commands", headers=auth_headers).json()
+    assert kept == ["gen a = 1"]

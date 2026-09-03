@@ -28,6 +28,33 @@ export default function Datasets() {
   const [search, setSearch] = useState('')
   const [uploadInto, setUploadInto] = useState<string | null>(null)
   const [showParadata, setShowParadata] = useState(false)
+  // Collapsed by project, remembered per browser: a server with a dozen
+  // projects on it is otherwise a page nobody can find anything on.
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>(() => {
+    try {
+      return JSON.parse(localStorage.getItem('surveyhq.datasets.collapsed') ?? '{}')
+    } catch {
+      return {}
+    }
+  })
+  const [selected, setSelected] = useState<Set<string>>(new Set())
+
+  const toggleGroup = (id: string) => {
+    const next = { ...collapsed, [id]: !collapsed[id] }
+    setCollapsed(next)
+    try {
+      localStorage.setItem('surveyhq.datasets.collapsed', JSON.stringify(next))
+    } catch {
+      /* a browser that refuses storage still gets the collapse, just not next time */
+    }
+  }
+
+  const toggleOne = (id: string) => {
+    const next = new Set(selected)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    setSelected(next)
+  }
 
   const datasets = useQuery({
     queryKey: ['datasets', search],
@@ -81,6 +108,18 @@ export default function Datasets() {
     onError: (error: Error) => toast.push(error.message, 'error'),
   })
 
+  const removeMany = useMutation({
+    mutationFn: (body: { ids?: string[]; project_id?: string }) =>
+      api.post<{ detail: string }>('/datasets/delete', body),
+    onSuccess: (result) => {
+      toast.push(result.detail, 'success')
+      setSelected(new Set())
+      queryClient.invalidateQueries({ queryKey: ['datasets'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
   return (
     <>
       <PageHeader
@@ -114,6 +153,31 @@ export default function Datasets() {
         )}
       </div>
 
+      {selected.size > 0 && (
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-brand-200 bg-brand-50 px-4 py-2.5 text-sm">
+          <span className="font-medium text-brand-900">
+            {selected.size} dataset{selected.size === 1 ? '' : 's'} selected
+          </span>
+          <button className="btn-ghost btn-sm text-ink-600" onClick={() => setSelected(new Set())}>
+            Clear
+          </button>
+          <button
+            className="btn-ghost btn-sm ml-auto text-red-600"
+            onClick={() => {
+              if (
+                confirm(
+                  `Delete ${selected.size} dataset(s)? Charts, indicators and merges built on ` +
+                    'them will stop working.',
+                )
+              )
+                removeMany.mutate({ ids: [...selected] })
+            }}
+          >
+            Delete selected
+          </button>
+        </div>
+      )}
+
       {datasets.isLoading ? (
         <Loading />
       ) : datasets.error ? (
@@ -142,6 +206,14 @@ export default function Datasets() {
           {grouped.map((group) => (
             <section key={group.id || 'shared'}>
               <header className="mb-3 flex flex-wrap items-center gap-3 border-b border-ink-200 pb-2">
+                <button
+                  className="text-ink-400 hover:text-ink-700"
+                  onClick={() => toggleGroup(group.id)}
+                  aria-expanded={!collapsed[group.id]}
+                  title={collapsed[group.id] ? 'Show these datasets' : 'Hide these datasets'}
+                >
+                  {collapsed[group.id] ? '▸' : '▾'}
+                </button>
                 <h2 className="text-sm font-semibold text-ink-800">
                   {group.id ? (
                     <Link to={`/projects/${group.id}`} className="hover:text-brand-700">
@@ -154,6 +226,43 @@ export default function Datasets() {
                 <span className="text-xs text-ink-400">
                   {group.datasets.length} dataset{group.datasets.length === 1 ? '' : 's'}
                 </span>
+
+                {can('manager') && group.datasets.length > 0 && (
+                  <>
+                    <button
+                      className="btn-ghost btn-sm text-ink-500"
+                      onClick={() => {
+                        const ids = group.datasets.map((d) => d.id)
+                        const next = new Set(selected)
+                        const allChosen = ids.every((id) => next.has(id))
+                        for (const id of ids) {
+                          if (allChosen) next.delete(id)
+                          else next.add(id)
+                        }
+                        setSelected(next)
+                      }}
+                    >
+                      {group.datasets.every((d) => selected.has(d.id))
+                        ? 'Clear selection'
+                        : 'Select all'}
+                    </button>
+                    <button
+                      className="btn-ghost btn-sm text-red-600"
+                      onClick={() => {
+                        if (
+                          confirm(
+                            `Delete all ${group.datasets.length} dataset(s) in ${group.name}? ` +
+                              'Charts, indicators and merges built on them will stop working.',
+                          )
+                        )
+                          removeMany.mutate({ project_id: group.id })
+                      }}
+                    >
+                      Delete all
+                    </button>
+                  </>
+                )}
+
                 {can('manager') && (
                   <button
                     className="btn-ghost btn-sm ml-auto"
@@ -164,7 +273,7 @@ export default function Datasets() {
                 )}
               </header>
 
-              {!group.datasets.length ? (
+              {collapsed[group.id] ? null : !group.datasets.length ? (
                 <p className="py-3 text-sm text-ink-400">
                   Nothing here yet.
                 </p>
@@ -175,6 +284,8 @@ export default function Datasets() {
                       key={dataset.id}
                       dataset={dataset}
                       canManage={can('manager')}
+                      selected={selected.has(dataset.id)}
+                      onSelect={can('manager') ? () => toggleOne(dataset.id) : undefined}
                       onDelete={() => {
                         if (
                           confirm(
@@ -208,15 +319,29 @@ export default function Datasets() {
 function DatasetCard({
   dataset,
   canManage,
+  selected = false,
+  onSelect,
   onDelete,
 }: {
   dataset: Dataset
   canManage: boolean
+  /** Whether this one is in the current selection, for deleting several. */
+  selected?: boolean
+  onSelect?: () => void
   onDelete: () => void
 }) {
   return (
-    <article className="card flex flex-col p-5">
+    <article className={`card flex flex-col p-5 ${selected ? 'ring-2 ring-brand-400' : ''}`}>
       <div className="flex items-start justify-between gap-2">
+        {onSelect && (
+          <input
+            type="checkbox"
+            className="mt-1.5"
+            checked={selected}
+            onChange={onSelect}
+            aria-label={`Select ${dataset.name}`}
+          />
+        )}
         <Link
           to={`/datasets/${dataset.id}`}
           className="min-w-0 flex-1 text-base font-semibold text-ink-900 hover:text-brand-700"

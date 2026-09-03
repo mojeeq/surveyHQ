@@ -815,7 +815,6 @@ function CommandPanel({ datasetId }: { datasetId: string }) {
   const queryClient = useQueryClient()
   const [text, setText] = useState('')
   const [log, setLog] = useState<{ command: string; message: string; ok: boolean }[]>([])
-  const [recalled, setRecalled] = useState(-1)
 
   const history = useQuery({
     queryKey: ['commands', datasetId],
@@ -824,14 +823,24 @@ function CommandPanel({ datasetId }: { datasetId: string }) {
 
   const run = useMutation({
     mutationFn: (command: string) =>
-      api.post<{ message: string; rows: number; columns: number }>(
-        `/datasets/${datasetId}/command`,
-        { command },
-      ),
-    onSuccess: (result, command) => {
-      setLog((entries) => [{ command, message: result.message, ok: true }, ...entries])
-      setText('')
-      setRecalled(-1)
+      api.post<{
+        results: { command: string; message: string }[]
+        error: string | null
+        rows: number
+        columns: number
+      }>(`/datasets/${datasetId}/command`, { command }),
+    onSuccess: (result) => {
+      // Newest first, so a long script's last line is the one in view.
+      const entries = [
+        ...(result.error ? [{ command: '', message: result.error, ok: false }] : []),
+        ...result.results.map((step) => ({
+          command: step.command,
+          message: step.message,
+          ok: true,
+        })),
+      ].reverse()
+      setLog((previous) => [...entries, ...previous])
+      if (!result.error) setText('')
       queryClient.invalidateQueries({ queryKey: ['dataset', datasetId] })
       queryClient.invalidateQueries({ queryKey: ['commands', datasetId] })
       queryClient.invalidateQueries({ queryKey: ['preview', datasetId] })
@@ -849,31 +858,15 @@ function CommandPanel({ datasetId }: { datasetId: string }) {
   })
 
   const submit = () => {
-    const command = text.trim()
-    if (command) run.mutate(command)
+    const script = text.trim()
+    if (script) run.mutate(script)
   }
 
-  // Up and down walk back through what has been run, as a shell does.
-  const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
-    const past = history.data ?? []
-    if (event.key === 'Enter') {
+  // Ctrl/Cmd+Enter runs, since Enter has to be a new line in a script box.
+  const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
       event.preventDefault()
       submit()
-    } else if (event.key === 'ArrowUp' && past.length) {
-      event.preventDefault()
-      const next = recalled < 0 ? past.length - 1 : Math.max(0, recalled - 1)
-      setRecalled(next)
-      setText(past[next])
-    } else if (event.key === 'ArrowDown' && recalled >= 0) {
-      event.preventDefault()
-      const next = recalled + 1
-      if (next >= past.length) {
-        setRecalled(-1)
-        setText('')
-      } else {
-        setRecalled(next)
-        setText(past[next])
-      }
     }
   }
 
@@ -881,32 +874,40 @@ function CommandPanel({ datasetId }: { datasetId: string }) {
     <div className="grid gap-4 lg:grid-cols-3">
       <div className="lg:col-span-2">
         <Card title="Command">
-          <div className="flex items-center gap-2">
-            <span className="font-mono text-sm text-ink-400">.</span>
-            <input
-              className="input font-mono text-sm"
-              value={text}
-              onChange={(event) => setText(event.target.value)}
-              onKeyDown={onKeyDown}
-              placeholder="gen adult = age >= 18"
-              spellCheck={false}
-              autoFocus
-            />
+          <textarea
+            className="input min-h-[220px] font-mono text-sm"
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={onKeyDown}
+            placeholder={'* One command per line, as in a do-file\ngen adult = age >= 18\nreplace adult = 0 if age == .'}
+            spellCheck={false}
+            rows={10}
+            autoFocus
+          />
+          <div className="mt-2 flex flex-wrap items-center gap-3">
             <button className="btn-primary" onClick={submit} disabled={run.isPending || !text.trim()}>
               {run.isPending && <Spinner className="h-4 w-4 text-white" />}
-              Run
+              Run script
             </button>
+            <span className="text-xs text-ink-400">Ctrl/⌘ + Enter</span>
+            {text.trim() && (
+              <button className="btn-ghost btn-sm text-ink-500" onClick={() => setText('')}>
+                Clear
+              </button>
+            )}
           </div>
           <p className="mt-2 text-xs text-ink-500">
-            Changes the data in place. Every command is kept and re-run after a newer export
-            replaces this dataset, so what you build here survives the next import.
+            Lines run top to bottom and stop at the first error; what ran before it stays
+            applied, as a do-file does. <code>*</code> and <code>//</code> are comments, and{' '}
+            <code>///</code> continues a line. Changes the data in place — every command is kept
+            and re-run after a newer export replaces this dataset.
           </p>
 
           {log.length > 0 && (
             <div className="mt-4 max-h-80 overflow-auto rounded border border-ink-200 bg-ink-50 p-3 font-mono text-xs">
               {log.map((entry, index) => (
                 <div key={index} className="mb-2">
-                  <div className="text-ink-700">. {entry.command}</div>
+                  {entry.command && <div className="text-ink-700">. {entry.command}</div>}
                   <div className={entry.ok ? 'text-green-700' : 'text-red-700'}>
                     {entry.message}
                   </div>
@@ -923,15 +924,24 @@ function CommandPanel({ datasetId }: { datasetId: string }) {
           subtitle={`${history.data?.length ?? 0} command(s) will be re-run`}
           actions={
             (history.data?.length ?? 0) > 0 && (
-              <button
-                className="btn-ghost btn-sm text-red-600"
-                onClick={() => {
-                  if (confirm('Stop re-running these? What they already did stays done.'))
-                    forget.mutate()
-                }}
-              >
-                Clear
-              </button>
+              <>
+                <button
+                  className="btn-ghost btn-sm text-ink-500"
+                  title="Put these back in the box to edit or re-run"
+                  onClick={() => setText((history.data ?? []).join('\n'))}
+                >
+                  Edit
+                </button>
+                <button
+                  className="btn-ghost btn-sm text-red-600"
+                  onClick={() => {
+                    if (confirm('Stop re-running these? What they already did stays done.'))
+                      forget.mutate()
+                  }}
+                >
+                  Clear
+                </button>
+              </>
             )
           }
         >
@@ -954,7 +964,8 @@ function CommandPanel({ datasetId }: { datasetId: string }) {
               <li key={example}>
                 <button
                   className="text-left hover:text-brand-700 hover:underline"
-                  onClick={() => setText(example)}
+                  title="Add this line to the script"
+                  onClick={() => setText((current) => (current ? `${current}\n${example}` : example))}
                 >
                   {example}
                 </button>

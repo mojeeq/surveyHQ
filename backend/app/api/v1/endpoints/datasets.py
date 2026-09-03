@@ -23,6 +23,7 @@ from app.models import Dataset, DatasetSource, DatasetStatus, Role, Variable
 from app.schemas.common import Message, Page
 from app.schemas.dataset import (
     ArchiveImportOut,
+    BulkDeleteRequest,
     CommandRequest,
     DatasetDetail,
     DatasetOut,
@@ -43,7 +44,7 @@ from app.services.datasets import (
 )
 from app.services.derived import propagate_labels, rebuild_dependents
 from app.services.ingest import SUPPORTED_EXTENSIONS, IngestError
-from app.services.projects import can_edit, restrict, scope_for
+from app.services.projects import can_edit, can_view, restrict, scope_for
 from app.services.query_engine import (
     DatasetContext,
     QueryError,
@@ -279,6 +280,60 @@ def update_dataset(
     return dataset
 
 
+@router.post("/delete", response_model=Message)
+def delete_datasets(
+    payload: BulkDeleteRequest, db: DbSession, user: RequireManager
+) -> Message:
+    """Delete several datasets at once, or a whole project's worth.
+
+    A survey export produces eight datasets in one upload, most of them roster
+    levels and paradata, so clearing a project one confirmation at a time is
+    eight confirmations for one decision.
+
+    Datasets the caller cannot reach are skipped rather than refused: the
+    listing they were chosen from is already scoped to what they can see, so a
+    stray id is a stale page rather than an attempt at something.
+    """
+    if payload.project_id is not None:
+        # Every dataset in one project, without the caller having to list them.
+        statement = restrict(
+            select(Dataset).where(Dataset.project_id == (payload.project_id or None)),
+            scope_for(db, user).filter(Dataset.project_id),
+        )
+        targets = list(db.scalars(statement).all())
+    else:
+        targets = []
+        for dataset_id in payload.ids:
+            dataset = db.get(Dataset, dataset_id)
+            if dataset is not None and can_view(db, user, dataset.project_id):
+                targets.append(dataset)
+
+    targets = [
+        dataset
+        for dataset in targets
+        if not dataset.project_id or can_edit(db, user, dataset.project_id, Role.manager)
+    ]
+    if not targets:
+        raise HTTPException(status_code=404, detail="Nothing to delete")
+
+    names = [dataset.name for dataset in targets]
+    for dataset in targets:
+        delete_dataset_files(dataset)
+        db.delete(dataset)
+    record(
+        db,
+        user=user,
+        action="delete_datasets",
+        entity_type="dataset",
+        detail={"count": len(names), "names": names[:20]},
+    )
+    db.commit()
+    return Message(
+        detail=f"Deleted {len(names)} dataset(s): " + ", ".join(names[:5])
+        + ("…" if len(names) > 5 else "")
+    )
+
+
 @router.delete("/{dataset_id}", response_model=Message)
 def delete_dataset(dataset_id: str, db: DbSession, user: RequireManager) -> Message:
     dataset = get_dataset(dataset_id, db, user)
@@ -501,34 +556,65 @@ def update_variable(
 def run_command(
     dataset_id: str, payload: CommandRequest, db: DbSession, user: RequireManager
 ) -> dict[str, Any]:
-    """Run one Stata-style command against the dataset.
+    """Run a Stata-style script against the dataset, a command per line.
 
     Recorded on the dataset and replayed after a newer export replaces it: a
     variable somebody generated is not in the export file, so otherwise it
     would disappear on exactly the upload this platform is built around.
+
+    A line that fails stops the script, and the response says which line and
+    why. Everything above it has already run - as in a do-file - so it is
+    committed rather than rolled back, and the log says what got through.
     """
     dataset = get_ready_dataset(dataset_id, db, user)
     if dataset.project_id and not can_edit(db, user, dataset.project_id, Role.manager):
         raise HTTPException(status_code=404, detail="Dataset not found")
+
+    done: list[Any] = []
+    failure: str | None = None
     try:
-        result = stata.run(db, dataset, payload.command)
+        done = stata.run_script(db, dataset, payload.command)
+    except stata.ScriptError as exc:
+        done, failure = exc.done, str(exc)
     except (CommandError, ExpressionError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    rebuilt = rebuild_dependents(db, [dataset.id]) if result.data_changed else []
+    if failure and not done:
+        # Nothing ran, so nothing to report but the reason.
+        db.rollback()
+        raise HTTPException(status_code=422, detail=failure)
+
+    result = done[-1]
+    rebuilt = (
+        rebuild_dependents(db, [dataset.id])
+        if any(step.data_changed for step in done)
+        else []
+    )
     record(
         db,
         user=user,
         action="run_command",
         entity_type="dataset",
         entity_id=dataset.id,
-        detail={"command": result.command},
+        detail={"commands": [step.command for step in done]},
     )
     db.commit()
     db.refresh(dataset)
     return {
+        "results": [
+            {
+                "command": step.command,
+                "message": step.message,
+                "variables_added": step.variables_added,
+                "variables_removed": step.variables_removed,
+            }
+            for step in done
+        ],
+        # The last one, kept so a caller that ran a single command still reads
+        # the same fields it always did.
         "command": result.command,
         "message": result.message,
+        "error": failure,
         "rows": dataset.row_count,
         "columns": dataset.column_count,
         "variables_added": result.variables_added,
