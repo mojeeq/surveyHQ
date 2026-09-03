@@ -16,6 +16,7 @@ import type {
   FilterGroup,
   Measure,
   Page,
+  Project,
   QueryResult,
   QuerySpec,
 } from '@/lib/types'
@@ -71,8 +72,32 @@ export default function Explore() {
     queryKey: ['datasets', 'all'],
     queryFn: () => api.get<Page<Dataset>>('/datasets?limit=200&status=ready'),
   })
+  const projects = useQuery({
+    queryKey: ['projects'],
+    queryFn: () => api.get<Project[]>('/projects'),
+  })
 
-  const datasetId = params.get('dataset') ?? datasets.data?.items[0]?.id ?? ''
+  // Both live in the URL, so a link to an analysis lands on the same two
+  // choices rather than resetting to whatever happens to be first.
+  const projectId = params.get('project') ?? ''
+  const inProject = useMemo(
+    () =>
+      (datasets.data?.items ?? []).filter((item) =>
+        projectId === ''
+          ? true
+          : projectId === 'none'
+            ? item.project_id === null
+            : item.project_id === projectId,
+      ),
+    [datasets.data, projectId],
+  )
+
+  const requested = params.get('dataset') ?? ''
+  // A dataset from another project stops being a valid choice the moment the
+  // project filter changes, so fall back rather than showing an empty picker.
+  const datasetId = inProject.some((item) => item.id === requested)
+    ? requested
+    : (inProject[0]?.id ?? '')
 
   const dataset = useQuery({
     queryKey: ['dataset', datasetId],
@@ -106,17 +131,43 @@ export default function Explore() {
         title="Explore"
         description="Build tabulations and charts against any dataset."
         actions={
-          <select
-            className="input w-64"
-            value={datasetId}
-            onChange={(event) => setParams({ dataset: event.target.value })}
-          >
-            {datasets.data.items.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name}
-              </option>
-            ))}
-          </select>
+          <div className="flex flex-wrap items-center gap-2">
+            <select
+              className="input w-52"
+              value={projectId}
+              onChange={(event) =>
+                setParams(
+                  event.target.value ? { project: event.target.value } : {},
+                )
+              }
+            >
+              <option value="">All projects</option>
+              <option value="none">Shared area</option>
+              {projects.data?.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+            <select
+              className="input w-64"
+              value={datasetId}
+              disabled={!inProject.length}
+              onChange={(event) =>
+                setParams(
+                  projectId
+                    ? { project: projectId, dataset: event.target.value }
+                    : { dataset: event.target.value },
+                )
+              }
+            >
+              {inProject.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </div>
         }
       />
 
@@ -129,7 +180,15 @@ export default function Explore() {
         onChange={(id) => setMode(id as 'aggregate' | 'crosstab')}
       />
 
-      {dataset.isLoading ? (
+      {!inProject.length ? (
+        <Card className="mt-4">
+          <EmptyState
+            icon="▤"
+            title="Nothing to analyse in this project"
+            description="Assign a dataset to it from the Datasets page, or upload straight into it."
+          />
+        </Card>
+      ) : dataset.isLoading ? (
         <Loading />
       ) : !dataset.data ? (
         <ErrorNote error={new Error('Dataset could not be loaded')} />

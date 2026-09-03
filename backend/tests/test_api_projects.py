@@ -434,3 +434,140 @@ def test_by_id_access_is_scoped_too_not_only_listings(client, auth_headers, data
     client.patch(
         f"/api/v1/users/{member['id']}", headers=auth_headers, json={"role": "analyst"}
     )
+
+
+def test_relationships_are_detected_from_the_data_and_can_be_merged(
+    client, auth_headers
+):
+    """A survey export is several tables that only mean something joined.
+
+    Detection reads the data rather than the column names: whether a key is
+    unique on each side is what tells one-to-many from many-to-many, and that is
+    a fact about values.
+    """
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Relationship test"}
+    ).json()
+
+    # One interview-level table and one roster, shaped like a real export
+    archive = _zip_bytes(
+        {
+            "rel_main.dta": _stata_bytes(
+                pd.DataFrame(
+                    {
+                        "interview__id": ["i1", "i2", "i3"],
+                        "province": [1.0, 2.0, 1.0],
+                    }
+                )
+            ),
+            "rel_people.dta": _stata_bytes(
+                pd.DataFrame(
+                    {
+                        "interview__id": ["i1", "i1", "i2"],
+                        "age": [40.0, 9.0, 33.0],
+                    }
+                )
+            ),
+        }
+    )
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("export.zip", archive, "application/zip")},
+        data={"project_id": project["id"]},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+
+    detected = client.post(
+        f"/api/v1/relationships/detect?project_id={project['id']}", headers=auth_headers
+    )
+    assert detected.status_code == 200, detected.text
+    proposals = detected.json()["proposed"]
+    assert len(proposals) == 1, proposals
+    link = proposals[0]
+    # rel_main is unique on the key and rel_people is not, so main is the "one"
+    assert {link["left_name"], link["right_name"]} == {"rel_main", "rel_people"}
+    assert link["cardinality"] in ("one_to_many", "many_to_one")
+    assert link["left_variable"] == "interview__id"
+
+    stored = client.get(
+        f"/api/v1/relationships?project_id={project['id']}", headers=auth_headers
+    ).json()
+    assert len(stored) == 1
+    relationship = stored[0]
+
+    merged = client.post(
+        "/api/v1/relationships/merge",
+        headers=auth_headers,
+        json={
+            "name": "People with their interview",
+            "relationship_id": relationship["id"],
+            "how": "inner",
+        },
+    )
+    assert merged.status_code == 201, merged.text
+    body = merged.json()
+    # Three people rows match an interview... except i3 has nobody, and one
+    # person belongs to i2. Whichever way round, an inner join keeps 3 rows.
+    assert body["row_count"] == 3
+    assert body["derivation"]["type"] == "merge"
+    names = {v["name"] for v in body["variables"]}
+    assert {"province", "age"} <= names, names
+
+    # Rebuilding re-runs the recipe rather than needing it redone by hand
+    rebuilt = client.post(
+        f"/api/v1/relationships/rebuild/{body['id']}", headers=auth_headers
+    )
+    assert rebuilt.status_code == 200, rebuilt.text
+    assert rebuilt.json()["row_count"] == 3
+    assert rebuilt.json()["version"] > body["version"]
+
+
+def test_a_many_to_many_link_refuses_to_merge(client, auth_headers):
+    """Joining two rosters on the interview multiplies rows rather than adding
+    columns, and the row count afterwards would look like real fieldwork."""
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Two rosters"}
+    ).json()
+    archive = _zip_bytes(
+        {
+            "roster_a.dta": _stata_bytes(
+                pd.DataFrame({"interview__id": ["i1", "i1", "i2"], "crop": [1.0, 2.0, 3.0]})
+            ),
+            "roster_b.dta": _stata_bytes(
+                pd.DataFrame({"interview__id": ["i1", "i1", "i2"], "animal": [1.0, 2.0, 3.0]})
+            ),
+        }
+    )
+    client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("rosters.zip", archive, "application/zip")},
+        data={"project_id": project["id"]},
+    )
+    client.post(
+        f"/api/v1/relationships/detect?project_id={project['id']}", headers=auth_headers
+    )
+    stored = client.get(
+        f"/api/v1/relationships?project_id={project['id']}", headers=auth_headers
+    ).json()
+    assert len(stored) == 1
+    assert stored[0]["cardinality"] == "many_to_many"
+    # Recorded, but not switched on for anyone to merge by accident
+    assert stored[0]["is_active"] is False
+
+    refused = client.post(
+        "/api/v1/relationships/merge",
+        headers=auth_headers,
+        json={"name": "Nonsense", "relationship_id": stored[0]["id"]},
+    )
+    assert refused.status_code == 422
+    assert "multiply rows" in refused.json()["detail"]

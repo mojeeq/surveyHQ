@@ -39,6 +39,10 @@ from app.models.project import (
     ProjectMember,
     ProjectStatus,
 )
+from app.models.relationship import (
+    Cardinality,
+    DatasetRelationship,
+)
 from app.models.system import (
     AuditLog,
     Job,
@@ -89,4 +93,6 @@ __all__ = [
     "Project",
     "ProjectMember",
     "ProjectStatus",
+    "DatasetRelationship",
+    "Cardinality",
 ]

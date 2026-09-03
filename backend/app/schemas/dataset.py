@@ -44,6 +44,8 @@ class DatasetOut(BaseModel):
     column_count: int = 0
     file_size: int = 0
     tags: list[str] = Field(default_factory=list)
+    # Non-empty when this dataset was built from others and can be rebuilt.
+    derivation: dict[str, Any] = Field(default_factory=dict)
     meta: dict[str, Any] = Field(default_factory=dict)
     version: int = 1
     refreshed_at: dt.datetime | None = None
