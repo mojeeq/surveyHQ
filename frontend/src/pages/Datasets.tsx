@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { formatBytes, formatNumber, relativeTime } from '@/lib/format'
-import type { ArchiveImport, Dataset, Page } from '@/lib/types'
+import type { ArchiveImport, Dataset, Page, Project } from '@/lib/types'
 import ProjectPicker from '@/components/ProjectPicker'
 import {
   Badge,
@@ -26,13 +26,51 @@ export default function Datasets() {
   const toast = useToast()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
-  const [uploadOpen, setUploadOpen] = useState(false)
+  const [uploadInto, setUploadInto] = useState<string | null>(null)
+  const [showParadata, setShowParadata] = useState(false)
 
   const datasets = useQuery({
     queryKey: ['datasets', search],
     queryFn: () =>
-      api.get<Page<Dataset>>(`/datasets?limit=100&search=${encodeURIComponent(search)}`),
+      api.get<Page<Dataset>>(`/datasets?limit=200&search=${encodeURIComponent(search)}`),
   })
+  const projects = useQuery({
+    queryKey: ['projects'],
+    queryFn: () => api.get<Project[]>('/projects'),
+  })
+
+  /**
+   * Datasets under the project they belong to, with the shared area last.
+   *
+   * A survey export produces eight datasets at once, most of them roster levels
+   * and paradata, so a flat list of every dataset stops being readable after
+   * two projects. Grouping is what makes "which data belongs to this round"
+   * answerable at a glance.
+   */
+  const grouped = useMemo(() => {
+    const all = (datasets.data?.items ?? []).filter(
+      (d) => showParadata || !d.tags.includes('paradata'),
+    )
+    const byProject = new Map<string, Dataset[]>()
+    for (const dataset of all) {
+      const key = dataset.project_id ?? ''
+      byProject.set(key, [...(byProject.get(key) ?? []), dataset])
+    }
+    const groups = (projects.data ?? []).map((project) => ({
+      id: project.id,
+      name: project.name,
+      datasets: byProject.get(project.id) ?? [],
+    }))
+    const shared = byProject.get('') ?? []
+    if (shared.length) {
+      groups.push({ id: '', name: 'Shared area', datasets: shared })
+    }
+    return groups
+  }, [datasets.data, projects.data, showParadata])
+
+  const hiddenParadata = (datasets.data?.items ?? []).filter((d) =>
+    d.tags.includes('paradata'),
+  ).length
 
   const remove = useMutation({
     mutationFn: (id: string) => api.delete(`/datasets/${id}`),
@@ -50,20 +88,30 @@ export default function Datasets() {
         description="Survey data imported from files or pulled from a Survey Solutions server."
         actions={
           can('manager') && (
-            <button className="btn-primary" onClick={() => setUploadOpen(true)}>
+            <button className="btn-primary" onClick={() => setUploadInto('')}>
               Upload data
             </button>
           )
         }
       />
 
-      <div className="mb-4 flex gap-2">
+      <div className="mb-4 flex flex-wrap items-center gap-3">
         <input
           className="input max-w-xs"
           placeholder="Search datasets…"
           value={search}
           onChange={(event) => setSearch(event.target.value)}
         />
+        {hiddenParadata > 0 && (
+          <label className="flex items-center gap-2 text-sm text-ink-600">
+            <input
+              type="checkbox"
+              checked={showParadata}
+              onChange={(event) => setShowParadata(event.target.checked)}
+            />
+            Show paradata ({hiddenParadata})
+          </label>
+        )}
       </div>
 
       {datasets.isLoading ? (
@@ -82,7 +130,7 @@ export default function Datasets() {
             }
             action={
               can('manager') && !search ? (
-                <button className="btn-primary btn-sm" onClick={() => setUploadOpen(true)}>
+                <button className="btn-primary btn-sm" onClick={() => setUploadInto('')}>
                   Upload your first dataset
                 </button>
               ) : undefined
@@ -90,69 +138,44 @@ export default function Datasets() {
           />
         </Card>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {datasets.data.items.map((dataset) => (
-            <article key={dataset.id} className="card flex flex-col p-5">
-              <div className="flex items-start justify-between gap-2">
-                <Link
-                  to={`/datasets/${dataset.id}`}
-                  className="min-w-0 flex-1 text-base font-semibold text-ink-900 hover:text-brand-700"
-                >
-                  {dataset.name}
-                </Link>
-                <StatusBadge status={dataset.status} />
-              </div>
-
-              {dataset.description && (
-                <p className="mt-1 line-clamp-2 text-sm text-ink-500">{dataset.description}</p>
-              )}
-
-              <dl className="mt-4 grid grid-cols-3 gap-2 text-center">
-                <div>
-                  <dt className="text-[11px] uppercase text-ink-400">Rows</dt>
-                  <dd className="text-sm font-semibold tabular-nums">
-                    {formatNumber(dataset.row_count)}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-[11px] uppercase text-ink-400">Columns</dt>
-                  <dd className="text-sm font-semibold tabular-nums">{dataset.column_count}</dd>
-                </div>
-                <div>
-                  <dt className="text-[11px] uppercase text-ink-400">Size</dt>
-                  <dd className="text-sm font-semibold">{formatBytes(dataset.file_size)}</dd>
-                </div>
-              </dl>
-
-              {dataset.status === 'failed' && dataset.error && (
-                <p className="mt-3 rounded border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-700">
-                  {dataset.error}
-                </p>
-              )}
-
-              <div className="mt-4 flex flex-wrap items-center gap-1.5">
-                {dataset.source === 'survey_solutions' && (
-                  <Badge tone="info" icon="⇄">
-                    Survey Solutions
-                  </Badge>
-                )}
-                {dataset.tags.map((tag) => (
-                  <Badge key={tag}>{tag}</Badge>
-                ))}
-              </div>
-
-              <div className="mt-4 flex items-center justify-between border-t border-ink-100 pt-3">
+        <div className="space-y-8">
+          {grouped.map((group) => (
+            <section key={group.id || 'shared'}>
+              <header className="mb-3 flex flex-wrap items-center gap-3 border-b border-ink-200 pb-2">
+                <h2 className="text-sm font-semibold text-ink-800">
+                  {group.id ? (
+                    <Link to={`/projects/${group.id}`} className="hover:text-brand-700">
+                      {group.name}
+                    </Link>
+                  ) : (
+                    group.name
+                  )}
+                </h2>
                 <span className="text-xs text-ink-400">
-                  Updated {relativeTime(dataset.refreshed_at ?? dataset.updated_at)}
+                  {group.datasets.length} dataset{group.datasets.length === 1 ? '' : 's'}
                 </span>
-                <div className="flex gap-1">
-                  <Link to={`/explore?dataset=${dataset.id}`} className="btn-ghost btn-sm">
-                    Analyse
-                  </Link>
-                  {can('manager') && (
-                    <button
-                      className="btn-ghost btn-sm text-red-600"
-                      onClick={() => {
+                {can('manager') && (
+                  <button
+                    className="btn-ghost btn-sm ml-auto"
+                    onClick={() => setUploadInto(group.id)}
+                  >
+                    + Upload into {group.id ? 'this project' : 'the shared area'}
+                  </button>
+                )}
+              </header>
+
+              {!group.datasets.length ? (
+                <p className="py-3 text-sm text-ink-400">
+                  Nothing here yet.
+                </p>
+              ) : (
+                <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                  {group.datasets.map((dataset) => (
+                    <DatasetCard
+                      key={dataset.id}
+                      dataset={dataset}
+                      canManage={can('manager')}
+                      onDelete={() => {
                         if (
                           confirm(
                             `Delete "${dataset.name}"? Charts and indicators built on it will stop working.`,
@@ -160,19 +183,104 @@ export default function Datasets() {
                         )
                           remove.mutate(dataset.id)
                       }}
-                    >
-                      Delete
-                    </button>
-                  )}
+                    />
+                  ))}
                 </div>
-              </div>
-            </article>
+              )}
+            </section>
           ))}
         </div>
       )}
 
-      <UploadModal open={uploadOpen} onClose={() => setUploadOpen(false)} />
+      <UploadModal
+        open={uploadInto !== null}
+        projectId={uploadInto ?? ''}
+        onClose={() => setUploadInto(null)}
+      />
     </>
+  )
+}
+
+/**
+ * One dataset in the list. Extracted so each project section renders the same
+ * card rather than the page repeating it per group.
+ */
+function DatasetCard({
+  dataset,
+  canManage,
+  onDelete,
+}: {
+  dataset: Dataset
+  canManage: boolean
+  onDelete: () => void
+}) {
+  return (
+    <article className="card flex flex-col p-5">
+      <div className="flex items-start justify-between gap-2">
+        <Link
+          to={`/datasets/${dataset.id}`}
+          className="min-w-0 flex-1 text-base font-semibold text-ink-900 hover:text-brand-700"
+        >
+          {dataset.name}
+        </Link>
+        <StatusBadge status={dataset.status} />
+      </div>
+
+      {dataset.description && (
+        <p className="mt-1 line-clamp-2 text-sm text-ink-500">{dataset.description}</p>
+      )}
+
+      <dl className="mt-4 grid grid-cols-3 gap-2 text-center">
+        <div>
+          <dt className="text-[11px] uppercase text-ink-400">Rows</dt>
+          <dd className="text-sm font-semibold tabular-nums">
+            {formatNumber(dataset.row_count)}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-[11px] uppercase text-ink-400">Columns</dt>
+          <dd className="text-sm font-semibold tabular-nums">{dataset.column_count}</dd>
+        </div>
+        <div>
+          <dt className="text-[11px] uppercase text-ink-400">Size</dt>
+          <dd className="text-sm font-semibold">{formatBytes(dataset.file_size)}</dd>
+        </div>
+      </dl>
+
+      {dataset.status === 'failed' && dataset.error && (
+        <p className="mt-3 rounded border border-red-200 bg-red-50 px-2 py-1.5 text-xs text-red-700">
+          {dataset.error}
+        </p>
+      )}
+
+      <div className="mt-4 flex flex-wrap items-center gap-1.5">
+        {dataset.source === 'survey_solutions' && (
+          <Badge tone="info" icon="⇄">
+            Survey Solutions
+          </Badge>
+        )}
+        {dataset.source === 'derived' && <Badge tone="info">merged</Badge>}
+        {dataset.tags.map((tag) => (
+          <Badge key={tag}>{tag}</Badge>
+        ))}
+      </div>
+
+      <div className="mt-4 flex items-center justify-between border-t border-ink-100 pt-3">
+        <span className="text-xs text-ink-400">
+          Updated {relativeTime(dataset.refreshed_at ?? dataset.updated_at)}
+        </span>
+        <div className="flex gap-1">
+          <Link to={`/explore?dataset=${dataset.id}`} className="btn-ghost btn-sm">
+            Analyse
+          </Link>
+          {canManage && (
+            <button className="btn-ghost btn-sm text-red-600" onClick={onDelete}>
+              Delete
+            </button>
+          )}
+        </div>
+      </div>
+    </article>
   )
 }
 
@@ -182,7 +290,16 @@ function StatusBadge({ status }: { status: Dataset['status'] }) {
   return <Badge tone="warning" icon="◷">{status}</Badge>
 }
 
-function UploadModal({ open, onClose }: { open: boolean; onClose: () => void }) {
+function UploadModal({
+  open,
+  projectId: initialProject,
+  onClose,
+}: {
+  open: boolean
+  /** Preselected from the section the upload was started in. */
+  projectId: string
+  onClose: () => void
+}) {
   const toast = useToast()
   const queryClient = useQueryClient()
   const fileRef = useRef<HTMLInputElement>(null)
@@ -190,12 +307,18 @@ function UploadModal({ open, onClose }: { open: boolean; onClose: () => void }) 
   const [description, setDescription] = useState('')
   const [tags, setTags] = useState('')
   const [combineAll, setCombineAll] = useState(false)
-  const [projectId, setProjectId] = useState('')
+  const [projectId, setProjectId] = useState(initialProject)
   const [mode, setMode] = useState<'replace' | 'append'>('replace')
   const [isZip, setIsZip] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [result, setResult] = useState<ArchiveImport | null>(null)
+
+  // The modal is kept mounted, so a fresh open from another section has to
+  // move the selection rather than keep the last one.
+  useEffect(() => {
+    if (open) setProjectId(initialProject)
+  }, [open, initialProject])
 
   const submit = async () => {
     const file = fileRef.current?.files?.[0]
