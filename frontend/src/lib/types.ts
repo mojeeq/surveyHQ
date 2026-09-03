@@ -414,6 +414,8 @@ export interface Indicator {
   critical_threshold: number | null
   direction: Direction
   breakdown_variable: string
+  /** '' for a plain number, or what the value is a percentage of. */
+  percent_of?: '' | 'all_rows' | 'answered'
   is_active: boolean
   display_order: number
   last_value: number | null
@@ -432,6 +434,7 @@ export interface IndicatorValue {
   status: IndicatorState
   direction: Direction
   breakdown: Record<string, number>
+  breakdown_variable: string
   computed_at: string | null
   error: string | null
   trend: { t: string; v: number | null }[]

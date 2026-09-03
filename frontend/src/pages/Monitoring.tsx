@@ -10,11 +10,13 @@ import type {
   Aggregation,
   Dataset,
   Direction,
+  FilterGroup,
   Indicator,
   IndicatorValue,
   Page,
 } from '@/lib/types'
 import ChartCard from '@/components/ChartCard'
+import FilterBuilder, { emptyFilter } from '@/components/FilterBuilder'
 import {
   Badge,
   Card,
@@ -248,21 +250,53 @@ function IndicatorCard({
   )
 }
 
-const AGGS: { value: Aggregation; label: string; needsVariable: boolean }[] = [
-  { value: 'count', label: 'Count of records', needsVariable: false },
-  { value: 'sum', label: 'Sum of', needsVariable: true },
-  { value: 'mean', label: 'Mean of', needsVariable: true },
-  { value: 'median', label: 'Median of', needsVariable: true },
-  { value: 'count_distinct', label: 'Distinct count of', needsVariable: true },
+/**
+ * What an indicator counts, in the words the answer is usually asked in.
+ *
+ * The creator used to offer only aggregations of a numeric variable, which
+ * quietly ruled out most of a questionnaire: a status, a yes/no, a chosen
+ * option are all categorical, and the number wanted from them is how many rows
+ * are in a given category - or, far more often, what share of the rows are.
+ */
+const MEASURES: {
+  value: MeasureKind
+  label: string
+  agg: Aggregation
+  needsVariable: boolean
+  numericOnly: boolean
+}[] = [
+  { value: 'records', label: 'Records', agg: 'count', needsVariable: false, numericOnly: false },
+  {
+    value: 'answered',
+    label: 'Records that answered a question',
+    agg: 'count',
+    needsVariable: true,
+    numericOnly: false,
+  },
+  { value: 'sum', label: 'Sum of', agg: 'sum', needsVariable: true, numericOnly: true },
+  { value: 'mean', label: 'Mean of', agg: 'mean', needsVariable: true, numericOnly: true },
+  { value: 'median', label: 'Median of', agg: 'median', needsVariable: true, numericOnly: true },
+  {
+    value: 'distinct',
+    label: 'Different values of',
+    agg: 'count_distinct',
+    needsVariable: true,
+    numericOnly: false,
+  },
 ]
+
+type MeasureKind = 'records' | 'answered' | 'sum' | 'mean' | 'median' | 'distinct'
+type PercentOf = '' | 'all_rows' | 'answered'
 
 function IndicatorModal({ onClose }: { onClose: () => void }) {
   const toast = useToast()
   const queryClient = useQueryClient()
   const [datasetId, setDatasetId] = useState('')
   const [name, setName] = useState('')
-  const [agg, setAgg] = useState<Aggregation>('count')
+  const [kind, setKind] = useState<MeasureKind>('records')
   const [variable, setVariable] = useState('')
+  const [where, setWhere] = useState<FilterGroup>(emptyFilter())
+  const [percentOf, setPercentOf] = useState<PercentOf>('')
   const [breakdown, setBreakdown] = useState('')
   const [target, setTarget] = useState('')
   const [warning, setWarning] = useState('')
@@ -282,6 +316,13 @@ function IndicatorModal({ onClose }: { onClose: () => void }) {
   const variables = dataset.data?.variables ?? []
   const numeric = variables.filter((v) => v.var_type === 'numeric')
   const groupable = variables.filter((v) => v.var_type === 'categorical' || v.n_unique <= 100)
+  const measure = MEASURES.find((m) => m.value === kind)!
+  const choices = measure.numericOnly ? numeric : variables
+  const isPercent = percentOf !== ''
+
+  // Only a counted measure has a meaningful share: the mean of a variable is
+  // not a portion of anything, and dividing it by a row count says nothing.
+  const canBePercent = kind === 'records' || kind === 'answered'
 
   const create = useMutation({
     mutationFn: () =>
@@ -290,12 +331,22 @@ function IndicatorModal({ onClose }: { onClose: () => void }) {
         dataset_id: datasetId,
         spec: {
           dimensions: [],
-          measures: [{ agg, variable: variable || null, alias: 'value' }],
-          filters: { op: 'and', conditions: [], groups: [] },
+          measures: [
+            {
+              agg: measure.agg,
+              variable: measure.needsVariable ? variable : null,
+              alias: 'value',
+            },
+          ],
+          filters: where,
           sort: [],
           limit: 1,
         },
         breakdown_variable: breakdown,
+        percent_of: canBePercent ? percentOf : '',
+        // A percentage says so in how it is written, rather than in a unit
+        // typed by hand that the tile would then print twice.
+        value_format: isPercent && canBePercent ? 'percent' : 'number',
         target_value: target ? Number(target) : null,
         warning_threshold: warning ? Number(warning) : null,
         critical_threshold: critical ? Number(critical) : null,
@@ -310,7 +361,7 @@ function IndicatorModal({ onClose }: { onClose: () => void }) {
     onError: (error: Error) => toast.push(error.message, 'error'),
   })
 
-  const needsVariable = AGGS.find((a) => a.value === agg)?.needsVariable
+  const ready = name && datasetId && (!measure.needsVariable || variable)
 
   return (
     <Modal
@@ -326,7 +377,7 @@ function IndicatorModal({ onClose }: { onClose: () => void }) {
           <button
             className="btn-primary"
             onClick={() => create.mutate()}
-            disabled={!name || !datasetId || create.isPending}
+            disabled={!ready || create.isPending}
           >
             {create.isPending && <Spinner className="h-4 w-4 text-white" />}
             Create indicator
@@ -340,7 +391,7 @@ function IndicatorModal({ onClose }: { onClose: () => void }) {
             className="input"
             value={name}
             onChange={(event) => setName(event.target.value)}
-            placeholder="Completed interviews"
+            placeholder="Completion rate"
           />
         </Field>
         <Field label="Dataset">
@@ -351,6 +402,7 @@ function IndicatorModal({ onClose }: { onClose: () => void }) {
               setDatasetId(event.target.value)
               setVariable('')
               setBreakdown('')
+              setWhere(emptyFilter())
             }}
           >
             <option value="">Choose a dataset…</option>
@@ -361,28 +413,33 @@ function IndicatorModal({ onClose }: { onClose: () => void }) {
             ))}
           </select>
         </Field>
-        <Field label="Measure">
+        <Field label="Count">
           <select
             className="input"
-            value={agg}
-            onChange={(event) => setAgg(event.target.value as Aggregation)}
+            value={kind}
+            onChange={(event) => {
+              const next = event.target.value as MeasureKind
+              setKind(next)
+              setVariable('')
+              if (next !== 'records' && next !== 'answered') setPercentOf('')
+            }}
           >
-            {AGGS.map((option) => (
+            {MEASURES.map((option) => (
               <option key={option.value} value={option.value}>
                 {option.label}
               </option>
             ))}
           </select>
         </Field>
-        {needsVariable && (
-          <Field label="Variable">
+        {measure.needsVariable && (
+          <Field label={measure.numericOnly ? 'Numeric variable' : 'Variable'}>
             <select
               className="input"
               value={variable}
               onChange={(event) => setVariable(event.target.value)}
             >
               <option value="">Choose a variable…</option>
-              {numeric.map((v) => (
+              {choices.map((v) => (
                 <option key={v.name} value={v.name}>
                   {v.label ? `${v.name} — ${v.label}` : v.name}
                 </option>
@@ -390,7 +447,45 @@ function IndicatorModal({ onClose }: { onClose: () => void }) {
             </select>
           </Field>
         )}
-        <Field label="Break down by" hint="Optional. Shows the indicator per region, team, etc.">
+      </div>
+
+      <Field
+        label="Only the records where"
+        hint="Optional. This is where a status, a yes/no or a chosen option goes - the values are offered by name."
+      >
+        {datasetId ? (
+          <FilterBuilder variables={variables} value={where} onChange={setWhere} />
+        ) : (
+          <p className="text-xs text-ink-400">Choose a dataset first.</p>
+        )}
+      </Field>
+
+      {canBePercent && (
+        <Field
+          label="Report it as"
+          hint="A share is what a target is usually set against: 90% completed, not 900 completed."
+        >
+          <select
+            className="input"
+            value={percentOf}
+            onChange={(event) => setPercentOf(event.target.value as PercentOf)}
+          >
+            <option value="">A count</option>
+            <option value="all_rows">A percentage of every record</option>
+            {variable && (
+              <option value="answered">
+                A percentage of the records that answered {variable}
+              </option>
+            )}
+          </select>
+        </Field>
+      )}
+
+      <div className="grid gap-x-4 sm:grid-cols-2">
+        <Field
+          label="Break down by"
+          hint="Optional. Shows the indicator per region, team, etc. - and can go on a dashboard as a chart."
+        >
           <select
             className="input"
             value={breakdown}
@@ -399,12 +494,15 @@ function IndicatorModal({ onClose }: { onClose: () => void }) {
             <option value="">No breakdown</option>
             {groupable.map((v) => (
               <option key={v.name} value={v.name}>
-                {v.name}
+                {v.label ? `${v.name} — ${v.label}` : v.name}
               </option>
             ))}
           </select>
         </Field>
-        <Field label="Target value" hint="Used for the progress bar">
+        <Field
+          label={isPercent ? 'Target (%)' : 'Target value'}
+          hint={isPercent ? 'e.g. 90 for nine in ten' : 'Used for the progress bar'}
+        >
           <input
             className="input"
             type="number"
@@ -423,7 +521,8 @@ function IndicatorModal({ onClose }: { onClose: () => void }) {
             <option value="neutral">Neither</option>
           </select>
         </Field>
-        <Field label="Warning threshold">
+        <div />
+        <Field label={isPercent ? 'Warning threshold (%)' : 'Warning threshold'}>
           <input
             className="input"
             type="number"
@@ -431,7 +530,7 @@ function IndicatorModal({ onClose }: { onClose: () => void }) {
             onChange={(event) => setWarning(event.target.value)}
           />
         </Field>
-        <Field label="Critical threshold">
+        <Field label={isPercent ? 'Critical threshold (%)' : 'Critical threshold'}>
           <input
             className="input"
             type="number"

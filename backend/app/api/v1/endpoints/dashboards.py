@@ -17,6 +17,7 @@ from app.api.deps import (
     get_ready_dataset,
 )
 from app.core.security import new_public_token
+from app.db.base import utcnow
 from app.models import (
     Chart,
     Dashboard,
@@ -55,7 +56,11 @@ from app.services.dashboard_assets import (
     save_background,
 )
 from app.services.datasets import dataset_is_queryable
-from app.services.monitoring import indicator_status, progress_percent
+from app.services.monitoring import (
+    evaluate_indicator,
+    indicator_status,
+    progress_percent,
+)
 from app.services.projects import can_edit, can_view, dataset_clause, restrict, scope_for
 from app.services.query_engine import (
     DatasetContext,
@@ -625,18 +630,35 @@ def _render_widget(
         indicator = db.get(Indicator, widget.indicator_id)
         if indicator is None:
             return {"error": "Indicator no longer exists"}
+
+        value = indicator.last_value
+        computed_at = indicator.last_computed_at
+        breakdown: dict[str, float] = {}
+        wants_breakdown = bool((widget.config or {}).get("show_breakdown"))
+        if wants_breakdown and indicator.breakdown_variable:
+            # Evaluated rather than read off the stored value, because a
+            # breakdown that was computed at a different moment from the
+            # headline above it would not add up to it - and the two sitting in
+            # one tile invite exactly that comparison.
+            outcome = evaluate_indicator(db, indicator)
+            if outcome.get("error"):
+                return {"error": outcome["error"]}
+            value = outcome["value"]
+            breakdown = outcome["breakdown"]
+            computed_at = utcnow()
+
         return {
             "type": "indicator",
             "name": indicator.name,
-            "value": indicator.last_value,
+            "value": value,
             "unit": indicator.unit,
             "value_format": indicator.value_format,
             "target_value": indicator.target_value,
-            "progress_percent": progress_percent(indicator, indicator.last_value),
-            "status": indicator_status(indicator, indicator.last_value),
-            "computed_at": (
-                indicator.last_computed_at.isoformat() if indicator.last_computed_at else None
-            ),
+            "progress_percent": progress_percent(indicator, value),
+            "status": indicator_status(indicator, value),
+            "breakdown": breakdown,
+            "breakdown_variable": indicator.breakdown_variable if wants_breakdown else "",
+            "computed_at": computed_at.isoformat() if computed_at else None,
         }
 
     if widget.widget_type.value == "countdown":

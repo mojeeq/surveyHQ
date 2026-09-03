@@ -23,7 +23,7 @@ from app.models import (
     Severity,
     User,
 )
-from app.schemas.query import Dimension, QuerySpec
+from app.schemas.query import Aggregation, Condition, Dimension, FilterGroup, Measure, QuerySpec
 from app.services.datasets import dataset_is_queryable
 from app.services.query_engine import DatasetContext, QueryError, execute_query
 
@@ -86,7 +86,82 @@ def evaluate_indicator(db: Session, indicator: Indicator) -> dict[str, Any]:
         except QueryError as exc:
             logger.warning("Breakdown failed for indicator %s: %s", indicator.name, exc)
 
+    if indicator.percent_of:
+        try:
+            value, breakdown = _as_percentages(ctx, indicator, spec, value, breakdown)
+        except QueryError as exc:
+            return {"value": None, "error": str(exc), "breakdown": {}}
+
     return {"value": value, "breakdown": breakdown, "error": None}
+
+
+def _denominator_spec(indicator: Indicator, spec: QuerySpec) -> QuerySpec:
+    """The query the indicator's own count is a share of.
+
+    Its filters are dropped, which is the whole point: the indicator's filters
+    are what select the rows being counted - completed interviews, households
+    with electricity - and the share is of the rows those were chosen from.
+    """
+    keep = FilterGroup()
+    if indicator.percent_of == "answered":
+        # "Of those who answered" needs the rows where the measured variable is
+        # present. Without a measured variable there is nothing to have
+        # answered, so this falls back to every row.
+        measured = next((m.variable for m in spec.measures if m.variable), None)
+        if measured:
+            keep = FilterGroup(conditions=[Condition(variable=measured, operator="is_not_null")])
+    return QuerySpec(
+        dimensions=[],
+        measures=[Measure(agg=Aggregation.count, alias="value")],
+        filters=keep,
+        limit=1,
+    )
+
+
+def _as_percentages(
+    ctx: DatasetContext,
+    indicator: Indicator,
+    spec: QuerySpec,
+    value: float | None,
+    breakdown: dict[str, float],
+) -> tuple[float | None, dict[str, float]]:
+    """Turn a count and its breakdown into percentages of their own totals.
+
+    Each group is divided by its own total rather than by the whole: "72% in
+    Shefa" means 72% of Shefa's interviews, not that Shefa holds 72% of the
+    completed ones. The second reading is what a share-of-total chart already
+    says, and it answers a different question from the one a target is set on.
+    """
+    denominator = _denominator_spec(indicator, spec)
+    total_result = execute_query(ctx, denominator)
+    total = 0.0
+    if total_result.rows and total_result.rows[0] and total_result.rows[0][0] is not None:
+        total = float(total_result.rows[0][0])
+    percent = round(value / total * 100, 2) if total and value is not None else None
+
+    if not breakdown:
+        return percent, {}
+
+    per_group = denominator.model_copy(
+        update={
+            "dimensions": [Dimension(variable=indicator.breakdown_variable)],
+            "limit": 200,
+        }
+    )
+    totals: dict[str, float] = {}
+    for row in execute_query(ctx, per_group).rows:
+        key = "(missing)" if row[0] is None else str(row[0])
+        totals[key] = float(row[1]) if row[1] is not None else 0.0
+
+    shares: dict[str, float] = {}
+    # Driven by the denominator, not the numerator: a region where nothing
+    # matched still has a rate, and it is 0%. Leaving it out would read as
+    # "no data from there", which is the opposite of what happened.
+    for key, group_total in totals.items():
+        # A group with no rows behind it genuinely has no rate to report.
+        if group_total:
+            shares[key] = round(breakdown.get(key, 0.0) / group_total * 100, 2)
+    return percent, shares
 
 
 def indicator_status(indicator: Indicator, value: float | None) -> str:

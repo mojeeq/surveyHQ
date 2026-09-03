@@ -451,7 +451,7 @@ function WidgetFrame({
             {payload.error}
           </p>
         ) : payload.type === 'indicator' ? (
-          <IndicatorWidget payload={payload} />
+          <IndicatorWidget payload={payload} theme={theme} />
         ) : payload.type === 'quality' ? (
           <QualityWidget payload={payload} />
         ) : payload.type === 'crosstab' ? (
@@ -696,10 +696,13 @@ function QualityWidget({ payload }: { payload: any }) {
   )
 }
 
-function IndicatorWidget({ payload }: { payload: any }) {
+function IndicatorWidget({ payload, theme }: { payload: any; theme: string }) {
   const color = STATUS_COLORS[payload.status as keyof typeof STATUS_COLORS] ?? STATUS_COLORS.unknown
+  const breakdown: Record<string, number> = payload.breakdown ?? {}
+  const groups = Object.entries(breakdown)
+
   return (
-    <div className="flex h-full flex-col justify-center">
+    <div className={`flex h-full flex-col ${groups.length ? '' : 'justify-center'}`}>
       <p className="text-3xl font-semibold tabular-nums text-ink-900">
         {formatValue(payload.value, payload.value_format, payload.unit)}
       </p>
@@ -725,6 +728,40 @@ function IndicatorWidget({ payload }: { payload: any }) {
         <p className="mt-2 text-[11px] text-ink-400">
           Updated {relativeTime(payload.computed_at)}
         </p>
+      )}
+
+      {/* The headline is an average of something. Which regions or teams are
+          behind it is the next question, and it used to need another page. */}
+      {groups.length > 0 && (
+        <div className="mt-3 min-h-0 flex-1">
+          <ChartCard
+            showToggle={false}
+            chartType="horizontal_bar"
+            fill
+            theme={theme}
+            result={{
+              columns: [
+                {
+                  name: 'group',
+                  label: payload.breakdown_variable || 'Group',
+                  type: 'dimension',
+                  data_type: 'text',
+                },
+                {
+                  name: 'value',
+                  label: payload.name ?? 'Value',
+                  type: 'measure',
+                  data_type: 'number',
+                },
+              ],
+              rows: groups.map(([key, value]) => [key, value]),
+              row_count: groups.length,
+              truncated: false,
+              sql: '',
+              duration_ms: 0,
+            }}
+          />
+        </div>
       )}
     </div>
   )
@@ -752,6 +789,7 @@ function AddWidgetModal({
   const [content, setContent] = useState('')
   const [deadline, setDeadline] = useState('')
   const [deadlineLabel, setDeadlineLabel] = useState('')
+  const [showBreakdown, setShowBreakdown] = useState(true)
 
   const charts = useQuery({ queryKey: ['charts'], queryFn: () => api.get<Chart[]>('/dashboards/charts') })
   const indicators = useQuery({
@@ -783,7 +821,9 @@ function AddWidgetModal({
         dataset_id: kind === 'quality' ? datasetId : null,
         page,
         config:
-          kind === 'text'
+          kind === 'indicator'
+            ? { show_breakdown: showBreakdown }
+            : kind === 'text'
             ? { content }
             : kind === 'countdown'
               ? // A local datetime from the browser; sent as an instant so the
@@ -791,7 +831,14 @@ function AddWidgetModal({
                 { target: new Date(deadline).toISOString(), label: deadlineLabel }
               : {},
         layout:
-          kind === 'indicator' || kind === 'countdown' ? { w: 3, h: 3 } : { w: 6, h: 4 },
+          kind === 'countdown'
+            ? { w: 3, h: 3 }
+            : kind === 'indicator'
+              ? // A tile with a chart under it needs the room for one.
+                showBreakdown && chosenIndicator?.breakdown_variable
+                ? { w: 4, h: 5 }
+                : { w: 3, h: 3 }
+              : { w: 6, h: 4 },
       }),
     onSuccess: () => {
       toast.push('Widget added', 'success')
@@ -801,6 +848,8 @@ function AddWidgetModal({
     },
     onError: (error: Error) => toast.push(error.message, 'error'),
   })
+
+  const chosenIndicator = indicators.data?.find((i) => i.id === indicatorId)
 
   const canAdd =
     (kind === 'chart' && chartId) ||
@@ -879,6 +928,7 @@ function AddWidgetModal({
       )}
 
       {kind === 'indicator' && (
+        <>
         <Field label="Indicator">
           <select
             className="input"
@@ -893,6 +943,17 @@ function AddWidgetModal({
             ))}
           </select>
         </Field>
+        {chosenIndicator?.breakdown_variable && (
+          <label className="mb-4 flex items-center gap-2 text-sm text-ink-700">
+            <input
+              type="checkbox"
+              checked={showBreakdown}
+              onChange={(event) => setShowBreakdown(event.target.checked)}
+            />
+            Show the breakdown by {chosenIndicator.breakdown_variable} under the number
+          </label>
+        )}
+        </>
       )}
 
       {kind === 'countdown' && (
