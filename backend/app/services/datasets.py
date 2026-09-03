@@ -121,12 +121,18 @@ def _apply_ingest(db: Session, dataset: Dataset, result: IngestResult) -> Datase
         db.delete(existing)
     db.flush()
 
+    # Labels somebody wrote by hand are not in the file and would be lost every
+    # time a newer export replaced it - so they are kept on the dataset and put
+    # back here, which is what makes them survive a replacement.
+    overrides = (dataset.meta or {}).get("variable_labels") or {}
+
     for meta in result.variables:
+        override = overrides.get(meta.name) or {}
         db.add(
             Variable(
                 dataset_id=dataset.id,
                 name=meta.name,
-                label=meta.label,
+                label=override.get("label", meta.label),
                 var_type=VariableType(meta.var_type),
                 storage_type=meta.storage_type,
                 position=meta.position,
@@ -135,7 +141,7 @@ def _apply_ingest(db: Session, dataset: Dataset, result: IngestResult) -> Datase
                 min_value=meta.min_value,
                 max_value=meta.max_value,
                 mean_value=meta.mean_value,
-                value_labels=meta.value_labels,
+                value_labels={**meta.value_labels, **(override.get("value_labels") or {})},
                 missing_tags=meta.missing_tags,
                 is_hidden=meta.is_hidden,
             )

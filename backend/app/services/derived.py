@@ -127,3 +127,55 @@ def rebuild_dependents(db: Session, changed_ids: list[str]) -> list[str]:
         if not progressed:
             break
     return rebuilt
+
+
+def propagate_labels(
+    db: Session, source_id: str, variable: str, stored: dict
+) -> list[str]:
+    """Carry a hand-written label into the merges built on that dataset.
+
+    A merged dataset is a dataset in its own right, holding its own copy of the
+    labels as they were when it was built. It is also the one dashboards point
+    at, so a label written on the source and not carried across would be
+    invisible exactly where it was wanted.
+
+    Works outwards in rounds like rebuild_dependents, so a merge of a merge gets
+    it too, and matches on the column name: a prefixed or disambiguated column
+    is a different name, and guessing at it would label the wrong thing.
+    """
+    derived = [
+        dataset
+        for dataset in db.scalars(select(Dataset)).all()
+        if (dataset.derivation or {}).get("type") == "merge"
+    ]
+    carriers = {source_id}
+    touched: list[str] = []
+    for _ in range(len(derived) or 1):
+        progressed = False
+        for dataset in derived:
+            if dataset.id in touched:
+                continue
+            sources = sources_of(db, dataset)
+            if sources is None:
+                continue
+            _, left, right = sources
+            if left.id not in carriers and right.id not in carriers:
+                continue
+            row = next((v for v in dataset.variables if v.name == variable), None)
+            if row is None:
+                continue
+            if "label" in stored:
+                row.label = stored["label"]
+            if "value_labels" in stored:
+                row.value_labels = dict(stored["value_labels"])
+            meta = dict(dataset.meta or {})
+            overrides = dict(meta.get("variable_labels") or {})
+            overrides[variable] = {**(overrides.get(variable) or {}), **stored}
+            meta["variable_labels"] = overrides
+            dataset.meta = meta
+            touched.append(dataset.id)
+            carriers.add(dataset.id)
+            progressed = True
+        if not progressed:
+            break
+    return touched

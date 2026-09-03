@@ -810,3 +810,54 @@ def test_a_merged_dataset_is_rebuilt_when_its_sources_are_replaced(client, auth_
     assert again["id"] == merged["id"]
     assert again["row_count"] == 3
     assert again["version"] > version
+
+
+def test_a_label_written_on_a_source_reaches_the_merge_built_on_it(client, auth_headers):
+    """A merged dataset holds its own copy of the labels, and is usually the one
+    a dashboard points at - so a label written on the source and left behind is
+    invisible exactly where it was wanted."""
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Labels through a merge"}
+    ).json()
+    archive = _zip_bytes(
+        {
+            "label_main.dta": _stata_bytes(
+                pd.DataFrame({"interview__id": ["i1", "i2"], "DEM_SEX": [1.0, 2.0]})
+            ),
+            "label_people.dta": _stata_bytes(
+                pd.DataFrame({"interview__id": ["i1", "i2"], "age": [30.0, 40.0]})
+            ),
+        }
+    )
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("labels.zip", archive, "application/zip")},
+        data={"project_id": project["id"]},
+    ).json()
+    main_id = next(d["id"] for d in uploaded["datasets"] if d["name"] == "label_main")
+
+    client.post(f"/api/v1/relationships/detect?project_id={project['id']}", headers=auth_headers)
+    relationship = client.get(
+        f"/api/v1/relationships?project_id={project['id']}", headers=auth_headers
+    ).json()[0]
+    merged = client.post(
+        "/api/v1/relationships/merge",
+        headers=auth_headers,
+        json={"name": "Merged for labels", "relationship_id": relationship["id"]},
+    ).json()
+
+    client.patch(
+        f"/api/v1/datasets/{main_id}/variables/DEM_SEX",
+        headers=auth_headers,
+        json={"label": "Sex", "value_labels": {"1": "Male", "2": "Female"}},
+    )
+
+    downstream = client.get(f"/api/v1/datasets/{merged['id']}", headers=auth_headers).json()
+    variable = next(v for v in downstream["variables"] if v["name"] == "DEM_SEX")
+    assert variable["label"] == "Sex"
+    assert variable["value_labels"] == {"1": "Male", "2": "Female"}

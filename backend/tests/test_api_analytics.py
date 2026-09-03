@@ -1433,3 +1433,77 @@ def test_a_widget_says_which_dashboard_filters_it_could_not_apply(
     # The filter it could honour still narrowed it
     assert sum(row[1] for row in payload["result"]["rows"]) < 200
     assert payload["filters_ignored"] == ["not_here"]
+
+
+def test_labels_written_by_hand_show_up_and_survive_a_replacement(client, auth_headers):
+    """An export often ships codes with no labels: DEM_SEX holding 1 and 2.
+
+    A table then prints "1.0" and "2.0", which is nobody's question. Labels
+    written here have to reach the charts, and to still be there after the next
+    export replaces the file - they are not in the file, so a rebuild of the
+    variable rows would otherwise drop them every time.
+    """
+    import pandas as pd
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Unlabelled codes"}
+    ).json()
+
+    def archive(rows: int):
+        return _zip_bytes(
+            {
+                "coded.dta": _stata_bytes(
+                    pd.DataFrame(
+                        {
+                            "interview__key": [f"k{i}" for i in range(rows)],
+                            "DEM_SEX": [1.0 if i % 2 else 2.0 for i in range(rows)],
+                        }
+                    )
+                )
+            }
+        )
+
+    first = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("codes.zip", archive(4), "application/zip")},
+        data={"project_id": project["id"]},
+    ).json()
+    dataset_id = first["datasets"][0]["id"]
+
+    named = client.patch(
+        f"/api/v1/datasets/{dataset_id}/variables/DEM_SEX",
+        headers=auth_headers,
+        json={"label": "Sex of respondent", "value_labels": {"1": "Male", "2": "Female"}},
+    )
+    assert named.status_code == 200, named.text
+    assert named.json()["value_labels"] == {"1": "Male", "2": "Female"}
+
+    # The names reach the numbers, which is the point of writing them
+    frequency = client.get(
+        f"/api/v1/analytics/datasets/{dataset_id}/frequency/DEM_SEX", headers=auth_headers
+    ).json()
+    assert {row["label"] for row in frequency["rows"]} == {"Male", "Female"}
+
+    # A newer export replaces the file; the labels are still there
+    later = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("codes-again.zip", archive(6), "application/zip")},
+        data={"project_id": project["id"]},
+    )
+    assert later.status_code == 201, later.text
+    after = client.get(f"/api/v1/datasets/{dataset_id}", headers=auth_headers).json()
+    assert after["row_count"] == 6
+    variable = next(v for v in after["variables"] if v["name"] == "DEM_SEX")
+    assert variable["label"] == "Sex of respondent"
+    assert variable["value_labels"] == {"1": "Male", "2": "Female"}
+
+
+def test_a_label_cannot_be_written_on_a_variable_that_is_not_there(client, auth_headers, dataset_id):
+    response = client.patch(
+        f"/api/v1/datasets/{dataset_id}/variables/nothing_like_this",
+        headers=auth_headers,
+        json={"label": "Nope"},
+    )
+    assert response.status_code == 404
