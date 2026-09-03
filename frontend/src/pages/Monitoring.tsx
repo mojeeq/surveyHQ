@@ -16,6 +16,7 @@ import type {
   Page,
 } from '@/lib/types'
 import ChartCard from '@/components/ChartCard'
+import ProjectFilter, { projectParam } from '@/components/ProjectFilter'
 import FilterBuilder, { emptyFilter } from '@/components/FilterBuilder'
 import {
   Badge,
@@ -41,15 +42,20 @@ export default function Monitoring() {
   const toast = useToast()
   const queryClient = useQueryClient()
   const [creating, setCreating] = useState(false)
+  const [project, setProject] = useState<string | null>(null)
 
   const values = useQuery({
-    queryKey: ['indicator-values', 'monitoring'],
-    queryFn: () => api.get<IndicatorValue[]>('/monitoring/indicators/values?trend_points=60'),
+    queryKey: ['indicator-values', 'monitoring', project],
+    queryFn: () =>
+      api.get<IndicatorValue[]>(
+        `/monitoring/indicators/values?trend_points=60${projectParam(project)}`,
+      ),
     refetchInterval: 120_000,
   })
   const indicators = useQuery({
-    queryKey: ['indicators'],
-    queryFn: () => api.get<Indicator[]>('/monitoring/indicators'),
+    queryKey: ['indicators', project],
+    queryFn: () =>
+      api.get<Indicator[]>(`/monitoring/indicators?${projectParam(project).slice(1)}`),
   })
 
   const refreshAll = useMutation({
@@ -93,6 +99,15 @@ export default function Monitoring() {
         }
       />
 
+      <div className="mb-4 flex flex-wrap items-center gap-3">
+        <ProjectFilter value={project} onChange={setProject} />
+        {project !== null && (
+          <span className="text-xs text-ink-400">
+            Indicators follow the project their dataset belongs to.
+          </span>
+        )}
+      </div>
+
       {values.isLoading ? (
         <Loading />
       ) : values.error ? (
@@ -101,7 +116,7 @@ export default function Monitoring() {
         <Card>
           <EmptyState
             icon="◎"
-            title="No indicators yet"
+            title={project === null ? 'No indicators yet' : 'No indicators in this project'}
             description="An indicator is a single tracked number, such as completed interviews or mean household size, with an optional target and warning thresholds."
             action={
               can('manager') && (

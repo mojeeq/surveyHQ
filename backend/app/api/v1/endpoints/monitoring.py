@@ -56,6 +56,7 @@ from app.services.monitoring import (
 from app.services.projects import (
     alert_rule_clause,
     dataset_clause,
+    in_project_clause,
     restrict,
     scope_for,
 )
@@ -69,7 +70,11 @@ router = APIRouter()
 
 @router.get("/indicators", response_model=list[IndicatorOut])
 def list_indicators(
-    db: DbSession, user: CurrentUser, dataset_id: str = "", active_only: bool = False
+    db: DbSession,
+    user: CurrentUser,
+    dataset_id: str = "",
+    project_id: str | None = None,
+    active_only: bool = False,
 ) -> list[Indicator]:
     statement = restrict(
         select(Indicator).order_by(Indicator.display_order, Indicator.created_at),
@@ -77,6 +82,8 @@ def list_indicators(
     )
     if dataset_id:
         statement = statement.where(Indicator.dataset_id == dataset_id)
+    if project_id is not None:
+        statement = statement.where(in_project_clause(Indicator.dataset_id, project_id))
     if active_only:
         statement = statement.where(Indicator.is_active.is_(True))
     return list(db.scalars(statement).all())
@@ -142,6 +149,7 @@ def indicator_values(
     db: DbSession,
     user: CurrentUser,
     dataset_id: str = "",
+    project_id: str | None = None,
     refresh: bool = False,
     trend_points: int = Query(default=30, le=365),
 ) -> list[IndicatorValue]:
@@ -152,6 +160,8 @@ def indicator_values(
     )
     if dataset_id:
         statement = statement.where(Indicator.dataset_id == dataset_id)
+    if project_id is not None:
+        statement = statement.where(in_project_clause(Indicator.dataset_id, project_id))
     indicators = list(
         db.scalars(statement.order_by(Indicator.display_order, Indicator.created_at)).all()
     )
@@ -241,12 +251,34 @@ def _get_indicator(indicator_id: str, db: DbSession, user: User) -> Indicator:
 
 
 @router.get("/alert-rules", response_model=list[AlertRuleOut])
-def list_alert_rules(db: DbSession, user: CurrentUser) -> list[AlertRule]:
+def list_alert_rules(
+    db: DbSession, user: CurrentUser, project_id: str | None = None
+) -> list[AlertRule]:
     statement = restrict(
         select(AlertRule).order_by(AlertRule.created_at.desc()),
         alert_rule_clause(db, user),
     )
+    if project_id is not None:
+        statement = statement.where(_rules_in_project(project_id))
     return list(db.scalars(statement).all())
+
+
+def _rules_in_project(project_id: str) -> Any:
+    """Alert rules belonging to one project, through whatever they are tied to.
+
+    A rule names a dataset, an indicator, or neither; the last is a global rule
+    and belongs to the shared area, which is what an empty project id asks for.
+    """
+    clause = AlertRule.dataset_id.in_(
+        select(Dataset.id).where(
+            Dataset.project_id == project_id if project_id else Dataset.project_id.is_(None)
+        )
+    ) | AlertRule.indicator_id.in_(
+        select(Indicator.id).where(in_project_clause(Indicator.dataset_id, project_id))
+    )
+    if not project_id:
+        clause = clause | (AlertRule.dataset_id.is_(None) & AlertRule.indicator_id.is_(None))
+    return clause
 
 
 @router.post("/alert-rules", response_model=AlertRuleOut, status_code=201)
@@ -311,6 +343,7 @@ def list_alerts(
     user: CurrentUser,
     status: AlertStatus | None = None,
     severity: Severity | None = None,
+    project_id: str | None = None,
     limit: int = Query(default=100, le=500),
 ) -> list[Alert]:
     # An alert is visible through the rule that raised it. One whose rule has
@@ -324,6 +357,11 @@ def list_alerts(
         statement = statement.where(Alert.status == status)
     if severity:
         statement = statement.where(Alert.severity == severity)
+    if project_id is not None:
+        # An alert reaches a project through the rule that raised it.
+        statement = statement.where(
+            Alert.rule_id.in_(select(AlertRule.id).where(_rules_in_project(project_id)))
+        )
     return list(db.scalars(statement).all())
 
 
@@ -357,7 +395,7 @@ def resolve_alert(alert_id: str, db: DbSession, _: CurrentUser) -> Alert:
 
 @router.get("/quality-rules", response_model=list[QualityRuleWithResult])
 def list_quality_rules(
-    db: DbSession, user: CurrentUser, dataset_id: str = ""
+    db: DbSession, user: CurrentUser, dataset_id: str = "", project_id: str | None = None
 ) -> list[QualityRuleWithResult]:
     statement = restrict(
         select(QualityRule).order_by(QualityRule.created_at.desc()),
@@ -365,6 +403,8 @@ def list_quality_rules(
     )
     if dataset_id:
         statement = statement.where(QualityRule.dataset_id == dataset_id)
+    if project_id is not None:
+        statement = statement.where(in_project_clause(QualityRule.dataset_id, project_id))
     rules = list(db.scalars(statement).all())
 
     output: list[QualityRuleWithResult] = []

@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api } from '@/lib/api'
+import ProjectFilter, { projectParam } from '@/components/ProjectFilter'
 import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { formatNumber, relativeTime } from '@/lib/format'
@@ -30,18 +31,21 @@ export default function Alerts() {
   const [tab, setTab] = useState<'alerts' | 'rules'>('alerts')
   const [statusFilter, setStatusFilter] = useState('open')
   const [creating, setCreating] = useState(false)
+  const [project, setProject] = useState<string | null>(null)
 
   const alerts = useQuery({
-    queryKey: ['alerts', statusFilter],
+    queryKey: ['alerts', statusFilter, project],
     queryFn: () =>
       api.get<Alert[]>(
-        `/monitoring/alerts?limit=200${statusFilter ? `&status=${statusFilter}` : ''}`,
+        `/monitoring/alerts?limit=200${statusFilter ? `&status=${statusFilter}` : ''}` +
+          projectParam(project),
       ),
     refetchInterval: 60_000,
   })
   const rules = useQuery({
-    queryKey: ['alert-rules'],
-    queryFn: () => api.get<AlertRule[]>('/monitoring/alert-rules'),
+    queryKey: ['alert-rules', project],
+    queryFn: () =>
+      api.get<AlertRule[]>(`/monitoring/alert-rules?${projectParam(project).slice(1)}`),
   })
 
   const act = useMutation({
@@ -88,6 +92,12 @@ export default function Alerts() {
       />
 
       <div className="mt-4">
+        {/* An alert belongs to whatever project raised it: its rule's dataset,
+            or its indicator's. A rule tied to neither is a global one. */}
+        <div className="mb-4">
+          <ProjectFilter value={project} onChange={setProject} />
+        </div>
+
         {tab === 'alerts' && (
           <>
             <div className="mb-4 flex gap-1">

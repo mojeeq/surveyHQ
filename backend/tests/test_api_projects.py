@@ -997,3 +997,139 @@ def test_a_viewer_cannot_bulk_delete(client, auth_headers):
         json={"project_id": project["id"]},
     )
     assert refused.status_code == 403
+
+
+def test_monitoring_quality_and_alerts_can_be_seen_one_project_at_a_time(
+    client, auth_headers
+):
+    """These all hang off a dataset, so a project filter is a question about
+    the dataset - one fact in one place, rather than a second project stored on
+    each of them that could disagree with it."""
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    def survey(name: str) -> tuple[str, str]:
+        project = client.post(
+            "/api/v1/projects", headers=auth_headers, json={"name": name}
+        ).json()
+        uploaded = client.post(
+            "/api/v1/datasets/upload",
+            headers=auth_headers,
+            files={
+                "file": (
+                    f"{name}.zip",
+                    _zip_bytes(
+                        {
+                            f"{name}.dta": _stata_bytes(
+                                pd.DataFrame(
+                                    {"interview__key": ["a", "b"], "age": [30.0, 40.0]}
+                                )
+                            )
+                        }
+                    ),
+                    "application/zip",
+                )
+            },
+            data={"project_id": project["id"]},
+        ).json()
+        return project["id"], uploaded["datasets"][0]["id"]
+
+    north, north_data = survey("scoped_north")
+    south, south_data = survey("scoped_south")
+
+    for label, dataset_id in (("North count", north_data), ("South count", south_data)):
+        client.post(
+            "/api/v1/monitoring/indicators",
+            headers=auth_headers,
+            json={
+                "name": label,
+                "dataset_id": dataset_id,
+                "spec": {"measures": [{"agg": "count"}]},
+            },
+        )
+        client.post(
+            "/api/v1/monitoring/quality-rules",
+            headers=auth_headers,
+            json={
+                "name": f"{label} completeness",
+                "dataset_id": dataset_id,
+                "check_type": "missing_rate",
+                "config": {"variable": "age", "threshold": 0.5},
+            },
+        )
+
+    indicators = client.get(
+        f"/api/v1/monitoring/indicators?project_id={north}", headers=auth_headers
+    ).json()
+    assert [i["name"] for i in indicators] == ["North count"]
+
+    values = client.get(
+        f"/api/v1/monitoring/indicators/values?project_id={south}", headers=auth_headers
+    ).json()
+    assert [v["name"] for v in values] == ["South count"]
+
+    rules = client.get(
+        f"/api/v1/monitoring/quality-rules?project_id={north}", headers=auth_headers
+    ).json()
+    assert [r["name"] for r in rules] == ["North count completeness"]
+
+    # No filter still shows both
+    everything = client.get("/api/v1/monitoring/indicators", headers=auth_headers).json()
+    assert {"North count", "South count"} <= {i["name"] for i in everything}
+
+
+def test_the_shared_area_is_a_place_a_filter_can_name(client, auth_headers):
+    """An empty project id means the shared area, not "no filter"."""
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Not shared"}
+    ).json()
+    frame = pd.DataFrame({"interview__key": ["a"], "age": [30.0]})
+
+    shared = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "sharedscope.zip",
+                _zip_bytes({"sharedscope.dta": _stata_bytes(frame)}),
+                "application/zip",
+            )
+        },
+    ).json()["datasets"][0]["id"]
+    owned = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "ownedscope.zip",
+                _zip_bytes({"ownedscope.dta": _stata_bytes(frame)}),
+                "application/zip",
+            )
+        },
+        data={"project_id": project["id"]},
+    ).json()["datasets"][0]["id"]
+
+    for label, dataset_id in (("Shared one", shared), ("Owned one", owned)):
+        client.post(
+            "/api/v1/monitoring/indicators",
+            headers=auth_headers,
+            json={
+                "name": label,
+                "dataset_id": dataset_id,
+                "spec": {"measures": [{"agg": "count"}]},
+            },
+        )
+
+    in_shared = {
+        i["name"]
+        for i in client.get(
+            "/api/v1/monitoring/indicators?project_id=", headers=auth_headers
+        ).json()
+    }
+    assert "Shared one" in in_shared
+    assert "Owned one" not in in_shared

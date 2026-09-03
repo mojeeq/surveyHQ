@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api } from '@/lib/api'
+import ProjectFilter from '@/components/ProjectFilter'
 import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { formatNumber, relativeTime, titleCase } from '@/lib/format'
@@ -81,7 +82,16 @@ export default function Quality() {
     queryKey: ['datasets', 'ready'],
     queryFn: () => api.get<Page<Dataset>>('/datasets?limit=200&status=ready'),
   })
-  const datasetId = params.get('dataset') ?? datasets.data?.items[0]?.id ?? ''
+
+  // This page is read one dataset at a time, so a project narrows which
+  // datasets are on offer rather than filtering the checks afterwards.
+  const project = params.get('project')
+  const inProject = (datasets.data?.items ?? []).filter(
+    (dataset) => project === null || (dataset.project_id ?? '') === project,
+  )
+  const chosen = params.get('dataset')
+  const datasetId =
+    chosen && inProject.some((d) => d.id === chosen) ? chosen : (inProject[0]?.id ?? '')
 
   const rules = useQuery({
     queryKey: ['quality-rules', datasetId],
@@ -151,12 +161,24 @@ export default function Quality() {
         description="Automated checks that flag suspicious or incomplete field data."
         actions={
           <>
+            <ProjectFilter
+              value={project}
+              onChange={(next) =>
+                setParams(next === null ? {} : { project: next })
+              }
+            />
             <select
               className="input w-56"
               value={datasetId}
-              onChange={(event) => setParams({ dataset: event.target.value })}
+              onChange={(event) =>
+                setParams(
+                  project === null
+                    ? { dataset: event.target.value }
+                    : { project, dataset: event.target.value },
+                )
+              }
             >
-              {datasets.data.items.map((item) => (
+              {inProject.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name}
                 </option>
@@ -178,6 +200,16 @@ export default function Quality() {
           </>
         }
       />
+
+      {!inProject.length ? (
+        <Card>
+          <EmptyState
+            icon="✓"
+            title="No datasets in this project"
+            description="Checks are defined per dataset, so choose a project that has some."
+          />
+        </Card>
+      ) : null}
 
       {openSuggestions.length > 0 && can('manager') && (
         <Card
