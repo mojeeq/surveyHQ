@@ -158,3 +158,25 @@ def test_streaming_a_large_file_gives_the_same_metadata_as_reading_it_whole(
     # an individual chunk may not. Whatever they conclude, they must agree.
     assert left["visited"].var_type == right["visited"].var_type
     assert left["never_asked"].var_type == "text"     # no values, no evidence
+
+
+def test_a_gps_column_is_found_and_a_date_is_not_mistaken_for_one():
+    """"lat" appears inside ACTIVATE_DATE_SIMULATION, which is not a latitude.
+
+    A bare substring match reads it as one and points the map at a date column,
+    which is what happened on a real export.
+    """
+    from app.services.ingest import VariableMeta, detect_monitoring_fields
+
+    def variable(name: str) -> VariableMeta:
+        return VariableMeta(name=name, label="", var_type="numeric", storage_type="DOUBLE")
+
+    detected = detect_monitoring_fields(
+        [
+            variable("ACTIVATE_DATE_SIMULATION"),
+            variable("GPS_4__Latitude"),
+            variable("GPS_4__Longitude"),
+        ]
+    )
+    assert detected["latitude"] == "GPS_4__Latitude"
+    assert detected["longitude"] == "GPS_4__Longitude"

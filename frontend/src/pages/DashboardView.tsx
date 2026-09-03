@@ -28,6 +28,7 @@ import DashboardFilters, {
   type FilterControl,
 } from '@/components/DashboardFilters'
 import CrosstabTable from '@/components/CrosstabTable'
+import MapWidget, { DEFAULT_TILES } from '@/components/MapWidget'
 import AppearanceModal, {
   canvasStyle,
   isDark,
@@ -473,6 +474,16 @@ function WidgetFrame({
           <QualityWidget payload={payload} />
         ) : payload.type === 'crosstab' ? (
           <CrosstabTable result={payload.result} compact fill />
+        ) : payload.type === 'map' ? (
+          <MapWidget
+            points={payload.points ?? []}
+            detail={payload.detail ?? []}
+            measure={payload.measure}
+            tiles={widget.config?.tiles as string | undefined}
+            truncated={payload.truncated}
+          />
+        ) : payload.type === 'html' ? (
+          <HtmlWidget html={payload.html ?? ''} />
         ) : payload.type === 'countdown' ? (
           <CountdownWidget payload={payload} />
         ) : payload.type === 'text' ? (
@@ -622,6 +633,30 @@ function PageTabs({
  * of that time is left. The number is computed in the browser rather than sent
  * by the server, so it goes on counting down on a screen nobody is touching.
  */
+/**
+ * Whatever markup the dashboard's author pasted in.
+ *
+ * It runs in a sandboxed frame with no same-origin privilege, so scripts in it
+ * execute in an opaque origin: they cannot read this page, its storage or its
+ * session, which is what makes accepting arbitrary markup from one user and
+ * showing it to another safe to do at all. That is also why it is a frame
+ * rather than dangerouslySetInnerHTML, which would run it right here.
+ */
+function HtmlWidget({ html }: { html: string }) {
+  if (!html.trim()) {
+    return <p className="py-6 text-center text-sm text-ink-400">This embed is empty</p>
+  }
+  return (
+    <iframe
+      title="Embedded content"
+      srcDoc={html}
+      sandbox="allow-scripts allow-popups allow-forms"
+      referrerPolicy="no-referrer"
+      className="h-full min-h-[120px] w-full border-0"
+    />
+  )
+}
+
 function CountdownWidget({ payload }: { payload: any }) {
   const target = payload.target ? new Date(payload.target).getTime() : NaN
   const [now, setNow] = useState(() => Date.now())
@@ -809,7 +844,7 @@ function AddWidgetModal({
   const toast = useToast()
   const queryClient = useQueryClient()
   const [kind, setKind] = useState<
-    'chart' | 'indicator' | 'quality' | 'text' | 'countdown'
+    'chart' | 'indicator' | 'quality' | 'text' | 'countdown' | 'map' | 'html'
   >('chart')
   const [datasetId, setDatasetId] = useState('')
   const [chartId, setChartId] = useState('')
@@ -819,6 +854,13 @@ function AddWidgetModal({
   const [deadline, setDeadline] = useState('')
   const [deadlineLabel, setDeadlineLabel] = useState('')
   const [showBreakdown, setShowBreakdown] = useState(true)
+  const [latitude, setLatitude] = useState('')
+  const [longitude, setLongitude] = useState('')
+  const [measureAgg, setMeasureAgg] = useState('count')
+  const [measureVariable, setMeasureVariable] = useState('')
+  const [detail, setDetail] = useState<string[]>([])
+  const [tiles, setTiles] = useState('')
+  const [html, setHtml] = useState('')
 
   const charts = useQuery({ queryKey: ['charts'], queryFn: () => api.get<Chart[]>('/dashboards/charts') })
   const indicators = useQuery({
@@ -828,7 +870,13 @@ function AddWidgetModal({
   const datasets = useQuery({
     queryKey: ['datasets'],
     queryFn: () => api.get<Page<Dataset>>('/datasets?limit=200'),
-    enabled: kind === 'quality',
+    enabled: kind === 'quality' || kind === 'map',
+  })
+  // The map needs the variables, to know which column holds the coordinates.
+  const chosenDataset = useQuery({
+    queryKey: ['dataset', datasetId],
+    queryFn: () => api.get<Dataset>(`/datasets/${datasetId}`),
+    enabled: kind === 'map' && Boolean(datasetId),
   })
 
   const add = useMutation({
@@ -840,6 +888,10 @@ function AddWidgetModal({
             ? charts.data?.find((c) => c.id === chartId)?.name
             : kind === 'quality'
               ? `Data quality: ${datasets.data?.items.find((d) => d.id === datasetId)?.name ?? ''}`
+              : kind === 'map'
+                ? 'Interview locations'
+                : kind === 'html'
+                  ? 'Embedded content'
               : kind === 'countdown'
                 ? deadlineLabel || 'Countdown'
                 : indicators.data?.find((i) => i.id === indicatorId)?.name) ||
@@ -847,11 +899,22 @@ function AddWidgetModal({
         widget_type: kind,
         chart_id: kind === 'chart' ? chartId : null,
         indicator_id: kind === 'indicator' ? indicatorId : null,
-        dataset_id: kind === 'quality' ? datasetId : null,
+        dataset_id: kind === 'quality' || kind === 'map' ? datasetId : null,
         page,
         config:
-          kind === 'indicator'
-            ? { show_breakdown: showBreakdown }
+          kind === 'map'
+            ? {
+                latitude,
+                longitude,
+                measure_agg: measureAgg,
+                measure_variable: measureAgg === 'count' ? '' : measureVariable,
+                detail,
+                ...(tiles.trim() ? { tiles: tiles.trim() } : {}),
+              }
+            : kind === 'html'
+              ? { html }
+            : kind === 'indicator'
+              ? { show_breakdown: showBreakdown }
             : kind === 'text'
             ? { content }
             : kind === 'countdown'
@@ -860,7 +923,9 @@ function AddWidgetModal({
                 { target: new Date(deadline).toISOString(), label: deadlineLabel }
               : {},
         layout:
-          kind === 'countdown'
+          kind === 'map'
+            ? { w: 6, h: 6 }
+            : kind === 'countdown'
             ? { w: 3, h: 3 }
             : kind === 'indicator'
               ? // A tile with a chart under it needs the room for one.
@@ -879,13 +944,18 @@ function AddWidgetModal({
   })
 
   const chosenIndicator = indicators.data?.find((i) => i.id === indicatorId)
+  const numericVariables = (chosenDataset.data?.variables ?? []).filter(
+    (v) => v.var_type === 'numeric',
+  )
 
   const canAdd =
     (kind === 'chart' && chartId) ||
     (kind === 'indicator' && indicatorId) ||
     (kind === 'quality' && datasetId) ||
     (kind === 'text' && content) ||
-    (kind === 'countdown' && deadline && !Number.isNaN(Date.parse(deadline)))
+    (kind === 'countdown' && deadline && !Number.isNaN(Date.parse(deadline))) ||
+    (kind === 'map' && datasetId && latitude && longitude) ||
+    (kind === 'html' && html.trim())
 
   return (
     <Modal
@@ -914,6 +984,8 @@ function AddWidgetModal({
           <option value="quality">Data quality panel</option>
           <option value="text">Text note</option>
           <option value="countdown">Countdown to a date</option>
+          <option value="map">Map of interview locations</option>
+          <option value="html">Embedded HTML</option>
         </select>
       </Field>
 
@@ -983,6 +1055,161 @@ function AddWidgetModal({
           </label>
         )}
         </>
+      )}
+
+      {kind === 'map' && (
+        <>
+          <Field
+            label="Dataset"
+            hint="The one holding the GPS question - usually the interview level."
+          >
+            <select
+              className="input"
+              value={datasetId}
+              onChange={(event) => {
+                setDatasetId(event.target.value)
+                setLatitude('')
+                setLongitude('')
+                setDetail([])
+              }}
+            >
+              <option value="">Choose a dataset…</option>
+              {datasets.data?.items.map((dataset) => (
+                <option key={dataset.id} value={dataset.id}>
+                  {dataset.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          {chosenDataset.isLoading ? (
+            <Loading />
+          ) : chosenDataset.data ? (
+            <>
+              <div className="grid gap-x-4 sm:grid-cols-2">
+                <Field label="Latitude">
+                  <select
+                    className="input"
+                    value={latitude}
+                    onChange={(event) => setLatitude(event.target.value)}
+                  >
+                    <option value="">Choose…</option>
+                    {numericVariables.map((v) => (
+                      <option key={v.name} value={v.name}>
+                        {v.label ? `${v.name} — ${v.label}` : v.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+                <Field label="Longitude">
+                  <select
+                    className="input"
+                    value={longitude}
+                    onChange={(event) => setLongitude(event.target.value)}
+                  >
+                    <option value="">Choose…</option>
+                    {numericVariables.map((v) => (
+                      <option key={v.name} value={v.name}>
+                        {v.label ? `${v.name} — ${v.label}` : v.name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
+
+              <Field
+                label="What each pin counts"
+                hint="Records at the same coordinate are one pin. This is the number it carries."
+              >
+                <div className="flex gap-2">
+                  <select
+                    className="input w-56"
+                    value={measureAgg}
+                    onChange={(event) => setMeasureAgg(event.target.value)}
+                  >
+                    <option value="count">How many records</option>
+                    <option value="sum">Total of</option>
+                    <option value="mean">Average of</option>
+                    <option value="max">Highest</option>
+                    <option value="min">Lowest</option>
+                  </select>
+                  {measureAgg !== 'count' && (
+                    <select
+                      className="input"
+                      value={measureVariable}
+                      onChange={(event) => setMeasureVariable(event.target.value)}
+                    >
+                      <option value="">Choose a variable…</option>
+                      {numericVariables.map((v) => (
+                        <option key={v.name} value={v.name}>
+                          {v.label ? `${v.name} — ${v.label}` : v.name}
+                        </option>
+                      ))}
+                    </select>
+                  )}
+                </div>
+              </Field>
+
+              <Field
+                label="Map tiles"
+                hint="Leave blank for OpenStreetMap. A server with no internet can point this at its own tile service."
+              >
+                <input
+                  className="input font-mono text-xs"
+                  value={tiles}
+                  onChange={(event) => setTiles(event.target.value)}
+                  placeholder={DEFAULT_TILES}
+                />
+              </Field>
+
+              <Field
+                label="Show on click"
+                hint="Up to six variables, listed in the popup when a pin is clicked."
+              >
+                <div className="grid max-h-40 gap-1 overflow-auto sm:grid-cols-2">
+                  {(chosenDataset.data.variables ?? [])
+                    .filter((v) => !v.is_hidden)
+                    .slice(0, 300)
+                    .map((v) => (
+                      <label
+                        key={v.name}
+                        className="flex items-center gap-2 text-sm text-ink-700"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={detail.includes(v.name)}
+                          disabled={!detail.includes(v.name) && detail.length >= 6}
+                          onChange={() =>
+                            setDetail(
+                              detail.includes(v.name)
+                                ? detail.filter((name) => name !== v.name)
+                                : [...detail, v.name],
+                            )
+                          }
+                        />
+                        <span className="truncate">{v.label || v.name}</span>
+                      </label>
+                    ))}
+                </div>
+              </Field>
+            </>
+          ) : null}
+        </>
+      )}
+
+      {kind === 'html' && (
+        <Field
+          label="HTML"
+          hint="Rendered in a sandboxed frame, so it cannot reach the rest of the page."
+        >
+          <textarea
+            className="input font-mono text-xs"
+            rows={8}
+            value={html}
+            onChange={(event) => setHtml(event.target.value)}
+            placeholder={'<h2>Round 3</h2>\n<p>Enumeration closes on Friday.</p>'}
+          />
+        </Field>
       )}
 
       {kind === 'countdown' && (

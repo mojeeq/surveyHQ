@@ -349,6 +349,8 @@ export type WidgetType =
   | 'crosstab'
   | 'quality'
   | 'countdown'
+  | 'map'
+  | 'html'
 
 export interface Widget {
   id: string

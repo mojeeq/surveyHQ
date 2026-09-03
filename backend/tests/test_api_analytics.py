@@ -1507,3 +1507,152 @@ def test_a_label_cannot_be_written_on_a_variable_that_is_not_there(client, auth_
         json={"label": "Nope"},
     )
     assert response.status_code == 404
+
+
+def test_a_map_widget_groups_interviews_by_where_they_happened(client, auth_headers):
+    """A pin is a place, not a row: several interviews at one household are one
+    pin carrying a number, which is what clicking it is for."""
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        {
+            "interview__key": ["a", "b", "c", "d"],
+            "gps__latitude": [-17.74, -17.74, -15.5, 0.0],
+            "gps__longitude": [168.31, 168.31, 167.2, 0.0],
+            "people": [4.0, 6.0, 3.0, 9.0],
+            "region": ["Shefa", "Shefa", "Sanma", "Nowhere"],
+        }
+    )
+    archive = _zip_bytes({"located.dta": _stata_bytes(frame)})
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("located.zip", archive, "application/zip")},
+    ).json()
+    dataset_id = uploaded["datasets"][0]["id"]
+
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Where the work is"}
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={
+            "title": "Interview locations",
+            "widget_type": "map",
+            "dataset_id": dataset_id,
+            "config": {
+                "latitude": "gps__latitude",
+                "longitude": "gps__longitude",
+                "measure_agg": "sum",
+                "measure_variable": "people",
+                "detail": ["region"],
+            },
+        },
+    )
+
+    rendered = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json={"op": "and", "conditions": [], "groups": []},
+    ).json()
+    payload = next(iter(rendered["widgets"].values()))
+    assert payload["type"] == "map"
+
+    # 0,0 is what a device with no fix records, and is dropped
+    assert len(payload["points"]) == 2
+    busiest = payload["points"][0]
+    assert (busiest["lat"], busiest["lon"]) == (-17.74, 168.31)
+    assert busiest["rows"] == 2
+    assert busiest["value"] == 10  # the two households' people, summed
+    assert busiest["region"] == "Shefa"
+
+
+def test_a_dashboard_filter_narrows_the_map(client, auth_headers):
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        {
+            "gps__latitude": [-17.74, -15.5],
+            "gps__longitude": [168.31, 167.2],
+            "region": ["Shefa", "Sanma"],
+        }
+    )
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("map2.zip", _zip_bytes({"map2.dta": _stata_bytes(frame)}), "application/zip")},
+    ).json()
+    dataset_id = uploaded["datasets"][0]["id"]
+
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Filtered map"}
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={
+            "widget_type": "map",
+            "dataset_id": dataset_id,
+            "config": {"latitude": "gps__latitude", "longitude": "gps__longitude"},
+        },
+    )
+
+    rendered = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json={
+            "op": "and",
+            "conditions": [{"variable": "region", "operator": "eq", "value": "Shefa"}],
+            "groups": [],
+        },
+    ).json()
+    payload = next(iter(rendered["widgets"].values()))
+    assert len(payload["points"]) == 1
+    assert payload["points"][0]["lon"] == 168.31
+
+
+def test_a_map_on_a_variable_that_is_not_there_says_so(client, auth_headers, dataset_id):
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Bad map"}
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={
+            "widget_type": "map",
+            "dataset_id": dataset_id,
+            "config": {"latitude": "nope", "longitude": "also_nope"},
+        },
+    )
+    rendered = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json={"op": "and", "conditions": [], "groups": []},
+    ).json()
+    payload = next(iter(rendered["widgets"].values()))
+    assert "nope" in payload["error"]
+
+
+def test_an_html_widget_carries_its_markup_through(client, auth_headers):
+    """It is rendered in a sandboxed frame, so it is passed through as written."""
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Embedded"}
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={
+            "title": "A note from the field office",
+            "widget_type": "html",
+            "config": {"html": "<h1>Round 3</h1><p>Enumeration closes Friday.</p>"},
+        },
+    )
+    rendered = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json={"op": "and", "conditions": [], "groups": []},
+    ).json()
+    payload = next(iter(rendered["widgets"].values()))
+    assert payload["type"] == "html"
+    assert payload["html"] == "<h1>Round 3</h1><p>Enumeration closes Friday.</p>"

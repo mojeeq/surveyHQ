@@ -56,6 +56,7 @@ from app.services.dashboard_assets import (
     save_background,
 )
 from app.services.datasets import dataset_is_queryable
+from app.services.geo import points as geo_points
 from app.services.monitoring import (
     evaluate_indicator,
     indicator_status,
@@ -682,6 +683,33 @@ def _render_widget(
             "breakdown_variable": indicator.breakdown_variable if wants_breakdown else "",
             "computed_at": computed_at.isoformat() if computed_at else None,
         }
+
+    if widget.widget_type.value == "html":
+        # Sent as written and rendered by the browser in a sandboxed frame, so
+        # what it contains is between its author and that frame - it cannot
+        # reach the page around it. See the widget component.
+        return {"type": "html", "html": (widget.config or {}).get("html", "")}
+
+    if widget.widget_type.value == "map":
+        config = widget.config or {}
+        dataset = db.get(Dataset, widget.dataset_id or config.get("dataset_id") or "")
+        if dataset is None or not dataset_is_queryable(dataset):
+            return {"error": "The map's dataset is unavailable"}
+        ctx = DatasetContext.from_model(dataset)
+        ignored = _ignored(filters, ctx)
+        try:
+            found = geo_points(
+                ctx,
+                latitude=config.get("latitude", ""),
+                longitude=config.get("longitude", ""),
+                detail=config.get("detail") or [],
+                measure_agg=config.get("measure_agg", "count"),
+                measure_variable=config.get("measure_variable", ""),
+                filters=_applicable(filters, ctx),
+            )
+        except QueryError as exc:
+            return {"error": str(exc)}
+        return {"type": "map", "filters_ignored": ignored, **found}
 
     if widget.widget_type.value == "countdown":
         config = widget.config or {}

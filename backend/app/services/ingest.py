@@ -485,12 +485,33 @@ def detect_monitoring_fields(variables: list[VariableMeta]) -> dict[str, str]:
                 detected[key] = lookup[candidate]
                 break
         else:
-            # Fall back to a substring match for prefixed export columns
-            for lower_name, actual in lookup.items():
-                if any(lower_name.endswith(c) or c in lower_name for c in candidates):
-                    detected[key] = actual
+            # Fall back to prefixed export columns, e.g. GPS_4__Latitude. The
+            # candidates are tried in order so the specific one wins over the
+            # short one, and each has to be a whole word in the name: a bare
+            # substring match reads "lat" out of ACTIVATE_DATE_SIMULATION and
+            # points the map at a date.
+            for candidate in candidates:
+                match = next(
+                    (
+                        actual
+                        for lower_name, actual in lookup.items()
+                        if _names_a(lower_name, candidate)
+                    ),
+                    None,
+                )
+                if match:
+                    detected[key] = match
                     break
     return detected
+
+
+def _names_a(column: str, candidate: str) -> bool:
+    """Whether a column name mentions the candidate as a word of its own."""
+    if column == candidate:
+        return True
+    # Survey Solutions separates parts with underscores; digits are part of a
+    # name rather than a separator, so GPS_4__Latitude is gps / 4 / latitude.
+    return candidate in re.split(r"[^a-z0-9]+", column)
 
 
 def dataframe_preview(path: Path, limit: int = 20) -> dict[str, Any]:

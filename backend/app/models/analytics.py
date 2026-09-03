@@ -46,6 +46,8 @@ class WidgetType(str, enum.Enum):
     crosstab = "crosstab"
     quality = "quality"
     countdown = "countdown"
+    map = "map"
+    html = "html"
 
 
 class SavedQuery(UUIDMixin, TimestampMixin, Base):
