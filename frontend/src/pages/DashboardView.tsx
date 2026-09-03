@@ -12,6 +12,12 @@ import { formatNumber, formatValue, relativeTime } from '@/lib/format'
 import type { Chart, Dashboard, Dataset, Indicator, Page, Widget } from '@/lib/types'
 import AssignProject from '@/components/AssignProject'
 import ChartCard from '@/components/ChartCard'
+import DashboardFilters, {
+  filterableVariables,
+  toFilterGroup,
+  useDashboardDatasets,
+  type FilterControl,
+} from '@/components/DashboardFilters'
 import CrosstabTable from '@/components/CrosstabTable'
 import {
   Badge,
@@ -35,6 +41,8 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
   const [editing, setEditing] = useState(false)
   const [adding, setAdding] = useState(false)
   const [activePage, setActivePage] = useState(0)
+  const [filterValues, setFilterValues] = useState<Record<string, string>>({})
+  const [editingFilters, setEditingFilters] = useState(false)
   const [width, setWidth] = useState(1200)
 
   const isPublic = Boolean(publicToken)
@@ -45,14 +53,18 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
     queryFn: () => api.get<Dashboard>(basePath),
   })
 
+  const filterControls: FilterControl[] = (dashboard.data?.filters ??
+    []) as unknown as FilterControl[]
+
   const rendered = useQuery({
-    queryKey: ['dashboard-data', id, publicToken],
+    // The values are part of the key, so changing a filter refetches rather
+    // than showing the previous selection's numbers under the new label.
+    queryKey: ['dashboard-data', id, publicToken, filterValues],
     queryFn: () =>
-      api.post<{ widgets: Record<string, any> }>(`${basePath}/data`, {
-        op: 'and',
-        conditions: [],
-        groups: [],
-      }),
+      api.post<{ widgets: Record<string, any> }>(
+        `${basePath}/data`,
+        toFilterGroup(filterControls, filterValues),
+      ),
     enabled: Boolean(dashboard.data),
     refetchInterval: dashboard.data?.refresh_interval_seconds
       ? dashboard.data.refresh_interval_seconds * 1000
@@ -189,6 +201,9 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
                       </option>
                     ))}
                   </select>
+                  <button className="btn-secondary" onClick={() => setEditingFilters(true)}>
+                    Filters
+                  </button>
                   <button className="btn-secondary" onClick={() => setAdding(true)}>
                     Add widget
                   </button>
@@ -222,6 +237,12 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
           </code>
         </div>
       )}
+
+      <DashboardFilters
+        controls={filterControls}
+        value={filterValues}
+        onChange={setFilterValues}
+      />
 
       <PageTabs
         pages={pages}
@@ -284,6 +305,14 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
 
       {adding && (
         <AddWidgetModal dashboardId={id} page={page} onClose={() => setAdding(false)} />
+      )}
+      {editingFilters && (
+        <FilterControlsModal
+          dashboardId={id}
+          widgets={allWidgets}
+          controls={filterControls}
+          onClose={() => setEditingFilters(false)}
+        />
       )}
     </div>
   )
@@ -703,6 +732,151 @@ function AddWidgetModal({
       <Field label="Title" hint="Leave blank to use the chart or indicator name">
         <input className="input" value={title} onChange={(event) => setTitle(event.target.value)} />
       </Field>
+    </Modal>
+  )
+}
+
+/**
+ * Chooses which variables the dashboard offers as filters.
+ *
+ * The candidates come from the datasets the dashboard's own widgets use, since
+ * a filter on a variable nothing here carries would do nothing. Only
+ * categorical variables with a manageable number of values are offered: a
+ * dropdown of 40,000 interview keys is not a filter.
+ */
+function FilterControlsModal({
+  dashboardId,
+  widgets,
+  controls,
+  onClose,
+}: {
+  dashboardId: string
+  widgets: Widget[]
+  controls: FilterControl[]
+  onClose: () => void
+}) {
+  const toast = useToast()
+  const queryClient = useQueryClient()
+  const [chosen, setChosen] = useState<FilterControl[]>(controls)
+
+  const charts = useQuery({
+    queryKey: ['charts'],
+    queryFn: () => api.get<Chart[]>('/dashboards/charts'),
+  })
+
+  // A widget names either a chart (which names a dataset) or a dataset directly
+  const datasetIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const widget of widgets) {
+      if (widget.dataset_id) ids.add(widget.dataset_id)
+      const chart = charts.data?.find((c) => c.id === widget.chart_id)
+      if (chart) ids.add(chart.dataset_id)
+    }
+    return [...ids]
+  }, [widgets, charts.data])
+
+  const datasets = useDashboardDatasets(datasetIds)
+  const details = useQuery({
+    queryKey: ['dataset-details', datasetIds],
+    queryFn: async () =>
+      Promise.all(datasetIds.map((id) => api.get<Dataset>(`/datasets/${id}`))),
+    enabled: datasetIds.length > 0,
+  })
+
+  const save = useMutation({
+    mutationFn: () => api.patch(`/dashboards/${dashboardId}`, { filters: chosen }),
+    onSuccess: () => {
+      toast.push('Filters saved', 'success')
+      queryClient.invalidateQueries({ queryKey: ['dashboard', dashboardId] })
+      onClose()
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  const toggle = (control: FilterControl) => {
+    const has = chosen.some((c) => c.variable === control.variable)
+    setChosen(
+      has
+        ? chosen.filter((c) => c.variable !== control.variable)
+        : [...chosen, control],
+    )
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Dashboard filters"
+      wide
+      footer={
+        <>
+          <button className="btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn-primary" onClick={() => save.mutate()}>
+            Save filters
+          </button>
+        </>
+      }
+    >
+      <p className="mb-3 text-sm text-ink-500">
+        A filter narrows every widget whose dataset carries that variable, and
+        leaves the others as they are — so it is still useful when only part of
+        the page has it.
+      </p>
+
+      {details.isLoading || datasets.isLoading ? (
+        <Loading />
+      ) : !details.data?.length ? (
+        <p className="text-sm text-ink-500">
+          Add a widget first; the filters come from the datasets it uses.
+        </p>
+      ) : (
+        <div className="space-y-4">
+          {details.data.map((dataset) => {
+            const options = filterableVariables(dataset)
+            return (
+              <div key={dataset.id}>
+                <p className="text-xs font-semibold uppercase tracking-wide text-ink-500">
+                  {dataset.name}
+                </p>
+                {!options.length ? (
+                  <p className="mt-1 text-sm text-ink-400">
+                    No variable here has few enough values to filter by.
+                  </p>
+                ) : (
+                  <div className="mt-1 grid gap-1 sm:grid-cols-2">
+                    {options.map((variable) => (
+                      <label
+                        key={variable.name}
+                        className="flex items-center gap-2 text-sm text-ink-700"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={chosen.some((c) => c.variable === variable.name)}
+                          onChange={() =>
+                            toggle({
+                              variable: variable.name,
+                              dataset_id: dataset.id,
+                              label: variable.label || variable.name,
+                            })
+                          }
+                        />
+                        <span className="truncate">
+                          {variable.label
+                            ? `${variable.name} — ${variable.label}`
+                            : variable.name}
+                          <span className="text-ink-400"> ({variable.n_unique})</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
     </Modal>
   )
 }

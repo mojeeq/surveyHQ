@@ -872,3 +872,73 @@ def test_a_data_quality_panel_can_go_on_a_dashboard(client, auth_headers, datase
     # Failing checks sort first, so the one worth seeing is not buried
     assert panel["checks"][0]["passed"] is False
     assert any("income" in c["message"] for c in failing)
+
+
+def test_a_dashboard_filter_only_applies_where_the_variable_exists(
+    client, auth_headers, dataset_id
+):
+    """A dashboard's widgets can draw on different datasets.
+
+    Filtering on a variable only some of them carry must narrow those and leave
+    the rest alone, not replace them with an error.
+    """
+    import pandas as pd
+
+    other = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "no_region.dta",
+                _stata_bytes(pd.DataFrame({"team": [1.0, 2.0, 1.0], "hours": [5.0, 6.0, 7.0]})),
+                "application/octet-stream",
+            )
+        },
+        data={"name": "Has no region"},
+    )
+    assert other.status_code == 201, other.text
+    other_id = other.json()["id"]
+
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Mixed sources"}
+    ).json()
+    for name, ds, variable in (
+        ("Has region", dataset_id, "region"),
+        ("No region", other_id, "team"),
+    ):
+        chart = client.post(
+            "/api/v1/dashboards/charts",
+            headers=auth_headers,
+            json={
+                "name": name,
+                "dataset_id": ds,
+                "chart_type": "bar",
+                "spec": {"query": {"dimensions": [{"variable": variable}],
+                                   "measures": [{"agg": "count", "alias": "n"}]}},
+            },
+        ).json()
+        client.post(
+            f"/api/v1/dashboards/{dashboard['id']}/widgets",
+            headers=auth_headers,
+            json={"title": name, "widget_type": "chart", "chart_id": chart["id"]},
+        )
+
+    rendered = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json={
+            "op": "and",
+            "conditions": [{"variable": "region", "operator": "eq", "value": "North"}],
+            "groups": [],
+        },
+    )
+    assert rendered.status_code == 200, rendered.text
+    widgets = list(rendered.json()["widgets"].values())
+    by_name = {w.get("name"): w for w in widgets}
+
+    # Neither widget errored
+    assert all("error" not in w for w in widgets), widgets
+    # The one that has the variable was narrowed
+    assert sum(r[1] for r in by_name["Has region"]["result"]["rows"]) < 200
+    # The one that does not was left as it was
+    assert sum(r[1] for r in by_name["No region"]["result"]["rows"]) == 3

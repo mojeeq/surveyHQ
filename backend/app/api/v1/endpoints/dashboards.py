@@ -126,6 +126,7 @@ def render_chart(
     chart = _get_chart(chart_id, db, user)
     dataset = get_ready_dataset(chart.dataset_id, db, user)
     ctx = DatasetContext.from_model(dataset)
+    filters = _applicable(filters, ctx)
     try:
         if _is_crosstab(chart.spec or {}):
             return execute_crosstab(ctx, _crosstab_from_chart(chart, filters))
@@ -143,6 +144,30 @@ def _get_chart(chart_id: str, db: DbSession, user: User) -> Chart:
     if dataset is None or not can_view(db, user, dataset.project_id):
         raise HTTPException(status_code=404, detail="Chart not found")
     return chart
+
+
+def _applicable(filters: FilterGroup | None, ctx: DatasetContext) -> FilterGroup | None:
+    """Drop conditions naming variables this dataset does not have.
+
+    A dashboard's widgets can draw on several datasets - the interview level,
+    the person level, the paradata - and a filter on "province" is meaningful
+    only to those that carry it. Passing it to the rest would fail the query and
+    replace those widgets with an error, so a dashboard-level filter narrows
+    what it can and leaves the others as they were.
+    """
+    if filters is None or filters.is_empty():
+        return filters
+    known = set(ctx.variables)
+
+    def prune(group: FilterGroup) -> FilterGroup:
+        return FilterGroup(
+            op=group.op,
+            conditions=[c for c in group.conditions if c.variable in known],
+            groups=[prune(g) for g in group.groups],
+        )
+
+    pruned = prune(filters)
+    return None if pruned.is_empty() else pruned
 
 
 def _is_crosstab(spec: dict[str, Any]) -> bool:
@@ -511,6 +536,7 @@ def _render_widget(
         if dataset is None or not dataset_is_queryable(dataset):
             return {"error": "The chart's dataset is unavailable"}
         ctx = DatasetContext.from_model(dataset)
+        filters = _applicable(filters, ctx)
         if _is_crosstab(chart.spec or {}):
             crosstab = execute_crosstab(ctx, _crosstab_from_chart(chart, filters))
             return {
