@@ -230,3 +230,53 @@ def test_download_reports_an_unreachable_host_rather_than_raising_transport_erro
     with make_client() as client, pytest.raises(SurveySolutionsError) as exc:
         client.download_export(job)
     assert "could not be reached" in str(exc.value)
+
+
+@respx.mock
+def test_an_export_is_kept_as_the_zip_it_arrived_as(tmp_path):
+    """The whole archive is what the platform imports, and what it hands back.
+
+    Keeping only the first data file threw away every roster level and all the
+    paradata; writing the zip down means the import path is the same one an
+    uploaded archive takes, and the file can be downloaded afterwards.
+    """
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        archive.writestr("household.dta", b"main")
+        archive.writestr("members.dta", b"roster")
+        archive.writestr("interview__actions.dta", b"paradata")
+    payload = buffer.getvalue()
+
+    respx.post(f"{BASE}/primary/api/v2/export").mock(
+        return_value=httpx.Response(
+            200, json={"JobId": 9, "ExportStatus": "Created", "HasExportFile": False}
+        )
+    )
+    respx.get(f"{BASE}/primary/api/v2/export/9").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "JobId": 9,
+                "ExportStatus": "Completed",
+                "HasExportFile": True,
+                "Links": {"Download": f"{BASE}/primary/api/v2/export/9/file"},
+            },
+        )
+    )
+    respx.get(f"{BASE}/primary/api/v2/export/9/file").mock(
+        return_value=httpx.Response(200, content=payload)
+    )
+
+    destination = tmp_path / "nested" / "export.zip"
+    with make_client() as client:
+        written = client.export_to_file("q1$2", destination, interview_status="All")
+
+    assert written == destination
+    assert destination.read_bytes() == payload
+    # Every member is still in it, paradata included
+    with zipfile.ZipFile(destination) as archive:
+        assert set(archive.namelist()) == {
+            "household.dta",
+            "members.dta",
+            "interview__actions.dta",
+        }

@@ -14,6 +14,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    text,
 )
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -60,6 +61,12 @@ class Connection(UUIDMixin, TimestampMixin, Base):
     questionnaires: Mapped[list] = mapped_column(JSON, default=list)
     interview_status: Mapped[str] = mapped_column(String(50), default="All")
 
+    # Where this connection's imports land. Null is the shared area, which is
+    # where every import went before a connection could name a project.
+    project_id: Mapped[str | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
     last_sync_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
     last_sync_status: Mapped[SyncStatus] = mapped_column(
         sync_status_type, default=SyncStatus.never
@@ -94,5 +101,8 @@ class SyncRun(UUIDMixin, Base):
     datasets_created: Mapped[int] = mapped_column(Integer, default=0)
     message: Mapped[str] = mapped_column(Text, default="")
     log: Mapped[list] = mapped_column(JSON, default=list)
+    # The export zip as it arrived, kept so it can be downloaded and re-used
+    # like any other export archive. Empty once it has been pruned.
+    archive_path: Mapped[str] = mapped_column(String(500), default="", server_default=text("''"))
 
     connection: Mapped[Connection] = relationship(back_populates="runs")

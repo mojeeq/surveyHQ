@@ -10,6 +10,7 @@ from typing import Any
 
 from sqlalchemy import select
 
+from app.core.config import settings
 from app.core.crypto import decrypt
 from app.core.logging import get_logger
 from app.db.base import utcnow
@@ -30,14 +31,14 @@ from app.models import (
     SyncRun,
     SyncStatus,
 )
-from app.services.datasets import create_dataset_record, load_file_into_dataset
+from app.services.datasets import load_archive_as_datasets, load_file_into_dataset
+from app.services.derived import rebuild_dependents
 from app.services.ingest import IngestError
 from app.services.monitoring import evaluate_alert_rule, refresh_indicator
 from app.services.quality import execute_rule
 from app.services.survey_solutions import (
     SurveySolutionsClient,
     SurveySolutionsError,
-    pick_main_file,
 )
 from app.workers.celery_app import celery_app
 
@@ -65,6 +66,7 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
     connection_id = params.get("connection_id")
     questionnaires: list[str] = list(params.get("questionnaires") or [])
     interview_status = params.get("interview_status") or "All"
+    mode = params.get("mode") or "replace"
 
     summary: dict[str, Any] = {"datasets": [], "errors": [], "rows": 0}
     workdir = Path(tempfile.mkdtemp(prefix="surveyhq-sync-"))
@@ -84,6 +86,7 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
             export_format = connection.export_format.value
             connection.last_sync_status = SyncStatus.running
             connection_name = connection.name
+            project_id = params.get("project_id") or connection.project_id
 
         with SurveySolutionsClient(**credentials) as client:
             catalogue = {q.identity: q for q in client.list_questionnaires()}
@@ -103,22 +106,22 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
                     run_id = run.id
 
                 try:
-                    target = workdir / identity.replace("$", "_")
-                    files = client.export_to_directory(
+                    # Kept where it can be downloaded again, and named after the
+                    # run so a connection's history is a list of real archives.
+                    archive = archives_path() / f"{run_id}.zip"
+                    client.export_to_file(
                         identity,
-                        target,
+                        archive,
                         export_type=export_format,  # type: ignore[arg-type]
                         interview_status=interview_status,  # type: ignore[arg-type]
                     )
-                    main_file = pick_main_file(
-                        files, questionnaire.variable if questionnaire else ""
-                    )
-                    rows = _import_export_file(
+                    outcome = _import_export_archive(
                         connection_id=str(connection_id),
                         connection_name=connection_name,
-                        identity=identity,
                         title=title,
-                        file_path=main_file,
+                        archive=archive,
+                        project_id=project_id,
+                        mode=mode,
                         summary=summary,
                     )
                     with session_scope() as db:
@@ -126,10 +129,14 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
                         if run:
                             run.status = SyncStatus.success
                             run.finished_at = utcnow()
-                            run.rows_imported = rows
-                            run.datasets_created = 1
-                            run.message = f"Imported {rows:,} records from {main_file.name}"
-                            run.log = [f.name for f in files]
+                            run.rows_imported = outcome["rows"]
+                            run.datasets_created = outcome["datasets"]
+                            run.archive_path = str(archive)
+                            run.message = (
+                                f"Imported {outcome['rows']:,} records into "
+                                f"{outcome['datasets']} dataset(s)"
+                            )
+                            run.log = outcome["log"]
                 except (SurveySolutionsError, IngestError) as exc:
                     logger.error("Sync failed for %s: %s", identity, exc)
                     summary["errors"].append({"questionnaire": title, "error": str(exc)})
@@ -139,6 +146,8 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
                             run.status = SyncStatus.failed
                             run.finished_at = utcnow()
                             run.message = str(exc)
+
+        prune_archives(str(connection_id))
 
         with session_scope() as db:
             connection = db.get(Connection, connection_id)
@@ -182,38 +191,85 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
         shutil.rmtree(workdir, ignore_errors=True)
 
 
-def _import_export_file(
+ARCHIVES_KEPT = 5
+
+
+def archives_path() -> Path:
+    return settings.storage_path / "sync-archives"
+
+
+def prune_archives(connection_id: str, keep: int = ARCHIVES_KEPT) -> None:
+    """Keep the last few export zips per connection and delete the rest.
+
+    An export is tens of megabytes and a connection syncing every six hours
+    produces four a day, so keeping all of them fills the disk of the machine
+    the platform runs on. The recent ones are the ones anybody downloads.
+    """
+    with session_scope() as db:
+        runs = db.scalars(
+            select(SyncRun)
+            .where(SyncRun.connection_id == connection_id, SyncRun.archive_path != "")
+            .order_by(SyncRun.started_at.desc())
+        ).all()
+        for run in runs[keep:]:
+            Path(run.archive_path).unlink(missing_ok=True)
+            run.archive_path = ""
+
+
+def _import_export_archive(
     *,
     connection_id: str,
     connection_name: str,
-    identity: str,
     title: str,
-    file_path: Path,
+    archive: Path,
+    project_id: str | None,
+    mode: str,
     summary: dict[str, Any],
-) -> int:
-    """Create or refresh the dataset backing one questionnaire."""
+) -> dict[str, Any]:
+    """Import a whole export, the same way an uploaded archive is imported.
+
+    A Survey Solutions export is one file per roster level plus the paradata,
+    and this used to keep only the first of them - so everything below the
+    interview level, and every record of how the fieldwork went, was downloaded
+    and thrown away. Sending the archive through the same path an upload takes
+    also means a re-import replaces each dataset in place, keeping the ids that
+    charts, indicators and merges are built on.
+    """
     with session_scope() as db:
-        dataset = db.scalar(
-            select(Dataset).where(
-                Dataset.connection_id == connection_id, Dataset.source_ref == identity
-            )
+        result = load_archive_as_datasets(
+            db,
+            archive_path=archive,
+            archive_name=f"{title}.zip",
+            project_id=project_id,
+            created_by=None,
+            name_prefix="",
+            mode=mode,
         )
-        if dataset is None:
-            dataset = create_dataset_record(
-                db,
-                name=f"{title} ({connection_name})",
-                description=f"Imported from Survey Solutions questionnaire {identity}",
-                source=DatasetSource.survey_solutions,
-                source_ref=identity,
-                connection_id=connection_id,
-                tags=["survey-solutions"],
+        rebuilt = rebuild_dependents(db, result.replaced_ids)
+        db.flush()
+        for dataset in result.datasets:
+            summary["datasets"].append(
+                {"id": dataset.id, "name": dataset.name, "rows": dataset.row_count}
             )
-        load_file_into_dataset(db, dataset, file_path)
-        summary["datasets"].append(
-            {"id": dataset.id, "name": dataset.name, "rows": dataset.row_count}
-        )
-        summary["rows"] += dataset.row_count
-        return dataset.row_count
+        summary["rows"] += result.rows
+        log = result.created + result.replaced + result.appended
+        if rebuilt:
+            log.append(f"{len(rebuilt)} merged dataset(s) rebuilt")
+        # The connection is recorded on each dataset so a later sync of the same
+        # questionnaire finds them, and so the UI can say where they came from.
+        for dataset in result.datasets:
+            dataset.connection_id = connection_id
+            if dataset.source == DatasetSource.upload:
+                dataset.source = DatasetSource.survey_solutions
+            tags = list(dataset.tags or [])
+            if connection_name and "survey-solutions" not in tags:
+                tags.append("survey-solutions")
+                dataset.tags = tags
+        return {
+            "rows": result.rows,
+            "datasets": len(result.datasets),
+            "log": log + result.warnings,
+        }
 
 
 @celery_app.task(name="app.workers.tasks.schedule_due_syncs")

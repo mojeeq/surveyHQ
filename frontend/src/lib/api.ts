@@ -87,9 +87,18 @@ export const api = {
   getBlob: (path: string) => request<Blob>(path, { raw: true }),
 }
 
-/** Trigger a browser download for an export endpoint. */
-export async function downloadFile(path: string, body: unknown, filename: string) {
-  const blob = await api.blob(path, body)
+/** Trigger a browser download for an export endpoint.
+ *
+ * Most exports are a POST carrying the query being exported; a stored file -
+ * an import's own archive - is a plain GET, hence the method.
+ */
+export async function downloadFile(
+  path: string,
+  body: unknown,
+  filename: string,
+  method: 'POST' | 'GET' = 'POST',
+) {
+  const blob = method === 'GET' ? await api.getBlob(path) : await api.blob(path, body)
   const url = URL.createObjectURL(blob)
   const anchor = document.createElement('a')
   anchor.href = url

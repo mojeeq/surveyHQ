@@ -280,6 +280,8 @@ export interface Connection {
   server_info: Record<string, unknown>
   created_at: string
   has_password: boolean
+  /** Where this connection's imports land. Null is the shared area. */
+  project_id: string | null
 }
 
 export interface Questionnaire {
@@ -302,6 +304,8 @@ export interface SyncRun {
   datasets_created: number
   message: string
   log: string[]
+  /** Whether the export zip is still on disk to be downloaded. */
+  has_archive: boolean
 }
 
 export type ChartType =

@@ -98,3 +98,20 @@ def dataset_id(client, auth_headers, stata_file) -> str:
         )
     assert response.status_code == 201, response.text
     return response.json()["id"]
+
+
+@pytest.fixture
+def db_session():
+    """A session for tests that need to set up rows the API cannot create.
+
+    A sync run, for instance: those are written by the worker, and the point of
+    the test is what the API does with one that already exists.
+    """
+    from app.db.session import SessionLocal
+
+    session = SessionLocal()
+    try:
+        yield session
+    finally:
+        session.rollback()
+        session.close()

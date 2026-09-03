@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi.responses import FileResponse
+from slugify import slugify
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DbSession, RequireManager
@@ -77,6 +80,7 @@ def create_connection(
         export_format=payload.export_format,
         questionnaires=payload.questionnaires,
         interview_status=payload.interview_status,
+        project_id=payload.project_id,
         created_by=user.id,
     )
     db.add(connection)
@@ -279,6 +283,8 @@ def trigger_sync(
             "connection_id": connection.id,
             "questionnaires": questionnaires,
             "interview_status": payload.interview_status or connection.interview_status,
+            "project_id": payload.project_id or connection.project_id,
+            "mode": payload.mode,
         },
         created_by=user.id,
     )
@@ -313,16 +319,49 @@ def trigger_sync(
     return job
 
 
+@router.get("/{connection_id}/runs/{run_id}/archive")
+def download_sync_archive(
+    connection_id: str, run_id: str, db: DbSession, _: CurrentUser
+) -> Response:
+    """The export zip exactly as the server sent it.
+
+    Worth keeping and worth handing back: it is the only record of what was
+    actually imported, and it can be re-uploaded like any other archive.
+    """
+    _get(connection_id, db)
+    run = db.get(SyncRun, run_id)
+    if run is None or run.connection_id != connection_id:
+        raise HTTPException(status_code=404, detail="Sync run not found")
+    path = Path(run.archive_path) if run.archive_path else None
+    if path is None or not path.is_file():
+        raise HTTPException(
+            status_code=404,
+            detail="The export file for this run is no longer on the server.",
+        )
+    stem = slugify(run.questionnaire or "export") or "export"
+    return FileResponse(
+        path,
+        media_type="application/zip",
+        filename=f"{stem}-{run.started_at:%Y%m%d-%H%M}.zip",
+    )
+
+
 @router.get("/{connection_id}/runs", response_model=list[SyncRunOut])
 def list_sync_runs(
     connection_id: str, db: DbSession, _: CurrentUser, limit: int = 20
-) -> list[SyncRun]:
+) -> list[SyncRunOut]:
     _get(connection_id, db)
-    return list(
-        db.scalars(
-            select(SyncRun)
-            .where(SyncRun.connection_id == connection_id)
-            .order_by(SyncRun.started_at.desc())
-            .limit(limit)
-        ).all()
-    )
+    runs = db.scalars(
+        select(SyncRun)
+        .where(SyncRun.connection_id == connection_id)
+        .order_by(SyncRun.started_at.desc())
+        .limit(limit)
+    ).all()
+    out: list[SyncRunOut] = []
+    for run in runs:
+        item = SyncRunOut.model_validate(run)
+        # Checked on disk rather than believed from the row: archives are
+        # pruned, and offering a download that 404s is worse than not offering.
+        item.has_archive = bool(run.archive_path) and Path(run.archive_path).is_file()
+        out.append(item)
+    return out
