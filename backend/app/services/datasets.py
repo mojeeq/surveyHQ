@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from dataclasses import field as dc_field
 from pathlib import Path
@@ -367,6 +368,7 @@ def load_archive_as_datasets(
     combine_all: bool = False,
     name_prefix: str = "",
     mode: str = "replace",
+    after_replace: Callable[[Session, Dataset], list[str]] | None = None,
 ) -> ArchiveImport:
     """Import an archive as one dataset per member file.
 
@@ -457,6 +459,16 @@ def load_archive_as_datasets(
                         [],
                     )
                     _apply_ingest(db, existing, ingested)
+                    # Anything recorded against this dataset - a generated
+                    # variable, a hand-written label - is put back before the
+                    # check below, or it would report as lost a variable that
+                    # is about to exist again.
+                    now = {v.name for v in ingested.variables}
+                    if after_replace is not None:
+                        outcome.warnings.extend(after_replace(db, existing))
+                        db.flush()
+                        db.refresh(existing)
+                        now = {v.name for v in existing.variables}
                     outcome.replaced.append(
                         f"{member.name} -> {existing.name} "
                         f"({before} rows replaced by {existing.row_count})"
@@ -464,9 +476,7 @@ def load_archive_as_datasets(
                     outcome.replaced_ids.append(existing.id)
                     outcome.rows += existing.row_count
                     outcome.warnings.extend(
-                        _lost_variable_warnings(
-                            db, existing, had, {v.name for v in ingested.variables}
-                        )
+                        _lost_variable_warnings(db, existing, had, now)
                     )
                 outcome.datasets.append(existing)
                 continue

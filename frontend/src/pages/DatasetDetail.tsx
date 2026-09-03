@@ -22,7 +22,7 @@ import {
   Tabs,
 } from '@/components/ui'
 
-type TabId = 'variables' | 'data' | 'summary' | 'progress'
+type TabId = 'variables' | 'data' | 'summary' | 'progress' | 'command'
 
 const TYPE_TONE = {
   numeric: 'info',
@@ -149,6 +149,7 @@ export default function DatasetDetail() {
           { id: 'data', label: 'Data' },
           { id: 'summary', label: 'Statistics' },
           { id: 'progress', label: 'Field progress' },
+          ...(can('manager') ? [{ id: 'command' as const, label: 'Command' }] : []),
         ]}
         active={tab}
         onChange={setTab}
@@ -240,6 +241,7 @@ export default function DatasetDetail() {
         {tab === 'data' && <DataPreview datasetId={id} totalRows={data.row_count} />}
         {tab === 'summary' && <SummaryPanel datasetId={id} variables={variables} />}
         {tab === 'progress' && <ProgressPanel datasetId={id} />}
+        {tab === 'command' && <CommandPanel datasetId={id} />}
       </div>
 
       {appending && <AppendModal datasetId={id} onClose={() => setAppending(false)} />}
@@ -777,5 +779,190 @@ function LabelModal({
         )}
       </Field>
     </Modal>
+  )
+}
+
+
+/**
+ * A Stata-style command line over the dataset.
+ *
+ * The idioms are the ones anybody who has prepared survey data types without
+ * thinking, and reaching for a spreadsheet to add one derived column is a poor
+ * substitute for them. What is typed here is not sent to the database as
+ * written: it is parsed, every name in it has to be a variable of this
+ * dataset, and only a listed few functions are understood.
+ *
+ * The commands are kept and re-run after a newer export replaces the data,
+ * which is what stops a generated variable disappearing on exactly the upload
+ * this platform exists to make routine.
+ */
+const EXAMPLES = [
+  'gen adult = age >= 18',
+  'gen band = 1 if age < 18',
+  'replace band = 2 if age >= 18',
+  'egen n_in_region = count(interview__key), by(region)',
+  'egen household_size = rowtotal(men women)',
+  'label variable age "Age in years"',
+  'label define yn 1 "Yes" 2 "No"',
+  'label values consent yn',
+  'rename q1 age',
+  'drop if age == .',
+  'keep if region == "North"',
+]
+
+function CommandPanel({ datasetId }: { datasetId: string }) {
+  const toast = useToast()
+  const queryClient = useQueryClient()
+  const [text, setText] = useState('')
+  const [log, setLog] = useState<{ command: string; message: string; ok: boolean }[]>([])
+  const [recalled, setRecalled] = useState(-1)
+
+  const history = useQuery({
+    queryKey: ['commands', datasetId],
+    queryFn: () => api.get<string[]>(`/datasets/${datasetId}/commands`),
+  })
+
+  const run = useMutation({
+    mutationFn: (command: string) =>
+      api.post<{ message: string; rows: number; columns: number }>(
+        `/datasets/${datasetId}/command`,
+        { command },
+      ),
+    onSuccess: (result, command) => {
+      setLog((entries) => [{ command, message: result.message, ok: true }, ...entries])
+      setText('')
+      setRecalled(-1)
+      queryClient.invalidateQueries({ queryKey: ['dataset', datasetId] })
+      queryClient.invalidateQueries({ queryKey: ['commands', datasetId] })
+      queryClient.invalidateQueries({ queryKey: ['preview', datasetId] })
+    },
+    onError: (error: Error, command) =>
+      setLog((entries) => [{ command, message: error.message, ok: false }, ...entries]),
+  })
+
+  const forget = useMutation({
+    mutationFn: () => api.delete(`/datasets/${datasetId}/commands`),
+    onSuccess: () => {
+      toast.push('Command history cleared', 'info')
+      queryClient.invalidateQueries({ queryKey: ['commands', datasetId] })
+    },
+  })
+
+  const submit = () => {
+    const command = text.trim()
+    if (command) run.mutate(command)
+  }
+
+  // Up and down walk back through what has been run, as a shell does.
+  const onKeyDown = (event: React.KeyboardEvent<HTMLInputElement>) => {
+    const past = history.data ?? []
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      submit()
+    } else if (event.key === 'ArrowUp' && past.length) {
+      event.preventDefault()
+      const next = recalled < 0 ? past.length - 1 : Math.max(0, recalled - 1)
+      setRecalled(next)
+      setText(past[next])
+    } else if (event.key === 'ArrowDown' && recalled >= 0) {
+      event.preventDefault()
+      const next = recalled + 1
+      if (next >= past.length) {
+        setRecalled(-1)
+        setText('')
+      } else {
+        setRecalled(next)
+        setText(past[next])
+      }
+    }
+  }
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-3">
+      <div className="lg:col-span-2">
+        <Card title="Command">
+          <div className="flex items-center gap-2">
+            <span className="font-mono text-sm text-ink-400">.</span>
+            <input
+              className="input font-mono text-sm"
+              value={text}
+              onChange={(event) => setText(event.target.value)}
+              onKeyDown={onKeyDown}
+              placeholder="gen adult = age >= 18"
+              spellCheck={false}
+              autoFocus
+            />
+            <button className="btn-primary" onClick={submit} disabled={run.isPending || !text.trim()}>
+              {run.isPending && <Spinner className="h-4 w-4 text-white" />}
+              Run
+            </button>
+          </div>
+          <p className="mt-2 text-xs text-ink-500">
+            Changes the data in place. Every command is kept and re-run after a newer export
+            replaces this dataset, so what you build here survives the next import.
+          </p>
+
+          {log.length > 0 && (
+            <div className="mt-4 max-h-80 overflow-auto rounded border border-ink-200 bg-ink-50 p-3 font-mono text-xs">
+              {log.map((entry, index) => (
+                <div key={index} className="mb-2">
+                  <div className="text-ink-700">. {entry.command}</div>
+                  <div className={entry.ok ? 'text-green-700' : 'text-red-700'}>
+                    {entry.message}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </Card>
+      </div>
+
+      <div className="space-y-4">
+        <Card
+          title="Kept for the next import"
+          subtitle={`${history.data?.length ?? 0} command(s) will be re-run`}
+          actions={
+            (history.data?.length ?? 0) > 0 && (
+              <button
+                className="btn-ghost btn-sm text-red-600"
+                onClick={() => {
+                  if (confirm('Stop re-running these? What they already did stays done.'))
+                    forget.mutate()
+                }}
+              >
+                Clear
+              </button>
+            )
+          }
+        >
+          {!history.data?.length ? (
+            <p className="text-sm text-ink-400">Nothing recorded yet.</p>
+          ) : (
+            <ol className="space-y-1 font-mono text-xs text-ink-600">
+              {history.data.map((command, index) => (
+                <li key={index} className="truncate" title={command}>
+                  {index + 1}. {command}
+                </li>
+              ))}
+            </ol>
+          )}
+        </Card>
+
+        <Card title="Commands it understands">
+          <ul className="space-y-1 font-mono text-xs text-ink-600">
+            {EXAMPLES.map((example) => (
+              <li key={example}>
+                <button
+                  className="text-left hover:text-brand-700 hover:underline"
+                  onClick={() => setText(example)}
+                >
+                  {example}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      </div>
+    </div>
   )
 }

@@ -27,6 +27,12 @@ class VariableOut(BaseModel):
     is_hidden: bool = False
 
 
+class CommandRequest(BaseModel):
+    """One Stata-style command, e.g. gen adult = age >= 18."""
+
+    command: str = Field(min_length=1, max_length=2000)
+
+
 class VariableUpdate(BaseModel):
     """Labels a person writes for a variable the export did not label."""
 
