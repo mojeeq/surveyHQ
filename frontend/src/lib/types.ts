@@ -376,6 +376,12 @@ export interface Appearance {
   background_fit?: 'cover' | 'contain' | 'tile'
   /** 0-1: how much white is laid over the image to keep widgets readable. */
   fade?: number
+  /** Grid columns: more is finer placement, not more room. Defaults to 12. */
+  columns?: number
+  /** Pixel height of one grid row. Defaults to 74. */
+  row_height?: number
+  /** A canvas wider than the window, which then scrolls sideways. 0 = fit. */
+  canvas_width?: number
 }
 
 export interface Dashboard {

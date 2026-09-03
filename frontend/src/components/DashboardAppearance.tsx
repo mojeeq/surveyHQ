@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useToast } from '@/hooks/useToast'
-import type { Appearance } from '@/lib/types'
+import type { Appearance, Widget } from '@/lib/types'
 import { Field, Modal } from '@/components/ui'
 
 /** Ready-made grounds, so a usable background does not need a colour picker. */
@@ -99,10 +99,13 @@ export function canvasStyle(
 export default function AppearanceModal({
   dashboardId,
   appearance,
+  widgets,
   onClose,
 }: {
   dashboardId: string
   appearance: Appearance
+  /** Every widget, so a change of column count can carry them with it. */
+  widgets: Widget[]
   onClose: () => void
 }) {
   const toast = useToast()
@@ -111,6 +114,9 @@ export default function AppearanceModal({
   const [draft, setDraft] = useState<Appearance>({
     background_fit: 'cover',
     fade: 0,
+    columns: 12,
+    row_height: 74,
+    canvas_width: 0,
     ...appearance,
   })
 
@@ -119,10 +125,42 @@ export default function AppearanceModal({
   }
 
   const save = useMutation({
-    mutationFn: (next: Appearance) =>
-      api.patch(`/dashboards/${dashboardId}`, { appearance: next }),
+    mutationFn: (next: Appearance) => {
+      const before = Number(appearance.columns) || 12
+      const after = Number(next.columns) || 12
+      if (before === after) {
+        return api.patch(`/dashboards/${dashboardId}`, { appearance: next })
+      }
+      // Widget positions are in columns, not pixels, so changing the count
+      // without moving them would halve every widget on the way to 24 and
+      // overflow every one on the way back. Scaled, they stay where they look.
+      const scale = after / before
+      return api.patch(`/dashboards/${dashboardId}`, {
+        appearance: next,
+        widgets: widgets.map((widget) => {
+          const layout = widget.layout ?? {}
+          const w = Math.max(1, Math.min(after, Math.round(Number(layout.w ?? 6) * scale)))
+          return {
+            id: widget.id,
+            title: widget.title,
+            widget_type: widget.widget_type,
+            chart_id: widget.chart_id,
+            indicator_id: widget.indicator_id,
+            dataset_id: widget.dataset_id,
+            config: widget.config,
+            position: widget.position,
+            page: widget.page ?? 0,
+            layout: {
+              ...layout,
+              x: Math.max(0, Math.min(after - w, Math.round(Number(layout.x ?? 0) * scale))),
+              w,
+            },
+          }
+        }),
+      })
+    },
     onSuccess: () => {
-      toast.push('Background saved', 'success')
+      toast.push('Appearance saved', 'success')
       refresh()
       onClose()
     },
@@ -166,7 +204,7 @@ export default function AppearanceModal({
     <Modal
       open
       onClose={onClose}
-      title="Dashboard background"
+      title="Dashboard appearance"
       footer={
         <>
           <button className="btn-secondary" onClick={onClose}>
@@ -178,6 +216,52 @@ export default function AppearanceModal({
         </>
       }
     >
+      <Field
+        label="Canvas width"
+        hint="Wider than the window gives more room to spread out, and scrolls sideways to reach it."
+      >
+        <select
+          className="input"
+          value={String(draft.canvas_width ?? 0)}
+          onChange={(event) =>
+            setDraft({ ...draft, canvas_width: Number(event.target.value) })
+          }
+        >
+          <option value="0">Fit the window</option>
+          <option value="1600">Wide (1600px)</option>
+          <option value="2000">Wider (2000px)</option>
+          <option value="2600">Widest (2600px)</option>
+        </select>
+      </Field>
+
+      <div className="grid gap-x-4 sm:grid-cols-2">
+        <Field
+          label="Columns"
+          hint="More columns place widgets more finely. Existing widgets move with it."
+        >
+          <select
+            className="input"
+            value={String(draft.columns ?? 12)}
+            onChange={(event) => setDraft({ ...draft, columns: Number(event.target.value) })}
+          >
+            <option value="12">12 — standard</option>
+            <option value="16">16 — finer</option>
+            <option value="24">24 — finest</option>
+          </select>
+        </Field>
+        <Field label="Row height" hint="Taller rows make every widget taller.">
+          <select
+            className="input"
+            value={String(draft.row_height ?? 74)}
+            onChange={(event) => setDraft({ ...draft, row_height: Number(event.target.value) })}
+          >
+            <option value="56">Compact</option>
+            <option value="74">Standard</option>
+            <option value="96">Tall</option>
+          </select>
+        </Field>
+      </div>
+
       <Field label="Background colour">
         <div className="flex flex-wrap items-center gap-2">
           {BACKGROUNDS.map((option) => (
