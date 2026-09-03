@@ -446,6 +446,7 @@ def test_a_later_archive_appends_each_file_to_its_match(client, auth_headers):
                 "application/zip",
             )
         },
+        data={"mode": "append"},
     )
     assert first.status_code == 201, first.text
     assert len(first.json()["created"]) == 2
@@ -460,6 +461,7 @@ def test_a_later_archive_appends_each_file_to_its_match(client, auth_headers):
                 "application/zip",
             )
         },
+        data={"mode": "append"},
     )
     assert second.status_code == 201, second.text
     body = second.json()
@@ -546,11 +548,13 @@ def test_re_uploading_the_same_archive_warns_that_interviews_are_doubled(
         "/api/v1/datasets/upload",
         headers=auth_headers,
         files={"file": ("cumulative-1.zip", payload, "application/zip")},
+        data={"mode": "append"},
     )
     again = client.post(
         "/api/v1/datasets/upload",
         headers=auth_headers,
         files={"file": ("cumulative-2.zip", payload, "application/zip")},
+        data={"mode": "append"},
     )
     assert again.status_code == 201, again.text
     warnings = " ".join(again.json()["warnings"])

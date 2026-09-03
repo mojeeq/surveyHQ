@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 import tempfile
 from dataclasses import dataclass
@@ -18,6 +19,7 @@ from app.core.logging import get_logger
 from app.db.base import utcnow
 from app.models import Dataset, DatasetSource, DatasetStatus, Variable, VariableType
 from app.services.archives import (
+    PARADATA_TAG,
     SOURCE_COLUMN,
     by_member_name,
     combine,
@@ -298,6 +300,7 @@ class ArchiveImport:
     datasets: list[Dataset] = dc_field(default_factory=list)
     created: list[str] = dc_field(default_factory=list)
     appended: list[str] = dc_field(default_factory=list)
+    replaced: list[str] = dc_field(default_factory=list)
     skipped: list[str] = dc_field(default_factory=list)
     warnings: list[str] = dc_field(default_factory=list)
     rows: int = 0
@@ -355,16 +358,27 @@ def load_archive_as_datasets(
     created_by: str | None = None,
     combine_all: bool = False,
     name_prefix: str = "",
+    mode: str = "replace",
 ) -> ArchiveImport:
     """Import an archive as one dataset per member file.
 
     An export holds one file per roster level - interview, household member,
-    person abroad - so each becomes its own dataset. A second archive from a
-    later round carries the same member names, and each of its files is appended
-    to the dataset holding that name rather than creating a duplicate.
+    person abroad - so each becomes its own dataset. A later archive carries the
+    same member names, and each of its files goes to the dataset already holding
+    that name rather than creating a duplicate.
 
-    combine_all is the escape hatch for an archive that really does hold several
-    rounds of one table: every member is appended into a single dataset instead.
+    mode decides what "goes to" means:
+
+      replace  the dataset's data is swapped for the new file's. The dataset row
+               keeps its id, so every relationship, chart, indicator and quality
+               rule built on it goes on working. This is what a live monitoring
+               tool needs: a fresh export every morning should update the
+               numbers, not accumulate yesterday's rows underneath today's.
+      append   the new rows are added to what is there, for genuinely
+               incremental exports where each file holds only what is new.
+
+    combine_all is a separate escape hatch for an archive that really does hold
+    several rounds of one table: every member goes into a single dataset.
     """
     workdir = Path(tempfile.mkdtemp(prefix="surveyhq-archive-"))
     outcome = ArchiveImport()
@@ -410,15 +424,42 @@ def load_archive_as_datasets(
             )
             if existing is not None and dataset_is_queryable(existing):
                 before = existing.row_count
-                append_frame_into_dataset(
-                    db, existing, frame, member.variable_labels, member.value_labels
-                )
+                if mode == "append":
+                    append_frame_into_dataset(
+                        db, existing, frame, member.variable_labels, member.value_labels
+                    )
+                    outcome.appended.append(
+                        f"{member.name} -> {existing.name} "
+                        f"({before} + {len(frame)} = {existing.row_count} rows)"
+                    )
+                    outcome.rows += len(frame)
+                else:
+                    # Everything built on this dataset points at its id, so the
+                    # row is kept and only its data swapped. Losing a variable is
+                    # the one way that can still break something, so it is
+                    # checked for rather than hoped about.
+                    had = {v.name for v in existing.variables}
+                    labels = dict(member.variable_labels)
+                    labels.setdefault(SOURCE_COLUMN, "Archive this row was imported from")
+                    ingested = ingest_frame(
+                        frame,
+                        labels,
+                        member.value_labels,
+                        dataset_directory(existing.id),
+                        [],
+                    )
+                    _apply_ingest(db, existing, ingested)
+                    outcome.replaced.append(
+                        f"{member.name} -> {existing.name} "
+                        f"({before} rows replaced by {existing.row_count})"
+                    )
+                    outcome.rows += existing.row_count
+                    outcome.warnings.extend(
+                        _lost_variable_warnings(
+                            db, existing, had, {v.name for v in ingested.variables}
+                        )
+                    )
                 outcome.datasets.append(existing)
-                outcome.appended.append(
-                    f"{member.name} -> {existing.name} "
-                    f"({before} + {len(frame)} = {existing.row_count} rows)"
-                )
-                outcome.rows += len(frame)
                 continue
 
             stem = Path(member.name).stem
@@ -433,6 +474,7 @@ def load_archive_as_datasets(
                 source_ref=member.name,
                 created_by=created_by,
                 project_id=project_id,
+                tags=[PARADATA_TAG] if member.is_paradata else [],
             )
             labels = dict(member.variable_labels)
             labels.setdefault(SOURCE_COLUMN, "Archive this row was imported from")
@@ -491,4 +533,61 @@ def _duplicate_key_warnings(
             + ", ".join(str(v) for v in sorted(overlap)[:3])
         )
         break  # one identity column is enough; the second would say the same
+    return warnings
+
+
+def _lost_variable_warnings(
+    db: Session, dataset: Dataset, had: set[str], now: set[str]
+) -> list[str]:
+    """Name what a replacement broke, rather than leaving it to be discovered.
+
+    Replacing a dataset in place is what keeps a live monitoring setup working:
+    the row keeps its id, so relationships, charts, indicators and quality rules
+    all still point at it. The one thing that still breaks it is a variable
+    disappearing - a question dropped between rounds - and nothing about the
+    import would otherwise say so. The chart just fails the next time somebody
+    opens the dashboard.
+    """
+    from app.models import Chart, Indicator, QualityRule
+
+    # The new names come from the ingest result, not from dataset.variables:
+    # the relationship is still holding the rows that were just replaced, so
+    # reading it here would compare the old list against itself and find nothing.
+    lost = {name for name in had - now if not name.endswith(MISSING_TAG_SUFFIX)}
+    if not lost:
+        return []
+
+    warnings = [
+        f"'{dataset.name}' no longer has {len(lost)} variable(s) it had before: "
+        + ", ".join(sorted(lost)[:6])
+        + ("..." if len(lost) > 6 else "")
+    ]
+
+    # Anything referring to a lost variable by name is now broken. The specs are
+    # free-form JSON, so this looks for the name in the serialised spec rather
+    # than trying to parse every shape a spec can take.
+    def mentions(blob: object) -> set[str]:
+        text = json.dumps(blob or {})
+        return {name for name in lost if f'"{name}"' in text}
+
+    broken: list[str] = []
+    for chart in db.scalars(select(Chart).where(Chart.dataset_id == dataset.id)):
+        if mentions(chart.spec):
+            broken.append(f"chart '{chart.name}'")
+    for indicator in db.scalars(
+        select(Indicator).where(Indicator.dataset_id == dataset.id)
+    ):
+        if mentions(indicator.spec) or indicator.breakdown_variable in lost:
+            broken.append(f"indicator '{indicator.name}'")
+    for rule in db.scalars(
+        select(QualityRule).where(QualityRule.dataset_id == dataset.id)
+    ):
+        if mentions(rule.config) or mentions(rule.filters):
+            broken.append(f"quality check '{rule.name}'")
+
+    if broken:
+        warnings.append(
+            f"{len(broken)} saved item(s) refer to those variables and will now "
+            "fail: " + ", ".join(broken[:6]) + ("..." if len(broken) > 6 else "")
+        )
     return warnings

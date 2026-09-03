@@ -571,3 +571,172 @@ def test_a_many_to_many_link_refuses_to_merge(client, auth_headers):
     )
     assert refused.status_code == 422
     assert "multiply rows" in refused.json()["detail"]
+
+
+def test_replacing_a_project_s_data_keeps_what_was_built_on_it(client, auth_headers):
+    """The live-monitoring case: a fresh export updates the numbers, and the
+    relationships, charts, indicators and quality rules go on working.
+
+    That holds because the dataset row keeps its id and only its data is
+    swapped. Nothing here would notice if a replace created new datasets
+    instead - so each saved object is used again afterwards, not merely counted.
+    """
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Live monitoring"}
+    ).json()
+
+    def archive(keys, provinces, person_keys, ages):
+        return _zip_bytes(
+            {
+                "live_main.dta": _stata_bytes(
+                    pd.DataFrame({"interview__id": keys, "province": provinces})
+                ),
+                "live_people.dta": _stata_bytes(
+                    pd.DataFrame({"interview__id": person_keys, "age": ages})
+                ),
+            }
+        )
+
+    monday = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("monday.zip", archive(["i1", "i2"], [1.0, 2.0], ["i1", "i2"], [30.0, 40.0]), "application/zip")},
+        data={"project_id": project["id"]},
+    )
+    assert monday.status_code == 201, monday.text
+    before = {d["name"]: d for d in monday.json()["datasets"]}
+    main_id = before["live_main"]["id"]
+
+    # Build the things a user would build on it
+    client.post(f"/api/v1/relationships/detect?project_id={project['id']}", headers=auth_headers)
+    relationship = client.get(
+        f"/api/v1/relationships?project_id={project['id']}", headers=auth_headers
+    ).json()[0]
+
+    chart = client.post(
+        "/api/v1/dashboards/charts",
+        headers=auth_headers,
+        json={
+            "name": "By province",
+            "dataset_id": main_id,
+            "chart_type": "bar",
+            "spec": {"query": {"dimensions": [{"variable": "province"}], "measures": [{"agg": "count"}]}},
+        },
+    ).json()
+    indicator = client.post(
+        "/api/v1/monitoring/indicators",
+        headers=auth_headers,
+        json={"name": "Interviews", "dataset_id": main_id, "spec": {"measures": [{"agg": "count"}]}},
+    ).json()
+    assert indicator["last_value"] == 2
+
+    # Wednesday's export: the same questions, more interviews
+    wednesday = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "wednesday.zip",
+                archive(["i1", "i2", "i3", "i4"], [1.0, 2.0, 1.0, 3.0],
+                        ["i1", "i2", "i3"], [30.0, 40.0, 22.0]),
+                "application/zip",
+            )
+        },
+        data={"project_id": project["id"]},
+    )
+    assert wednesday.status_code == 201, wednesday.text
+    body = wednesday.json()
+    assert body["created"] == [], body["created"]
+    assert len(body["replaced"]) == 2, body
+
+    # Replaced, not accumulated: 4 interviews, not 2 + 4
+    after = {d["name"]: d for d in body["datasets"]}
+    assert after["live_main"]["row_count"] == 4
+    assert after["live_main"]["id"] == main_id
+
+    # The relationship still points at the same datasets and still merges
+    still_there = client.get(
+        f"/api/v1/relationships?project_id={project['id']}", headers=auth_headers
+    ).json()
+    assert [r["id"] for r in still_there] == [relationship["id"]]
+    merged = client.post(
+        "/api/v1/relationships/merge",
+        headers=auth_headers,
+        json={"name": "After replace", "relationship_id": relationship["id"], "how": "inner"},
+    )
+    assert merged.status_code == 201, merged.text
+
+    # The chart runs against the new data
+    rendered = client.post(
+        f"/api/v1/dashboards/charts/{chart['id']}/data", headers=auth_headers
+    )
+    assert rendered.status_code == 200, rendered.text
+    assert sum(row[1] for row in rendered.json()["rows"]) == 4
+
+    # And the indicator reports the new number
+    refreshed = client.post(
+        f"/api/v1/monitoring/indicators/{indicator['id']}/refresh", headers=auth_headers
+    )
+    assert refreshed.status_code == 200, refreshed.text
+    assert refreshed.json()["value"] == 4
+
+
+def test_a_replacement_that_drops_a_variable_says_what_it_broke(client, auth_headers):
+    """The one way a replace still breaks things, so it is not left to be found
+    when somebody opens the dashboard."""
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Dropped question"}
+    ).json()
+
+    full = _zip_bytes(
+        {
+            "drop_test.dta": _stata_bytes(
+                pd.DataFrame({"interview__id": ["a", "b"], "region": [1.0, 2.0], "income": [10.0, 20.0]})
+            )
+        }
+    )
+    first = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("with-income.zip", full, "application/zip")},
+        data={"project_id": project["id"]},
+    )
+    dataset_id = first.json()["datasets"][0]["id"]
+    client.post(
+        "/api/v1/dashboards/charts",
+        headers=auth_headers,
+        json={
+            "name": "Mean income",
+            "dataset_id": dataset_id,
+            "chart_type": "bar",
+            "spec": {"query": {"dimensions": [{"variable": "region"}],
+                               "measures": [{"agg": "mean", "variable": "income"}]}},
+        },
+    )
+
+    # The next export no longer carries income
+    without = _zip_bytes(
+        {
+            "drop_test.dta": _stata_bytes(
+                pd.DataFrame({"interview__id": ["a", "b", "c"], "region": [1.0, 2.0, 1.0]})
+            )
+        }
+    )
+    second = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("without-income.zip", without, "application/zip")},
+        data={"project_id": project["id"]},
+    )
+    assert second.status_code == 201, second.text
+    warnings = " ".join(second.json()["warnings"])
+    assert "no longer has" in warnings and "income" in warnings, warnings
+    assert "Mean income" in warnings, warnings

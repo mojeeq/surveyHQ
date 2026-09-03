@@ -191,6 +191,7 @@ function UploadModal({ open, onClose }: { open: boolean; onClose: () => void }) 
   const [tags, setTags] = useState('')
   const [combineAll, setCombineAll] = useState(false)
   const [projectId, setProjectId] = useState('')
+  const [mode, setMode] = useState<'replace' | 'append'>('replace')
   const [isZip, setIsZip] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -211,6 +212,7 @@ function UploadModal({ open, onClose }: { open: boolean; onClose: () => void }) 
     form.append('tags', tags)
     form.append('combine_all', String(combineAll))
     form.append('project_id', projectId)
+    form.append('mode', mode)
     try {
       const body = await api.upload<Dataset | ArchiveImport>('/datasets/upload', form)
       queryClient.invalidateQueries({ queryKey: ['datasets'] })
@@ -312,7 +314,44 @@ function UploadModal({ open, onClose }: { open: boolean; onClose: () => void }) 
             A <code className="text-xs">source_file</code> column records which
             archive each row arrived in.
           </p>
-          <label className="mt-2 flex items-start gap-2 text-sm text-brand-900">
+          <div className="mt-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-brand-900">
+              When a dataset already holds that file
+            </p>
+            <label className="mt-1 flex items-start gap-2 text-sm text-brand-900">
+              <input
+                type="radio"
+                className="mt-0.5"
+                checked={mode === 'replace'}
+                onChange={() => setMode('replace')}
+              />
+              <span>
+                Replace its data
+                <span className="block text-xs text-brand-800/80">
+                  The dataset keeps its identity, so relationships, charts,
+                  indicators and quality checks built on it go on working. Use
+                  this for a fresh export of everything collected so far.
+                </span>
+              </span>
+            </label>
+            <label className="mt-1.5 flex items-start gap-2 text-sm text-brand-900">
+              <input
+                type="radio"
+                className="mt-0.5"
+                checked={mode === 'append'}
+                onChange={() => setMode('append')}
+              />
+              <span>
+                Add its rows to what is there
+                <span className="block text-xs text-brand-800/80">
+                  For an export that contains only what is new. Appending a
+                  cumulative export counts the same interviews twice.
+                </span>
+              </span>
+            </label>
+          </div>
+
+          <label className="mt-3 flex items-start gap-2 text-sm text-brand-900">
             <input
               type="checkbox"
               className="mt-0.5"
@@ -383,6 +422,7 @@ function ArchiveResult({ result }: { result: ArchiveImport }) {
 
       {[
         ['Created', result.created] as const,
+        ['Replaced', result.replaced] as const,
         ['Appended to existing datasets', result.appended] as const,
         ['Skipped', result.skipped] as const,
       ]

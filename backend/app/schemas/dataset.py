@@ -68,6 +68,7 @@ class ArchiveImportOut(BaseModel):
     datasets: list[DatasetOut] = Field(default_factory=list)
     created: list[str] = Field(default_factory=list)
     appended: list[str] = Field(default_factory=list)
+    replaced: list[str] = Field(default_factory=list)
     skipped: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     rows: int = 0

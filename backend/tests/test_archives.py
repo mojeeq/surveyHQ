@@ -59,16 +59,24 @@ def test_members_are_appended_with_their_source_file(two_rounds, tmp_path):
     assert sorted(result.frame["id"].tolist()) == [1, 2, 3, 4]
 
 
-def test_survey_solutions_system_files_are_ignored(tmp_path):
-    """An export ships action and error logs beside the data; they are not rounds."""
+def test_paradata_is_imported_and_marked_as_such(tmp_path):
+    """An export ships action and comment logs beside the responses.
+
+    They are not survey answers, they are the record of how the fieldwork
+    happened - who did what and when, how long an interview took, what a
+    supervisor rejected - which is the subject of a monitoring tool. They are
+    imported like any other level, and flagged so they can be told apart.
+    """
     data = _stata(tmp_path / "household.dta", pd.DataFrame({"id": [1], "age": [30.0]}))
     actions = _stata(
         tmp_path / "interview__actions.dta", pd.DataFrame({"id": [1], "action": [2.0]})
     )
     archive = _zip(tmp_path / "export.zip", [data, actions])
 
-    members = extract_members(archive, tmp_path / "work")
-    assert [m.name for m in members] == ["household.dta"]
+    members = {m.name: m for m in extract_members(archive, tmp_path / "work")}
+    assert set(members) == {"household.dta", "interview__actions.dta"}
+    assert members["interview__actions.dta"].is_paradata is True
+    assert members["household.dta"].is_paradata is False
 
 
 def test_files_with_different_schemas_are_grouped_apart(tmp_path):

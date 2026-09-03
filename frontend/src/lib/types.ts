@@ -333,6 +333,8 @@ export interface ArchiveImport {
   created: string[]
   /** "R_demographics.dta -> R_demographics (401 + 381 = 782 rows)" */
   appended: string[]
+  /** "R_demographics.dta -> R_demographics (401 rows replaced by 415)" */
+  replaced: string[]
   skipped: string[]
   warnings: string[]
   rows: number
