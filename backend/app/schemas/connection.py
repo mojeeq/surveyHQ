@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
@@ -19,6 +19,7 @@ class ConnectionBase(BaseModel):
     export_format: ExportFormat = ExportFormat.stata
     questionnaires: list[str] = Field(default_factory=list)
     interview_status: str = "All"
+    project_id: str | None = None
 
     @field_validator("base_url")
     @classmethod
@@ -48,6 +49,7 @@ class ConnectionUpdate(BaseModel):
     export_format: ExportFormat | None = None
     questionnaires: list[str] | None = None
     interview_status: str | None = None
+    project_id: str | None = None
 
 
 class ConnectionOut(BaseModel):
@@ -65,6 +67,7 @@ class ConnectionOut(BaseModel):
     export_format: ExportFormat
     questionnaires: list[str] = Field(default_factory=list)
     interview_status: str
+    project_id: str | None = None
     last_sync_at: dt.datetime | None = None
     last_sync_status: SyncStatus
     last_sync_error: str = ""
@@ -102,8 +105,14 @@ class SyncRunOut(BaseModel):
     datasets_created: int
     message: str = ""
     log: list[Any] = Field(default_factory=list)
+    # Whether the export zip is still on disk to be downloaded.
+    has_archive: bool = False
 
 
 class SyncRequest(BaseModel):
     questionnaires: list[str] = Field(default_factory=list)
     interview_status: str | None = None
+    # Where the imported datasets land. Absent falls back to the connection's
+    # own project, which is how a scheduled sync knows where to put things.
+    project_id: str | None = None
+    mode: Literal["replace", "append"] = "replace"

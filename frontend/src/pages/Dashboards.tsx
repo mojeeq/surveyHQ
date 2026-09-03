@@ -7,6 +7,8 @@ import { useToast } from '@/hooks/useToast'
 import { relativeTime } from '@/lib/format'
 import type { Chart, Dashboard } from '@/lib/types'
 import ChartCard from '@/components/ChartCard'
+import CrosstabTable from '@/components/CrosstabTable'
+import ErrorBoundary from '@/components/ErrorBoundary'
 import ProjectPicker from '@/components/ProjectPicker'
 import {
   Badge,
@@ -171,14 +173,15 @@ export default function Dashboards() {
           ) : (
             <div className="grid gap-4 lg:grid-cols-2">
               {charts.data.map((chart) => (
-                <ChartPreview
-                  key={chart.id}
-                  chart={chart}
-                  canDelete={can('analyst')}
-                  onDelete={() => {
-                    if (confirm(`Delete the chart "${chart.name}"?`)) removeChart.mutate(chart.id)
-                  }}
-                />
+                <ErrorBoundary key={chart.id} what={`"${chart.name}"`}>
+                  <ChartPreview
+                    chart={chart}
+                    canDelete={can('analyst')}
+                    onDelete={() => {
+                      if (confirm(`Delete the chart "${chart.name}"?`)) removeChart.mutate(chart.id)
+                    }}
+                  />
+                </ErrorBoundary>
               ))}
             </div>
           ))}
@@ -249,6 +252,11 @@ function ChartPreview({
         <Loading />
       ) : data.error ? (
         <ErrorNote error={data.error} />
+      ) : chart.chart_type === 'crosstab' ? (
+        // A saved cross-tab answers with a table, not a series: it has row and
+        // column labels and a grid, where a chart expects columns and rows.
+        // Handing one to the chart renderer is what used to blank this page.
+        <CrosstabTable result={data.data} compact maxHeight={260} />
       ) : (
         <ChartCard result={data.data} chartType={chart.chart_type} height={260} />
       )}

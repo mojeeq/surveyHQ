@@ -23,6 +23,7 @@ from app.models import Dataset, DatasetSource, DatasetStatus, Role, Variable
 from app.schemas.common import Message, Page
 from app.schemas.dataset import (
     ArchiveImportOut,
+    CommandRequest,
     DatasetDetail,
     DatasetOut,
     DatasetPreview,
@@ -31,6 +32,7 @@ from app.schemas.dataset import (
     VariableUpdate,
 )
 from app.schemas.query import FilterGroup
+from app.services import stata
 from app.services.audit import record
 from app.services.datasets import (
     append_file_into_dataset,
@@ -49,6 +51,8 @@ from app.services.query_engine import (
     distinct_values,
     run_sql,
 )
+from app.services.stata import CommandError
+from app.services.stata_expr import ExpressionError
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -193,6 +197,10 @@ async def upload_dataset(
                 combine_all=combine_all,
                 name_prefix=name.strip(),
                 mode=mode,
+                # Variables somebody generated are not in the export, so a
+                # replacement drops them and everything built on them. The
+                # recorded commands are run again on the new data.
+                after_replace=stata.replay,
             )
         else:
             load_file_into_dataset(db, dataset, upload_path)
@@ -487,6 +495,63 @@ def update_variable(
     db.commit()
     db.refresh(row)
     return row
+
+
+@router.post("/{dataset_id}/command", response_model=dict)
+def run_command(
+    dataset_id: str, payload: CommandRequest, db: DbSession, user: RequireManager
+) -> dict[str, Any]:
+    """Run one Stata-style command against the dataset.
+
+    Recorded on the dataset and replayed after a newer export replaces it: a
+    variable somebody generated is not in the export file, so otherwise it
+    would disappear on exactly the upload this platform is built around.
+    """
+    dataset = get_ready_dataset(dataset_id, db, user)
+    if dataset.project_id and not can_edit(db, user, dataset.project_id, Role.manager):
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    try:
+        result = stata.run(db, dataset, payload.command)
+    except (CommandError, ExpressionError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    rebuilt = rebuild_dependents(db, [dataset.id]) if result.data_changed else []
+    record(
+        db,
+        user=user,
+        action="run_command",
+        entity_type="dataset",
+        entity_id=dataset.id,
+        detail={"command": result.command},
+    )
+    db.commit()
+    db.refresh(dataset)
+    return {
+        "command": result.command,
+        "message": result.message,
+        "rows": dataset.row_count,
+        "columns": dataset.column_count,
+        "variables_added": result.variables_added,
+        "variables_removed": result.variables_removed,
+        "rebuilt": len(rebuilt),
+    }
+
+
+@router.get("/{dataset_id}/commands", response_model=list[str])
+def list_commands(dataset_id: str, db: DbSession, user: CurrentUser) -> list[str]:
+    """What has been run against this dataset, in the order it will be replayed."""
+    return stata.history(get_dataset(dataset_id, db, user))
+
+
+@router.delete("/{dataset_id}/commands", response_model=Message)
+def clear_commands(dataset_id: str, db: DbSession, user: RequireManager) -> Message:
+    """Stop replaying the recorded commands, without undoing what they did."""
+    dataset = get_dataset(dataset_id, db, user)
+    if dataset.project_id and not can_edit(db, user, dataset.project_id, Role.manager):
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    stata.forget(dataset)
+    db.commit()
+    return Message(detail="The command history is cleared. Re-upload to rebuild from source.")
 
 
 @router.get("/{dataset_id}/variables/{variable}/values", response_model=list[dict])

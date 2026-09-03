@@ -28,6 +28,7 @@ import DashboardFilters, {
   type FilterControl,
 } from '@/components/DashboardFilters'
 import CrosstabTable from '@/components/CrosstabTable'
+import ErrorBoundary from '@/components/ErrorBoundary'
 import MapWidget, { DEFAULT_TILES } from '@/components/MapWidget'
 import AppearanceModal, {
   canvasStyle,
@@ -47,6 +48,12 @@ import {
 
 const COLUMNS = 12
 const ROW_HEIGHT = 74
+// Breathing room inside the canvas, so a widget dragged to the far right stops
+// short of the edge instead of butting against it.
+const CANVAS_PADDING = 16
+
+const appearanceOf = (dashboard: Dashboard | undefined): Appearance =>
+  (dashboard?.appearance ?? {}) as Appearance
 
 export default function DashboardView({ publicToken }: { publicToken?: string }) {
   const { id = '' } = useParams()
@@ -83,6 +90,14 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
   )
   // Pages ask different questions, so each carries its own filters.
   const pageControls = controlsForPage(filterControls, page)
+
+  // How much board there is to arrange on. More columns is finer placement
+  // rather than more room; a canvas wider than the window is more room, and
+  // scrolls sideways to reach it.
+  const columns = Number(appearanceOf(dashboard.data).columns) || COLUMNS
+  const rowHeight = Number(appearanceOf(dashboard.data).row_height) || ROW_HEIGHT
+  const fixedWidth = Number(appearanceOf(dashboard.data).canvas_width) || 0
+  const canvasWidth = Math.max(fixedWidth || width, 320)
 
   const rendered = useQuery({
     // The values are part of the key, so changing a filter refetches rather
@@ -179,7 +194,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
     [allWidgets, page],
   )
 
-  const appearance = (dashboard.data?.appearance ?? {}) as Appearance
+  const appearance = appearanceOf(dashboard.data)
   const backgroundUrl = useBackgroundImage(basePath, appearance)
   const canvas = canvasStyle(appearance, backgroundUrl)
   const onDarkGround = Boolean(canvas) && isDark(appearance.background_color)
@@ -215,7 +230,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
   }
 
   return (
-    <div ref={(node) => node && setWidth(node.clientWidth)}>
+    <div>
       <PageHeader
         title={dashboard.data!.name}
         description={dashboard.data!.description}
@@ -246,7 +261,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
                     Filters
                   </button>
                   <button className="btn-secondary" onClick={() => setEditingStyle(true)}>
-                    Background
+                    Appearance
                   </button>
                   <button className="btn-secondary" onClick={() => setAdding(true)}>
                     Add widget
@@ -324,13 +339,22 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
           />
         </Card>
       ) : (
+        <div
+          ref={(node) => node && setWidth(node.clientWidth)}
+          className={fixedWidth > width ? 'overflow-x-auto' : ''}
+        >
         <GridLayout
           className="layout"
           layout={layout}
-          cols={COLUMNS}
-          rowHeight={ROW_HEIGHT}
-          width={width}
+          cols={columns}
+          rowHeight={rowHeight}
+          width={canvasWidth}
+          // Without an explicit width the container stays as wide as the
+          // window while the widgets inside it are laid out for the wider
+          // canvas, so there is nothing for the scroller to scroll.
+          style={fixedWidth ? { width: canvasWidth } : undefined}
           margin={[16, 16]}
+          containerPadding={[CANVAS_PADDING, CANVAS_PADDING]}
           isDraggable={editing && !isPublic}
           isResizable={editing && !isPublic}
           onDragStop={onLayoutChange}
@@ -339,6 +363,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         >
           {widgets.map((widget) => (
             <div key={widget.id} className="card overflow-hidden">
+              <ErrorBoundary what={`"${widget.title || 'this widget'}"`}>
               <WidgetFrame
                 widget={widget}
                 payload={rendered.data?.widgets[widget.id]}
@@ -353,9 +378,11 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
                     removeWidget.mutate(widget.id)
                 }}
               />
+              </ErrorBoundary>
             </div>
           ))}
         </GridLayout>
+        </div>
       )}
       </div>
 
@@ -366,6 +393,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         <AppearanceModal
           dashboardId={id}
           appearance={appearance}
+          widgets={allWidgets}
           onClose={() => setEditingStyle(false)}
         />
       )}

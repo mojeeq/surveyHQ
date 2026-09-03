@@ -404,6 +404,29 @@ class SurveySolutionsClient:
             None,
         )
 
+    def export_to_file(
+        self,
+        questionnaire_identity: str,
+        destination: Path,
+        export_type: ExportType = "STATA",
+        interview_status: InterviewStatus = "All",
+        on_progress: Any = None,
+    ) -> Path:
+        """Full export round trip, keeping the zip exactly as it arrived.
+
+        The archive is what the platform already knows how to import - one
+        dataset per roster level, paradata included - so it is written down
+        rather than unpacked here. Keeping it also means it can be downloaded
+        afterwards, which is the only copy of what the server actually sent.
+        """
+        job = self.start_export(questionnaire_identity, export_type, interview_status)
+        logger.info("Started export job %s for %s", job.job_id, questionnaire_identity)
+        job = self.wait_for_export(job.job_id, on_progress=on_progress)
+        payload = self.download_export(job)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(payload)
+        return destination
+
     def export_to_directory(
         self,
         questionnaire_identity: str,

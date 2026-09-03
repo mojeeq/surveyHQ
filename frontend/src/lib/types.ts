@@ -280,6 +280,8 @@ export interface Connection {
   server_info: Record<string, unknown>
   created_at: string
   has_password: boolean
+  /** Where this connection's imports land. Null is the shared area. */
+  project_id: string | null
 }
 
 export interface Questionnaire {
@@ -302,6 +304,8 @@ export interface SyncRun {
   datasets_created: number
   message: string
   log: string[]
+  /** Whether the export zip is still on disk to be downloaded. */
+  has_archive: boolean
 }
 
 export type ChartType =
@@ -376,6 +380,12 @@ export interface Appearance {
   background_fit?: 'cover' | 'contain' | 'tile'
   /** 0-1: how much white is laid over the image to keep widgets readable. */
   fade?: number
+  /** Grid columns: more is finer placement, not more room. Defaults to 12. */
+  columns?: number
+  /** Pixel height of one grid row. Defaults to 74. */
+  row_height?: number
+  /** A canvas wider than the window, which then scrolls sideways. 0 = fit. */
+  canvas_width?: number
 }
 
 export interface Dashboard {

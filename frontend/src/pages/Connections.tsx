@@ -1,10 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { api } from '@/lib/api'
+import { api, downloadFile } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { relativeTime } from '@/lib/format'
 import type { Connection, Questionnaire, SyncRun } from '@/lib/types'
+import ProjectPicker from '@/components/ProjectPicker'
 import {
   Badge,
   Card,
@@ -30,6 +31,7 @@ const BLANK = {
   export_format: 'STATA' as const,
   questionnaires: [] as string[],
   interview_status: 'All',
+  project_id: '',
 }
 
 export default function Connections() {
@@ -226,7 +228,25 @@ function SyncHistory({ connectionId }: { connectionId: string }) {
               <span className="text-ink-700">{run.questionnaire}</span>
             </span>
             <span className="truncate text-ink-500">{run.message}</span>
-            <span className="shrink-0 text-ink-400">{relativeTime(run.started_at)}</span>
+            <span className="flex shrink-0 items-center gap-2">
+              {run.has_archive && (
+                <button
+                  className="text-brand-600 hover:underline"
+                  title="Download the export exactly as the server sent it"
+                  onClick={() =>
+                    downloadFile(
+                      `/connections/${connectionId}/runs/${run.id}/archive`,
+                      undefined,
+                      `${run.questionnaire || 'export'}.zip`,
+                      'GET',
+                    )
+                  }
+                >
+                  Download zip
+                </button>
+              )}
+              <span className="text-ink-400">{relativeTime(run.started_at)}</span>
+            </span>
           </li>
         ))}
       </ul>
@@ -258,6 +278,7 @@ function ConnectionModal({
           export_format: connection.export_format,
           questionnaires: connection.questionnaires,
           interview_status: connection.interview_status,
+          project_id: connection.project_id ?? '',
         }
       : {}),
   })
@@ -273,7 +294,7 @@ function ConnectionModal({
 
   const save = useMutation({
     mutationFn: () => {
-      const payload: Record<string, unknown> = { ...form }
+      const payload: Record<string, unknown> = { ...form, project_id: form.project_id || null }
       if (connection && !form.password) delete payload.password
       return connection
         ? api.patch(`/connections/${connection.id}`, payload)
@@ -380,6 +401,13 @@ function ConnectionModal({
             <option value="SPSS">SPSS (.sav)</option>
           </select>
         </Field>
+        <ProjectPicker
+          value={form.project_id}
+          onChange={(project_id) => update({ project_id })}
+          label="Default project for imports"
+          hint="Where this server's data lands. A single import can be sent elsewhere."
+        />
+
         <Field label="Interview status to import">
           <select
             className="input"
@@ -431,6 +459,8 @@ function ImportModal({ connection, onClose }: { connection: Connection; onClose:
   const toast = useToast()
   const queryClient = useQueryClient()
   const [selected, setSelected] = useState<string[]>(connection.questionnaires)
+  const [projectId, setProjectId] = useState(connection.project_id ?? '')
+  const [mode, setMode] = useState<'replace' | 'append'>('replace')
 
   const questionnaires = useQuery({
     queryKey: ['questionnaires', connection.id],
@@ -439,7 +469,11 @@ function ImportModal({ connection, onClose }: { connection: Connection; onClose:
 
   const start = useMutation({
     mutationFn: () =>
-      api.post(`/connections/${connection.id}/sync`, { questionnaires: selected }),
+      api.post(`/connections/${connection.id}/sync`, {
+        questionnaires: selected,
+        project_id: projectId || null,
+        mode,
+      }),
     onSuccess: () => {
       toast.push(
         'Import started. It runs in the background and can take a few minutes for large surveys.',
@@ -474,6 +508,27 @@ function ImportModal({ connection, onClose }: { connection: Connection; onClose:
         </>
       }
     >
+      <div className="mb-4 grid gap-x-4 sm:grid-cols-2">
+        <ProjectPicker
+          value={projectId}
+          onChange={setProjectId}
+          label="Import into project"
+        />
+        <Field
+          label="If these datasets already exist"
+          hint="Replacing keeps the datasets' ids, so charts, indicators and merges built on them go on working."
+        >
+          <select
+            className="input"
+            value={mode}
+            onChange={(event) => setMode(event.target.value as 'replace' | 'append')}
+          >
+            <option value="replace">Replace their data</option>
+            <option value="append">Add these rows to them</option>
+          </select>
+        </Field>
+      </div>
+
       {questionnaires.isLoading ? (
         <Loading label="Fetching questionnaires from the server" />
       ) : questionnaires.error ? (
@@ -487,7 +542,8 @@ function ImportModal({ connection, onClose }: { connection: Connection; onClose:
       ) : (
         <>
           <p className="mb-3 text-sm text-ink-500">
-            Each questionnaire becomes a dataset. Re-importing refreshes it in place, so saved
+            Each questionnaire's whole export is imported - one dataset per roster level, with
+            the paradata - and re-importing refreshes them in place, so saved
             charts and indicators keep working.
           </p>
           <div className="max-h-80 space-y-1 overflow-y-auto">
