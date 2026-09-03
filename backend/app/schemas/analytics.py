@@ -92,6 +92,7 @@ class DashboardCreate(BaseModel):
     refresh_interval_seconds: int = 0
     project_id: str | None = None
     pages: list[dict[str, Any]] = Field(default_factory=list)
+    theme: str = "default"
 
 
 class DashboardUpdate(BaseModel):
@@ -100,6 +101,7 @@ class DashboardUpdate(BaseModel):
     filters: list[dict[str, Any]] | None = None
     refresh_interval_seconds: int | None = None
     pages: list[dict[str, Any]] | None = None
+    theme: str | None = None
     is_public: bool | None = None
     widgets: list[WidgetIn] | None = None
 
@@ -114,6 +116,7 @@ class DashboardOut(BaseModel):
     filters: list[dict[str, Any]] = Field(default_factory=list)
     project_id: str | None = None
     pages: list[dict[str, Any]] = Field(default_factory=list)
+    theme: str = "default"
     is_public: bool = False
     public_token: str | None = None
     refresh_interval_seconds: int = 0

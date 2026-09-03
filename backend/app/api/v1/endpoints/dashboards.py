@@ -216,6 +216,7 @@ def create_dashboard(
         refresh_interval_seconds=payload.refresh_interval_seconds,
         created_by=user.id,
         project_id=payload.project_id,
+        theme=payload.theme,
     )
     db.add(dashboard)
     record(db, user=user, action="create_dashboard", entity_type="dashboard")

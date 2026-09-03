@@ -7,7 +7,7 @@ import 'react-resizable/css/styles.css'
 import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
-import { STATUS_COLORS } from '@/lib/charts'
+import { CHART_THEMES, STATUS_COLORS } from '@/lib/charts'
 import { formatNumber, formatValue, relativeTime } from '@/lib/format'
 import type { Chart, Dashboard, Dataset, Indicator, Page, Widget } from '@/lib/types'
 import AssignProject from '@/components/AssignProject'
@@ -97,6 +97,15 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
     },
   })
 
+  const saveTheme = useMutation({
+    mutationFn: (theme: string) => api.patch(`/dashboards/${id}`, { theme }),
+    onSuccess: () => {
+      toast.push('Palette changed', 'success')
+      queryClient.invalidateQueries({ queryKey: ['dashboard', id] })
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
   const savePages = useMutation({
     mutationFn: (pages: { name: string }[]) => api.patch(`/dashboards/${id}`, { pages }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['dashboard', id] }),
@@ -168,6 +177,18 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
               />
               {can('analyst') && (
                 <>
+                  <select
+                    className="input w-44"
+                    title="Chart colours for this dashboard"
+                    value={dashboard.data!.theme ?? 'default'}
+                    onChange={(event) => saveTheme.mutate(event.target.value)}
+                  >
+                    {Object.entries(CHART_THEMES).map(([key, theme]) => (
+                      <option key={key} value={key}>
+                        {theme.label}
+                      </option>
+                    ))}
+                  </select>
                   <button className="btn-secondary" onClick={() => setAdding(true)}>
                     Add widget
                   </button>
@@ -250,6 +271,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
                 loading={rendered.isLoading}
                 editing={editing && !isPublic}
                 canEdit={!isPublic && can('analyst')}
+                theme={dashboard.data!.theme ?? 'default'}
                 onRemove={() => {
                   if (confirm(`Remove "${widget.title || 'this widget'}" from the dashboard?`))
                     removeWidget.mutate(widget.id)
@@ -273,6 +295,7 @@ function WidgetFrame({
   loading,
   editing,
   canEdit,
+  theme,
   onRemove,
 }: {
   widget: Widget
@@ -280,6 +303,8 @@ function WidgetFrame({
   loading: boolean
   editing: boolean
   canEdit: boolean
+  /** The dashboard's categorical ordering, applied to every chart on it. */
+  theme: string
   onRemove: () => void
 }) {
   return (
@@ -327,6 +352,7 @@ function WidgetFrame({
             chartType={payload.chart_type ?? 'bar'}
             fill
             showToggle={false}
+            theme={theme}
           />
         ) : null}
       </div>

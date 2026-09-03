@@ -371,6 +371,8 @@ export interface Dashboard {
   project_id: string | null
   /** Named pages; empty means the dashboard is a single unnamed page. */
   pages: { name: string }[]
+  /** Which categorical ordering its charts use; see CHART_THEMES. */
+  theme: string
   is_public: boolean
   public_token: string | null
   refresh_interval_seconds: number

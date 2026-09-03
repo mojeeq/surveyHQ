@@ -99,6 +99,12 @@ class Dashboard(UUIDMixin, TimestampMixin, Base):
     # without one it is NOT NULL with nothing to fill in, and the upgrade has to
     # skip it - which start-up reports as an error rather than silently ignoring.
     pages: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
+    # Which categorical ordering the charts on this dashboard use. The orders
+    # live in the frontend, which is what draws them; the server only remembers
+    # the choice, so adding one needs no migration.
+    theme: Mapped[str] = mapped_column(
+        String(40), default="default", server_default=text("'default'")
+    )
     is_public: Mapped[bool] = mapped_column(Boolean, default=False)
     public_token: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
     refresh_interval_seconds: Mapped[int] = mapped_column(Integer, default=0)

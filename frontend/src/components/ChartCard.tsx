@@ -18,6 +18,7 @@ export default function ChartCard({
   height = 320,
   fill = false,
   showToggle = true,
+  theme,
 }: {
   result: QueryResult
   chartType: ChartType
@@ -27,6 +28,8 @@ export default function ChartCard({
    *  inside a container the user just made bigger. */
   fill?: boolean
   showToggle?: boolean
+  /** Categorical ordering, set per dashboard. */
+  theme?: string
 }) {
   const [view, setView] = useState<'chart' | 'table'>('chart')
   const container = useRef<HTMLDivElement>(null)
@@ -94,7 +97,7 @@ export default function ChartCard({
       {showToggle && <ViewToggle view={view} onChange={setView} />}
       <ReactECharts
         ref={chart}
-        option={buildChartOption(result, chartType)}
+        option={buildChartOption(result, chartType, { theme })}
         style={fill ? { flex: 1, minHeight: 0, width: '100%' } : { height, width: '100%' }}
         opts={{ renderer: 'canvas' }}
         notMerge
