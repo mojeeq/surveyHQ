@@ -117,6 +117,7 @@ export default function AppearanceModal({
     columns: 12,
     row_height: 74,
     canvas_width: 0,
+    widget_opacity: 1,
     ...appearance,
   })
 
@@ -261,6 +262,23 @@ export default function AppearanceModal({
           </select>
         </Field>
       </div>
+
+      <Field
+        label={`Widget transparency: ${Math.round((1 - (draft.widget_opacity ?? 1)) * 100)}%`}
+        hint="Lets the background through the widgets. It stops at 70% because the text on them has to stay readable."
+      >
+        <input
+          type="range"
+          className="w-full"
+          min={0}
+          max={0.7}
+          step={0.05}
+          value={1 - (draft.widget_opacity ?? 1)}
+          onChange={(event) =>
+            setDraft({ ...draft, widget_opacity: 1 - Number(event.target.value) })
+          }
+        />
+      </Field>
 
       <Field label="Background colour">
         <div className="flex flex-wrap items-center gap-2">

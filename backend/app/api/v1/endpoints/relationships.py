@@ -11,6 +11,7 @@ from app.models import (
     Dataset,
     DatasetRelationship,
     DatasetSource,
+    Role,
     User,
 )
 from app.schemas.common import Message
@@ -29,7 +30,7 @@ from app.services.datasets import (
     dataset_is_queryable,
 )
 from app.services.derived import run_merge
-from app.services.projects import scope_for
+from app.services.projects import can_edit, restrict, scope_for
 from app.services.relationships import detect, store
 
 router = APIRouter()
@@ -154,6 +155,50 @@ def update_relationship(
     db.commit()
     db.refresh(relationship)
     return _to_out(relationship, db)
+
+
+@router.post("/clear", response_model=Message)
+def clear_relationships(
+    db: DbSession,
+    user: RequireManager,
+    project_id: str = "",
+    detected_only: bool = False,
+) -> Message:
+    """Remove a project's relationships, so detection can be started over.
+
+    Detection is a guess made from the data, and a wrong guess is easier to
+    clear out than to correct one at a time. Merges already built stay as they
+    are - they hold their own data - but they can no longer be re-run, which is
+    what the response says.
+    """
+    statement = restrict(
+        select(DatasetRelationship).where(
+            DatasetRelationship.project_id == (project_id or None)
+        ),
+        scope_for(db, user).filter(DatasetRelationship.project_id),
+    )
+    if detected_only:
+        # Keeping the ones somebody made or corrected by hand: those are not
+        # guesses, and clearing them loses work rather than tidying up.
+        statement = statement.where(DatasetRelationship.detected.is_(True))
+    rows = list(db.scalars(statement).all())
+    if not rows:
+        raise HTTPException(status_code=404, detail="There are no relationships to clear")
+
+    for relationship in rows:
+        if not can_edit(db, user, relationship.project_id, Role.manager):
+            raise HTTPException(status_code=404, detail="Project not found")
+        db.delete(relationship)
+    record(
+        db,
+        user=user,
+        action="clear_relationships",
+        entity_type="project",
+        entity_id=project_id or None,
+        detail={"count": len(rows), "detected_only": detected_only},
+    )
+    db.commit()
+    return Message(detail=f"Cleared {len(rows)} relationship(s)")
 
 
 @router.delete("/{relationship_id}", response_model=Message)

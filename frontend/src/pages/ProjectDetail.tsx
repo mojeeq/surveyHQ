@@ -416,6 +416,8 @@ function RelationshipsTab({
   const queryClient = useQueryClient()
   const [selected, setSelected] = useState<Relationship | null>(null)
   const [merging, setMerging] = useState<Relationship | null>(null)
+  const [adding, setAdding] = useState(false)
+  const [clearing, setClearing] = useState(false)
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ['relationships', projectId] })
@@ -459,6 +461,20 @@ function RelationshipsTab({
     onError: (error: Error) => toast.push(error.message, 'error'),
   })
 
+  const clearAll = useMutation({
+    mutationFn: (detectedOnly: boolean) =>
+      api.post<{ detail: string }>(
+        `/relationships/clear?project_id=${projectId}&detected_only=${detectedOnly}`,
+      ),
+    onSuccess: (result) => {
+      toast.push(result.detail, 'success')
+      refresh()
+      setSelected(null)
+      setClearing(false)
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
   return (
     <Card
       className="mt-4"
@@ -466,13 +482,27 @@ function RelationshipsTab({
       subtitle="How this project's datasets link to each other"
       actions={
         canManage && (
-          <button
-            className="btn-secondary btn-sm"
-            onClick={() => detect.mutate()}
-            disabled={detect.isPending || datasets.length < 2}
-          >
-            {detect.isPending ? 'Looking…' : 'Detect relationships'}
-          </button>
+          <>
+            <button
+              className="btn-secondary btn-sm"
+              onClick={() => detect.mutate()}
+              disabled={detect.isPending || datasets.length < 2}
+            >
+              {detect.isPending ? 'Looking…' : 'Detect'}
+            </button>
+            <button
+              className="btn-secondary btn-sm"
+              onClick={() => setAdding(true)}
+              disabled={datasets.length < 2}
+            >
+              Add by hand
+            </button>
+            {relationships.length > 0 && (
+              <button className="btn-ghost btn-sm text-red-600" onClick={() => setClearing(true)}>
+                Clear
+              </button>
+            )}
+          </>
         )
       }
     >
@@ -498,6 +528,57 @@ function RelationshipsTab({
                 ? 'Detect them from the data, or add one by hand.'
                 : 'A project manager can detect them from the data.'}
             </p>
+          )}
+
+          {adding && (
+            <ManualRelationshipModal
+              datasets={datasets}
+              onClose={() => setAdding(false)}
+              onCreated={() => {
+                refresh()
+                setAdding(false)
+              }}
+            />
+          )}
+
+          {clearing && (
+            <Modal
+              open
+              onClose={() => setClearing(false)}
+              title="Clear relationships"
+              footer={
+                <>
+                  <button className="btn-secondary" onClick={() => setClearing(false)}>
+                    Cancel
+                  </button>
+                  <button
+                    className="btn-secondary"
+                    onClick={() => clearAll.mutate(true)}
+                    disabled={clearAll.isPending}
+                  >
+                    Only the detected ones
+                  </button>
+                  <button
+                    className="btn-primary"
+                    onClick={() => clearAll.mutate(false)}
+                    disabled={clearAll.isPending}
+                  >
+                    Clear all {relationships.length}
+                  </button>
+                </>
+              }
+            >
+              <p className="text-sm text-ink-600">
+                Detection is a guess made from the data, and a wrong guess is easier to clear
+                out than to correct one at a time. Datasets already merged keep their data —
+                they hold their own copy — but they can no longer be re-run from a
+                relationship that is gone.
+              </p>
+              <p className="mt-2 text-sm text-ink-600">
+                {relationships.filter((r) => !r.detected).length} of these were made or
+                corrected by hand.
+              </p>
+            </Modal>
           )}
 
           {selected && (
@@ -723,6 +804,171 @@ function MergeModal({
         The merge is saved with the new dataset, so it can be re-run from the dataset
         page whenever either source is updated.
       </p>
+    </Modal>
+  )
+}
+
+
+/**
+ * A relationship somebody knows about that detection did not find.
+ *
+ * Detection matches obvious keys - interview__id to interview__id, a name that
+ * appears on both sides with enough values in common. It cannot know that this
+ * survey's household id is called `hhid` on one file and `HH_SERIAL` on the
+ * other, which is exactly the case the analyst can settle in ten seconds.
+ */
+function ManualRelationshipModal({
+  datasets,
+  onClose,
+  onCreated,
+}: {
+  datasets: Dataset[]
+  onClose: () => void
+  onCreated: () => void
+}) {
+  const toast = useToast()
+  const [leftId, setLeftId] = useState(datasets[0]?.id ?? '')
+  const [rightId, setRightId] = useState(datasets[1]?.id ?? '')
+  const [leftVariable, setLeftVariable] = useState('')
+  const [rightVariable, setRightVariable] = useState('')
+  const [cardinality, setCardinality] = useState('one_to_many')
+
+  const left = useQuery({
+    queryKey: ['dataset', leftId],
+    queryFn: () => api.get<Dataset>(`/datasets/${leftId}`),
+    enabled: Boolean(leftId),
+  })
+  const right = useQuery({
+    queryKey: ['dataset', rightId],
+    queryFn: () => api.get<Dataset>(`/datasets/${rightId}`),
+    enabled: Boolean(rightId),
+  })
+
+  const create = useMutation({
+    mutationFn: () =>
+      api.post('/relationships', {
+        left_dataset_id: leftId,
+        right_dataset_id: rightId,
+        left_variable: leftVariable,
+        right_variable: rightVariable,
+        cardinality,
+      }),
+    onSuccess: () => {
+      toast.push('Relationship added', 'success')
+      onCreated()
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  const columns = (dataset: Dataset | undefined) =>
+    (dataset?.variables ?? []).filter((v) => !v.is_hidden)
+
+  const ready = leftId && rightId && leftId !== rightId && leftVariable && rightVariable
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Add a relationship"
+      wide
+      footer={
+        <>
+          <button className="btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="btn-primary"
+            onClick={() => create.mutate()}
+            disabled={!ready || create.isPending}
+          >
+            Add relationship
+          </button>
+        </>
+      }
+    >
+      <div className="grid gap-x-4 sm:grid-cols-2">
+        <Field label="From dataset">
+          <select
+            className="input"
+            value={leftId}
+            onChange={(event) => {
+              setLeftId(event.target.value)
+              setLeftVariable('')
+            }}
+          >
+            {datasets.map((dataset) => (
+              <option key={dataset.id} value={dataset.id}>
+                {dataset.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="To dataset">
+          <select
+            className="input"
+            value={rightId}
+            onChange={(event) => {
+              setRightId(event.target.value)
+              setRightVariable('')
+            }}
+          >
+            {datasets.map((dataset) => (
+              <option key={dataset.id} value={dataset.id}>
+                {dataset.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label="Joined on">
+          <select
+            className="input"
+            value={leftVariable}
+            onChange={(event) => setLeftVariable(event.target.value)}
+          >
+            <option value="">Choose a column…</option>
+            {columns(left.data).map((variable) => (
+              <option key={variable.name} value={variable.name}>
+                {variable.label ? `${variable.name} — ${variable.label}` : variable.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="equals">
+          <select
+            className="input"
+            value={rightVariable}
+            onChange={(event) => setRightVariable(event.target.value)}
+          >
+            <option value="">Choose a column…</option>
+            {columns(right.data).map((variable) => (
+              <option key={variable.name} value={variable.name}>
+                {variable.label ? `${variable.name} — ${variable.label}` : variable.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+
+      <Field
+        label="How they line up"
+        hint="One-to-many is the usual shape: one interview, several people."
+      >
+        <select
+          className="input"
+          value={cardinality}
+          onChange={(event) => setCardinality(event.target.value)}
+        >
+          <option value="one_to_one">One to one</option>
+          <option value="one_to_many">One to many</option>
+          <option value="many_to_one">Many to one</option>
+          <option value="many_to_many">Many to many</option>
+        </select>
+      </Field>
+
+      {leftId === rightId && (
+        <p className="text-xs text-amber-700">A dataset cannot be related to itself.</p>
+      )}
     </Modal>
   )
 }

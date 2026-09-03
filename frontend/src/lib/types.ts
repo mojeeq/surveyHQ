@@ -282,6 +282,11 @@ export interface Connection {
   has_password: boolean
   /** Where this connection's imports land. Null is the shared area. */
   project_id: string | null
+  /** 'interval' counts from the last run; 'daily' uses sync_times. */
+  sync_mode: 'interval' | 'daily'
+  /** Times of day to import at, as "HH:MM", read in sync_timezone. */
+  sync_times: string[]
+  sync_timezone: string
 }
 
 export interface Questionnaire {
@@ -386,6 +391,8 @@ export interface Appearance {
   row_height?: number
   /** A canvas wider than the window, which then scrolls sideways. 0 = fit. */
   canvas_width?: number
+  /** 0-1: how opaque the widget cards are, so the background shows through. */
+  widget_opacity?: number
 }
 
 export interface Dashboard {

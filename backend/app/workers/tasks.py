@@ -36,6 +36,7 @@ from app.services.derived import rebuild_dependents
 from app.services.ingest import IngestError
 from app.services.monitoring import evaluate_alert_rule, refresh_indicator
 from app.services.quality import execute_rule
+from app.services.scheduling import is_due
 from app.services.survey_solutions import (
     SurveySolutionsClient,
     SurveySolutionsError,
@@ -274,7 +275,12 @@ def _import_export_archive(
 
 @celery_app.task(name="app.workers.tasks.schedule_due_syncs")
 def schedule_due_syncs() -> dict[str, Any]:
-    """Queue syncs for connections whose interval has elapsed."""
+    """Queue the automatic imports that are due.
+
+    Runs every few minutes, and each connection decides for itself whether its
+    moment has arrived - an elapsed interval, or a clock time in its own zone
+    that has passed with nothing having run since.
+    """
     queued: list[str] = []
     now = utcnow()
     with session_scope() as db:
@@ -286,13 +292,16 @@ def schedule_due_syncs() -> dict[str, Any]:
         for connection in connections:
             if not connection.questionnaires:
                 continue
-            last = connection.last_sync_at
-            if last is not None:
-                if last.tzinfo is None:
-                    last = last.replace(tzinfo=dt.UTC)
-                if (now - last).total_seconds() < connection.sync_interval_minutes * 60:
-                    continue
             if connection.last_sync_status == SyncStatus.running:
+                continue
+            if not is_due(
+                mode=connection.sync_mode or "interval",
+                times=list(connection.sync_times or []),
+                timezone=connection.sync_timezone or "UTC",
+                interval_minutes=connection.sync_interval_minutes,
+                last_sync_at=connection.last_sync_at,
+                now=now,
+            ):
                 continue
 
             job = Job(
@@ -303,6 +312,8 @@ def schedule_due_syncs() -> dict[str, Any]:
                     "connection_id": connection.id,
                     "questionnaires": list(connection.questionnaires),
                     "interview_status": connection.interview_status,
+                    "project_id": connection.project_id,
+                    "mode": "replace",
                 },
             )
             db.add(job)

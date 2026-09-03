@@ -19,6 +19,24 @@ import {
   Toggle,
 } from '@/components/ui'
 
+/**
+ * Every zone the browser knows, so the times are set where the fieldwork is.
+ *
+ * Intl.supportedValuesOf is not in every browser; where it is missing the list
+ * falls back to this machine's own zone and UTC, which covers the case it
+ * exists for - somebody scheduling an import for the country they are in.
+ */
+const ZONES: string[] = (() => {
+  const here = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+  try {
+    const all = (Intl as any).supportedValuesOf?.('timeZone') as string[] | undefined
+    if (all?.length) return all
+  } catch {
+    /* fall through to the short list */
+  }
+  return [...new Set([here, 'UTC'])]
+})()
+
 const BLANK = {
   name: '',
   base_url: '',
@@ -32,6 +50,12 @@ const BLANK = {
   questionnaires: [] as string[],
   interview_status: 'All',
   project_id: '',
+  sync_mode: 'interval' as 'interval' | 'daily',
+  sync_times: [] as string[],
+  sync_timezone:
+    // The browser's own zone is nearly always the one the fieldwork is in,
+    // and is a far better guess than UTC.
+    Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
 }
 
 export default function Connections() {
@@ -279,6 +303,9 @@ function ConnectionModal({
           questionnaires: connection.questionnaires,
           interview_status: connection.interview_status,
           project_id: connection.project_id ?? '',
+          sync_mode: connection.sync_mode ?? 'interval',
+          sync_times: connection.sync_times ?? [],
+          sync_timezone: connection.sync_timezone || 'UTC',
         }
       : {}),
   })
@@ -428,22 +455,98 @@ function ConnectionModal({
             ))}
           </select>
         </Field>
-        <Field label="Sync interval (minutes)">
-          <input
+        <Field label="Import automatically">
+          <select
             className="input"
-            type="number"
-            min={5}
-            value={form.sync_interval_minutes}
-            onChange={(event) => update({ sync_interval_minutes: Number(event.target.value) })}
-          />
+            value={form.sync_mode}
+            onChange={(event) =>
+              update({ sync_mode: event.target.value as 'interval' | 'daily' })
+            }
+          >
+            <option value="interval">Every so many minutes</option>
+            <option value="daily">At set times of day</option>
+          </select>
         </Field>
+
+        {form.sync_mode === 'interval' ? (
+          <Field label="Sync interval (minutes)">
+            <input
+              className="input"
+              type="number"
+              min={5}
+              value={form.sync_interval_minutes}
+              onChange={(event) => update({ sync_interval_minutes: Number(event.target.value) })}
+            />
+          </Field>
+        ) : (
+          <Field label="Time zone" hint="The times below are read in this zone.">
+            <select
+              className="input"
+              value={form.sync_timezone}
+              onChange={(event) => update({ sync_timezone: event.target.value })}
+            >
+              {ZONES.map((name) => (
+                <option key={name} value={name}>
+                  {name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
       </div>
+
+      {form.sync_mode === 'daily' && (
+        <Field
+          label="Import at"
+          hint="24-hour times. The check runs every few minutes, so an import starts shortly after the time you set."
+        >
+          <div className="flex flex-wrap items-center gap-2">
+            {form.sync_times.map((time, index) => (
+              <span key={index} className="flex items-center gap-1">
+                <input
+                  className="input w-28"
+                  type="time"
+                  value={time}
+                  onChange={(event) =>
+                    update({
+                      sync_times: form.sync_times.map((existing, i) =>
+                        i === index ? event.target.value : existing,
+                      ),
+                    })
+                  }
+                />
+                <button
+                  className="btn-ghost btn-sm text-red-600"
+                  aria-label={`Remove ${time}`}
+                  onClick={() =>
+                    update({ sync_times: form.sync_times.filter((_, i) => i !== index) })
+                  }
+                >
+                  ✕
+                </button>
+              </span>
+            ))}
+            <button
+              className="btn-secondary btn-sm"
+              onClick={() => update({ sync_times: [...form.sync_times, '06:00'] })}
+            >
+              + Add a time
+            </button>
+          </div>
+        </Field>
+      )}
 
       <div className="space-y-3 border-t border-ink-200 pt-4">
         <Toggle
           checked={form.sync_enabled}
           onChange={(value) => update({ sync_enabled: value })}
-          label="Import automatically on the schedule above"
+          label={
+            form.sync_mode === 'daily'
+              ? `Import automatically at ${
+                  form.sync_times.length ? form.sync_times.join(', ') : 'the times above'
+                }`
+              : 'Import automatically on the schedule above'
+          }
         />
         <Toggle
           checked={form.verify_ssl}

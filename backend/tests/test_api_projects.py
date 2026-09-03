@@ -1133,3 +1133,143 @@ def test_the_shared_area_is_a_place_a_filter_can_name(client, auth_headers):
     }
     assert "Shared one" in in_shared
     assert "Owned one" not in in_shared
+
+
+def _two_dataset_project(client, auth_headers, name: str) -> tuple[str, list[dict]]:
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": name}
+    ).json()
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                f"{name}.zip",
+                _zip_bytes(
+                    {
+                        f"{name}_main.dta": _stata_bytes(
+                            pd.DataFrame({"interview__id": ["i1", "i2"], "province": [1.0, 2.0]})
+                        ),
+                        f"{name}_people.dta": _stata_bytes(
+                            pd.DataFrame({"interview__id": ["i1", "i2"], "age": [30.0, 40.0]})
+                        ),
+                    }
+                ),
+                "application/zip",
+            )
+        },
+        data={"project_id": project["id"]},
+    ).json()
+    return project["id"], uploaded["datasets"]
+
+
+def test_relationships_can_be_cleared_and_detected_again(client, auth_headers):
+    """Detection is a guess, and a wrong guess is easier to clear out than to
+    correct one at a time."""
+    project, _ = _two_dataset_project(client, auth_headers, "clearable")
+
+    client.post(f"/api/v1/relationships/detect?project_id={project}", headers=auth_headers)
+    assert client.get(
+        f"/api/v1/relationships?project_id={project}", headers=auth_headers
+    ).json()
+
+    cleared = client.post(
+        f"/api/v1/relationships/clear?project_id={project}", headers=auth_headers
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert "relationship(s)" in cleared.json()["detail"]
+    assert (
+        client.get(
+            f"/api/v1/relationships?project_id={project}", headers=auth_headers
+        ).json()
+        == []
+    )
+
+    # And detection can be run again from a clean slate
+    client.post(f"/api/v1/relationships/detect?project_id={project}", headers=auth_headers)
+    assert client.get(
+        f"/api/v1/relationships?project_id={project}", headers=auth_headers
+    ).json()
+
+
+def test_clearing_only_the_guesses_keeps_what_was_made_by_hand(client, auth_headers):
+    """A hand-made link is not a guess, and clearing it loses work."""
+    project, datasets = _two_dataset_project(client, auth_headers, "handmade")
+    main = next(d for d in datasets if d["name"].endswith("_main"))
+    people = next(d for d in datasets if d["name"].endswith("_people"))
+
+    client.post(f"/api/v1/relationships/detect?project_id={project}", headers=auth_headers)
+    made = client.post(
+        "/api/v1/relationships",
+        headers=auth_headers,
+        json={
+            "left_dataset_id": main["id"],
+            "right_dataset_id": people["id"],
+            "left_variable": "province",
+            "right_variable": "age",
+            "cardinality": "one_to_many",
+        },
+    )
+    assert made.status_code == 201, made.text
+    assert made.json()["detected"] is False
+
+    cleared = client.post(
+        f"/api/v1/relationships/clear?project_id={project}&detected_only=true",
+        headers=auth_headers,
+    )
+    assert cleared.status_code == 200, cleared.text
+
+    left = client.get(
+        f"/api/v1/relationships?project_id={project}", headers=auth_headers
+    ).json()
+    assert [r["id"] for r in left] == [made.json()["id"]]
+
+
+def test_clearing_nothing_says_so(client, auth_headers):
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Nothing to clear"}
+    ).json()
+    response = client.post(
+        f"/api/v1/relationships/clear?project_id={project['id']}", headers=auth_headers
+    )
+    assert response.status_code == 404
+
+
+def test_a_relationship_can_be_made_by_hand_between_any_two_columns(client, auth_headers):
+    """Detection only finds the obvious keys; the analyst knows the rest."""
+    project, datasets = _two_dataset_project(client, auth_headers, "byhand")
+    main, people = datasets[0], datasets[1]
+
+    response = client.post(
+        "/api/v1/relationships",
+        headers=auth_headers,
+        json={
+            "left_dataset_id": main["id"],
+            "right_dataset_id": people["id"],
+            "left_variable": "interview__id",
+            "right_variable": "interview__id",
+            "cardinality": "one_to_many",
+        },
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["detected"] is False
+    assert body["left_variable"] == "interview__id"
+
+    # A column that is not there is refused rather than stored and failing later
+    bad = client.post(
+        "/api/v1/relationships",
+        headers=auth_headers,
+        json={
+            "left_dataset_id": main["id"],
+            "right_dataset_id": people["id"],
+            "left_variable": "not_a_column",
+            "right_variable": "interview__id",
+        },
+    )
+    assert bad.status_code == 422
+    assert "not_a_column" in bad.json()["detail"]
