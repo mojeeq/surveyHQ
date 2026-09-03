@@ -748,6 +748,10 @@ def _render_widget(
             "chart_type": chart.chart_type.value,
             "name": chart.name,
             "filters_ignored": ignored,
+            # How it is drawn - order, top-N, a target line - saved with the
+            # chart, so a dashboard shows what its author built rather than a
+            # default rendering of the same numbers.
+            "display": (chart.spec or {}).get("options") or {},
             "result": result.model_dump(mode="json"),
         }
 

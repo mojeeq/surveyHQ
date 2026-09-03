@@ -523,6 +523,7 @@ function WidgetFrame({
             fill
             showToggle={false}
             theme={theme}
+            display={payload.display}
           />
         ) : null}
       </div>

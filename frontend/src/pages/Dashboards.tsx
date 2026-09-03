@@ -258,7 +258,12 @@ function ChartPreview({
         // Handing one to the chart renderer is what used to blank this page.
         <CrosstabTable result={data.data} compact maxHeight={260} />
       ) : (
-        <ChartCard result={data.data} chartType={chart.chart_type} height={260} />
+        <ChartCard
+          result={data.data}
+          chartType={chart.chart_type}
+          height={260}
+          display={(chart.spec as any)?.options}
+        />
       )}
     </Card>
   )

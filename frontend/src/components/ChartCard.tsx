@@ -1,6 +1,6 @@
 import ReactECharts from 'echarts-for-react'
 import { useEffect, useRef, useState } from 'react'
-import { buildChartOption } from '@/lib/charts'
+import { buildChartOption, type BuildOptions } from '@/lib/charts'
 import { formatCell } from '@/lib/format'
 import type { ChartType, QueryResult } from '@/lib/types'
 import { EmptyState } from './ui'
@@ -19,6 +19,7 @@ export default function ChartCard({
   fill = false,
   showToggle = true,
   theme,
+  display,
 }: {
   result: QueryResult
   chartType: ChartType
@@ -30,6 +31,8 @@ export default function ChartCard({
   showToggle?: boolean
   /** Categorical ordering, set per dashboard. */
   theme?: string
+  /** How this chart is drawn: order, top-N, labels, a target line. */
+  display?: BuildOptions
 }) {
   const [view, setView] = useState<'chart' | 'table'>('chart')
   const container = useRef<HTMLDivElement>(null)
@@ -97,7 +100,7 @@ export default function ChartCard({
       {showToggle && <ViewToggle view={view} onChange={setView} />}
       <ReactECharts
         ref={chart}
-        option={buildChartOption(result, chartType, { theme })}
+        option={buildChartOption(result, chartType, { ...display, theme })}
         style={fill ? { flex: 1, minHeight: 0, width: '100%' } : { height, width: '100%' }}
         opts={{ renderer: 'canvas' }}
         notMerge

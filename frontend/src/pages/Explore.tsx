@@ -21,6 +21,7 @@ import type {
   QuerySpec,
 } from '@/lib/types'
 import ChartCard from '@/components/ChartCard'
+import type { BuildOptions } from '@/lib/charts'
 import CrosstabTable from '@/components/CrosstabTable'
 import FilterBuilder, { emptyFilter } from '@/components/FilterBuilder'
 import {
@@ -240,6 +241,7 @@ function AggregateBuilder({
   const [measures, setMeasures] = useState<Measure[]>([{ agg: 'count', alias: 'count' }])
   const [filters, setFilters] = useState<FilterGroup>(emptyFilter())
   const [chartType, setChartType] = useState<ChartType>('bar')
+  const [display, setDisplay] = useState<BuildOptions>({ sort: 'value_desc' })
   const [limit, setLimit] = useState(50)
   const [result, setResult] = useState<QueryResult | null>(null)
   const [saveOpen, setSaveOpen] = useState(false)
@@ -490,6 +492,141 @@ function AggregateBuilder({
               ))}
             </select>
           </Field>
+          <Field label="Order">
+            <select
+              className="input py-1.5 text-xs"
+              value={display.sort ?? 'none'}
+              onChange={(event) =>
+                setDisplay({ ...display, sort: event.target.value as BuildOptions['sort'] })
+              }
+            >
+              <option value="value_desc">Largest first</option>
+              <option value="value_asc">Smallest first</option>
+              <option value="label_asc">By name (A–Z)</option>
+              <option value="label_desc">By name (Z–A)</option>
+              <option value="none">As the query returned them</option>
+            </select>
+          </Field>
+
+          <Field
+            label="Show only the top"
+            hint="The rest are added together into one 'Other'. Blank keeps them all."
+          >
+            <input
+              className="input py-1.5 text-xs"
+              type="number"
+              min={1}
+              max={50}
+              value={display.topN ?? ''}
+              placeholder="all"
+              onChange={(event) =>
+                setDisplay({ ...display, topN: Number(event.target.value) || undefined })
+              }
+            />
+          </Field>
+
+          <Field label="Value axis title" hint="Blank uses the measure's own name.">
+            <input
+              className="input py-1.5 text-xs"
+              value={display.valueTitle ?? ''}
+              onChange={(event) => setDisplay({ ...display, valueTitle: event.target.value })}
+            />
+          </Field>
+
+          <div className="grid grid-cols-2 gap-2">
+            <Field label="Axis from">
+              <input
+                className="input py-1.5 text-xs"
+                type="number"
+                placeholder="auto"
+                value={display.valueMin ?? ''}
+                onChange={(event) =>
+                  setDisplay({
+                    ...display,
+                    valueMin: event.target.value === '' ? null : Number(event.target.value),
+                  })
+                }
+              />
+            </Field>
+            <Field label="to">
+              <input
+                className="input py-1.5 text-xs"
+                type="number"
+                placeholder="auto"
+                value={display.valueMax ?? ''}
+                onChange={(event) =>
+                  setDisplay({
+                    ...display,
+                    valueMax: event.target.value === '' ? null : Number(event.target.value),
+                  })
+                }
+              />
+            </Field>
+          </div>
+
+          <Field label="Target line" hint="A dashed rule across the plot, e.g. the target.">
+            <div className="grid grid-cols-2 gap-2">
+              <input
+                className="input py-1.5 text-xs"
+                type="number"
+                placeholder="value"
+                value={display.referenceValue ?? ''}
+                onChange={(event) =>
+                  setDisplay({
+                    ...display,
+                    referenceValue: event.target.value === '' ? null : Number(event.target.value),
+                  })
+                }
+              />
+              <input
+                className="input py-1.5 text-xs"
+                placeholder="label"
+                value={display.referenceLabel ?? ''}
+                onChange={(event) => setDisplay({ ...display, referenceLabel: event.target.value })}
+              />
+            </div>
+          </Field>
+
+          <div className="mb-3 space-y-1.5 text-xs text-ink-700">
+            {/* Numbers on the marks read on bars and slices; on a line they
+                collide with each other, so that combination is not offered. */}
+            {chartType !== 'line' && chartType !== 'area' && chartType !== 'scatter' && (
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={Boolean(display.showValues)}
+                  onChange={(event) =>
+                    setDisplay({ ...display, showValues: event.target.checked })
+                  }
+                />
+                Print the numbers on the chart
+                <span className="text-ink-400">(up to 24 bars)</span>
+              </label>
+            )}
+            {(chartType === 'stacked_bar' || chartType === 'area') && (
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={Boolean(display.percentStack)}
+                  onChange={(event) =>
+                    setDisplay({ ...display, percentStack: event.target.checked })
+                  }
+                />
+                Stack to 100% (composition, not size)
+              </label>
+            )}
+            {(chartType === 'line' || chartType === 'area') && (
+              <label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={Boolean(display.smooth)}
+                  onChange={(event) => setDisplay({ ...display, smooth: event.target.checked })}
+                />
+                Smooth the line
+              </label>
+            )}
+          </div>
+
           <Field label="Row limit">
             <input
               className="input py-1.5 text-xs"
@@ -593,7 +730,7 @@ function AggregateBuilder({
                   see more.
                 </p>
               )}
-              <ChartCard result={result} chartType={chartType} height={420} />
+              <ChartCard result={result} chartType={chartType} height={420} display={display} />
               {showSql && (
                 <pre className="mt-4 overflow-x-auto rounded-lg bg-ink-900 p-3 text-xs text-ink-100">
                   {result.sql}
@@ -610,6 +747,7 @@ function AggregateBuilder({
         datasetId={datasetId}
         datasetName={datasetName}
         chartType={chartType}
+        display={display}
         spec={spec}
         onSaved={onSaved}
       />
@@ -623,6 +761,7 @@ function SaveChartModal({
   datasetId,
   datasetName,
   chartType,
+  display,
   spec,
   onSaved,
 }: {
@@ -631,6 +770,8 @@ function SaveChartModal({
   datasetId: string
   datasetName: string
   chartType: ChartType
+  /** How it is drawn, saved with it so a dashboard shows the same chart. */
+  display: BuildOptions
   spec: QuerySpec
   onSaved: () => void
 }) {
@@ -642,7 +783,7 @@ function SaveChartModal({
         name: name || `Chart on ${datasetName}`,
         dataset_id: datasetId,
         chart_type: chartType,
-        spec: { query: spec },
+        spec: { query: spec, options: display },
       }),
     onSuccess: () => {
       onSaved()
