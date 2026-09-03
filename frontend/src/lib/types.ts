@@ -333,6 +333,8 @@ export interface ArchiveImport {
   created: string[]
   /** "R_demographics.dta -> R_demographics (401 + 381 = 782 rows)" */
   appended: string[]
+  /** "R_demographics.dta -> R_demographics (401 rows replaced by 415)" */
+  replaced: string[]
   skipped: string[]
   warnings: string[]
   rows: number
@@ -346,6 +348,7 @@ export type WidgetType =
   | 'text'
   | 'crosstab'
   | 'quality'
+  | 'countdown'
 
 export interface Widget {
   id: string
@@ -362,6 +365,17 @@ export interface Widget {
   position: number
 }
 
+export interface Appearance {
+  background_color?: string
+  /** File name of an uploaded image, served from the dashboard's own endpoint. */
+  background_image?: string
+  /** Changes whenever the image does, so a cached one is not shown instead. */
+  background_version?: string
+  background_fit?: 'cover' | 'contain' | 'tile'
+  /** 0-1: how much white is laid over the image to keep widgets readable. */
+  fade?: number
+}
+
 export interface Dashboard {
   id: string
   name: string
@@ -373,6 +387,8 @@ export interface Dashboard {
   pages: { name: string }[]
   /** Which categorical ordering its charts use; see CHART_THEMES. */
   theme: string
+  /** How the board is dressed: background colour, image, fit and fade. */
+  appearance: Appearance
   is_public: boolean
   public_token: string | null
   refresh_interval_seconds: number
@@ -398,6 +414,8 @@ export interface Indicator {
   critical_threshold: number | null
   direction: Direction
   breakdown_variable: string
+  /** '' for a plain number, or what the value is a percentage of. */
+  percent_of?: '' | 'all_rows' | 'answered'
   is_active: boolean
   display_order: number
   last_value: number | null
@@ -416,6 +434,7 @@ export interface IndicatorValue {
   status: IndicatorState
   direction: Direction
   breakdown: Record<string, number>
+  breakdown_variable: string
   computed_at: string | null
   error: string | null
   trend: { t: string; v: number | null }[]

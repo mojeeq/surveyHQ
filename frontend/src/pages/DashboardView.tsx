@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import GridLayout, { type Layout } from 'react-grid-layout'
 import 'react-grid-layout/css/styles.css'
@@ -9,10 +9,29 @@ import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { CHART_THEMES, STATUS_COLORS } from '@/lib/charts'
 import { formatNumber, formatValue, relativeTime } from '@/lib/format'
-import type { Chart, Dashboard, Dataset, Indicator, Page, Widget } from '@/lib/types'
+import type {
+  Appearance,
+  Chart,
+  Dashboard,
+  Dataset,
+  Indicator,
+  Page,
+  Widget,
+} from '@/lib/types'
 import AssignProject from '@/components/AssignProject'
 import ChartCard from '@/components/ChartCard'
+import DashboardFilters, {
+  filterableVariables,
+  toFilterGroup,
+  useDashboardDatasets,
+  type FilterControl,
+} from '@/components/DashboardFilters'
 import CrosstabTable from '@/components/CrosstabTable'
+import AppearanceModal, {
+  canvasStyle,
+  isDark,
+  useBackgroundImage,
+} from '@/components/DashboardAppearance'
 import {
   Badge,
   Card,
@@ -35,6 +54,9 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
   const [editing, setEditing] = useState(false)
   const [adding, setAdding] = useState(false)
   const [activePage, setActivePage] = useState(0)
+  const [filterValues, setFilterValues] = useState<Record<string, string>>({})
+  const [editingFilters, setEditingFilters] = useState(false)
+  const [editingStyle, setEditingStyle] = useState(false)
   const [width, setWidth] = useState(1200)
 
   const isPublic = Boolean(publicToken)
@@ -45,14 +67,18 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
     queryFn: () => api.get<Dashboard>(basePath),
   })
 
+  const filterControls: FilterControl[] = (dashboard.data?.filters ??
+    []) as unknown as FilterControl[]
+
   const rendered = useQuery({
-    queryKey: ['dashboard-data', id, publicToken],
+    // The values are part of the key, so changing a filter refetches rather
+    // than showing the previous selection's numbers under the new label.
+    queryKey: ['dashboard-data', id, publicToken, filterValues],
     queryFn: () =>
-      api.post<{ widgets: Record<string, any> }>(`${basePath}/data`, {
-        op: 'and',
-        conditions: [],
-        groups: [],
-      }),
+      api.post<{ widgets: Record<string, any> }>(
+        `${basePath}/data`,
+        toFilterGroup(filterControls, filterValues),
+      ),
     enabled: Boolean(dashboard.data),
     refetchInterval: dashboard.data?.refresh_interval_seconds
       ? dashboard.data.refresh_interval_seconds * 1000
@@ -112,6 +138,18 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
     onError: (error: Error) => toast.push(error.message, 'error'),
   })
 
+  const moveWidget = useMutation({
+    mutationFn: ({ widgetId, page }: { widgetId: string; page: number }) =>
+      api.patch(`/dashboards/${id}/widgets/${widgetId}`, { page }),
+    onSuccess: (_data, variables) => {
+      toast.push('Widget moved', 'success')
+      queryClient.invalidateQueries({ queryKey: ['dashboard', id] })
+      // Follow it, so the move can be seen rather than just reported.
+      setActivePage(variables.page)
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
   const removeWidget = useMutation({
     mutationFn: (widgetId: string) => api.delete(`/dashboards/${id}/widgets/${widgetId}`),
     onSuccess: () => {
@@ -125,11 +163,20 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
   // A dashboard with no named pages is one unnamed page, which is what every
   // dashboard made before this feature is.
   const pageCount = Math.max(1, pages.length)
+  const pageNames = Array.from(
+    { length: Math.max(1, pages.length) },
+    (_, index) => pages[index]?.name || `Page ${index + 1}`,
+  )
   const page = Math.min(activePage, pageCount - 1)
   const widgets = useMemo(
     () => allWidgets.filter((widget) => (widget.page ?? 0) === page),
     [allWidgets, page],
   )
+
+  const appearance = (dashboard.data?.appearance ?? {}) as Appearance
+  const backgroundUrl = useBackgroundImage(basePath, appearance)
+  const canvas = canvasStyle(appearance, backgroundUrl)
+  const onDarkGround = Boolean(canvas) && isDark(appearance.background_color)
 
   const layout: Layout[] = useMemo(
     () =>
@@ -189,6 +236,12 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
                       </option>
                     ))}
                   </select>
+                  <button className="btn-secondary" onClick={() => setEditingFilters(true)}>
+                    Filters
+                  </button>
+                  <button className="btn-secondary" onClick={() => setEditingStyle(true)}>
+                    Background
+                  </button>
                   <button className="btn-secondary" onClick={() => setAdding(true)}>
                     Add widget
                   </button>
@@ -223,12 +276,27 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         </div>
       )}
 
+      {/* Everything the dashboard is read for sits on the canvas: the filters
+          in use, the pages, and the widgets. The page header stays off it, so
+          the toolbar's buttons keep the contrast they were designed with. */}
+      <div
+        className={canvas ? 'rounded-xl p-4' : ''}
+        style={canvas}
+        data-testid="dashboard-canvas"
+      >
+      <DashboardFilters
+        controls={filterControls}
+        value={filterValues}
+        onChange={setFilterValues}
+      />
+
       <PageTabs
         pages={pages}
         active={page}
         count={pageCount}
         canEdit={!isPublic && can('analyst')}
         widgetsOnPage={widgets.length}
+        onDark={onDarkGround}
         onSelect={setActivePage}
         onChange={(next) => savePages.mutate(next)}
       />
@@ -272,6 +340,8 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
                 editing={editing && !isPublic}
                 canEdit={!isPublic && can('analyst')}
                 theme={dashboard.data!.theme ?? 'default'}
+                pageNames={pageNames}
+                onMove={(toPage) => moveWidget.mutate({ widgetId: widget.id, page: toPage })}
                 onRemove={() => {
                   if (confirm(`Remove "${widget.title || 'this widget'}" from the dashboard?`))
                     removeWidget.mutate(widget.id)
@@ -281,9 +351,25 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
           ))}
         </GridLayout>
       )}
+      </div>
 
       {adding && (
         <AddWidgetModal dashboardId={id} page={page} onClose={() => setAdding(false)} />
+      )}
+      {editingStyle && (
+        <AppearanceModal
+          dashboardId={id}
+          appearance={appearance}
+          onClose={() => setEditingStyle(false)}
+        />
+      )}
+      {editingFilters && (
+        <FilterControlsModal
+          dashboardId={id}
+          widgets={allWidgets}
+          controls={filterControls}
+          onClose={() => setEditingFilters(false)}
+        />
       )}
     </div>
   )
@@ -296,6 +382,8 @@ function WidgetFrame({
   editing,
   canEdit,
   theme,
+  pageNames,
+  onMove,
   onRemove,
 }: {
   widget: Widget
@@ -305,6 +393,9 @@ function WidgetFrame({
   canEdit: boolean
   /** The dashboard's categorical ordering, applied to every chart on it. */
   theme: string
+  /** Every page on this dashboard, so a widget can be sent to another one. */
+  pageNames: string[]
+  onMove: (page: number) => void
   onRemove: () => void
 }) {
   return (
@@ -313,6 +404,26 @@ function WidgetFrame({
         <h3 className={`truncate text-sm font-semibold text-ink-800 ${editing ? 'cursor-move' : ''}`}>
           {widget.title || payload?.name || 'Widget'}
         </h3>
+        <div className="flex shrink-0 items-center gap-1">
+        {canEdit && pageNames.length > 1 && (
+          // Which page a widget belongs on is usually decided after it is
+          // built, and rebuilding it somewhere else is not an answer.
+          <select
+            className={`h-7 rounded border border-ink-200 bg-white px-1.5 text-xs text-ink-600 transition-opacity ${
+              editing ? 'opacity-100' : 'opacity-0 focus:opacity-100 group-hover:opacity-100'
+            }`}
+            title="Move this widget to another page"
+            aria-label={`Move ${widget.title || 'widget'} to another page`}
+            value={widget.page ?? 0}
+            onChange={(event) => onMove(Number(event.target.value))}
+          >
+            {pageNames.map((name, index) => (
+              <option key={index} value={index}>
+                {name}
+              </option>
+            ))}
+          </select>
+        )}
         {canEdit && (
           // Removal used to live only inside Arrange mode with nothing saying
           // so, which read as "widgets cannot be removed". It is now always
@@ -328,6 +439,7 @@ function WidgetFrame({
             ✕
           </button>
         )}
+        </div>
       </header>
       <div className="flex min-h-0 flex-1 flex-col overflow-auto p-4">
         {loading ? (
@@ -339,11 +451,13 @@ function WidgetFrame({
             {payload.error}
           </p>
         ) : payload.type === 'indicator' ? (
-          <IndicatorWidget payload={payload} />
+          <IndicatorWidget payload={payload} theme={theme} />
         ) : payload.type === 'quality' ? (
           <QualityWidget payload={payload} />
         ) : payload.type === 'crosstab' ? (
-          <CrosstabTable result={payload.result} compact maxHeight={260} />
+          <CrosstabTable result={payload.result} compact fill />
+        ) : payload.type === 'countdown' ? (
+          <CountdownWidget payload={payload} />
         ) : payload.type === 'text' ? (
           <p className="whitespace-pre-wrap text-sm text-ink-700">{payload.content}</p>
         ) : payload.result ? (
@@ -380,6 +494,7 @@ function PageTabs({
   count,
   canEdit,
   widgetsOnPage,
+  onDark,
   onSelect,
   onChange,
 }: {
@@ -388,6 +503,8 @@ function PageTabs({
   count: number
   canEdit: boolean
   widgetsOnPage: number
+  /** Set when the dashboard's background is dark enough to swallow ink text. */
+  onDark: boolean
   onSelect: (index: number) => void
   onChange: (pages: { name: string }[]) => void
 }) {
@@ -421,7 +538,11 @@ function PageTabs({
   if (count <= 1 && !canEdit) return null
 
   return (
-    <div className="mb-4 flex flex-wrap items-center gap-1 border-b border-ink-200">
+    <div
+      className={`mb-4 flex flex-wrap items-center gap-1 border-b ${
+        onDark ? 'border-white/25' : 'border-ink-200'
+      }`}
+    >
       {count > 1 &&
         named.map((page, index) => (
           <button
@@ -431,8 +552,12 @@ function PageTabs({
             title={canEdit ? 'Double-click to rename' : undefined}
             className={`whitespace-nowrap border-b-2 px-3.5 py-2.5 text-sm font-medium transition-colors ${
               active === index
-                ? 'border-brand-600 text-brand-700'
-                : 'border-transparent text-ink-500 hover:text-ink-800'
+                ? onDark
+                  ? 'border-white text-white'
+                  : 'border-brand-600 text-brand-700'
+                : onDark
+                  ? 'border-transparent text-white/70 hover:text-white'
+                  : 'border-transparent text-ink-500 hover:text-ink-800'
             }`}
           >
             {page.name}
@@ -440,7 +565,10 @@ function PageTabs({
         ))}
       {canEdit && (
         <>
-          <button className="btn-ghost btn-sm text-ink-500" onClick={addPage}>
+          <button
+            className={`btn-ghost btn-sm ${onDark ? 'text-white/80' : 'text-ink-500'}`}
+            onClick={addPage}
+          >
             + Page
           </button>
           {count > 1 && (
@@ -453,6 +581,69 @@ function PageTabs({
           )}
         </>
       )}
+    </div>
+  )
+}
+
+/**
+ * Time left until a deadline, ticking.
+ *
+ * Fieldwork is run against dates - the day enumeration closes, the day the
+ * report is due - and a board that reports progress is read against how much
+ * of that time is left. The number is computed in the browser rather than sent
+ * by the server, so it goes on counting down on a screen nobody is touching.
+ */
+function CountdownWidget({ payload }: { payload: any }) {
+  const target = payload.target ? new Date(payload.target).getTime() : NaN
+  const [now, setNow] = useState(() => Date.now())
+
+  useEffect(() => {
+    if (!Number.isFinite(target)) return
+    const timer = setInterval(() => setNow(Date.now()), 1000)
+    return () => clearInterval(timer)
+  }, [target])
+
+  if (!Number.isFinite(target)) {
+    return <p className="py-6 text-center text-sm text-ink-400">No date set for this countdown</p>
+  }
+
+  const remaining = target - now
+  if (remaining <= 0) {
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-1 text-center">
+        <p className="text-2xl font-semibold text-red-600">
+          {payload.expired_text || 'Time is up'}
+        </p>
+        <p className="text-xs text-ink-500">
+          {payload.label || new Date(target).toLocaleString()}
+        </p>
+      </div>
+    )
+  }
+
+  const seconds = Math.floor(remaining / 1000)
+  const parts = [
+    { value: Math.floor(seconds / 86400), unit: 'days' },
+    { value: Math.floor((seconds % 86400) / 3600), unit: 'hours' },
+    { value: Math.floor((seconds % 3600) / 60), unit: 'min' },
+    { value: seconds % 60, unit: 'sec' },
+  ]
+
+  return (
+    <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
+      <div className="flex items-end gap-3">
+        {parts.map((part) => (
+          <div key={part.unit}>
+            <div className="text-3xl font-semibold tabular-nums text-ink-900">
+              {String(part.value).padStart(2, '0')}
+            </div>
+            <div className="text-[11px] uppercase tracking-wide text-ink-400">{part.unit}</div>
+          </div>
+        ))}
+      </div>
+      <p className="text-xs text-ink-500">
+        {payload.label || `until ${new Date(target).toLocaleString()}`}
+      </p>
     </div>
   )
 }
@@ -505,10 +696,13 @@ function QualityWidget({ payload }: { payload: any }) {
   )
 }
 
-function IndicatorWidget({ payload }: { payload: any }) {
+function IndicatorWidget({ payload, theme }: { payload: any; theme: string }) {
   const color = STATUS_COLORS[payload.status as keyof typeof STATUS_COLORS] ?? STATUS_COLORS.unknown
+  const breakdown: Record<string, number> = payload.breakdown ?? {}
+  const groups = Object.entries(breakdown)
+
   return (
-    <div className="flex h-full flex-col justify-center">
+    <div className={`flex h-full flex-col ${groups.length ? '' : 'justify-center'}`}>
       <p className="text-3xl font-semibold tabular-nums text-ink-900">
         {formatValue(payload.value, payload.value_format, payload.unit)}
       </p>
@@ -535,6 +729,40 @@ function IndicatorWidget({ payload }: { payload: any }) {
           Updated {relativeTime(payload.computed_at)}
         </p>
       )}
+
+      {/* The headline is an average of something. Which regions or teams are
+          behind it is the next question, and it used to need another page. */}
+      {groups.length > 0 && (
+        <div className="mt-3 min-h-0 flex-1">
+          <ChartCard
+            showToggle={false}
+            chartType="horizontal_bar"
+            fill
+            theme={theme}
+            result={{
+              columns: [
+                {
+                  name: 'group',
+                  label: payload.breakdown_variable || 'Group',
+                  type: 'dimension',
+                  data_type: 'text',
+                },
+                {
+                  name: 'value',
+                  label: payload.name ?? 'Value',
+                  type: 'measure',
+                  data_type: 'number',
+                },
+              ],
+              rows: groups.map(([key, value]) => [key, value]),
+              row_count: groups.length,
+              truncated: false,
+              sql: '',
+              duration_ms: 0,
+            }}
+          />
+        </div>
+      )}
     </div>
   )
 }
@@ -551,12 +779,17 @@ function AddWidgetModal({
 }) {
   const toast = useToast()
   const queryClient = useQueryClient()
-  const [kind, setKind] = useState<'chart' | 'indicator' | 'quality' | 'text'>('chart')
+  const [kind, setKind] = useState<
+    'chart' | 'indicator' | 'quality' | 'text' | 'countdown'
+  >('chart')
   const [datasetId, setDatasetId] = useState('')
   const [chartId, setChartId] = useState('')
   const [indicatorId, setIndicatorId] = useState('')
   const [title, setTitle] = useState('')
   const [content, setContent] = useState('')
+  const [deadline, setDeadline] = useState('')
+  const [deadlineLabel, setDeadlineLabel] = useState('')
+  const [showBreakdown, setShowBreakdown] = useState(true)
 
   const charts = useQuery({ queryKey: ['charts'], queryFn: () => api.get<Chart[]>('/dashboards/charts') })
   const indicators = useQuery({
@@ -578,15 +811,34 @@ function AddWidgetModal({
             ? charts.data?.find((c) => c.id === chartId)?.name
             : kind === 'quality'
               ? `Data quality: ${datasets.data?.items.find((d) => d.id === datasetId)?.name ?? ''}`
-              : indicators.data?.find((i) => i.id === indicatorId)?.name) ||
+              : kind === 'countdown'
+                ? deadlineLabel || 'Countdown'
+                : indicators.data?.find((i) => i.id === indicatorId)?.name) ||
           'Widget',
         widget_type: kind,
         chart_id: kind === 'chart' ? chartId : null,
         indicator_id: kind === 'indicator' ? indicatorId : null,
         dataset_id: kind === 'quality' ? datasetId : null,
         page,
-        config: kind === 'text' ? { content } : {},
-        layout: kind === 'indicator' ? { w: 3, h: 3 } : { w: 6, h: 4 },
+        config:
+          kind === 'indicator'
+            ? { show_breakdown: showBreakdown }
+            : kind === 'text'
+            ? { content }
+            : kind === 'countdown'
+              ? // A local datetime from the browser; sent as an instant so the
+                // count reads the same wherever the dashboard is opened.
+                { target: new Date(deadline).toISOString(), label: deadlineLabel }
+              : {},
+        layout:
+          kind === 'countdown'
+            ? { w: 3, h: 3 }
+            : kind === 'indicator'
+              ? // A tile with a chart under it needs the room for one.
+                showBreakdown && chosenIndicator?.breakdown_variable
+                ? { w: 4, h: 5 }
+                : { w: 3, h: 3 }
+              : { w: 6, h: 4 },
       }),
     onSuccess: () => {
       toast.push('Widget added', 'success')
@@ -597,11 +849,14 @@ function AddWidgetModal({
     onError: (error: Error) => toast.push(error.message, 'error'),
   })
 
+  const chosenIndicator = indicators.data?.find((i) => i.id === indicatorId)
+
   const canAdd =
     (kind === 'chart' && chartId) ||
     (kind === 'indicator' && indicatorId) ||
     (kind === 'quality' && datasetId) ||
-    (kind === 'text' && content)
+    (kind === 'text' && content) ||
+    (kind === 'countdown' && deadline && !Number.isNaN(Date.parse(deadline)))
 
   return (
     <Modal
@@ -629,6 +884,7 @@ function AddWidgetModal({
           <option value="indicator">Indicator tile</option>
           <option value="quality">Data quality panel</option>
           <option value="text">Text note</option>
+          <option value="countdown">Countdown to a date</option>
         </select>
       </Field>
 
@@ -672,6 +928,7 @@ function AddWidgetModal({
       )}
 
       {kind === 'indicator' && (
+        <>
         <Field label="Indicator">
           <select
             className="input"
@@ -686,6 +943,38 @@ function AddWidgetModal({
             ))}
           </select>
         </Field>
+        {chosenIndicator?.breakdown_variable && (
+          <label className="mb-4 flex items-center gap-2 text-sm text-ink-700">
+            <input
+              type="checkbox"
+              checked={showBreakdown}
+              onChange={(event) => setShowBreakdown(event.target.checked)}
+            />
+            Show the breakdown by {chosenIndicator.breakdown_variable} under the number
+          </label>
+        )}
+        </>
+      )}
+
+      {kind === 'countdown' && (
+        <>
+          <Field label="Counting down to" hint="Fieldwork closing, a reporting deadline.">
+            <input
+              type="datetime-local"
+              className="input"
+              value={deadline}
+              onChange={(event) => setDeadline(event.target.value)}
+            />
+          </Field>
+          <Field label="Caption" hint="Shown under the clock.">
+            <input
+              className="input"
+              value={deadlineLabel}
+              onChange={(event) => setDeadlineLabel(event.target.value)}
+              placeholder="until fieldwork closes"
+            />
+          </Field>
+        </>
       )}
 
       {kind === 'text' && (
@@ -703,6 +992,151 @@ function AddWidgetModal({
       <Field label="Title" hint="Leave blank to use the chart or indicator name">
         <input className="input" value={title} onChange={(event) => setTitle(event.target.value)} />
       </Field>
+    </Modal>
+  )
+}
+
+/**
+ * Chooses which variables the dashboard offers as filters.
+ *
+ * The candidates come from the datasets the dashboard's own widgets use, since
+ * a filter on a variable nothing here carries would do nothing. Only
+ * categorical variables with a manageable number of values are offered: a
+ * dropdown of 40,000 interview keys is not a filter.
+ */
+function FilterControlsModal({
+  dashboardId,
+  widgets,
+  controls,
+  onClose,
+}: {
+  dashboardId: string
+  widgets: Widget[]
+  controls: FilterControl[]
+  onClose: () => void
+}) {
+  const toast = useToast()
+  const queryClient = useQueryClient()
+  const [chosen, setChosen] = useState<FilterControl[]>(controls)
+
+  const charts = useQuery({
+    queryKey: ['charts'],
+    queryFn: () => api.get<Chart[]>('/dashboards/charts'),
+  })
+
+  // A widget names either a chart (which names a dataset) or a dataset directly
+  const datasetIds = useMemo(() => {
+    const ids = new Set<string>()
+    for (const widget of widgets) {
+      if (widget.dataset_id) ids.add(widget.dataset_id)
+      const chart = charts.data?.find((c) => c.id === widget.chart_id)
+      if (chart) ids.add(chart.dataset_id)
+    }
+    return [...ids]
+  }, [widgets, charts.data])
+
+  const datasets = useDashboardDatasets(datasetIds)
+  const details = useQuery({
+    queryKey: ['dataset-details', datasetIds],
+    queryFn: async () =>
+      Promise.all(datasetIds.map((id) => api.get<Dataset>(`/datasets/${id}`))),
+    enabled: datasetIds.length > 0,
+  })
+
+  const save = useMutation({
+    mutationFn: () => api.patch(`/dashboards/${dashboardId}`, { filters: chosen }),
+    onSuccess: () => {
+      toast.push('Filters saved', 'success')
+      queryClient.invalidateQueries({ queryKey: ['dashboard', dashboardId] })
+      onClose()
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  const toggle = (control: FilterControl) => {
+    const has = chosen.some((c) => c.variable === control.variable)
+    setChosen(
+      has
+        ? chosen.filter((c) => c.variable !== control.variable)
+        : [...chosen, control],
+    )
+  }
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Dashboard filters"
+      wide
+      footer={
+        <>
+          <button className="btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn-primary" onClick={() => save.mutate()}>
+            Save filters
+          </button>
+        </>
+      }
+    >
+      <p className="mb-3 text-sm text-ink-500">
+        A filter narrows every widget whose dataset carries that variable, and
+        leaves the others as they are — so it is still useful when only part of
+        the page has it.
+      </p>
+
+      {details.isLoading || datasets.isLoading ? (
+        <Loading />
+      ) : !details.data?.length ? (
+        <p className="text-sm text-ink-500">
+          Add a widget first; the filters come from the datasets it uses.
+        </p>
+      ) : (
+        <div className="space-y-4">
+          {details.data.map((dataset) => {
+            const options = filterableVariables(dataset)
+            return (
+              <div key={dataset.id}>
+                <p className="text-xs font-semibold uppercase tracking-wide text-ink-500">
+                  {dataset.name}
+                </p>
+                {!options.length ? (
+                  <p className="mt-1 text-sm text-ink-400">
+                    No variable here has few enough values to filter by.
+                  </p>
+                ) : (
+                  <div className="mt-1 grid gap-1 sm:grid-cols-2">
+                    {options.map((variable) => (
+                      <label
+                        key={variable.name}
+                        className="flex items-center gap-2 text-sm text-ink-700"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={chosen.some((c) => c.variable === variable.name)}
+                          onChange={() =>
+                            toggle({
+                              variable: variable.name,
+                              dataset_id: dataset.id,
+                              label: variable.label || variable.name,
+                            })
+                          }
+                        />
+                        <span className="truncate">
+                          {variable.label
+                            ? `${variable.name} — ${variable.label}`
+                            : variable.name}
+                          <span className="text-ink-400"> ({variable.n_unique})</span>
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
     </Modal>
   )
 }

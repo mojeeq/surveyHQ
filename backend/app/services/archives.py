@@ -31,15 +31,20 @@ logger = get_logger(__name__)
 # Written onto every combined dataset so a row can be traced to its file.
 SOURCE_COLUMN = "source_file"
 
-# Survey Solutions writes these beside the interview data; they are not the
-# subject of analysis and would otherwise be mistaken for extra rounds.
-SYSTEM_FILE_STEMS = {
+# Survey Solutions writes these beside the interview data. They are not survey
+# responses - they are the record of how the fieldwork happened - which is
+# exactly what a monitoring tool wants: who did what and when, how long an
+# interview took, what a supervisor rejected and why. They are imported like any
+# other level and tagged so they can be told apart.
+PARADATA_STEMS = {
     "interview__actions",
     "interview__errors",
     "interview__comments",
     "interview__diagnostics",
     "assignment__actions",
 }
+
+PARADATA_TAG = "paradata"
 
 # .txt counts as a data format here, so a Survey Solutions export's own readme
 # would otherwise be read as tabular and appended as though it were a round.
@@ -61,6 +66,11 @@ class ExtractedMember:
     @property
     def columns(self) -> tuple[str, ...]:
         return tuple(str(c) for c in self.frame.columns)
+
+    @property
+    def is_paradata(self) -> bool:
+        """A record of how fieldwork happened rather than what was answered."""
+        return Path(self.name).stem.lower() in PARADATA_STEMS
 
 
 @dataclass
@@ -93,8 +103,6 @@ def _safe_members(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
         if suffix not in SUPPORTED_EXTENSIONS:
             continue
         stem = Path(name).stem.lower()
-        if stem in SYSTEM_FILE_STEMS:
-            continue
         if any(fragment in stem for fragment in IGNORED_STEM_FRAGMENTS):
             continue
         members.append(info)

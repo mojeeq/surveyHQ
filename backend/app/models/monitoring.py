@@ -80,6 +80,16 @@ class Indicator(UUIDMixin, TimestampMixin, Base):
     )
     # Optional variable used to break the indicator down (region, team, ...)
     breakdown_variable: Mapped[str] = mapped_column(String(300), default="")
+    # What the value is a percentage of, if it is one. Empty means it is a
+    # plain number. "all_rows" divides by every row in the dataset before the
+    # indicator's own filters, which is how "% of interviews completed" is
+    # expressed: the filters pick the completed ones, this says what they are a
+    # share of. "answered" divides by the rows that answered the measured
+    # variable, which is the same question asked of a variable rather than of
+    # the file - the share among those who were asked.
+    percent_of: Mapped[str] = mapped_column(
+        String(20), default="", server_default=text("''")
+    )
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     display_order: Mapped[int] = mapped_column(Integer, default=0)
 

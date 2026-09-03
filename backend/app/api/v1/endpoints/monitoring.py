@@ -99,6 +99,7 @@ def create_indicator(
         critical_threshold=payload.critical_threshold,
         direction=payload.direction,
         breakdown_variable=payload.breakdown_variable,
+        percent_of=payload.percent_of,
         display_order=payload.display_order,
     )
     db.add(indicator)
@@ -186,6 +187,7 @@ def indicator_values(
                 status=indicator_status(indicator, indicator.last_value),
                 direction=indicator.direction,
                 breakdown=breakdown,
+                breakdown_variable=indicator.breakdown_variable,
                 computed_at=indicator.last_computed_at,
                 error=error,
                 trend=trend,
@@ -215,6 +217,7 @@ def refresh_single_indicator(
         status=indicator_status(indicator, indicator.last_value),
         direction=indicator.direction,
         breakdown=outcome.get("breakdown") or {},
+        breakdown_variable=indicator.breakdown_variable,
         computed_at=indicator.last_computed_at,
         error=outcome.get("error"),
     )

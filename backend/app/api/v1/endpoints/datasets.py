@@ -100,6 +100,7 @@ async def upload_dataset(
     tags: Annotated[str, Form()] = "",
     combine_all: Annotated[bool, Form()] = False,
     project_id: Annotated[str, Form()] = "",
+    mode: Annotated[str, Form()] = "replace",
 ) -> DatasetDetail | ArchiveImportOut:
     """Upload a data file, or an export archive, and ingest it immediately.
 
@@ -108,10 +109,15 @@ async def upload_dataset(
     - the interview, the household members, the people abroad - and those are
     different tables, not different rounds.
 
-    Uploading a later round's archive appends each of its files to the dataset
-    already holding that file name, so the rounds meet where they belong. Pass
-    combine_all for the other case: an archive that really does hold several
-    rounds of one table, which is appended into a single dataset instead.
+    Uploading a later archive sends each of its files to the dataset already
+    holding that file name. mode="replace" (the default) swaps that dataset's
+    data while keeping its id, so relationships, charts, indicators and quality
+    rules built on it go on working - which is what a live monitoring tool
+    needs. mode="append" adds the rows instead, for genuinely incremental
+    exports.
+
+    Pass combine_all for the other case: an archive that really does hold
+    several rounds of one table, which goes into a single dataset instead.
     """
     filename = Path(file.filename or "upload.dat").name
     suffix = Path(filename).suffix.lower()
@@ -127,6 +133,11 @@ async def upload_dataset(
     if project_id and not can_edit(db, user, project_id, Role.manager):
         raise HTTPException(
             status_code=404, detail="Project not found"
+        )
+
+    if mode not in ("replace", "append"):
+        raise HTTPException(
+            status_code=422, detail="mode must be 'replace' or 'append'"
         )
 
     settings.ensure_directories()
@@ -179,6 +190,7 @@ async def upload_dataset(
                 created_by=user.id,
                 combine_all=combine_all,
                 name_prefix=name.strip(),
+                mode=mode,
             )
         else:
             load_file_into_dataset(db, dataset, upload_path)
@@ -203,9 +215,11 @@ async def upload_dataset(
             datasets=[DatasetOut.model_validate(d) for d in outcome.datasets],
             created=outcome.created,
             appended=outcome.appended,
+            replaced=outcome.replaced,
             skipped=outcome.skipped,
             warnings=sorted(
-                {w for d in outcome.datasets for w in (d.meta or {}).get("warnings", [])}
+                set(outcome.warnings)
+                | {w for d in outcome.datasets for w in (d.meta or {}).get("warnings", [])}
             ),
             rows=outcome.rows,
         )

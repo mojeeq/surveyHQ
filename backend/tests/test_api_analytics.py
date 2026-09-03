@@ -446,6 +446,7 @@ def test_a_later_archive_appends_each_file_to_its_match(client, auth_headers):
                 "application/zip",
             )
         },
+        data={"mode": "append"},
     )
     assert first.status_code == 201, first.text
     assert len(first.json()["created"]) == 2
@@ -460,6 +461,7 @@ def test_a_later_archive_appends_each_file_to_its_match(client, auth_headers):
                 "application/zip",
             )
         },
+        data={"mode": "append"},
     )
     assert second.status_code == 201, second.text
     body = second.json()
@@ -546,11 +548,13 @@ def test_re_uploading_the_same_archive_warns_that_interviews_are_doubled(
         "/api/v1/datasets/upload",
         headers=auth_headers,
         files={"file": ("cumulative-1.zip", payload, "application/zip")},
+        data={"mode": "append"},
     )
     again = client.post(
         "/api/v1/datasets/upload",
         headers=auth_headers,
         files={"file": ("cumulative-2.zip", payload, "application/zip")},
+        data={"mode": "append"},
     )
     assert again.status_code == 201, again.text
     warnings = " ".join(again.json()["warnings"])
@@ -868,3 +872,513 @@ def test_a_data_quality_panel_can_go_on_a_dashboard(client, auth_headers, datase
     # Failing checks sort first, so the one worth seeing is not buried
     assert panel["checks"][0]["passed"] is False
     assert any("income" in c["message"] for c in failing)
+
+
+def test_a_dashboard_filter_only_applies_where_the_variable_exists(
+    client, auth_headers, dataset_id
+):
+    """A dashboard's widgets can draw on different datasets.
+
+    Filtering on a variable only some of them carry must narrow those and leave
+    the rest alone, not replace them with an error.
+    """
+    import pandas as pd
+
+    other = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "no_region.dta",
+                _stata_bytes(pd.DataFrame({"team": [1.0, 2.0, 1.0], "hours": [5.0, 6.0, 7.0]})),
+                "application/octet-stream",
+            )
+        },
+        data={"name": "Has no region"},
+    )
+    assert other.status_code == 201, other.text
+    other_id = other.json()["id"]
+
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Mixed sources"}
+    ).json()
+    for name, ds, variable in (
+        ("Has region", dataset_id, "region"),
+        ("No region", other_id, "team"),
+    ):
+        chart = client.post(
+            "/api/v1/dashboards/charts",
+            headers=auth_headers,
+            json={
+                "name": name,
+                "dataset_id": ds,
+                "chart_type": "bar",
+                "spec": {"query": {"dimensions": [{"variable": variable}],
+                                   "measures": [{"agg": "count", "alias": "n"}]}},
+            },
+        ).json()
+        client.post(
+            f"/api/v1/dashboards/{dashboard['id']}/widgets",
+            headers=auth_headers,
+            json={"title": name, "widget_type": "chart", "chart_id": chart["id"]},
+        )
+
+    rendered = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json={
+            "op": "and",
+            "conditions": [{"variable": "region", "operator": "eq", "value": "North"}],
+            "groups": [],
+        },
+    )
+    assert rendered.status_code == 200, rendered.text
+    widgets = list(rendered.json()["widgets"].values())
+    by_name = {w.get("name"): w for w in widgets}
+
+    # Neither widget errored
+    assert all("error" not in w for w in widgets), widgets
+    # The one that has the variable was narrowed
+    assert sum(r[1] for r in by_name["Has region"]["result"]["rows"]) < 200
+    # The one that does not was left as it was
+    assert sum(r[1] for r in by_name["No region"]["result"]["rows"]) == 3
+
+
+def _png() -> bytes:
+    """The smallest valid PNG: a 1x1 transparent pixel."""
+    import base64
+
+    return base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAY"
+        "AAjCB0C8AAAAASUVORK5CYII="
+    )
+
+
+def test_a_widget_can_be_moved_to_another_page(client, auth_headers, dataset_id):
+    """Where a widget belongs is often decided after it is built."""
+    dashboard = client.post(
+        "/api/v1/dashboards",
+        headers=auth_headers,
+        json={"name": "Two pages", "pages": [{"name": "Fieldwork"}, {"name": "Quality"}]},
+    ).json()
+    detail = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={"title": "A note", "widget_type": "text", "config": {"content": "hello"}},
+    ).json()
+    widget = detail["widgets"][0]
+    assert widget["page"] == 0
+
+    moved = client.patch(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets/{widget['id']}",
+        headers=auth_headers,
+        json={"page": 1},
+    )
+    assert moved.status_code == 200
+    after = moved.json()["widgets"][0]
+    assert after["page"] == 1
+    assert after["title"] == "A note"
+    assert after["config"] == {"content": "hello"}
+
+
+def test_a_moved_widget_is_placed_below_the_page_it_arrives_on(client, auth_headers):
+    """Its old coordinates would drop it on top of what is already there."""
+    dashboard = client.post(
+        "/api/v1/dashboards",
+        headers=auth_headers,
+        json={"name": "Crowded", "pages": [{"name": "One"}, {"name": "Two"}]},
+    ).json()
+
+    def add(title: str, page: int) -> dict:
+        body = client.post(
+            f"/api/v1/dashboards/{dashboard['id']}/widgets",
+            headers=auth_headers,
+            json={"title": title, "widget_type": "text", "page": page},
+        ).json()
+        return next(w for w in body["widgets"] if w["title"] == title)
+
+    add("Sitting on page two", 1)
+    travelling = add("Moving over", 0)
+    assert travelling["layout"]["y"] == 0
+
+    body = client.patch(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets/{travelling['id']}",
+        headers=auth_headers,
+        json={"page": 1},
+    ).json()
+    arrived = next(w for w in body["widgets"] if w["id"] == travelling["id"])
+    assert arrived["layout"]["y"] > 0
+    # Its size travels with it: a widget sized for what it shows does not get
+    # resized just because it changed page.
+    assert arrived["layout"]["w"] == travelling["layout"]["w"]
+    assert arrived["layout"]["h"] == travelling["layout"]["h"]
+
+
+def test_a_widget_cannot_be_moved_to_a_page_that_does_not_exist(client, auth_headers):
+    dashboard = client.post(
+        "/api/v1/dashboards",
+        headers=auth_headers,
+        json={"name": "One page", "pages": [{"name": "Only"}]},
+    ).json()
+    widget = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={"title": "A note", "widget_type": "text"},
+    ).json()["widgets"][0]
+
+    response = client.patch(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets/{widget['id']}",
+        headers=auth_headers,
+        json={"page": 4},
+    )
+    assert response.status_code == 422
+
+
+def test_a_countdown_widget_renders_its_deadline(client, auth_headers):
+    """A monitoring board is usually read against a date fieldwork has to end."""
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Deadline"}
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={
+            "title": "Fieldwork ends",
+            "widget_type": "countdown",
+            "config": {"target": "2030-01-01T00:00:00Z", "label": "until fieldwork ends"},
+        },
+    )
+
+    rendered = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json={"op": "and", "conditions": [], "groups": []},
+    )
+    assert rendered.status_code == 200
+    widget = next(iter(rendered.json()["widgets"].values()))
+    # Not an error about a missing data source: a countdown queries nothing
+    assert widget == {
+        "type": "countdown",
+        "target": "2030-01-01T00:00:00Z",
+        "label": "until fieldwork ends",
+        "expired_text": "",
+    }
+
+
+def test_a_dashboard_remembers_its_background_colour(client, auth_headers):
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Dressed"}
+    ).json()
+    assert dashboard["appearance"] == {}
+
+    updated = client.patch(
+        f"/api/v1/dashboards/{dashboard['id']}",
+        headers=auth_headers,
+        json={"appearance": {"background_color": "#0f172a", "dim": 0.4}},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["appearance"]["background_color"] == "#0f172a"
+
+    again = client.get(f"/api/v1/dashboards/{dashboard['id']}", headers=auth_headers).json()
+    assert again["appearance"]["dim"] == 0.4
+
+
+def test_a_background_image_is_uploaded_and_served_back(client, auth_headers):
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "With a picture"}
+    ).json()
+
+    upload = client.put(
+        f"/api/v1/dashboards/{dashboard['id']}/background",
+        headers=auth_headers,
+        files={"file": ("bg.png", _png(), "image/png")},
+    )
+    assert upload.status_code == 200
+    appearance = upload.json()["appearance"]
+    assert appearance["background_image"].endswith(".png")
+    assert appearance["background_version"]
+
+    served = client.get(
+        f"/api/v1/dashboards/{dashboard['id']}/background", headers=auth_headers
+    )
+    assert served.status_code == 200
+    assert served.headers["content-type"] == "image/png"
+    assert served.content == _png()
+
+    cleared = client.delete(
+        f"/api/v1/dashboards/{dashboard['id']}/background", headers=auth_headers
+    )
+    assert cleared.status_code == 200
+    assert "background_image" not in cleared.json()["appearance"]
+    assert (
+        client.get(
+            f"/api/v1/dashboards/{dashboard['id']}/background", headers=auth_headers
+        ).status_code
+        == 404
+    )
+
+
+def test_a_file_that_is_not_an_image_is_refused_as_a_background(client, auth_headers):
+    """The name and the content type are the uploader's to choose; the bytes are not."""
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Nice try"}
+    ).json()
+
+    response = client.put(
+        f"/api/v1/dashboards/{dashboard['id']}/background",
+        headers=auth_headers,
+        files={"file": ("bg.png", b"<svg onload=alert(1)></svg>", "image/png")},
+    )
+    assert response.status_code == 400
+    assert "PNG" in response.json()["detail"]
+
+
+def test_a_shared_dashboard_serves_its_background_without_a_login(client, auth_headers):
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Shared and dressed"}
+    ).json()
+    client.put(
+        f"/api/v1/dashboards/{dashboard['id']}/background",
+        headers=auth_headers,
+        files={"file": ("bg.png", _png(), "image/png")},
+    )
+    shared = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/share", headers=auth_headers, json={}
+    ).json()
+
+    response = client.get(f"/api/v1/public/dashboards/{shared['public_token']}/background")
+    assert response.status_code == 200
+    assert response.content == _png()
+
+
+def test_an_indicator_can_be_a_percentage_of_the_rows_it_selects(
+    client, auth_headers, dataset_id
+):
+    """"How many are completed" is rarely the question; "what share" is.
+
+    The indicator's own filters pick the rows being counted, and percent_of
+    says what they are a share of - so a count of completed interviews becomes
+    the completion rate, which is a number a target can be set against.
+    """
+    counted = client.post(
+        "/api/v1/monitoring/indicators",
+        headers=auth_headers,
+        json={
+            "name": "Completed interviews",
+            "dataset_id": dataset_id,
+            "spec": {
+                "measures": [{"agg": "count", "alias": "n"}],
+                "filters": {
+                    "op": "and",
+                    "conditions": [
+                        {"variable": "interview__status", "operator": "eq", "value": "Completed",
+                         "use_label": True}
+                    ],
+                    "groups": [],
+                },
+            },
+        },
+    ).json()
+    completed = counted["last_value"]
+    assert 0 < completed < 200
+
+    share = client.post(
+        "/api/v1/monitoring/indicators",
+        headers=auth_headers,
+        json={
+            "name": "Completion rate",
+            "dataset_id": dataset_id,
+            "spec": {
+                "measures": [{"agg": "count", "alias": "n"}],
+                "filters": {
+                    "op": "and",
+                    "conditions": [
+                        {"variable": "interview__status", "operator": "eq", "value": "Completed",
+                         "use_label": True}
+                    ],
+                    "groups": [],
+                },
+            },
+            "percent_of": "all_rows",
+            "target_value": 90,
+            "unit": "%",
+        },
+    )
+    assert share.status_code == 201
+    body = share.json()
+    assert body["percent_of"] == "all_rows"
+    # The denominator is every row, not the filtered ones: the filters are what
+    # chose the numerator, so counting them twice would always give 100%.
+    assert body["last_value"] == round(completed / 200 * 100, 2)
+
+
+def test_a_percentage_breakdown_is_each_group_s_own_rate(client, auth_headers, dataset_id):
+    """72% in the North means 72% of the North, not 72% of all completions."""
+    created = client.post(
+        "/api/v1/monitoring/indicators",
+        headers=auth_headers,
+        json={
+            "name": "Completion rate by region",
+            "dataset_id": dataset_id,
+            "spec": {
+                "measures": [{"agg": "count", "alias": "n"}],
+                "filters": {
+                    "op": "and",
+                    "conditions": [
+                        {"variable": "interview__status", "operator": "eq", "value": "Completed",
+                         "use_label": True}
+                    ],
+                    "groups": [],
+                },
+            },
+            "breakdown_variable": "region",
+            "percent_of": "all_rows",
+        },
+    ).json()
+
+    refreshed = client.post(
+        f"/api/v1/monitoring/indicators/{created['id']}/refresh", headers=auth_headers
+    ).json()
+    breakdown = refreshed["breakdown"]
+    assert set(breakdown) == {"North", "South"}
+    assert all(0 < rate <= 100 for rate in breakdown.values())
+    # Shares of a total would sum to 100; rates of their own groups do not have
+    # to, and each one has to sit either side of the overall rate.
+    assert min(breakdown.values()) <= refreshed["value"] <= max(breakdown.values())
+    assert refreshed["breakdown_variable"] == "region"
+
+
+def test_a_group_where_nothing_matched_reports_zero_rather_than_vanishing(
+    client, auth_headers, dataset_id
+):
+    """An empty region is 0%, which is a finding. Silence is not."""
+    created = client.post(
+        "/api/v1/monitoring/indicators",
+        headers=auth_headers,
+        json={
+            "name": "An impossible status",
+            "dataset_id": dataset_id,
+            "spec": {
+                "measures": [{"agg": "count", "alias": "n"}],
+                "filters": {
+                    "op": "and",
+                    "conditions": [
+                        {"variable": "interviewer", "operator": "eq", "value": "ana"}
+                    ],
+                    "groups": [],
+                },
+            },
+            "breakdown_variable": "interviewer",
+            "percent_of": "all_rows",
+        },
+    ).json()
+
+    refreshed = client.post(
+        f"/api/v1/monitoring/indicators/{created['id']}/refresh", headers=auth_headers
+    ).json()
+    # Every interviewer is in the breakdown; ana is all of her own rows, and
+    # the other two are none of theirs.
+    assert set(refreshed["breakdown"]) == {"ana", "ben", "cara"}
+    assert refreshed["breakdown"]["ana"] == 100.0
+    assert refreshed["breakdown"]["ben"] == 0.0
+
+
+def test_a_percentage_can_be_of_those_who_answered(client, auth_headers, dataset_id):
+    """Income is missing for ten rows, so the two denominators differ."""
+    common = {
+        "dataset_id": dataset_id,
+        "spec": {
+            "measures": [{"agg": "count", "variable": "income", "alias": "n"}],
+            "filters": {
+                "op": "and",
+                "conditions": [{"variable": "income", "operator": "gt", "value": 900}],
+                "groups": [],
+            },
+        },
+    }
+    of_all = client.post(
+        "/api/v1/monitoring/indicators",
+        headers=auth_headers,
+        json={**common, "name": "Earning over 900, of everyone", "percent_of": "all_rows"},
+    ).json()
+    of_answered = client.post(
+        "/api/v1/monitoring/indicators",
+        headers=auth_headers,
+        json={**common, "name": "Earning over 900, of those who said", "percent_of": "answered"},
+    ).json()
+
+    # Same numerator, smaller denominator: the rate among those who answered is
+    # the higher of the two.
+    assert of_answered["last_value"] > of_all["last_value"]
+
+
+def test_an_indicator_widget_can_show_its_breakdown(client, auth_headers, dataset_id):
+    """A tile with one number on it hides where that number comes from."""
+    indicator = client.post(
+        "/api/v1/monitoring/indicators",
+        headers=auth_headers,
+        json={
+            "name": "Interviews by region",
+            "dataset_id": dataset_id,
+            "spec": {"measures": [{"agg": "count", "alias": "n"}]},
+            "breakdown_variable": "region",
+        },
+    ).json()
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "With a breakdown"}
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={
+            "title": "Interviews by region",
+            "widget_type": "indicator",
+            "indicator_id": indicator["id"],
+            "config": {"show_breakdown": True},
+        },
+    )
+
+    rendered = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json={"op": "and", "conditions": [], "groups": []},
+    ).json()
+    payload = next(iter(rendered["widgets"].values()))
+    assert payload["type"] == "indicator"
+    assert payload["breakdown_variable"] == "region"
+    assert set(payload["breakdown"]) == {"North", "South"}
+    # The parts add up to the headline they are shown under
+    assert sum(payload["breakdown"].values()) == payload["value"] == 200
+
+
+def test_an_indicator_widget_without_a_breakdown_stays_a_single_number(
+    client, auth_headers, dataset_id
+):
+    """Asking every tile for a breakdown would run two more queries per render."""
+    indicator = client.post(
+        "/api/v1/monitoring/indicators",
+        headers=auth_headers,
+        json={
+            "name": "Plain count",
+            "dataset_id": dataset_id,
+            "spec": {"measures": [{"agg": "count", "alias": "n"}]},
+            "breakdown_variable": "region",
+        },
+    ).json()
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "No breakdown"}
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={"widget_type": "indicator", "indicator_id": indicator["id"]},
+    )
+
+    rendered = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json={"op": "and", "conditions": [], "groups": []},
+    ).json()
+    payload = next(iter(rendered["widgets"].values()))
+    assert payload["breakdown"] == {}
+    assert payload["value"] == 200

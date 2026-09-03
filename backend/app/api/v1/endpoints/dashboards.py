@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
-from typing import Any
+import datetime as dt
+from typing import Annotated, Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, File, HTTPException, Response, UploadFile
+from fastapi.responses import FileResponse
 from slugify import slugify
 from sqlalchemy import select
 
@@ -15,6 +17,7 @@ from app.api.deps import (
     get_ready_dataset,
 )
 from app.core.security import new_public_token
+from app.db.base import utcnow
 from app.models import (
     Chart,
     Dashboard,
@@ -35,6 +38,7 @@ from app.schemas.analytics import (
     DashboardOut,
     DashboardUpdate,
     WidgetIn,
+    WidgetPatch,
 )
 from app.schemas.common import Message
 from app.schemas.query import (
@@ -45,8 +49,18 @@ from app.schemas.query import (
     QuerySpec,
 )
 from app.services.audit import record
+from app.services.dashboard_assets import (
+    BackgroundError,
+    background_file,
+    remove_background,
+    save_background,
+)
 from app.services.datasets import dataset_is_queryable
-from app.services.monitoring import indicator_status, progress_percent
+from app.services.monitoring import (
+    evaluate_indicator,
+    indicator_status,
+    progress_percent,
+)
 from app.services.projects import can_edit, can_view, dataset_clause, restrict, scope_for
 from app.services.query_engine import (
     DatasetContext,
@@ -126,6 +140,7 @@ def render_chart(
     chart = _get_chart(chart_id, db, user)
     dataset = get_ready_dataset(chart.dataset_id, db, user)
     ctx = DatasetContext.from_model(dataset)
+    filters = _applicable(filters, ctx)
     try:
         if _is_crosstab(chart.spec or {}):
             return execute_crosstab(ctx, _crosstab_from_chart(chart, filters))
@@ -143,6 +158,30 @@ def _get_chart(chart_id: str, db: DbSession, user: User) -> Chart:
     if dataset is None or not can_view(db, user, dataset.project_id):
         raise HTTPException(status_code=404, detail="Chart not found")
     return chart
+
+
+def _applicable(filters: FilterGroup | None, ctx: DatasetContext) -> FilterGroup | None:
+    """Drop conditions naming variables this dataset does not have.
+
+    A dashboard's widgets can draw on several datasets - the interview level,
+    the person level, the paradata - and a filter on "province" is meaningful
+    only to those that carry it. Passing it to the rest would fail the query and
+    replace those widgets with an error, so a dashboard-level filter narrows
+    what it can and leaves the others as they were.
+    """
+    if filters is None or filters.is_empty():
+        return filters
+    known = set(ctx.variables)
+
+    def prune(group: FilterGroup) -> FilterGroup:
+        return FilterGroup(
+            op=group.op,
+            conditions=[c for c in group.conditions if c.variable in known],
+            groups=[prune(g) for g in group.groups],
+        )
+
+    pruned = prune(filters)
+    return None if pruned.is_empty() else pruned
 
 
 def _is_crosstab(spec: dict[str, Any]) -> bool:
@@ -217,6 +256,8 @@ def create_dashboard(
         created_by=user.id,
         project_id=payload.project_id,
         theme=payload.theme,
+        pages=payload.pages,
+        appearance=payload.appearance,
     )
     db.add(dashboard)
     record(db, user=user, action="create_dashboard", entity_type="dashboard")
@@ -262,6 +303,7 @@ def update_dashboard(
 def delete_dashboard(dashboard_id: str, db: DbSession, user: RequireAnalyst) -> Message:
     dashboard = _get_dashboard(dashboard_id, db, user)
     name = dashboard.name
+    remove_background(dashboard.id)
     db.delete(dashboard)
     record(
         db,
@@ -309,6 +351,106 @@ def delete_widget(
     db.commit()
     db.refresh(dashboard)
     return DashboardDetail.model_validate(dashboard)
+
+
+@router.patch("/{dashboard_id}/widgets/{widget_id}", response_model=DashboardDetail)
+def update_widget(
+    dashboard_id: str,
+    widget_id: str,
+    payload: WidgetPatch,
+    db: DbSession,
+    user: RequireAnalyst,
+) -> DashboardDetail:
+    """Change one widget - which is how a widget is moved to another page.
+
+    Pages hold independent layouts, so a widget that arrives on a new page
+    without one of its own is put below what is already there. Keeping its old
+    coordinates would drop it on top of another widget, or far below the last
+    of them on a page that has less on it.
+    """
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    widget = db.get(Widget, widget_id)
+    if widget is None or widget.dashboard_id != dashboard.id:
+        raise HTTPException(status_code=404, detail="Widget not found")
+
+    data = payload.model_dump(exclude_unset=True)
+    moving = "page" in data and int(data["page"]) != (widget.page or 0)
+    if moving and not 0 <= int(data["page"]) < max(len(dashboard.pages or []), 1):
+        raise HTTPException(status_code=422, detail="That page does not exist")
+    for field, value in data.items():
+        setattr(widget, field, value)
+    if moving and "layout" not in data:
+        # Its own size is part of what the widget is - a countdown is not a
+        # crosstab - so only where it sits is decided again.
+        was = widget.layout or {}
+        placed = _next_layout(dashboard, widget.page, exclude=widget.id)
+        widget.layout = {
+            **placed,
+            "w": int(was.get("w", placed["w"])),
+            "h": int(was.get("h", placed["h"])),
+        }
+
+    db.commit()
+    db.refresh(dashboard)
+    return DashboardDetail.model_validate(dashboard)
+
+
+@router.put("/{dashboard_id}/background", response_model=DashboardOut)
+async def upload_background(
+    dashboard_id: str,
+    db: DbSession,
+    user: RequireAnalyst,
+    file: Annotated[UploadFile, File(description="PNG, JPEG, GIF or WebP image")],
+) -> Dashboard:
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    try:
+        name = save_background(dashboard.id, await file.read())
+    except BackgroundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    appearance = dict(dashboard.appearance or {})
+    appearance["background_image"] = name
+    # The file name is stable, so a browser holding the previous image would go
+    # on showing it. The stamp is what the frontend hangs a query string on.
+    appearance["background_version"] = dt.datetime.now(dt.UTC).isoformat()
+    dashboard.appearance = appearance
+    db.commit()
+    db.refresh(dashboard)
+    return dashboard
+
+
+@router.get("/{dashboard_id}/background")
+def read_background(dashboard_id: str, db: DbSession, user: CurrentUser) -> Response:
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    return background_response(dashboard)
+
+
+@router.delete("/{dashboard_id}/background", response_model=DashboardOut)
+def delete_background(dashboard_id: str, db: DbSession, user: RequireAnalyst) -> Dashboard:
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    remove_background(dashboard.id)
+    appearance = dict(dashboard.appearance or {})
+    appearance.pop("background_image", None)
+    appearance.pop("background_version", None)
+    dashboard.appearance = appearance
+    db.commit()
+    db.refresh(dashboard)
+    return dashboard
+
+
+def background_response(dashboard: Dashboard) -> Response:
+    """Serve a dashboard's background image. Shared with the public router."""
+    found = background_file(dashboard.id, (dashboard.appearance or {}).get("background_image"))
+    if found is None:
+        raise HTTPException(status_code=404, detail="This dashboard has no background image")
+    path, content_type = found
+    return FileResponse(
+        path,
+        media_type=content_type,
+        # The bytes are user-uploaded, so the browser is told exactly what they
+        # are and forbidden from guessing something else.
+        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, max-age=300"},
+    )
 
 
 @router.post("/{dashboard_id}/data", response_model=dict)
@@ -360,7 +502,9 @@ def _unique_slug(db: DbSession, name: str) -> str:
     return candidate
 
 
-def _next_layout(dashboard: Dashboard, page: int = 0) -> dict[str, int]:
+def _next_layout(
+    dashboard: Dashboard, page: int = 0, exclude: str | None = None
+) -> dict[str, int]:
     """Space below what is already on that page.
 
     Pages have independent layouts, so a widget added to the second page must
@@ -369,7 +513,7 @@ def _next_layout(dashboard: Dashboard, page: int = 0) -> dict[str, int]:
     """
     bottom = 0
     for widget in dashboard.widgets:
-        if (widget.page or 0) != page:
+        if (widget.page or 0) != page or widget.id == exclude:
             continue
         layout = widget.layout or {}
         bottom = max(bottom, int(layout.get("y", 0)) + int(layout.get("h", 4)))
@@ -486,18 +630,44 @@ def _render_widget(
         indicator = db.get(Indicator, widget.indicator_id)
         if indicator is None:
             return {"error": "Indicator no longer exists"}
+
+        value = indicator.last_value
+        computed_at = indicator.last_computed_at
+        breakdown: dict[str, float] = {}
+        wants_breakdown = bool((widget.config or {}).get("show_breakdown"))
+        if wants_breakdown and indicator.breakdown_variable:
+            # Evaluated rather than read off the stored value, because a
+            # breakdown that was computed at a different moment from the
+            # headline above it would not add up to it - and the two sitting in
+            # one tile invite exactly that comparison.
+            outcome = evaluate_indicator(db, indicator)
+            if outcome.get("error"):
+                return {"error": outcome["error"]}
+            value = outcome["value"]
+            breakdown = outcome["breakdown"]
+            computed_at = utcnow()
+
         return {
             "type": "indicator",
             "name": indicator.name,
-            "value": indicator.last_value,
+            "value": value,
             "unit": indicator.unit,
             "value_format": indicator.value_format,
             "target_value": indicator.target_value,
-            "progress_percent": progress_percent(indicator, indicator.last_value),
-            "status": indicator_status(indicator, indicator.last_value),
-            "computed_at": (
-                indicator.last_computed_at.isoformat() if indicator.last_computed_at else None
-            ),
+            "progress_percent": progress_percent(indicator, value),
+            "status": indicator_status(indicator, value),
+            "breakdown": breakdown,
+            "breakdown_variable": indicator.breakdown_variable if wants_breakdown else "",
+            "computed_at": computed_at.isoformat() if computed_at else None,
+        }
+
+    if widget.widget_type.value == "countdown":
+        config = widget.config or {}
+        return {
+            "type": "countdown",
+            "target": config.get("target"),
+            "label": config.get("label", ""),
+            "expired_text": config.get("expired_text", ""),
         }
 
     if widget.widget_type.value == "quality":
@@ -511,6 +681,7 @@ def _render_widget(
         if dataset is None or not dataset_is_queryable(dataset):
             return {"error": "The chart's dataset is unavailable"}
         ctx = DatasetContext.from_model(dataset)
+        filters = _applicable(filters, ctx)
         if _is_crosstab(chart.spec or {}):
             crosstab = execute_crosstab(ctx, _crosstab_from_chart(chart, filters))
             return {
