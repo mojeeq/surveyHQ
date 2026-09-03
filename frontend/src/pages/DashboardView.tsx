@@ -343,7 +343,7 @@ function WidgetFrame({
         ) : payload.type === 'quality' ? (
           <QualityWidget payload={payload} />
         ) : payload.type === 'crosstab' ? (
-          <CrosstabTable result={payload.result} compact maxHeight={260} />
+          <CrosstabTable result={payload.result} compact fill />
         ) : payload.type === 'text' ? (
           <p className="whitespace-pre-wrap text-sm text-ink-700">{payload.content}</p>
         ) : payload.result ? (

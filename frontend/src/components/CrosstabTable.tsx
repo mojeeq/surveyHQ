@@ -10,10 +10,15 @@ export default function CrosstabTable({
   result,
   compact = false,
   maxHeight,
+  fill = false,
 }: {
   result: CrosstabResult
   compact?: boolean
   maxHeight?: number
+  /** Fill the parent rather than stopping at a fixed height. A dashboard widget
+   *  is resizable, so a fixed cap leaves the table its original size inside a
+   *  container the user has just made taller - the same fault charts had. */
+  fill?: boolean
 }) {
   const suffix = result.percentages === 'none' ? '' : '%'
   const showing = result.percentages !== 'none'
@@ -22,10 +27,12 @@ export default function CrosstabTable({
   // 50% stays "50.0%" beside 48.2%. Counts do not: they are whole numbers.
 
   return (
-    <div className="flex flex-col">
+    <div className={`flex flex-col ${fill ? 'h-full min-h-0' : ''}`}>
       <div
-        className="overflow-auto rounded-lg border border-ink-200"
-        style={maxHeight ? { maxHeight } : undefined}
+        className={`overflow-auto rounded-lg border border-ink-200 ${
+          fill ? 'min-h-0 flex-1' : ''
+        }`}
+        style={!fill && maxHeight ? { maxHeight } : undefined}
       >
         <table className="table-base">
           <thead className="sticky top-0">
