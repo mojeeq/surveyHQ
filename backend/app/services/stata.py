@@ -118,6 +118,66 @@ def run(db: Session, dataset: Dataset, text: str, record_it: bool = True) -> Com
     return result
 
 
+def run_script(db: Session, dataset: Dataset, text: str) -> list[CommandResult]:
+    """Run several commands in order, as a do-file does.
+
+    Stops at the first one that fails, and says which: the commands that ran
+    before it have already changed the data, and carrying on past a failure
+    would apply the rest of the script to something the author did not mean.
+    What ran stays run, which is also what Stata does.
+    """
+    results: list[CommandResult] = []
+    for number, line in enumerate(_lines(text), start=1):
+        try:
+            results.append(run(db, dataset, line))
+        except (CommandError, ExpressionError) as exc:
+            raise ScriptError(number, line, str(exc), results) from exc
+    if not results:
+        raise CommandError("There is nothing to run")
+    return results
+
+
+class ScriptError(CommandError):
+    """One line of a script failed. Carries what ran before it."""
+
+    def __init__(self, line_number: int, line: str, message: str, done: list[CommandResult]):
+        super().__init__(f"Line {line_number} ({line}): {message}")
+        self.line_number = line_number
+        self.line = line
+        self.reason = message
+        self.done = done
+
+
+def _lines(text: str) -> list[str]:
+    """Split a script into commands, honouring comments and continuations.
+
+    `*` starts a comment line and `//` a trailing one, as in Stata, and `///`
+    at the end of a line joins it to the next - which is how a long generate
+    gets written without a horizontal scrollbar.
+    """
+    joined: list[str] = []
+    buffer = ""
+    for raw in text.splitlines():
+        line = raw.strip()
+        if line.startswith("*"):
+            continue
+        # A // inside a string is part of the string, not a comment.
+        if "//" in line and line.count('"') % 2 == 0:
+            head, _, tail = line.partition("//")
+            if tail.startswith("/"):
+                buffer += " " + head.strip()
+                continue
+            line = head.strip()
+        if not line:
+            continue
+        buffer = (buffer + " " + line).strip() if buffer else line
+        joined.append(buffer)
+        buffer = ""
+    if buffer:
+        joined.append(buffer)
+    return joined
+
+
 def history(dataset: Dataset) -> list[str]:
     return list((dataset.meta or {}).get("commands") or [])
 

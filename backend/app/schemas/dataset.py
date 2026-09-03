@@ -27,10 +27,18 @@ class VariableOut(BaseModel):
     is_hidden: bool = False
 
 
-class CommandRequest(BaseModel):
-    """One Stata-style command, e.g. gen adult = age >= 18."""
+class BulkDeleteRequest(BaseModel):
+    """Datasets to delete: either a list of ids, or a whole project's worth."""
 
-    command: str = Field(min_length=1, max_length=2000)
+    ids: list[str] = Field(default_factory=list)
+    # "" is the shared area, which is a real place; None means "use ids".
+    project_id: str | None = None
+
+
+class CommandRequest(BaseModel):
+    """A Stata-style script: one command per line, as a do-file is written."""
+
+    command: str = Field(min_length=1, max_length=20000)
 
 
 class VariableUpdate(BaseModel):

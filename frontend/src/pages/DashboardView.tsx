@@ -523,6 +523,7 @@ function WidgetFrame({
             fill
             showToggle={false}
             theme={theme}
+            display={payload.display}
           />
         ) : null}
       </div>
@@ -617,7 +618,7 @@ function PageTabs({
             key={index}
             onClick={() => onSelect(index)}
             onDoubleClick={() => canEdit && renamePage(index)}
-            title={canEdit ? 'Double-click to rename' : undefined}
+            title={canEdit ? 'Double-click to rename, or use the Rename button' : undefined}
             className={`whitespace-nowrap border-b-2 px-3.5 py-2.5 text-sm font-medium transition-colors ${
               active === index
                 ? onDark
@@ -638,6 +639,14 @@ function PageTabs({
             onClick={addPage}
           >
             + Page
+          </button>
+          {/* Renaming used to be a double-click on the tab and nothing said so,
+              which is no way to find a feature. */}
+          <button
+            className={`btn-ghost btn-sm ${onDark ? 'text-white/80' : 'text-ink-500'}`}
+            onClick={() => renamePage(active)}
+          >
+            Rename
           </button>
           {count > 1 && (
             <button

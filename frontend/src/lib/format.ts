@@ -17,12 +17,10 @@ export function formatNumber(
   fixed = false,
 ): string {
   if (value === null || value === undefined || Number.isNaN(value)) return '–'
-  const compact = (scaled: number, suffix: string) =>
-    `${scaled.toLocaleString(undefined, { maximumFractionDigits: 1 })}${suffix}`
-  const abs = Math.abs(value)
-  if (abs >= 1_000_000_000) return compact(value / 1_000_000_000, 'B')
-  if (abs >= 1_000_000) return compact(value / 1_000_000, 'M')
-  if (abs >= 10_000) return compact(value / 1_000, 'k')
+  // Written out in full, with thousands separators. A count of interviews is
+  // a number somebody reconciles against another system: "21.4k" cannot be
+  // checked against 21,400, and rounds away the four hundred that the person
+  // reading it is looking for.
   return value.toLocaleString(undefined, {
     minimumFractionDigits: fixed ? digits : 0,
     maximumFractionDigits: digits,

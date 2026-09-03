@@ -129,6 +129,23 @@ def dataset_clause(db: Session, user: User, column: ColumnElement) -> ColumnElem
     return column.in_(select(Dataset.id).where(inner))
 
 
+def in_project_clause(column: ColumnElement, project_id: str) -> ColumnElement:
+    """Narrow a dataset_id column to one project's datasets.
+
+    Indicators, quality rules and alerts belong to whatever project their
+    dataset belongs to - that is one fact recorded in one place, rather than a
+    second project stored on each of them that could disagree with it. So
+    filtering them by project is a question about their dataset.
+
+    An empty project id means the shared area, which is a real place and not
+    the absence of a filter.
+    """
+    from app.models import Dataset
+
+    target = Dataset.project_id == project_id if project_id else Dataset.project_id.is_(None)
+    return column.in_(select(Dataset.id).where(target))
+
+
 def alert_rule_clause(db: Session, user: User) -> ColumnElement | None:
     """An alert rule is reachable through its dataset, its indicator, or neither.
 

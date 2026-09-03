@@ -861,3 +861,275 @@ def test_a_label_written_on_a_source_reaches_the_merge_built_on_it(client, auth_
     variable = next(v for v in downstream["variables"] if v["name"] == "DEM_SEX")
     assert variable["label"] == "Sex"
     assert variable["value_labels"] == {"1": "Male", "2": "Female"}
+
+
+def test_a_project_s_datasets_can_be_deleted_in_one_go(client, auth_headers):
+    """An export makes eight datasets at once; clearing them one at a time is
+    eight confirmations for one decision."""
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Bulk delete"}
+    ).json()
+    other = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Left alone"}
+    ).json()
+
+    archive = _zip_bytes(
+        {
+            "bulk_main.dta": _stata_bytes(pd.DataFrame({"id": ["i1"], "age": [30.0]})),
+            "bulk_people.dta": _stata_bytes(pd.DataFrame({"pid": ["p1"], "sex": [1.0]})),
+        }
+    )
+    client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("bulk.zip", archive, "application/zip")},
+        data={"project_id": project["id"]},
+    )
+    keeper = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("keeper.zip", archive, "application/zip")},
+        data={"project_id": other["id"]},
+    ).json()["datasets"]
+
+    response = client.post(
+        "/api/v1/datasets/delete", headers=auth_headers, json={"project_id": project["id"]}
+    )
+    assert response.status_code == 200, response.text
+    assert "2 dataset(s)" in response.json()["detail"]
+
+    listed = client.get("/api/v1/datasets?limit=200", headers=auth_headers).json()["items"]
+    assert not [d for d in listed if d["project_id"] == project["id"]]
+    # The other project is untouched
+    assert len([d for d in listed if d["project_id"] == other["id"]]) == len(keeper)
+
+
+def test_several_chosen_datasets_can_be_deleted_together(client, auth_headers):
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Pick and choose"}
+    ).json()
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "choose.zip",
+                _zip_bytes(
+                    {
+                        "choose_a.dta": _stata_bytes(pd.DataFrame({"id": ["a"], "v": [1.0]})),
+                        "choose_b.dta": _stata_bytes(pd.DataFrame({"pid": ["b"], "w": [2.0]})),
+                    }
+                ),
+                "application/zip",
+            )
+        },
+        data={"project_id": project["id"]},
+    ).json()["datasets"]
+
+    doomed = uploaded[0]
+    response = client.post(
+        "/api/v1/datasets/delete", headers=auth_headers, json={"ids": [doomed["id"]]}
+    )
+    assert response.status_code == 200, response.text
+
+    remaining = client.get("/api/v1/datasets?limit=200", headers=auth_headers).json()["items"]
+    names = {d["id"] for d in remaining if d["project_id"] == project["id"]}
+    assert doomed["id"] not in names
+    assert len(names) == len(uploaded) - 1
+
+
+def test_deleting_nothing_says_so_rather_than_reporting_success(client, auth_headers):
+    response = client.post(
+        "/api/v1/datasets/delete", headers=auth_headers, json={"ids": ["not-a-real-id"]}
+    )
+    assert response.status_code == 404
+
+
+def test_a_viewer_cannot_bulk_delete(client, auth_headers):
+    """The same rule as deleting one, which the bulk route must not slip past."""
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Viewer bulk"}
+    ).json()
+    client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "viewerbulk.zip",
+                _zip_bytes({"vb.dta": _stata_bytes(pd.DataFrame({"id": ["a"], "v": [1.0]}))}),
+                "application/zip",
+            )
+        },
+        data={"project_id": project["id"]},
+    )
+
+    created = client.post(
+        "/api/v1/users",
+        headers=auth_headers,
+        json={
+            "email": "bulkviewer@example.com",
+            "full_name": "Bulk Viewer",
+            "role": "viewer",
+            "password": "viewer-password-1",
+        },
+    )
+    assert created.status_code == 201, created.text
+    token = client.post(
+        "/api/v1/auth/login",
+        json={"email": "bulkviewer@example.com", "password": "viewer-password-1"},
+    ).json()["access_token"]
+
+    refused = client.post(
+        "/api/v1/datasets/delete",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"project_id": project["id"]},
+    )
+    assert refused.status_code == 403
+
+
+def test_monitoring_quality_and_alerts_can_be_seen_one_project_at_a_time(
+    client, auth_headers
+):
+    """These all hang off a dataset, so a project filter is a question about
+    the dataset - one fact in one place, rather than a second project stored on
+    each of them that could disagree with it."""
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    def survey(name: str) -> tuple[str, str]:
+        project = client.post(
+            "/api/v1/projects", headers=auth_headers, json={"name": name}
+        ).json()
+        uploaded = client.post(
+            "/api/v1/datasets/upload",
+            headers=auth_headers,
+            files={
+                "file": (
+                    f"{name}.zip",
+                    _zip_bytes(
+                        {
+                            f"{name}.dta": _stata_bytes(
+                                pd.DataFrame(
+                                    {"interview__key": ["a", "b"], "age": [30.0, 40.0]}
+                                )
+                            )
+                        }
+                    ),
+                    "application/zip",
+                )
+            },
+            data={"project_id": project["id"]},
+        ).json()
+        return project["id"], uploaded["datasets"][0]["id"]
+
+    north, north_data = survey("scoped_north")
+    south, south_data = survey("scoped_south")
+
+    for label, dataset_id in (("North count", north_data), ("South count", south_data)):
+        client.post(
+            "/api/v1/monitoring/indicators",
+            headers=auth_headers,
+            json={
+                "name": label,
+                "dataset_id": dataset_id,
+                "spec": {"measures": [{"agg": "count"}]},
+            },
+        )
+        client.post(
+            "/api/v1/monitoring/quality-rules",
+            headers=auth_headers,
+            json={
+                "name": f"{label} completeness",
+                "dataset_id": dataset_id,
+                "check_type": "missing_rate",
+                "config": {"variable": "age", "threshold": 0.5},
+            },
+        )
+
+    indicators = client.get(
+        f"/api/v1/monitoring/indicators?project_id={north}", headers=auth_headers
+    ).json()
+    assert [i["name"] for i in indicators] == ["North count"]
+
+    values = client.get(
+        f"/api/v1/monitoring/indicators/values?project_id={south}", headers=auth_headers
+    ).json()
+    assert [v["name"] for v in values] == ["South count"]
+
+    rules = client.get(
+        f"/api/v1/monitoring/quality-rules?project_id={north}", headers=auth_headers
+    ).json()
+    assert [r["name"] for r in rules] == ["North count completeness"]
+
+    # No filter still shows both
+    everything = client.get("/api/v1/monitoring/indicators", headers=auth_headers).json()
+    assert {"North count", "South count"} <= {i["name"] for i in everything}
+
+
+def test_the_shared_area_is_a_place_a_filter_can_name(client, auth_headers):
+    """An empty project id means the shared area, not "no filter"."""
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Not shared"}
+    ).json()
+    frame = pd.DataFrame({"interview__key": ["a"], "age": [30.0]})
+
+    shared = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "sharedscope.zip",
+                _zip_bytes({"sharedscope.dta": _stata_bytes(frame)}),
+                "application/zip",
+            )
+        },
+    ).json()["datasets"][0]["id"]
+    owned = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "ownedscope.zip",
+                _zip_bytes({"ownedscope.dta": _stata_bytes(frame)}),
+                "application/zip",
+            )
+        },
+        data={"project_id": project["id"]},
+    ).json()["datasets"][0]["id"]
+
+    for label, dataset_id in (("Shared one", shared), ("Owned one", owned)):
+        client.post(
+            "/api/v1/monitoring/indicators",
+            headers=auth_headers,
+            json={
+                "name": label,
+                "dataset_id": dataset_id,
+                "spec": {"measures": [{"agg": "count"}]},
+            },
+        )
+
+    in_shared = {
+        i["name"]
+        for i in client.get(
+            "/api/v1/monitoring/indicators?project_id=", headers=auth_headers
+        ).json()
+    }
+    assert "Shared one" in in_shared
+    assert "Owned one" not in in_shared

@@ -155,12 +155,78 @@ const tooltipBase = {
   extraCssText: 'box-shadow: 0 10px 30px rgba(15,23,42,.12); border-radius: 8px;',
 }
 
-interface BuildOptions {
+export interface BuildOptions {
   horizontal?: boolean
   stacked?: boolean
   showLegend?: boolean
   /** Which categorical ordering to use; see CHART_THEMES. */
   theme?: string
+  /** How the categories are ordered along the axis. */
+  sort?: 'none' | 'value_desc' | 'value_asc' | 'label_asc' | 'label_desc'
+  /** Keep the largest N categories and fold the rest into one "Other" bar. */
+  topN?: number
+  /** Print the number on the mark. Bars and slices only - see below. */
+  showValues?: boolean
+  /** Stack to 100%, for reading composition rather than magnitude. */
+  percentStack?: boolean
+  smooth?: boolean
+  valueTitle?: string
+  valueMin?: number | null
+  valueMax?: number | null
+  /** A line across the plot, e.g. the target this chart is read against. */
+  referenceValue?: number | null
+  referenceLabel?: string
+  decimals?: number
+}
+
+/** A fixed value-axis range, when one is asked for. */
+function bounds(options: BuildOptions) {
+  return {
+    ...(options.valueMin === null || options.valueMin === undefined
+      ? {}
+      : { min: options.valueMin }),
+    ...(options.valueMax === null || options.valueMax === undefined
+      ? {}
+      : { max: options.valueMax }),
+  }
+}
+
+/** A horizontal rule across the plot, for the target a chart is read against. */
+function referenceLine(options: BuildOptions) {
+  if (options.referenceValue === null || options.referenceValue === undefined) return undefined
+  return {
+    silent: true,
+    symbol: 'none',
+    label: {
+      formatter: options.referenceLabel || `Target ${formatNumber(options.referenceValue)}`,
+      // At the left end: at the right it runs off the edge of the plot, since
+      // nothing reserves room for it there.
+      position: 'insideStartTop' as const,
+      color: INK.muted,
+      ...BASE_TEXT,
+    },
+    lineStyle: { color: INK.axis, width: 2, type: 'dashed' as const },
+    data: [{ yAxis: options.referenceValue }],
+  }
+}
+
+/** Data labels, in a text token rather than the series colour.
+ *
+ * Off past a couple of dozen marks whatever was asked for: a number on every
+ * one of forty bars is a wall of digits that overlap each other, and the axis
+ * and the tooltip already carry them.
+ */
+const MAX_LABELLED = 24
+
+function markLabel(options: BuildOptions, position: 'top' | 'right' | 'inside', marks = 0) {
+  if (!options.showValues || marks > MAX_LABELLED) return { show: false }
+  return {
+    show: true,
+    position,
+    color: position === 'inside' ? '#fff' : INK.muted,
+    ...BASE_TEXT,
+    formatter: (params: any) => formatNumber(Number(params.value), options.decimals ?? 0),
+  }
 }
 
 /**
@@ -220,16 +286,96 @@ function pivot(result: QueryResult) {
   }
 }
 
+/**
+ * Order the categories, and fold the tail into one "Other".
+ *
+ * Both are reading aids rather than data changes: a bar chart of forty
+ * provinces sorted by name answers nothing, and the ninth series is never a
+ * new colour - it folds into Other, which is also what keeps a palette inside
+ * the range it was validated over.
+ */
+function shape(
+  categories: string[],
+  series: { name: string; data: (number | null)[] }[],
+  options: BuildOptions,
+) {
+  const totals = categories.map((_, index) =>
+    series.reduce((sum, entry) => sum + Number(entry.data[index] ?? 0), 0),
+  )
+  let order = categories.map((_, index) => index)
+
+  switch (options.sort) {
+    case 'value_desc':
+      order = order.sort((a, b) => totals[b] - totals[a])
+      break
+    case 'value_asc':
+      order = order.sort((a, b) => totals[a] - totals[b])
+      break
+    case 'label_asc':
+      order = order.sort((a, b) => categories[a].localeCompare(categories[b]))
+      break
+    case 'label_desc':
+      order = order.sort((a, b) => categories[b].localeCompare(categories[a]))
+      break
+    default:
+      break
+  }
+
+  const top = options.topN && options.topN > 0 ? options.topN : 0
+  let names = order.map((index) => categories[index])
+  let rows = series.map((entry) => ({
+    name: entry.name,
+    data: order.map((index) => entry.data[index]),
+  }))
+
+  if (top && names.length > top) {
+    // Ranked by size for the fold, whatever order the axis is in: "Other"
+    // means the small ones, not the last ones alphabetically.
+    const ranked = [...order].sort((a, b) => totals[b] - totals[a])
+    const kept = new Set(ranked.slice(0, top))
+    const keptOrder = order.filter((index) => kept.has(index))
+    const rest = order.filter((index) => !kept.has(index))
+    names = [...keptOrder.map((index) => categories[index]), `Other (${rest.length})`]
+    rows = series.map((entry) => ({
+      name: entry.name,
+      data: [
+        ...keptOrder.map((index) => entry.data[index]),
+        rest.reduce((sum, index) => sum + Number(entry.data[index] ?? 0), 0),
+      ],
+    }))
+  }
+
+  if (options.percentStack) {
+    // Each category summing to 100, which is what a composition is read as.
+    const columnTotals = names.map((_, index) =>
+      rows.reduce((sum, entry) => sum + Number(entry.data[index] ?? 0), 0),
+    )
+    rows = rows.map((entry) => ({
+      name: entry.name,
+      data: entry.data.map((value, index) =>
+        columnTotals[index] ? (Number(value ?? 0) / columnTotals[index]) * 100 : null,
+      ),
+    }))
+  }
+
+  return { categories: names, series: rows }
+}
+
 export function buildChartOption(
   result: QueryResult,
   chartType: ChartType,
   options: BuildOptions = {},
 ): EChartsOption {
   const palette = themeColors(options.theme)
-  const { categories, series, valueLabel } = pivot(result)
+  const pivoted = pivot(result)
+  const valueLabelText = pivoted.valueLabel
+  const { categories, series } = shape(pivoted.categories, pivoted.series, options)
   const multiSeries = series.length > 1
-  // A single series is named by the chart title, so it needs no legend box.
-  const legend = options.showLegend ?? multiSeries
+  // A single series is named by the chart title, so it needs no legend box -
+  // and can be given one on request. Two or more always keep theirs, whatever
+  // is asked for: without it the only thing telling the series apart is their
+  // colour, which is exactly what a colour-blind reader cannot use.
+  const legend = multiSeries || (options.showLegend ?? false)
 
   const common: EChartsOption = {
     color: [...palette],
@@ -287,7 +433,14 @@ export function buildChartOption(
             // 2px surface gap between adjacent segments
             itemStyle: { borderColor: INK.surface, borderWidth: 2, borderRadius: 3 },
             // The legend carries the names, so the slice label is the value only
-            label: { color: '#52514e', ...BASE_TEXT, formatter: '{d}%' },
+            label: options.showValues
+              ? {
+                  color: '#52514e',
+                  ...BASE_TEXT,
+                  formatter: (params: any) =>
+                    `${formatNumber(Number(params.value), options.decimals ?? 0)} (${params.percent}%)`,
+                }
+              : { color: '#52514e', ...BASE_TEXT, formatter: '{d}%' },
             labelLine: { length: 8, length2: 8, lineStyle: { color: INK.axis } },
             data: values,
           },
@@ -401,12 +554,18 @@ export function buildChartOption(
           axisPointer: { type: 'line', lineStyle: { color: INK.axis, width: 1 } },
         },
         xAxis: { type: 'category', data: categories, boundaryGap: false, ...axisCommon() },
-        yAxis: valueAxis(multiSeries ? '' : valueLabel),
+        yAxis: {
+          ...valueAxis(options.valueTitle ?? (multiSeries ? '' : valueLabelText)),
+          ...bounds(options),
+        },
         series: series.map((entry, index) => ({
           name: entry.name,
           type: 'line',
           data: entry.data,
-          smooth: false,
+          smooth: Boolean(options.smooth),
+          // A number on every point is unreadable on a line, so the labels
+          // toggle deliberately does not reach here - see the bar branch.
+          ...(index === 0 ? { markLine: referenceLine(options) } : {}),
           symbol: 'circle',
           symbolSize: 8,
           showSymbol: entry.data.length <= 40,
@@ -440,7 +599,9 @@ export function buildChartOption(
         grid: {
           left: 8,
           right: 24,
-          top: legend ? 40 : 16,
+          // Headroom for a number printed above the tallest bar, which is
+          // otherwise drawn outside the plot and clipped.
+          top: legend ? 40 : options.showValues ? 28 : 16,
           bottom: 8,
           containLabel: true,
         },
@@ -461,18 +622,29 @@ export function buildChartOption(
             return `${head}<br/>${rows}`
           },
         },
-        xAxis: horizontal ? valueAxis() : categoryAxis,
-        yAxis: horizontal ? categoryAxis : valueAxis(multiSeries ? '' : valueLabel),
-        series: series.map((entry) => ({
+        xAxis: horizontal
+          ? { ...valueAxis(options.valueTitle ?? ''), ...bounds(options) }
+          : categoryAxis,
+        yAxis: horizontal
+          ? categoryAxis
+          : {
+              ...valueAxis(options.valueTitle ?? (multiSeries ? '' : valueLabelText)),
+              ...bounds(options),
+            },
+        series: series.map((entry, index) => ({
           name: entry.name,
           type: 'bar',
           data: entry.data,
           stack: stacked ? 'total' : undefined,
           barMaxWidth: 42,
+          label: markLabel(options, horizontal ? 'right' : 'top', categories.length),
           // 4px rounded data-end anchored to the baseline
           itemStyle: stacked
             ? { borderColor: INK.surface, borderWidth: 2 }
             : { borderRadius: horizontal ? [0, 4, 4, 0] : [4, 4, 0, 0] },
+          // One reference line, on the first series, or it is drawn once per
+          // series and the plot grows a ladder of identical rules.
+          ...(index === 0 && !horizontal ? { markLine: referenceLine(options) } : {}),
         })),
       }
     }
