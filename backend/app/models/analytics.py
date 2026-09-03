@@ -45,6 +45,7 @@ class WidgetType(str, enum.Enum):
     text = "text"
     crosstab = "crosstab"
     quality = "quality"
+    countdown = "countdown"
 
 
 class SavedQuery(UUIDMixin, TimestampMixin, Base):
@@ -105,6 +106,11 @@ class Dashboard(UUIDMixin, TimestampMixin, Base):
     theme: Mapped[str] = mapped_column(
         String(40), default="default", server_default=text("'default'")
     )
+    # How the dashboard is dressed: {"background_color": "#0f172a",
+    # "background_image": "<file>", "background_fit": "cover", "dim": 0.3}. A
+    # dict rather than columns because it is presentation, changes often, and
+    # nothing queries it.
+    appearance: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'"))
     is_public: Mapped[bool] = mapped_column(Boolean, default=False)
     public_token: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
     refresh_interval_seconds: Mapped[int] = mapped_column(Integer, default=0)

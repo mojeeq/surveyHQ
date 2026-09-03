@@ -85,6 +85,15 @@ class WidgetOut(BaseModel):
     page: int = 0
 
 
+class WidgetPatch(BaseModel):
+    """Changes to one widget, for edits that do not rewrite the whole board."""
+
+    title: str | None = None
+    page: int | None = None
+    layout: dict[str, Any] | None = None
+    config: dict[str, Any] | None = None
+
+
 class DashboardCreate(BaseModel):
     name: str
     description: str = ""
@@ -93,6 +102,7 @@ class DashboardCreate(BaseModel):
     project_id: str | None = None
     pages: list[dict[str, Any]] = Field(default_factory=list)
     theme: str = "default"
+    appearance: dict[str, Any] = Field(default_factory=dict)
 
 
 class DashboardUpdate(BaseModel):
@@ -102,6 +112,7 @@ class DashboardUpdate(BaseModel):
     refresh_interval_seconds: int | None = None
     pages: list[dict[str, Any]] | None = None
     theme: str | None = None
+    appearance: dict[str, Any] | None = None
     is_public: bool | None = None
     widgets: list[WidgetIn] | None = None
 
@@ -117,6 +128,7 @@ class DashboardOut(BaseModel):
     project_id: str | None = None
     pages: list[dict[str, Any]] = Field(default_factory=list)
     theme: str = "default"
+    appearance: dict[str, Any] = Field(default_factory=dict)
     is_public: bool = False
     public_token: str | None = None
     refresh_interval_seconds: int = 0

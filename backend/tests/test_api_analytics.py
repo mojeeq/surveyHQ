@@ -942,3 +942,210 @@ def test_a_dashboard_filter_only_applies_where_the_variable_exists(
     assert sum(r[1] for r in by_name["Has region"]["result"]["rows"]) < 200
     # The one that does not was left as it was
     assert sum(r[1] for r in by_name["No region"]["result"]["rows"]) == 3
+
+
+def _png() -> bytes:
+    """The smallest valid PNG: a 1x1 transparent pixel."""
+    import base64
+
+    return base64.b64decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAAC0lEQVR42mNkYAAAAAY"
+        "AAjCB0C8AAAAASUVORK5CYII="
+    )
+
+
+def test_a_widget_can_be_moved_to_another_page(client, auth_headers, dataset_id):
+    """Where a widget belongs is often decided after it is built."""
+    dashboard = client.post(
+        "/api/v1/dashboards",
+        headers=auth_headers,
+        json={"name": "Two pages", "pages": [{"name": "Fieldwork"}, {"name": "Quality"}]},
+    ).json()
+    detail = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={"title": "A note", "widget_type": "text", "config": {"content": "hello"}},
+    ).json()
+    widget = detail["widgets"][0]
+    assert widget["page"] == 0
+
+    moved = client.patch(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets/{widget['id']}",
+        headers=auth_headers,
+        json={"page": 1},
+    )
+    assert moved.status_code == 200
+    after = moved.json()["widgets"][0]
+    assert after["page"] == 1
+    assert after["title"] == "A note"
+    assert after["config"] == {"content": "hello"}
+
+
+def test_a_moved_widget_is_placed_below_the_page_it_arrives_on(client, auth_headers):
+    """Its old coordinates would drop it on top of what is already there."""
+    dashboard = client.post(
+        "/api/v1/dashboards",
+        headers=auth_headers,
+        json={"name": "Crowded", "pages": [{"name": "One"}, {"name": "Two"}]},
+    ).json()
+
+    def add(title: str, page: int) -> dict:
+        body = client.post(
+            f"/api/v1/dashboards/{dashboard['id']}/widgets",
+            headers=auth_headers,
+            json={"title": title, "widget_type": "text", "page": page},
+        ).json()
+        return next(w for w in body["widgets"] if w["title"] == title)
+
+    add("Sitting on page two", 1)
+    travelling = add("Moving over", 0)
+    assert travelling["layout"]["y"] == 0
+
+    body = client.patch(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets/{travelling['id']}",
+        headers=auth_headers,
+        json={"page": 1},
+    ).json()
+    arrived = next(w for w in body["widgets"] if w["id"] == travelling["id"])
+    assert arrived["layout"]["y"] > 0
+    # Its size travels with it: a widget sized for what it shows does not get
+    # resized just because it changed page.
+    assert arrived["layout"]["w"] == travelling["layout"]["w"]
+    assert arrived["layout"]["h"] == travelling["layout"]["h"]
+
+
+def test_a_widget_cannot_be_moved_to_a_page_that_does_not_exist(client, auth_headers):
+    dashboard = client.post(
+        "/api/v1/dashboards",
+        headers=auth_headers,
+        json={"name": "One page", "pages": [{"name": "Only"}]},
+    ).json()
+    widget = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={"title": "A note", "widget_type": "text"},
+    ).json()["widgets"][0]
+
+    response = client.patch(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets/{widget['id']}",
+        headers=auth_headers,
+        json={"page": 4},
+    )
+    assert response.status_code == 422
+
+
+def test_a_countdown_widget_renders_its_deadline(client, auth_headers):
+    """A monitoring board is usually read against a date fieldwork has to end."""
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Deadline"}
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={
+            "title": "Fieldwork ends",
+            "widget_type": "countdown",
+            "config": {"target": "2030-01-01T00:00:00Z", "label": "until fieldwork ends"},
+        },
+    )
+
+    rendered = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json={"op": "and", "conditions": [], "groups": []},
+    )
+    assert rendered.status_code == 200
+    widget = next(iter(rendered.json()["widgets"].values()))
+    # Not an error about a missing data source: a countdown queries nothing
+    assert widget == {
+        "type": "countdown",
+        "target": "2030-01-01T00:00:00Z",
+        "label": "until fieldwork ends",
+        "expired_text": "",
+    }
+
+
+def test_a_dashboard_remembers_its_background_colour(client, auth_headers):
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Dressed"}
+    ).json()
+    assert dashboard["appearance"] == {}
+
+    updated = client.patch(
+        f"/api/v1/dashboards/{dashboard['id']}",
+        headers=auth_headers,
+        json={"appearance": {"background_color": "#0f172a", "dim": 0.4}},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["appearance"]["background_color"] == "#0f172a"
+
+    again = client.get(f"/api/v1/dashboards/{dashboard['id']}", headers=auth_headers).json()
+    assert again["appearance"]["dim"] == 0.4
+
+
+def test_a_background_image_is_uploaded_and_served_back(client, auth_headers):
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "With a picture"}
+    ).json()
+
+    upload = client.put(
+        f"/api/v1/dashboards/{dashboard['id']}/background",
+        headers=auth_headers,
+        files={"file": ("bg.png", _png(), "image/png")},
+    )
+    assert upload.status_code == 200
+    appearance = upload.json()["appearance"]
+    assert appearance["background_image"].endswith(".png")
+    assert appearance["background_version"]
+
+    served = client.get(
+        f"/api/v1/dashboards/{dashboard['id']}/background", headers=auth_headers
+    )
+    assert served.status_code == 200
+    assert served.headers["content-type"] == "image/png"
+    assert served.content == _png()
+
+    cleared = client.delete(
+        f"/api/v1/dashboards/{dashboard['id']}/background", headers=auth_headers
+    )
+    assert cleared.status_code == 200
+    assert "background_image" not in cleared.json()["appearance"]
+    assert (
+        client.get(
+            f"/api/v1/dashboards/{dashboard['id']}/background", headers=auth_headers
+        ).status_code
+        == 404
+    )
+
+
+def test_a_file_that_is_not_an_image_is_refused_as_a_background(client, auth_headers):
+    """The name and the content type are the uploader's to choose; the bytes are not."""
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Nice try"}
+    ).json()
+
+    response = client.put(
+        f"/api/v1/dashboards/{dashboard['id']}/background",
+        headers=auth_headers,
+        files={"file": ("bg.png", b"<svg onload=alert(1)></svg>", "image/png")},
+    )
+    assert response.status_code == 400
+    assert "PNG" in response.json()["detail"]
+
+
+def test_a_shared_dashboard_serves_its_background_without_a_login(client, auth_headers):
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Shared and dressed"}
+    ).json()
+    client.put(
+        f"/api/v1/dashboards/{dashboard['id']}/background",
+        headers=auth_headers,
+        files={"file": ("bg.png", _png(), "image/png")},
+    )
+    shared = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/share", headers=auth_headers, json={}
+    ).json()
+
+    response = client.get(f"/api/v1/public/dashboards/{shared['public_token']}/background")
+    assert response.status_code == 200
+    assert response.content == _png()

@@ -4,11 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Response
 from sqlalchemy import select
 
 from app.api.deps import DbSession
-from app.api.v1.endpoints.dashboards import _render_widgets
+from app.api.v1.endpoints.dashboards import _render_widgets, background_response
 from app.models import Dashboard
 from app.schemas.analytics import DashboardDetail
 from app.schemas.query import FilterGroup
@@ -38,3 +38,9 @@ def render_shared_dashboard(
 ) -> dict[str, Any]:
     dashboard = _get_shared(token, db)
     return _render_widgets(db, dashboard, filters)
+
+
+@router.get("/dashboards/{token}/background")
+def read_shared_background(token: str, db: DbSession) -> Response:
+    """A shared dashboard is shown as its owner dressed it, background and all."""
+    return background_response(_get_shared(token, db))

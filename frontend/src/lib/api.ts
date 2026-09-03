@@ -81,6 +81,10 @@ export const api = {
   upload: <T>(path: string, form: FormData) => request<T>(path, { method: 'POST', body: form }),
   blob: (path: string, body?: unknown) =>
     request<Blob>(path, { method: 'POST', body, raw: true }),
+  // A GET that returns bytes rather than JSON. An <img src> cannot carry the
+  // Authorization header, so an authenticated image is fetched and shown from
+  // an object URL instead.
+  getBlob: (path: string) => request<Blob>(path, { raw: true }),
 }
 
 /** Trigger a browser download for an export endpoint. */
