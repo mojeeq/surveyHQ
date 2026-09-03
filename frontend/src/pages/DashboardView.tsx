@@ -97,6 +97,10 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
   const columns = Number(appearanceOf(dashboard.data).columns) || COLUMNS
   const rowHeight = Number(appearanceOf(dashboard.data).row_height) || ROW_HEIGHT
   const fixedWidth = Number(appearanceOf(dashboard.data).canvas_width) || 0
+  const declaredOpacity = appearanceOf(dashboard.data).widget_opacity
+  // Opaque unless asked otherwise, and never so faint that the text on it
+  // stops being readable against whatever is behind.
+  const widgetOpacity = Math.min(1, Math.max(0.3, Number(declaredOpacity ?? 1)))
   const canvasWidth = Math.max(fixedWidth || width, 320)
 
   const rendered = useQuery({
@@ -362,7 +366,17 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
           draggableHandle=".widget-handle"
         >
           {widgets.map((widget) => (
-            <div key={widget.id} className="card overflow-hidden">
+            <div
+              key={widget.id}
+              className="card overflow-hidden"
+              // Let the dashboard's own background through the card. The charts
+              // inside draw on a transparent canvas, so they come with it.
+              style={
+                widgetOpacity < 1
+                  ? { backgroundColor: `rgba(255,255,255,${widgetOpacity})` }
+                  : undefined
+              }
+            >
               <ErrorBoundary what={`"${widget.title || 'this widget'}"`}>
               <WidgetFrame
                 widget={widget}

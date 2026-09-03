@@ -158,3 +158,50 @@ def test_an_archive_cannot_be_fetched_through_another_connection(
         f"/api/v1/connections/{mine['id']}/runs/{run.id}/archive", headers=auth_headers
     )
     assert response.status_code == 404
+
+
+def test_a_connection_can_be_told_what_time_to_import(client, auth_headers):
+    """A nightly refresh is a time of day, not an interval: the dashboard is
+    read at nine, so the import belongs at six."""
+    connection = _connection(
+        client,
+        auth_headers,
+        sync_enabled=True,
+        sync_mode="daily",
+        sync_times=["18:00", "06:00"],
+        sync_timezone="Pacific/Efate",
+    )
+    assert connection["sync_mode"] == "daily"
+    # Sorted and de-duplicated on the way in
+    assert connection["sync_times"] == ["06:00", "18:00"]
+    assert connection["sync_timezone"] == "Pacific/Efate"
+
+    changed = client.patch(
+        f"/api/v1/connections/{connection['id']}",
+        headers=auth_headers,
+        json={"sync_times": ["07:30", "07:30"]},
+    )
+    assert changed.status_code == 200
+    assert changed.json()["sync_times"] == ["07:30"]
+
+
+def test_a_time_that_is_not_a_time_is_refused(client, auth_headers):
+    connection = _connection(client, auth_headers, name="Bad times")
+    response = client.patch(
+        f"/api/v1/connections/{connection['id']}",
+        headers=auth_headers,
+        json={"sync_times": ["half past six"]},
+    )
+    assert response.status_code == 422
+    assert "not a time of day" in response.text
+
+
+def test_a_zone_that_does_not_exist_is_refused(client, auth_headers):
+    connection = _connection(client, auth_headers, name="Bad zone")
+    response = client.patch(
+        f"/api/v1/connections/{connection['id']}",
+        headers=auth_headers,
+        json={"sync_timezone": "Middle/Earth"},
+    )
+    assert response.status_code == 422
+    assert "not a known time zone" in response.text

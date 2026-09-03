@@ -6,6 +6,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 
 from app.models.connection import ExportFormat, SyncStatus
+from app.services.scheduling import valid_time, valid_timezone
 
 
 class ConnectionBase(BaseModel):
@@ -20,6 +21,27 @@ class ConnectionBase(BaseModel):
     questionnaires: list[str] = Field(default_factory=list)
     interview_status: str = "All"
     project_id: str | None = None
+    sync_mode: Literal["interval", "daily"] = "interval"
+    sync_times: list[str] = Field(default_factory=list)
+    sync_timezone: str = "UTC"
+
+    @field_validator("sync_times")
+    @classmethod
+    def _validate_times(cls, value: list[str]) -> list[str]:
+        cleaned = [text.strip() for text in value if text.strip()]
+        for text in cleaned:
+            if not valid_time(text):
+                raise ValueError(f"'{text}' is not a time of day. Use 24-hour HH:MM, e.g. 06:00")
+        # Sorted and de-duplicated: two identical times are one time.
+        return sorted(set(cleaned))
+
+    @field_validator("sync_timezone")
+    @classmethod
+    def _validate_timezone(cls, value: str) -> str:
+        name = value.strip() or "UTC"
+        if not valid_timezone(name):
+            raise ValueError(f"'{name}' is not a known time zone")
+        return name
 
     @field_validator("base_url")
     @classmethod
@@ -50,6 +72,12 @@ class ConnectionUpdate(BaseModel):
     questionnaires: list[str] | None = None
     interview_status: str | None = None
     project_id: str | None = None
+    sync_mode: Literal["interval", "daily"] | None = None
+    sync_times: list[str] | None = None
+    sync_timezone: str | None = None
+
+    _check_times = field_validator("sync_times")(ConnectionBase._validate_times.__func__)
+    _check_zone = field_validator("sync_timezone")(ConnectionBase._validate_timezone.__func__)
 
 
 class ConnectionOut(BaseModel):
@@ -68,6 +96,9 @@ class ConnectionOut(BaseModel):
     questionnaires: list[str] = Field(default_factory=list)
     interview_status: str
     project_id: str | None = None
+    sync_mode: str = "interval"
+    sync_times: list[str] = Field(default_factory=list)
+    sync_timezone: str = "UTC"
     last_sync_at: dt.datetime | None = None
     last_sync_status: SyncStatus
     last_sync_error: str = ""

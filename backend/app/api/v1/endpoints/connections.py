@@ -81,6 +81,9 @@ def create_connection(
         questionnaires=payload.questionnaires,
         interview_status=payload.interview_status,
         project_id=payload.project_id,
+        sync_mode=payload.sync_mode,
+        sync_times=payload.sync_times,
+        sync_timezone=payload.sync_timezone,
         created_by=user.id,
     )
     db.add(connection)

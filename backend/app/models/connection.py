@@ -57,6 +57,19 @@ class Connection(UUIDMixin, TimestampMixin, Base):
     export_format: Mapped[ExportFormat] = mapped_column(
         Enum(ExportFormat, name="export_format"), default=ExportFormat.stata
     )
+    # "interval" runs every sync_interval_minutes since the last import;
+    # "daily" runs at named clock times, which is what a nightly refresh is.
+    sync_mode: Mapped[str] = mapped_column(
+        String(20), default="interval", server_default=text("'interval'")
+    )
+    # Times of day to import at, as "HH:MM", read in sync_timezone. Several are
+    # allowed: a morning and an evening pull is a common shape.
+    sync_times: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
+    # The zone those times are read in. Fieldwork happens somewhere, and "06:00"
+    # means six in the morning there, not six in UTC.
+    sync_timezone: Mapped[str] = mapped_column(
+        String(60), default="UTC", server_default=text("'UTC'")
+    )
     # Which questionnaires to pull; empty means "all"
     questionnaires: Mapped[list] = mapped_column(JSON, default=list)
     interview_status: Mapped[str] = mapped_column(String(50), default="All")
