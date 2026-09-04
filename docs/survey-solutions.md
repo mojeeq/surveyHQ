@@ -36,6 +36,7 @@ it can be revoked without disturbing anyone's login.
 | Password | Its password — encrypted before it is stored |
 | Export format | **Stata** (recommended — it carries variable and value labels) |
 | Interview status | `All`, or restrict to e.g. `ApprovedBySupervisor` |
+| Project | Which project the imported datasets belong to |
 
 Press **Test connection** before saving. On success it reports the workspace and
 how many questionnaires the account can see, which confirms the URL, the
@@ -51,34 +52,56 @@ What happens next:
 1. SurveyHQ asks the server to prepare an export job.
 2. It polls until the server reports the job complete. Large surveys take
    minutes — this runs in the background, so you can close the page.
-3. It downloads the archive and unpacks the data files.
-4. It picks the interview-level file (the one named after the questionnaire
-   variable, ignoring `interview__actions` and friends) and imports it.
+3. It downloads the archive, keeps it, and unpacks the data files.
+4. It imports **every** data file in it — the interview level, each roster
+   level, and the paradata — one dataset each.
 
-Each questionnaire becomes one dataset. **Re-importing refreshes that dataset in
-place**, so saved charts, dashboards, indicators and quality checks keep working
-as long as variable names are stable.
+**Re-importing replaces those datasets in place**, keeping each one's identity,
+so saved charts, dashboards, indicators, quality rules, relationships, merges
+and derived variables keep working as long as variable names are stable. That is
+the whole point: an export arrives every morning with the same variables and
+more interviews, and nothing downstream should have to be rebuilt.
+
+Choose *append* instead if your export really is incremental — each run holding
+only what is new.
 
 Progress and history appear under **Recent imports** on the connection, and
-under **Administration → Background jobs**.
+under **Administration → Background jobs**. Each run keeps the export zip
+exactly as the server sent it; **Download** on the run hands it back. It is the
+only record of what was actually imported, and it can be re-uploaded like any
+other archive. The last five per connection are kept — an export is tens of
+megabytes, and a connection syncing every six hours produces four a day.
 
 ## Scheduled imports
 
-Turn on **Import automatically** and set an interval. The scheduler then
-re-imports the questionnaires listed on the connection whenever the interval has
-elapsed. A connection with no default questionnaires selected is skipped.
+Turn on **Import automatically**, then choose how the schedule is expressed:
 
-For daily monitoring, every 60–360 minutes is usually right. Exports are
+- **Every N minutes** — keeps the data no older than a known age. For daily
+  monitoring, 60–360 minutes is usually right.
+- **At set times** — e.g. `06:00` and `18:00`, listed as many as you like. This
+  puts the import where the day has room for it: before the office opens, after
+  the field teams sync their tablets. A monitoring dashboard is usually read at
+  a particular hour, and the useful guarantee is that it was refreshed just
+  before.
+
+Times are read in the connection's **timezone**, which you set alongside them.
+Fieldwork happens somewhere, and 06:00 means six in the morning there — in
+Vanuatu that is five the previous afternoon in UTC, so getting the zone wrong is
+a day's error, not an hour's.
+
+A connection with no default questionnaires selected is skipped. Exports are
 expensive for the Survey Solutions server, so avoid very short intervals on a
 busy production server.
 
 ## Roster and multi-level data
 
-A Survey Solutions export contains one file per roster level. SurveyHQ imports
-the interview level, which is what field monitoring needs.
+A Survey Solutions export contains one file per roster level, and SurveyHQ
+imports all of them. The interview level is what field monitoring needs; the
+rosters are what analysis of people, plots or livestock needs.
 
-To analyse a roster level, download the export from Survey Solutions and upload
-the roster's `.dta` file as its own dataset. It behaves like any other dataset.
+Because they arrive together in one project, **Projects → Relationships** can
+detect the links between them from the data, and two related datasets can be
+merged into one for analysis. See the [user guide](user-guide.md#relating-and-merging-datasets).
 
 ## What gets recognised automatically
 
@@ -130,6 +153,12 @@ certificate** on the connection — only on a network you trust.
 **"The export archive contained no data files"**
 The questionnaire has no interviews matching the selected status. Set interview
 status to `All` and try again.
+
+**The scheduled import is not running**
+Check that **Import automatically** is on, that the connection lists at least
+one questionnaire, and — for a time-of-day schedule — that the timezone is the
+one you meant. `SYNC_TICK_MINUTES` decides how often the scheduler looks; a
+time of day cannot be honoured more precisely than that.
 
 **Import runs but the dataset is empty**
 Interviews exist but none match the status filter. Check the filter on the
