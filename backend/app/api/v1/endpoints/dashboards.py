@@ -52,6 +52,7 @@ from app.services.audit import record
 from app.services.dashboard_assets import (
     BackgroundError,
     background_file,
+    remove_all,
     remove_background,
     save_background,
 )
@@ -331,7 +332,7 @@ def update_dashboard(
 def delete_dashboard(dashboard_id: str, db: DbSession, user: RequireAnalyst) -> Message:
     dashboard = _get_dashboard(dashboard_id, db, user)
     name = dashboard.name
-    remove_background(dashboard.id)
+    remove_all(dashboard.id)
     db.delete(dashboard)
     record(
         db,
@@ -466,11 +467,61 @@ def delete_background(dashboard_id: str, db: DbSession, user: RequireAnalyst) ->
     return dashboard
 
 
-def background_response(dashboard: Dashboard) -> Response:
-    """Serve a dashboard's background image. Shared with the public router."""
-    found = background_file(dashboard.id, (dashboard.appearance or {}).get("background_image"))
+@router.put("/{dashboard_id}/logo", response_model=DashboardOut)
+async def upload_logo(
+    dashboard_id: str,
+    db: DbSession,
+    user: RequireAnalyst,
+    file: Annotated[UploadFile, File(description="PNG, JPEG, GIF or WebP image")],
+) -> Dashboard:
+    """A logo for the dashboard's own header.
+
+    A dashboard is usually the thing a survey team shows other people, and it
+    is theirs rather than the platform's. This is what puts the statistics
+    office at the top of it rather than us.
+    """
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    try:
+        name = save_background(dashboard.id, await file.read(), kind="logo")
+    except BackgroundError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    appearance = dict(dashboard.appearance or {})
+    appearance["logo_image"] = name
+    appearance["logo_version"] = dt.datetime.now(dt.UTC).isoformat()
+    dashboard.appearance = appearance
+    db.commit()
+    db.refresh(dashboard)
+    return dashboard
+
+
+@router.get("/{dashboard_id}/logo")
+def read_logo(dashboard_id: str, db: DbSession, user: CurrentUser) -> Response:
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    return background_response(dashboard, kind="logo")
+
+
+@router.delete("/{dashboard_id}/logo", response_model=DashboardOut)
+def delete_logo(dashboard_id: str, db: DbSession, user: RequireAnalyst) -> Dashboard:
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    remove_background(dashboard.id, kind="logo")
+    appearance = dict(dashboard.appearance or {})
+    appearance.pop("logo_image", None)
+    appearance.pop("logo_version", None)
+    dashboard.appearance = appearance
+    db.commit()
+    db.refresh(dashboard)
+    return dashboard
+
+
+def background_response(dashboard: Dashboard, kind: str = "background") -> Response:
+    """Serve one of a dashboard's images. Shared with the public router."""
+    stored = (dashboard.appearance or {}).get(
+        "logo_image" if kind == "logo" else "background_image"
+    )
+    found = background_file(dashboard.id, stored, kind=kind)
     if found is None:
-        raise HTTPException(status_code=404, detail="This dashboard has no background image")
+        raise HTTPException(status_code=404, detail=f"This dashboard has no {kind} image")
     path, content_type = found
     return FileResponse(
         path,

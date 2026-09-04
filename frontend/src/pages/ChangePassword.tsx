@@ -51,10 +51,10 @@ export default function ChangePassword() {
     <div className="flex min-h-screen items-center justify-center bg-ink-50 p-4">
       <div className="w-full max-w-md">
         <div className="mb-6 flex items-center gap-2">
-          <span className="grid h-8 w-8 place-items-center rounded-control bg-brand-600 text-sm font-bold text-white">
-            S
+          <img src="/logo.svg" alt="" className="h-9 w-9" />
+          <span className="text-lg font-semibold text-ink-900">
+            suso<span className="font-normal text-ink-500">Dash</span>
           </span>
-          <span className="text-lg font-semibold text-ink-900">SurveyHQ</span>
         </div>
 
         <form onSubmit={submit} className="card p-6">

@@ -244,6 +244,9 @@ export interface CrosstabResult {
   grand_total: number
   percentages: string
   chi_square: { statistic: number; dof: number; cramers_v: number } | null
+  /** Categories the data had beyond what was returned, so a cut table says so. */
+  rows_omitted?: number
+  columns_omitted?: number
 }
 
 export interface SummaryStats {
@@ -397,6 +400,23 @@ export interface Appearance {
   widget_opacity?: number
   /** A band behind the page tabs, for when the background swallows them. */
   tab_background?: string
+
+  // --- the dashboard's own header -----------------------------------------
+  /** An uploaded logo, served from the dashboard's own endpoint. */
+  logo_image?: string
+  logo_version?: string
+  /** Logo height in pixels. Width follows the image. */
+  logo_height?: number
+  /** Title size in pixels. 0 or absent uses the default. */
+  title_size?: number
+  title_color?: string
+  /** A named stack from TITLE_FONTS, not arbitrary CSS. */
+  title_font?: string
+  title_align?: 'left' | 'center'
+  /** A line under the header, which most branded dashboards want. */
+  header_rule?: boolean
+  /** Show the description under the title. */
+  hide_subtitle?: boolean
 }
 
 export interface Dashboard {

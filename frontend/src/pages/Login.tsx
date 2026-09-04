@@ -30,10 +30,10 @@ export default function Login() {
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-ink-100 via-ink-50 to-brand-50 p-4">
       <div className="w-full max-w-sm">
         <div className="mb-6 text-center">
-          <span className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-card bg-brand-600 text-xl font-bold text-white">
-            S
-          </span>
-          <h1 className="text-xl font-semibold text-ink-900">SurveyHQ</h1>
+          <img src="/logo.svg" alt="" className="mx-auto mb-3 h-14 w-14" />
+          <h1 className="text-2xl font-semibold text-ink-900">
+            suso<span className="font-normal text-ink-500">Dash</span>
+          </h1>
           <p className="mt-1 text-sm text-ink-500">Survey monitoring and analysis</p>
         </div>
 

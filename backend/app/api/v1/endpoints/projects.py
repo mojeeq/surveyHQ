@@ -35,7 +35,7 @@ from app.schemas.project import (
     ProjectUpdate,
 )
 from app.services.audit import record
-from app.services.dashboard_assets import remove_background
+from app.services.dashboard_assets import remove_all
 from app.services.datasets import delete_dataset_files
 from app.services.projects import (
     can_edit,
@@ -152,7 +152,7 @@ def delete_project(
         for relationship in relationships:
             db.delete(relationship)
         for dashboard in dashboards:
-            remove_background(dashboard.id)
+            remove_all(dashboard.id)
             db.delete(dashboard)
 
         # Everything hanging off those datasets, deleted by name rather than

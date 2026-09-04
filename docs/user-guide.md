@@ -329,6 +329,12 @@ row, column, or percent of total. Row and column totals are always shown.
 Underneath, chi-square and Cramér's V are reported so you can see whether an
 apparent association is worth anything.
 
+A cross-tabulation is not capped at a readable size: up to 5,000 rows and 1,000
+columns come back, so tabulating by interview key or enumeration area gives you
+the whole table. It scrolls with its headers pinned, and exports whole. If a
+variable somehow has more categories than that, the table says how many it left
+out rather than quietly ending.
+
 **Save for dashboards** keeps the table itself, not a picture of it. It reruns
 against current data wherever it appears, and dashboard filters narrow it like
 any other widget.
@@ -367,7 +373,7 @@ To build a dashboard:
 | **Data quality panel** | The last result of every check on a dataset, and how old the oldest one is |
 | **Text note** | A heading, an explanation, a caveat |
 | **Countdown to a date** | Time remaining to a deadline, ticking, with your own label and a message for when it passes |
-| **Map of interview locations** | GPS points from a dataset, grouped by coordinate. Click a point for its count or any aggregate, plus the detail columns you chose |
+| **Map of interview locations** | GPS points from a dataset, grouped by coordinate — up to 50,000 places. Click a point for its count or any aggregate, plus the detail columns you chose |
 | **Embedded HTML** | Whatever HTML you paste, rendered in a sandboxed frame — a logo, an embedded video, a link bar |
 | **How recent the data is** | When each dataset was last imported, and how old its newest record is |
 
@@ -396,9 +402,27 @@ interviewer while a "Coverage" page filters by district. A control only applies
 to widgets whose dataset actually has that variable; widgets that cannot answer
 it say so rather than quietly ignoring it.
 
+### Making it yours
+
+A dashboard is usually the thing a survey team shows other people, and it
+belongs to them rather than to the platform. **Appearance → Header** is where it
+says so:
+
+- **Logo** — upload your organisation's mark (PNG, JPEG, GIF or WebP, up to
+  8 MB). It sits beside the title, at whatever height you set, and it travels
+  with the shared link, where it matters most.
+- **Title size** — from 16 to 64 pixels, so a board left on an office wall can
+  be read from across the room.
+- **Title font** — the interface face, or a grotesque, serif, slab or
+  monospace. All of them are already on the machine, so a screen with no
+  internet still renders in the face you chose.
+- **Title colour and alignment** — your colour, left or centred.
+- **A rule under the header**, and the option to **hide the description**, for
+  when the title alone is the whole heading.
+
 ### Appearance
 
-**Appearance** in the header controls how the dashboard is dressed:
+The rest of **Appearance** controls how the dashboard is dressed:
 
 - **Background** — a colour, or an uploaded image (PNG, JPEG, GIF or WebP, up to
   8 MB), set to fill the page, fit whole, or repeat, with a fade slider so text

@@ -24,7 +24,12 @@ from app.services.query_engine import (
 
 # A dashboard map is read at a glance; past a few thousand pins it is a smear,
 # and the browser is doing the work of drawing them.
-MAX_POINTS = 5000
+# Points are grouped by coordinate before this applies, so the ceiling counts
+# distinct places rather than interviews - but a census enumerates every
+# household at its own GPS reading, and 5,000 of those is one province. The
+# browser draws them on a canvas and builds each popup only when it is opened,
+# which is what makes a number this size a map rather than a hang.
+MAX_POINTS = 50_000
 
 AGGREGATIONS = {
     "count": None,

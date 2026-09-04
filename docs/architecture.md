@@ -170,9 +170,15 @@ colour, image, fit and fade, canvas width, grid columns, row height, widget
 opacity, tab-strip colour. It is presentation, it changes often, and nothing
 queries it.
 
-Background images are stored on disk, one file per dashboard, and their type is
-sniffed from the leading bytes rather than trusted from the filename or the
-browser's content type. SVG is refused: it is a document that can carry script,
+A dashboard also dresses its own header: a logo, and the title's size, face,
+colour and alignment. The faces are named stacks the frontend resolves rather
+than CSS carried in the record, because a dashboard is rendered for people who
+did not write it - and every stack is already on the machine, so a field office
+screen with no internet renders in the face it was designed in.
+
+Background and logo images are stored on disk, one file per dashboard per kind,
+and their type is sniffed from the leading bytes rather than trusted from the
+filename or the browser's content type. SVG is refused: it is a document that can carry script,
 and the file is served back from the API's own origin. Embedded HTML is
 rendered in a sandboxed frame, so what it contains is between its author and
 that frame.
@@ -323,9 +329,29 @@ frontend/src/
   pages/        one per route
 ```
 
+## Reading a whole table, and a whole map
+
+Two ceilings existed because a browser has to draw what comes back, and both
+were set where a table stops being readable rather than where it stops being
+possible. That is the wrong place for them: reading is what a scroll bar and an
+export are for.
+
+A cross-tabulation now returns up to 5,000 rows and 1,000 columns - enough to
+tabulate by interview key or enumeration area - and reports how many categories
+it left out when it does cut, because a cut table's totals still add up and
+nothing else on screen would say the rest is missing.
+
+A map returns up to 50,000 points, already grouped by coordinate. What made the
+old figure necessary was the browser rather than the query: one SVG node per
+point, each with a popup string built whether or not anybody opens it. The map
+now draws on a canvas and builds each popup when it is opened, which is what
+makes a number that size a map rather than a freeze.
+
 ## The look of it
 
-The interface follows Redash's own theme values - `#2196f3` primary, `#edecec`
+The interface is **susoDash**: its own mark - a point becoming a distribution,
+which is what the platform does to an export - on a palette that follows
+Redash's own theme values - `#2196f3` primary, `#edecec`
 page, `#e8e8e8` borders, `#595959` text on `#333` headings, 13px system font,
 3px panels and 2px controls, and the `#191c22` navy its sidebar has always
 been. They live as Tailwind tokens in `tailwind.config.js`, so the palette is

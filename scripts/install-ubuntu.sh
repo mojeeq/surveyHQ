@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# One-shot installer for SurveyHQ on Ubuntu 22.04 / 24.04.
+# One-shot installer for susoDash on Ubuntu 22.04 / 24.04.
 #
 #   curl -fsSL https://get.docker.com | sh   # if you prefer to do it yourself
 #   ./scripts/install-ubuntu.sh
@@ -161,7 +161,7 @@ done
 
 echo
 if [[ "$API_READY" -eq 1 ]]; then
-    echo -e "${GREEN}SurveyHQ is running.${NC}"
+    echo -e "${GREEN}susoDash is running.${NC}"
 else
     # Never claim success we did not observe.
     printf '\n'

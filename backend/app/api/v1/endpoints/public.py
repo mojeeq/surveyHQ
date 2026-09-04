@@ -44,3 +44,9 @@ def render_shared_dashboard(
 def read_shared_background(token: str, db: DbSession) -> Response:
     """A shared dashboard is shown as its owner dressed it, background and all."""
     return background_response(_get_shared(token, db))
+
+
+@router.get("/dashboards/{token}/logo")
+def read_shared_logo(token: str, db: DbSession) -> Response:
+    """The logo too: a shared link is where somebody else's badge matters most."""
+    return background_response(_get_shared(token, db), kind="logo")

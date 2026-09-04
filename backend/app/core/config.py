@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     )
 
     # General
-    project_name: str = "SurveyHQ"
+    project_name: str = "susoDash"
     environment: str = "production"
     public_url: str = "http://localhost:8080"
     log_level: str = "INFO"
@@ -59,7 +59,7 @@ class Settings(BaseSettings):
     smtp_user: str = ""
     smtp_password: str = ""
     smtp_tls: bool = True
-    smtp_from: str = "SurveyHQ <no-reply@example.com>"
+    smtp_from: str = "susoDash <no-reply@example.com>"
 
     # Scheduler
     sync_tick_minutes: int = 5

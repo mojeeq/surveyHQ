@@ -33,6 +33,7 @@ import MapWidget, { DEFAULT_TILES } from '@/components/MapWidget'
 import AppearanceModal, {
   canvasStyle,
   isDark,
+  titleFontStack,
   useBackgroundImage,
 } from '@/components/DashboardAppearance'
 import {
@@ -201,6 +202,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
 
   const appearance = appearanceOf(dashboard.data)
   const backgroundUrl = useBackgroundImage(basePath, appearance)
+  const logoUrl = useBackgroundImage(basePath, appearance, 'logo')
   const canvas = canvasStyle(appearance, backgroundUrl)
   const onDarkGround = Boolean(canvas) && isDark(appearance.background_color)
   // The tabs sit on their own band when one is set, so what they have to stay
@@ -243,7 +245,25 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
     <div>
       <PageHeader
         title={dashboard.data!.name}
-        description={dashboard.data!.description}
+        description={appearance.hide_subtitle ? undefined : dashboard.data!.description}
+        logo={
+          logoUrl ? (
+            <img
+              src={logoUrl}
+              alt=""
+              style={{ height: appearance.logo_height ?? 32 }}
+              className="w-auto shrink-0 object-contain"
+            />
+          ) : undefined
+        }
+        titleStyle={{
+          fontSize: appearance.title_size ? `${appearance.title_size}px` : undefined,
+          fontFamily: titleFontStack(appearance.title_font),
+          color: appearance.title_color || undefined,
+          lineHeight: 1.15,
+        }}
+        align={appearance.title_align ?? 'left'}
+        rule={Boolean(appearance.header_rule)}
         actions={
           !isPublic && (
             <>
