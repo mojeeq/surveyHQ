@@ -62,12 +62,14 @@ export function EmptyState({
   )
 }
 
+// A quiet border of the tone's own colour, which is what stops a square badge
+// reading as a button.
 const BADGE_TONES = {
-  neutral: 'bg-ink-100 text-ink-700',
-  info: 'bg-brand-50 text-brand-700',
-  success: 'bg-emerald-50 text-emerald-700',
-  warning: 'bg-amber-50 text-amber-800',
-  danger: 'bg-red-50 text-red-700',
+  neutral: 'bg-ink-100 text-ink-700 border-ink-200',
+  info: 'bg-brand-50 text-brand-700 border-brand-200',
+  success: 'bg-emerald-50 text-emerald-700 border-emerald-200',
+  warning: 'bg-amber-50 text-amber-800 border-amber-200',
+  danger: 'bg-red-50 text-red-700 border-red-200',
 } as const
 
 export type BadgeTone = keyof typeof BADGE_TONES
@@ -337,7 +339,7 @@ export function Tabs<T extends string>({
         >
           {tab.label}
           {tab.count !== undefined && (
-            <span className="ml-1.5 rounded-full bg-ink-100 px-1.5 py-0.5 text-xs text-ink-600">
+            <span className="ml-1.5 rounded-control bg-ink-100 px-1.5 py-0.5 text-xs text-ink-600">
               {tab.count}
             </span>
           )}
