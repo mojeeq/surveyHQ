@@ -14,6 +14,7 @@ import type {
   Chart,
   Dashboard,
   Dataset,
+  FilterGroup,
   Indicator,
   Page,
   Widget,
@@ -53,6 +54,32 @@ const ROW_HEIGHT = 74
 // short of the edge instead of butting against it.
 const CANVAS_PADDING = 16
 
+/** A selection made by clicking a mark, filtering the rest of the page.
+ *
+ *  `from` is the widget it was clicked on, which is left unfiltered: it is the
+ *  thing being clicked, and collapsing it to the one bar just chosen would take
+ *  away the means of choosing another.
+ */
+type CrossFilter = { variable: string; value: string; label: string; from: string }
+
+/** Fold a click-to-filter selection into the page's own filters. */
+function withCrossFilter(group: FilterGroup, drill: CrossFilter | null): FilterGroup {
+  if (!drill) return group
+  return {
+    ...group,
+    conditions: [
+      ...group.conditions,
+      // The clicked text is the label shown on the axis, not the stored code.
+      { variable: drill.variable, operator: 'eq', value: drill.value, use_label: true },
+    ],
+  }
+}
+
+/** The variable a chart's first grouping is on, which is what a click means. */
+function clickedVariable(payload: { grouped_on?: string[] } | undefined): string {
+  return payload?.grouped_on?.[0] ?? ''
+}
+
 /** A few grounds that sit under a chart without fighting it. */
 const WIDGET_COLOURS: { label: string; value: string }[] = [
   { label: 'Paper', value: '#f7f8f9' },
@@ -91,6 +118,9 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
   const [adding, setAdding] = useState(false)
   const [activePage, setActivePage] = useState(0)
   const [filterValues, setFilterValues] = useState<Record<string, string>>({})
+  /** What was clicked on a chart, filtering the rest of the page by it. */
+  const [drill, setDrill] = useState<CrossFilter | null>(null)
+  useEffect(() => setDrill(null), [activePage])
   const [editingFilters, setEditingFilters] = useState(false)
   const [editingStyle, setEditingStyle] = useState(false)
   const [editingWidget, setEditingWidget] = useState<Widget | null>(null)
@@ -135,11 +165,11 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
     // The values are part of the key, so changing a filter refetches rather
     // than showing the previous selection's numbers under the new label. So is
     // the page, whose filters are its own.
-    queryKey: ['dashboard-data', id, publicToken, activePage, filterValues],
+    queryKey: ['dashboard-data', id, publicToken, activePage, filterValues, drill],
     queryFn: () =>
       api.post<{ widgets: Record<string, any> }>(
-        `${basePath}/data`,
-        toFilterGroup(pageControls, filterValues),
+        `${basePath}/data${drill ? `?every_widget_but=${drill.from}` : ''}`,
+        withCrossFilter(toFilterGroup(pageControls, filterValues), drill),
       ),
     enabled: Boolean(dashboard.data),
     refetchInterval: dashboard.data?.refresh_interval_seconds
@@ -307,6 +337,9 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         }}
         align={appearance.title_align ?? 'left'}
         rule={Boolean(appearance.header_rule)}
+        onTitleClick={
+          !isPublic && can('analyst') ? () => setEditingStyle(true) : undefined
+        }
         actions={
           !isPublic && (
             <>
@@ -370,6 +403,24 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         style={canvas}
         data-testid="dashboard-canvas"
       >
+      {drill && (
+        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-card border border-brand-300 bg-brand-50 px-3 py-2 text-sm text-brand-900">
+          <Badge tone="info" icon="⊙">
+            Filtered by a click
+          </Badge>
+          <span>
+            <span className="font-mono text-xs">{drill.variable}</span> is{' '}
+            <strong>{drill.value}</strong>
+          </span>
+          <span className="text-xs text-brand-800/70">
+            — every widget on this page except &ldquo;{drill.label}&rdquo;
+          </span>
+          <button className="btn-ghost btn-sm ml-auto" onClick={() => setDrill(null)}>
+            Clear
+          </button>
+        </div>
+      )}
+
       <DashboardFilters
         controls={pageControls}
         value={filterValues}
@@ -454,6 +505,15 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
                   if (confirm(`Remove "${widget.title || 'this widget'}" from the dashboard?`))
                     removeWidget.mutate(widget.id)
                 }}
+                onSelect={(variable, value) =>
+                  setDrill((current) =>
+                    // Clicking the same mark again is how you undo it, which is
+                    // where the hand goes before it finds the chip.
+                    current && current.variable === variable && current.value === value
+                      ? null
+                      : { variable, value, label: widget.title || variable, from: widget.id },
+                  )
+                }
               />
               </ErrorBoundary>
             </div>
@@ -507,6 +567,7 @@ function WidgetFrame({
   onMove,
   onEdit,
   onRemove,
+  onSelect,
 }: {
   widget: Widget
   payload: any
@@ -520,6 +581,8 @@ function WidgetFrame({
   onMove: (page: number) => void
   onEdit: () => void
   onRemove: () => void
+  /** A mark was clicked: filter the rest of the page by what it stands for. */
+  onSelect?: (variable: string, value: string) => void
 }) {
   return (
     <div className="flex h-full flex-col">
@@ -625,6 +688,14 @@ function WidgetFrame({
             showToggle={false}
             theme={theme}
             display={payload.display}
+            onSelect={
+              // Only where a click means something: a chart grouped on a
+              // variable. A KPI or a table of measures has no category behind
+              // the mark, so clicking it would filter by nothing.
+              onSelect && clickedVariable(payload)
+                ? (category) => onSelect(clickedVariable(payload), category)
+                : undefined
+            }
           />
         ) : null}
       </div>

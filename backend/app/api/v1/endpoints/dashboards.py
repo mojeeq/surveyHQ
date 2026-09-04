@@ -538,11 +538,17 @@ def background_response(dashboard: Dashboard, kind: str = "background") -> Respo
 
 @router.post("/{dashboard_id}/data", response_model=dict)
 def render_dashboard(
-    dashboard_id: str, db: DbSession, user: CurrentUser, filters: FilterGroup | None = None
+    dashboard_id: str,
+    db: DbSession,
+    user: CurrentUser,
+    filters: FilterGroup | None = None,
+    # A query parameter rather than part of the body, so the body stays the
+    # bare filter group everything already sends.
+    every_widget_but: str = "",
 ) -> dict[str, Any]:
     """Render every widget in one round trip so the page loads at once."""
     dashboard = _get_dashboard(dashboard_id, db, user)
-    return _render_widgets(db, dashboard, filters)
+    return _render_widgets(db, dashboard, filters, every_widget_but)
 
 
 @router.post("/{dashboard_id}/share", response_model=DashboardOut)
@@ -766,8 +772,17 @@ def _replace_widgets(db: DbSession, dashboard: Dashboard, widgets: list[WidgetIn
 
 
 def _render_widgets(
-    db: DbSession, dashboard: Dashboard, filters: FilterGroup | None
+    db: DbSession,
+    dashboard: Dashboard,
+    filters: FilterGroup | None,
+    except_widget: str = "",
 ) -> dict[str, Any]:
+    """Every widget's data in one round trip, so a page loads at once.
+
+    except_widget is the widget a click-to-filter selection was made on. It is
+    rendered unfiltered, because it is the thing being clicked: narrowing it to
+    the one bar just chosen would take away the means of choosing another.
+    """
     payload: dict[str, Any] = {
         "dashboard_id": dashboard.id,
         "name": dashboard.name,
@@ -775,7 +790,9 @@ def _render_widgets(
     }
     for widget in dashboard.widgets:
         try:
-            payload["widgets"][widget.id] = _render_widget(db, widget, filters)
+            payload["widgets"][widget.id] = _render_widget(
+                db, widget, None if widget.id == except_widget else filters
+            )
         except (QueryError, HTTPException) as exc:
             detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
             payload["widgets"][widget.id] = {"error": str(detail)}
@@ -975,6 +992,15 @@ def _render_widget(
             # chart, so a dashboard shows what its author built rather than a
             # default rendering of the same numbers.
             "display": (chart.spec or {}).get("options") or {},
+            # What the chart groups on, so clicking a mark can say which
+            # variable the category belongs to and filter the page by it. Read
+            # through the same accessor the query goes through: a saved chart
+            # nests its query, an older one does not.
+            "grouped_on": [
+                dimension.variable
+                for dimension in _spec_from_chart(chart, None).dimensions
+                if dimension.variable
+            ],
             "result": result.model_dump(mode="json"),
         }
 

@@ -242,9 +242,16 @@ function ChartPreview({
       subtitle={chart.description || chart.chart_type.replace('_', ' ')}
       actions={
         canDelete && (
-          <button className="btn-ghost btn-sm text-red-600" onClick={onDelete}>
-            Delete
-          </button>
+          <>
+            {/* Editing a chart is changing the query it was built from, and
+                Explore is where that was done in the first place. */}
+            <Link className="btn-ghost btn-sm" to={`/explore?chart=${chart.id}`}>
+              Edit
+            </Link>
+            <button className="btn-ghost btn-sm text-red-600" onClick={onDelete}>
+              Delete
+            </button>
+          </>
         )
       }
     >

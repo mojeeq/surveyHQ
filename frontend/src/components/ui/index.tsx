@@ -208,6 +208,7 @@ export function PageHeader({
   titleStyle,
   align = 'left',
   rule = false,
+  onTitleClick,
 }: {
   title: string
   description?: string
@@ -216,6 +217,8 @@ export function PageHeader({
   titleStyle?: CSSProperties
   align?: 'left' | 'center'
   rule?: boolean
+  /** Makes the title itself the way in to styling it. */
+  onTitleClick?: () => void
 }) {
   const centred = align === 'center'
   return (
@@ -227,9 +230,24 @@ export function PageHeader({
       <div className={centred ? 'flex flex-col items-center gap-2' : 'flex items-center gap-3'}>
         {logo}
         <div>
-          <h1 className="text-xl font-semibold text-ink-900" style={titleStyle}>
-            {title}
-          </h1>
+          {onTitleClick ? (
+            // Everything that dresses the header lives behind the Appearance
+            // button, which is not where a hand goes to change a title. It
+            // goes to the title.
+            <button
+              className="rounded-control text-left decoration-dotted underline-offset-4 hover:underline"
+              onClick={onTitleClick}
+              title="Change the title's size, font and colour"
+            >
+              <h1 className="text-xl font-semibold text-ink-900" style={titleStyle}>
+                {title}
+              </h1>
+            </button>
+          ) : (
+            <h1 className="text-xl font-semibold text-ink-900" style={titleStyle}>
+              {title}
+            </h1>
+          )}
           {description && <p className="mt-1 text-sm text-ink-500">{description}</p>}
         </div>
       </div>

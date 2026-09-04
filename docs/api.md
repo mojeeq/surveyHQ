@@ -271,7 +271,10 @@ PUT    /dashboards/{id}/logo              upload a header logo  [analyst]
 GET    /dashboards/{id}/logo              the logo itself
 DELETE /dashboards/{id}/logo                                    [analyst]
 POST   /dashboards/{id}/data              render every widget; the body may carry
-                                          filter conditions to narrow them
+                                          filter conditions to narrow them.
+                                          ?every_widget_but=<widget id> renders
+                                          that one unfiltered, which is what
+                                          click-to-filter needs
 POST   /dashboards/{id}/share?enable=true public link           [analyst]
 PUT    /dashboards/{id}/hostname          give a shared dashboard its own
                                           address, or "" to remove it
@@ -320,6 +323,10 @@ sits on), `filters` (the controls offered to viewers, each belonging to a page),
 
 `title_font` names a stack the frontend knows (`grotesque`, `serif`, `slab`,
 `mono`, or empty for the interface face) rather than carrying CSS.
+
+A rendered chart widget carries `grouped_on`, the variables its query groups
+on. That is what lets a click on a mark say which variable the category it
+stands for belongs to, and filter the page by it.
 
 A widget is one of `chart`, `crosstab`, `indicator`, `quality`, `text`,
 `countdown`, `map`, `html` or `freshness`, and the rest of what it needs lives in

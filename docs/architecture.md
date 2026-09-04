@@ -195,6 +195,18 @@ receives only the conditions its own dataset can answer and reports the rest as
 ignored - the alternative being a filter that silently does nothing to half the
 page.
 
+**Click-to-filter** turns a mark into a condition. A rendered chart reports the
+variables it groups on, so a click carries a variable as well as a category,
+and the category is matched as a label rather than a code because the label is
+what was on the axis. The selection is folded into the page's own filters, so
+the two compose rather than compete.
+
+One widget is excluded: the one clicked, named by `every_widget_but` on the
+render call. It renders unfiltered because it is the thing being clicked -
+collapsing it to the one bar just chosen would take away the means of choosing
+another. That is a query parameter rather than part of the body so the body
+stays the bare filter group everything already sends.
+
 **Appearance** is one JSON column rather than a set of columns: background
 colour, image, fit and fade, canvas width, grid columns, row height, widget
 opacity, tab-strip colour. It is presentation, it changes often, and nothing

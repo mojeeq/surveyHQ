@@ -7,6 +7,7 @@ import { useToast } from '@/hooks/useToast'
 import { formatNumber } from '@/lib/format'
 import type {
   Aggregation,
+  Chart,
   ChartType,
   CrosstabRequest,
   CrosstabResult,
@@ -107,7 +108,25 @@ export default function Explore() {
     [datasets.data, projectId],
   )
 
-  const requested = params.get('dataset') ?? ''
+  // Editing a saved chart opens it here, which is where its query was built
+  // in the first place. Everything is prefilled, so "change the variable" is
+  // changing the variable rather than rebuilding the chart from memory.
+  const editingId = params.get('chart') ?? ''
+  const editing = useQuery({
+    queryKey: ['chart', editingId],
+    queryFn: () => api.get<Chart>(`/dashboards/charts/${editingId}`),
+    enabled: Boolean(editingId),
+  })
+
+  // A saved cross-tabulation is built in the other mode, so opening one for
+  // editing has to switch to it.
+  useEffect(() => {
+    if (editing.data) {
+      setMode(editing.data.chart_type === 'crosstab' ? 'crosstab' : 'aggregate')
+    }
+  }, [editing.data])
+
+  const requested = editing.data?.dataset_id || (params.get('dataset') ?? '')
   // A dataset from another project stops being a valid choice the moment the
   // project filter changes, so fall back rather than showing an empty picker.
   const datasetId = inProject.some((item) => item.id === requested)
@@ -145,10 +164,26 @@ export default function Explore() {
   return (
     <>
       <PageHeader
-        title="Explore"
-        description="Build tabulations and charts against any dataset."
+        title={editing.data ? `Editing “${editing.data.name}”` : 'Explore'}
+        description={
+          editing.data
+            ? 'Change the grouping, the measure, the filters or the chart type. Saving writes back to this chart, so every dashboard showing it follows.'
+            : 'Build tabulations and charts against any dataset.'
+        }
         actions={
           <div className="flex flex-wrap items-center gap-2">
+            {editing.data && (
+              <button
+                className="btn-secondary"
+                onClick={() => {
+                  const next = new URLSearchParams(params)
+                  next.delete('chart')
+                  setParams(next)
+                }}
+              >
+                Stop editing
+              </button>
+            )}
             <select
               className="input w-52"
               value={projectId}
@@ -211,22 +246,26 @@ export default function Explore() {
         <ErrorNote error={new Error('Dataset could not be loaded')} />
       ) : mode === 'aggregate' ? (
         <AggregateBuilder
+          key={editingId || datasetId}
           datasetId={datasetId}
           datasetName={dataset.data.name}
           groupable={groupable}
           numeric={numeric}
           allVariables={variables}
           canSave={can('analyst')}
+          editing={editing.data?.chart_type === 'crosstab' ? undefined : editing.data}
           onSaved={() => toast.push('Chart saved', 'success')}
         />
       ) : (
         <CrosstabBuilder
+          key={editingId || datasetId}
           datasetId={datasetId}
           datasetName={dataset.data.name}
           groupable={groupable}
           numeric={numeric}
           allVariables={variables}
           canSave={can('analyst')}
+          editing={editing.data?.chart_type === 'crosstab' ? editing.data : undefined}
         />
       )}
     </>
@@ -242,6 +281,7 @@ function AggregateBuilder({
   numeric,
   allVariables,
   canSave,
+  editing,
   onSaved,
 }: {
   datasetId: string
@@ -250,6 +290,8 @@ function AggregateBuilder({
   numeric: NonNullable<VariableList>
   allVariables: NonNullable<VariableList>
   canSave: boolean
+  /** The saved chart being edited, if this was opened from one. */
+  editing?: Chart
   onSaved: () => void
 }) {
   const toast = useToast()
@@ -262,6 +304,8 @@ function AggregateBuilder({
   const [result, setResult] = useState<QueryResult | null>(null)
   const [saveOpen, setSaveOpen] = useState(false)
   const [showSql, setShowSql] = useState(false)
+  /** Set when a chart's saved query has just been loaded and wants running. */
+  const [pending, setPending] = useState(false)
 
   // Reset the builder whenever the dataset changes; variable names differ.
   useEffect(() => {
@@ -270,6 +314,29 @@ function AggregateBuilder({
     setFilters(emptyFilter())
     setResult(null)
   }, [datasetId])
+
+  // A chart opened for editing fills the builder with what it was built from.
+  useEffect(() => {
+    if (!editing) return
+    const saved = (editing.spec?.query ?? editing.spec) as QuerySpec | undefined
+    if (!saved) return
+    setDimensions(saved.dimensions ?? [])
+    setMeasures(saved.measures ?? [{ agg: 'count', alias: 'count' }])
+    setFilters(saved.filters ?? emptyFilter())
+    setLimit(saved.limit ?? 50)
+    setChartType(editing.chart_type as ChartType)
+    setDisplay((editing.spec?.options as BuildOptions) ?? { sort: 'value_desc' })
+    setPending(true)
+  }, [editing])
+
+  // Run once the prefilled query has reached the state the request is built
+  // from, rather than from inside the effect that fills it in.
+  useEffect(() => {
+    if (!pending || !dimensions.length) return
+    setPending(false)
+    run.mutate()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pending, dimensions])
 
   const spec: QuerySpec = {
     dimensions,
@@ -728,7 +795,7 @@ function AggregateBuilder({
                 </button>
                 {canSave && (
                   <button className="btn-primary btn-sm" onClick={() => setSaveOpen(true)}>
-                    Save as chart
+                    {editing ? 'Save changes' : 'Save as chart'}
                   </button>
                 )}
               </>
@@ -772,6 +839,7 @@ function AggregateBuilder({
         chartType={chartType}
         display={display}
         spec={spec}
+        editing={editing}
         onSaved={onSaved}
       />
     </div>
@@ -786,6 +854,7 @@ function SaveChartModal({
   chartType,
   display,
   spec,
+  editing,
   onSaved,
 }: {
   open: boolean
@@ -796,21 +865,27 @@ function SaveChartModal({
   /** How it is drawn, saved with it so a dashboard shows the same chart. */
   display: BuildOptions
   spec: QuerySpec
+  /** The chart this was opened from, which is updated rather than duplicated. */
+  editing?: Chart
   onSaved: () => void
 }) {
   const toast = useToast()
-  const [name, setName] = useState('')
+  const [name, setName] = useState(editing?.name ?? '')
   const save = useMutation({
-    mutationFn: () =>
-      api.post('/dashboards/charts', {
-        name: name || `Chart on ${datasetName}`,
+    mutationFn: () => {
+      const body = {
+        name: name || editing?.name || `Chart on ${datasetName}`,
         dataset_id: datasetId,
         chart_type: chartType,
         spec: { query: spec, options: display },
-      }),
+      }
+      return editing
+        ? api.patch(`/dashboards/charts/${editing.id}`, body)
+        : api.post('/dashboards/charts', body)
+    },
     onSuccess: () => {
       onSaved()
-      setName('')
+      if (!editing) setName('')
       onClose()
     },
     onError: (error: Error) => toast.push(error.message, 'error'),
@@ -820,14 +895,14 @@ function SaveChartModal({
     <Modal
       open={open}
       onClose={onClose}
-      title="Save as chart"
+      title={editing ? `Save changes to "${editing.name}"` : 'Save as chart'}
       footer={
         <>
           <button className="btn-secondary" onClick={onClose}>
             Cancel
           </button>
           <button className="btn-primary" onClick={() => save.mutate()} disabled={save.isPending}>
-            Save chart
+            {editing ? 'Save changes' : 'Save chart'}
           </button>
         </>
       }
@@ -851,6 +926,7 @@ function CrosstabBuilder({
   numeric,
   allVariables,
   canSave,
+  editing,
 }: {
   datasetId: string
   datasetName: string
@@ -858,6 +934,8 @@ function CrosstabBuilder({
   numeric: NonNullable<VariableList>
   allVariables: NonNullable<VariableList>
   canSave: boolean
+  /** The saved cross-tabulation being edited, if this was opened from one. */
+  editing?: Chart
 }) {
   const toast = useToast()
   const [rowVariable, setRowVariable] = useState(groupable[0]?.name ?? '')
@@ -873,6 +951,18 @@ function CrosstabBuilder({
     setColumnVariable(groupable[1]?.name ?? '')
     setResult(null)
   }, [datasetId, groupable])
+
+  // A saved cross-tabulation opened for editing keeps the request it was made
+  // from, so this is filling the form back in from it.
+  useEffect(() => {
+    const saved = editing?.spec?.crosstab as CrosstabRequest | undefined
+    if (!saved) return
+    setRowVariable(saved.row_variable)
+    setColumnVariable(saved.column_variable)
+    setPercentages(saved.percentages ?? 'none')
+    setMeasure(saved.measure ?? { agg: 'count' })
+    setFilters(saved.filters ?? emptyFilter())
+  }, [editing])
 
   const body: CrosstabRequest = {
     row_variable: rowVariable,
@@ -1000,7 +1090,7 @@ function CrosstabBuilder({
               </button>
               {canSave && (
                 <button className="btn-primary btn-sm" onClick={() => setSaveOpen(true)}>
-                  Save for dashboards
+                  {editing ? 'Save changes' : 'Save for dashboards'}
                 </button>
               )}
             </>
@@ -1066,6 +1156,7 @@ function CrosstabBuilder({
         datasetId={datasetId}
         datasetName={datasetName}
         request={body}
+        editing={editing}
       />
     </div>
   )
@@ -1077,29 +1168,39 @@ function SaveCrosstabModal({
   datasetId,
   datasetName,
   request,
+  editing,
 }: {
   open: boolean
   onClose: () => void
   datasetId: string
   datasetName: string
   request: CrosstabRequest
+  /** The saved cross-tabulation being edited, updated rather than duplicated. */
+  editing?: Chart
 }) {
   const toast = useToast()
-  const [name, setName] = useState('')
+  const [name, setName] = useState(editing?.name ?? '')
 
   const save = useMutation({
-    mutationFn: () =>
-      api.post('/dashboards/charts', {
-        name: name || `${request.row_variable} by ${request.column_variable}`,
+    mutationFn: () => {
+      const body = {
+        name: name || editing?.name || `${request.row_variable} by ${request.column_variable}`,
         dataset_id: datasetId,
         chart_type: 'crosstab',
         // A crosstab spec holds the request rather than a query, and the server
         // branches on that when rendering.
         spec: { crosstab: request },
-      }),
+      }
+      return editing
+        ? api.patch(`/dashboards/charts/${editing.id}`, body)
+        : api.post('/dashboards/charts', body)
+    },
     onSuccess: () => {
-      toast.push('Cross-tabulation saved; add it to a dashboard', 'success')
-      setName('')
+      toast.push(
+        editing ? 'Cross-tabulation updated' : 'Cross-tabulation saved; add it to a dashboard',
+        'success',
+      )
+      if (!editing) setName('')
       onClose()
     },
     onError: (error: Error) => toast.push(error.message, 'error'),
