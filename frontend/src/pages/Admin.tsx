@@ -376,7 +376,7 @@ function ApiKeys() {
       subtitle="For scripts and integrations. Send as the X-API-Key header."
     >
       {created && (
-        <div className="mb-4 rounded-lg border border-emerald-200 bg-emerald-50 p-3">
+        <div className="mb-4 rounded-card border border-emerald-200 bg-emerald-50 p-3">
           <p className="text-sm font-medium text-emerald-900">
             Copy this key now. It is not shown again.
           </p>

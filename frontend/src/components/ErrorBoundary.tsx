@@ -35,7 +35,7 @@ export default class ErrorBoundary extends Component<Props, State> {
   render() {
     if (!this.state.error) return this.props.children
     return (
-      <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+      <div className="rounded-card border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-900">
         <p className="font-medium">Could not show {this.props.what ?? 'this panel'}</p>
         <p className="mt-1 text-xs text-amber-800">{this.state.error.message}</p>
         <button

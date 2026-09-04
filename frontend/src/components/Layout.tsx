@@ -31,13 +31,16 @@ export default function Layout() {
   })
 
   return (
-    <div className="flex min-h-screen bg-ink-50">
-      <aside className="hidden w-56 shrink-0 flex-col border-r border-ink-200 bg-white lg:flex">
-        <div className="flex h-14 items-center gap-2 border-b border-ink-200 px-5">
-          <span className="grid h-7 w-7 place-items-center rounded-md bg-brand-600 text-sm font-bold text-white">
+    <div className="flex min-h-screen bg-ink-100">
+      {/* The one dark surface in the interface, as it is in Redash: the
+          navigation is furniture, and keeping it out of the paper-white
+          working area is what makes a dashboard read as the content. */}
+      <aside className="hidden w-56 shrink-0 flex-col bg-sidebar lg:flex">
+        <div className="flex h-14 items-center gap-2 px-5">
+          <span className="grid h-7 w-7 place-items-center rounded-control bg-brand-500 text-sm font-bold text-white">
             S
           </span>
-          <span className="text-[15px] font-semibold text-ink-900">SurveyHQ</span>
+          <span className="text-[15px] font-semibold text-white">SurveyHQ</span>
         </div>
         <nav className="flex-1 space-y-0.5 overflow-y-auto p-3">
           {NAV.map((item) => (
@@ -46,10 +49,10 @@ export default function Layout() {
               to={item.to}
               end={item.end}
               className={({ isActive }) =>
-                `flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                `flex items-center gap-2.5 rounded-control px-3 py-2 text-[13px] transition-colors ${
                   isActive
-                    ? 'bg-brand-50 text-brand-700'
-                    : 'text-ink-600 hover:bg-ink-100 hover:text-ink-900'
+                    ? 'bg-sidebar-active text-white'
+                    : 'text-sidebar-text hover:bg-sidebar-active hover:text-white'
                 }`
               }
             >
@@ -63,10 +66,10 @@ export default function Layout() {
             <NavLink
               to="/admin"
               className={({ isActive }) =>
-                `flex items-center gap-2.5 rounded-lg px-3 py-2 text-sm font-medium transition-colors ${
+                `flex items-center gap-2.5 rounded-control px-3 py-2 text-[13px] transition-colors ${
                   isActive
-                    ? 'bg-brand-50 text-brand-700'
-                    : 'text-ink-600 hover:bg-ink-100 hover:text-ink-900'
+                    ? 'bg-sidebar-active text-white'
+                    : 'text-sidebar-text hover:bg-sidebar-active hover:text-white'
                 }`
               }
             >
@@ -77,7 +80,7 @@ export default function Layout() {
             </NavLink>
           )}
         </nav>
-        <div className="border-t border-ink-200 p-3 text-xs text-ink-400">SurveyHQ v1.0</div>
+        <div className="p-3 text-xs text-sidebar-text/60">SurveyHQ v1.0</div>
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -105,11 +108,11 @@ export default function Layout() {
                 )}
               </button>
               {notificationsOpen && (
-                <div className="absolute right-0 top-10 z-40 w-80 rounded-xl border border-ink-200 bg-white shadow-pop">
+                <div className="absolute right-0 top-10 z-40 w-80 rounded-card border border-ink-200 bg-white shadow-pop">
                   <div className="flex items-center justify-between border-b border-ink-200 px-4 py-2.5">
                     <span className="text-sm font-semibold">Notifications</span>
                     <button
-                      className="text-xs text-brand-600 hover:underline"
+                      className="text-xs text-brand-500 hover:underline"
                       onClick={async () => {
                         await api.post('/system/notifications/read-all')
                         setNotificationsOpen(false)
@@ -171,7 +174,7 @@ export default function Layout() {
                 end={item.end}
                 onClick={() => setMenuOpen(false)}
                 className={({ isActive }) =>
-                  `block rounded-lg px-3 py-2 text-sm ${
+                  `block rounded-card px-3 py-2 text-sm ${
                     isActive ? 'bg-brand-50 text-brand-700' : 'text-ink-700'
                   }`
                 }

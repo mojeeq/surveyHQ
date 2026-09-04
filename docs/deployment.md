@@ -15,6 +15,11 @@ Disk depends on your data. A survey with 100,000 interviews and 500 variables
 stores as roughly 100–200 MB of Parquet, because Parquet is columnar and
 compressed. Budget for keeping several rounds.
 
+Three other things share that volume: the uploads as received, the last five
+export archives per connection (tens of megabytes each), and dashboard
+background images (8 MB each at most). The archives prune themselves as new runs
+land; nothing else does.
+
 ## Install
 
 ```bash
@@ -37,8 +42,8 @@ Everything lives in `.env`. Values worth attention:
 | `PUBLIC_URL` | The URL people use. Appears in alert emails. |
 | `CORS_ORIGINS` | Comma separated. Must include your real domain in production. |
 | `WEB_PORT` | Host port for the web interface. Default 8080. |
-| `MAX_UPLOAD_MB` | Upload ceiling. Raise `client_max_body_size` in `frontend/nginx.conf` to match if you go above 1 GB. |
-| `SYNC_TICK_MINUTES` | How often the scheduler checks for due imports. |
+| `MAX_UPLOAD_MB` | The upload ceiling, and the only one: nginx no longer enforces a second. An upload over it is refused with a message naming the size and the limit, before the body is transferred. |
+| `SYNC_TICK_MINUTES` | How often the scheduler checks for due imports. A connection set to import at a time of day cannot be honoured more precisely than this. |
 | `MONITOR_TICK_MINUTES` | How often indicators, alerts and checks are evaluated. |
 
 After editing `.env`:
@@ -135,8 +140,9 @@ make backup                                   # ./backups/surveyhq-<timestamp>.t
 make restore FILE=backups/surveyhq-....tar.gz
 ```
 
-Each archive holds the database dump, all Parquet datasets, and a copy of
-`.env` (which carries `ENCRYPTION_KEY`). Treat archives as secrets.
+Each archive holds the database dump, everything on the data volume — Parquet
+datasets, uploads, kept export archives and dashboard backgrounds — and a copy
+of `.env` (which carries `ENCRYPTION_KEY`). Treat archives as secrets.
 
 Nightly at 02:00, keeping the 14 most recent:
 
@@ -213,6 +219,12 @@ docker compose logs api --tail=50
 curl localhost:8080/health
 ```
 
+**A large upload never finishes**
+
+Uploads over 48 MB are imported by the worker, so the file is transferred, a
+job is created, and nothing happens if the worker is not running. The job says
+so under **Administration → Background jobs**.
+
 **Imports stay queued forever**
 
 The worker or Redis is down.
@@ -235,7 +247,10 @@ docker system prune -a          # removes unused images (not your volumes)
 ```
 
 Datasets live in the `survey-data` volume; deleting a dataset in the interface
-removes its files.
+removes its files, and deleting a project with its contents removes all of
+theirs. Kept export archives (`sync-archives/`) are the usual surprise on a
+server with several busy connections; the five most recent per connection are
+kept and the rest are deleted as new runs land.
 
 **Reset the administrator password**
 

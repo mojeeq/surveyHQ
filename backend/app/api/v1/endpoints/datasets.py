@@ -7,7 +7,18 @@ from pathlib import Path
 from typing import Annotated, Any
 from uuid import uuid4
 
-from fastapi import APIRouter, File, Form, HTTPException, Query, UploadFile
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
+from fastapi.responses import FileResponse
 from sqlalchemy import func, or_, select
 
 from app.api.deps import (
@@ -19,8 +30,18 @@ from app.api.deps import (
 )
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.models import Dataset, DatasetSource, DatasetStatus, Role, Variable
+from app.models import (
+    Dataset,
+    DatasetSource,
+    DatasetStatus,
+    Job,
+    JobStatus,
+    JobType,
+    Role,
+    Variable,
+)
 from app.schemas.common import Message, Page
+from app.schemas.monitoring import JobOut
 from app.schemas.dataset import (
     ArchiveImportOut,
     BulkDeleteRequest,
@@ -43,6 +64,8 @@ from app.services.datasets import (
     load_file_into_dataset,
 )
 from app.services.derived import propagate_labels, rebuild_dependents
+from app.services.download import FORMATS as DOWNLOAD_FORMATS
+from app.services.download import download_file, temp_directory
 from app.services.ingest import SUPPORTED_EXTENSIONS, IngestError
 from app.services.projects import can_edit, can_view, restrict, scope_for
 from app.services.query_engine import (
@@ -97,8 +120,83 @@ def list_datasets(
     return Page(items=items, total=total, limit=limit, offset=offset)
 
 
-@router.post("/upload", response_model=DatasetDetail | ArchiveImportOut, status_code=201)
+def _queue_import(
+    db: DbSession,
+    *,
+    user: Any,
+    dataset: Dataset | None,
+    upload_path: Path,
+    filename: str,
+    written: int,
+    project_id: str | None,
+    combine_all: bool,
+    name_prefix: str,
+    mode: str,
+) -> Job:
+    """Hand a large upload to the worker and answer with the job watching it."""
+    job = Job(
+        job_type=JobType.ingest,
+        status=JobStatus.queued,
+        title=f"Import {filename}",
+        params={
+            "upload_path": str(upload_path),
+            "filename": filename,
+            "dataset_id": dataset.id if dataset else "",
+            "project_id": project_id or "",
+            "combine_all": combine_all,
+            "name_prefix": name_prefix,
+            "mode": mode,
+            "bytes": written,
+        },
+        created_by=user.id,
+    )
+    db.add(job)
+    record(
+        db,
+        user=user,
+        action="upload_dataset",
+        entity_type="dataset",
+        entity_id=dataset.id if dataset else None,
+        detail={"filename": filename, "queued": True, "bytes": written},
+    )
+    db.commit()
+    db.refresh(job)
+
+    from app.workers.tasks import run_upload_import
+
+    try:
+        async_result = run_upload_import.delay(job.id)
+        job.celery_task_id = async_result.id
+        db.commit()
+        db.refresh(job)
+    except Exception as exc:  # noqa: BLE001 - broker unreachable
+        logger.error("Could not queue import job %s: %s", job.id, exc)
+        job.status = JobStatus.failed
+        job.error = (
+            "The background worker could not be reached. Check that the worker "
+            "and Redis containers are running."
+        )
+        db.commit()
+        db.refresh(job)
+    return job
+
+
+# Above this, an upload is imported by the worker rather than in the request.
+# A census roster export is hundreds of megabytes and takes minutes to read,
+# which is longer than any proxy in front of this will hold a request open -
+# and reading it in the API process starves everyone else's requests of memory
+# while it happens. The worker has neither problem, and the browser watches the
+# job instead of watching a socket.
+INLINE_IMPORT_LIMIT = 48 * 1024 * 1024
+
+
+@router.post(
+    "/upload",
+    response_model=DatasetDetail | ArchiveImportOut | JobOut,
+    status_code=201,
+)
 async def upload_dataset(
+    request: Request,
     db: DbSession,
     user: RequireManager,
     file: Annotated[UploadFile, File(description="Stata, SPSS, CSV, tab or Excel file")],
@@ -108,7 +206,7 @@ async def upload_dataset(
     combine_all: Annotated[bool, Form()] = False,
     project_id: Annotated[str, Form()] = "",
     mode: Annotated[str, Form()] = "replace",
-) -> DatasetDetail | ArchiveImportOut:
+) -> DatasetDetail | ArchiveImportOut | JobOut:
     """Upload a data file, or an export archive, and ingest it immediately.
 
     A single file becomes one dataset. An archive becomes one dataset per file
@@ -147,6 +245,23 @@ async def upload_dataset(
             status_code=422, detail="mode must be 'replace' or 'append'"
         )
 
+    max_bytes = settings.max_upload_mb * 1024 * 1024
+    # Refused from the declared length, before a byte of it is stored. The old
+    # order - store, count, refuse - meant the whole file was uploaded and
+    # written to disk first, and a proxy that had already forwarded a body no
+    # longer being read reported it as a bad gateway rather than as the size
+    # limit it was.
+    declared = request.headers.get("content-length")
+    if declared and declared.isdigit() and int(declared) > max_bytes + 1024 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"This upload is {int(declared) / (1024 * 1024):,.0f} MB and the "
+                f"limit is {settings.max_upload_mb} MB. Raise MAX_UPLOAD_MB in "
+                ".env and restart, or upload the archive's files separately."
+            ),
+        )
+
     settings.ensure_directories()
     archive = suffix == ".zip"
     # An archive creates its own datasets, one per member file, so there is no
@@ -168,7 +283,6 @@ async def upload_dataset(
     )
 
     upload_path = settings.uploads_path / f"{dataset.id if dataset else uuid4().hex}{suffix}"
-    max_bytes = settings.max_upload_mb * 1024 * 1024
     written = 0
     try:
         with open(upload_path, "wb") as handle:
@@ -186,6 +300,20 @@ async def upload_dataset(
         raise
     finally:
         await file.close()
+
+    if written > INLINE_IMPORT_LIMIT:
+        return _queue_import(
+            db,
+            user=user,
+            dataset=dataset,
+            upload_path=upload_path,
+            filename=filename,
+            written=written,
+            project_id=project_id or None,
+            combine_all=combine_all,
+            name_prefix=name.strip(),
+            mode=mode,
+        )
 
     try:
         if archive:
@@ -427,6 +555,53 @@ async def append_to_dataset(
     db.commit()
     db.refresh(dataset)
     return DatasetDetail.model_validate(dataset)
+
+
+@router.get("/{dataset_id}/download")
+def download_dataset(
+    dataset_id: str,
+    background: BackgroundTasks,
+    db: DbSession,
+    user: RequireManager,
+    format: str = Query(default="csv", pattern="^(csv|xlsx|dta)$"),
+) -> Response:
+    """The whole dataset as a file: CSV, Excel or Stata.
+
+    Written from the Parquet the platform queries, not from whatever was
+    uploaded, so a merged dataset - which never had a file of its own - comes
+    back like any other, and what you get is what the charts are reading.
+
+    Stata carries the labels: the variable labels and, where the codes are
+    whole numbers, the value labels. That is the reason to prefer it to CSV.
+    """
+    dataset = get_ready_dataset(dataset_id, db, user)
+    directory = temp_directory()
+    try:
+        path = download_file(dataset, format, directory)
+    except QueryError as exc:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
+    # Deleted once the response has been sent, not before: the file is the
+    # response body.
+    background.add_task(shutil.rmtree, directory, ignore_errors=True)
+    record(
+        db,
+        user=user,
+        action="download_dataset",
+        entity_type="dataset",
+        entity_id=dataset.id,
+        detail={"format": format, "rows": dataset.row_count},
+    )
+    db.commit()
+    return FileResponse(
+        path,
+        media_type=DOWNLOAD_FORMATS[format][1],
+        filename=path.name,
+        background=background,
+    )
 
 
 @router.get("/{dataset_id}/variables", response_model=list[VariableOut])

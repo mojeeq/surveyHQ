@@ -30,7 +30,7 @@ export default function Login() {
     <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-ink-100 via-ink-50 to-brand-50 p-4">
       <div className="w-full max-w-sm">
         <div className="mb-6 text-center">
-          <span className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-xl bg-brand-600 text-xl font-bold text-white">
+          <span className="mx-auto mb-3 grid h-12 w-12 place-items-center rounded-card bg-brand-600 text-xl font-bold text-white">
             S
           </span>
           <h1 className="text-xl font-semibold text-ink-900">SurveyHQ</h1>
@@ -39,7 +39,7 @@ export default function Login() {
 
         <form onSubmit={submit} className="card p-6">
           {error && (
-            <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+            <div className="mb-4 rounded-card border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
               {error}
             </div>
           )}

@@ -37,7 +37,7 @@ export default function DashboardFilters({
   if (!controls.length) return null
 
   return (
-    <div className="mb-4 flex flex-wrap items-end gap-3 rounded-lg border border-ink-200 bg-white px-4 py-3">
+    <div className="mb-4 flex flex-wrap items-end gap-3 rounded-card border border-ink-200 bg-white px-4 py-3">
       {controls.map((control) => (
         <FilterControlInput
           key={`${control.dataset_id}:${control.variable}`}

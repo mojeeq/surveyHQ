@@ -374,6 +374,116 @@ def run_all_quality_checks() -> dict[str, Any]:
     return {"passed": passed, "failed": failed}
 
 
+@celery_app.task(name="app.workers.tasks.run_upload_import", bind=True)
+def run_upload_import(self: Any, job_id: str) -> dict[str, Any]:
+    """Import a file somebody uploaded, off the request that carried it.
+
+    A census roster export is hundreds of megabytes: reading it takes longer
+    than any proxy will hold a request open, and reading it in the API process
+    takes memory from every other request. Here it costs the worker a slot and
+    the browser a job to watch.
+    """
+    with session_scope() as db:
+        job = db.get(Job, job_id)
+        if job is None:
+            return {"error": "job not found"}
+        job.status = JobStatus.running
+        job.started_at = utcnow()
+        params = dict(job.params or {})
+        created_by = job.created_by
+
+    upload_path = Path(str(params.get("upload_path") or ""))
+    filename = str(params.get("filename") or upload_path.name)
+    archive = upload_path.suffix.lower() == ".zip"
+    summary: dict[str, Any] = {}
+
+    try:
+        if not upload_path.is_file():
+            raise IngestError("The uploaded file is no longer on the server.")
+        with session_scope() as db:
+            if archive:
+                from app.services import stata
+
+                outcome = load_archive_as_datasets(
+                    db,
+                    archive_path=upload_path,
+                    archive_name=filename,
+                    project_id=str(params.get("project_id") or "") or None,
+                    created_by=created_by,
+                    combine_all=bool(params.get("combine_all")),
+                    name_prefix=str(params.get("name_prefix") or ""),
+                    mode=str(params.get("mode") or "replace"),
+                    after_replace=stata.replay,
+                )
+                rebuilt = rebuild_dependents(db, outcome.replaced_ids)
+                db.flush()
+                warnings = list(outcome.warnings)
+                if rebuilt:
+                    names = [
+                        d.name for d in (db.get(Dataset, i) for i in rebuilt) if d
+                    ]
+                    warnings.append(
+                        "Rebuilt from the new data: " + ", ".join(sorted(names))
+                    )
+                summary = {
+                    "datasets": [
+                        {"id": d.id, "name": d.name, "rows": d.row_count}
+                        for d in outcome.datasets
+                    ],
+                    "created": outcome.created,
+                    "replaced": outcome.replaced,
+                    "appended": outcome.appended,
+                    "skipped": outcome.skipped,
+                    "warnings": sorted(
+                        set(warnings)
+                        | {
+                            w
+                            for d in outcome.datasets
+                            for w in (d.meta or {}).get("warnings", [])
+                        }
+                    ),
+                    "rows": outcome.rows,
+                }
+            else:
+                dataset = db.get(Dataset, str(params.get("dataset_id") or ""))
+                if dataset is None:
+                    raise IngestError("The dataset record for this upload is gone.")
+                load_file_into_dataset(db, dataset, upload_path)
+                db.flush()
+                summary = {
+                    "datasets": [
+                        {
+                            "id": dataset.id,
+                            "name": dataset.name,
+                            "rows": dataset.row_count,
+                        }
+                    ],
+                    "rows": dataset.row_count,
+                    "columns": dataset.column_count,
+                }
+    except (IngestError, OSError, MemoryError) as exc:
+        logger.error("Upload import job %s failed: %s", job_id, exc)
+        with session_scope() as db:
+            job = db.get(Job, job_id)
+            if job:
+                job.status = JobStatus.failed
+                job.finished_at = utcnow()
+                job.progress = 100.0
+                job.error = str(exc) or exc.__class__.__name__
+        return {"error": str(exc)}
+    finally:
+        upload_path.unlink(missing_ok=True)
+
+    with session_scope() as db:
+        job = db.get(Job, job_id)
+        if job:
+            job.status = JobStatus.success
+            job.finished_at = utcnow()
+            job.progress = 100.0
+            job.result = summary
+    return summary
+
+
 @celery_app.task(name="app.workers.tasks.ingest_dataset_file")
 def ingest_dataset_file(dataset_id: str, file_path: str) -> dict[str, Any]:
     """Used for large uploads that are handed off to the worker."""

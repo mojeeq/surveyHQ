@@ -27,6 +27,12 @@ or dashboard and click the project button in its header to move it. Moving needs
 manager rights on *both* projects, so nobody can take a dataset out of a project
 they have no say over.
 
+Monitoring, Data quality and Alerts each have a project filter at the top, so a
+round in the field can be looked at on its own rather than alongside every other
+survey the platform holds. Connections belong to a project too: someone who can
+reach one project sees that project's servers and its imported archives, and
+not anybody else's.
+
 ### Giving someone one project only
 
 This is the point of projects, and it takes two steps:
@@ -46,8 +52,24 @@ A member's role on a project never exceeds their own role. Adding a viewer to a
 project as manager does not make them an editor of anything; membership widens
 what someone can reach, never what they are allowed to do.
 
-Deleting a project does not delete its data. Its datasets and dashboards move
-back to the shared area.
+### Deleting a project
+
+**Delete project** asks what should happen to its contents, because both answers
+are reasonable:
+
+- **Delete, keep the data** dissolves the project and moves its datasets and
+  dashboards to the shared area, where they go on working. A project is an
+  organising idea, and dissolving one need not throw away the data organised by
+  it.
+- **Delete everything** also destroys those datasets and their files, and
+  everything built on them — charts, indicators and their history, quality
+  checks, alert rules and the alerts they raised, relationships, any dataset
+  merged out of them, and this project's dashboards. A round that is finished
+  with is finished with.
+
+The second cannot be undone, so it asks you to type the project's name first.
+Connections are kept either way: a connection is a server and a set of
+credentials, which outlive the project pointed at it.
 
 ## Relating and merging datasets
 
@@ -55,11 +77,22 @@ A Survey Solutions export is several tables, not one. A labour force export
 holds the interview, the household members and the people living abroad, and
 each becomes its own dataset when you upload the archive.
 
-**Projects → (a project) → Relationships → Detect relationships** reads the data
-and proposes the links between them. It reads values, not column names: whether
-a key is unique on each side is what tells one-to-many from many-to-many. It
-also reports the overlap, so you can see that (say) only 18% of interviews have
-someone living abroad — a real link that covers little of the data.
+**Projects → (a project) → Relationships** has three ways to build the model:
+
+- **Detect relationships** reads the data and proposes the links. It reads
+  values, not column names: whether a key is unique on each side is what tells
+  one-to-many from many-to-many. It also reports the overlap, so you can see
+  that (say) only 18% of interviews have someone living abroad — a real link
+  that covers little of the data.
+- **Add by hand** declares one directly: pick the two datasets, the key on each
+  side, and the cardinality. Use it when detection cannot see a link, for
+  instance where the key is spelled differently on the two sides.
+- **Clear relationships** removes the project's links and starts again, either
+  all of them or **only the detected ones**, leaving what you declared or
+  corrected by hand. Detection is a guess, and a wrong guess is easier to clear
+  out than to correct one at a time. Datasets already merged keep their data —
+  they hold their own copy — but can no longer be re-run from a relationship
+  that is gone.
 
 Click a link to correct it. Changing anything marks it as yours, and detecting
 again never reverts it.
@@ -73,9 +106,10 @@ platform says so when it happens.
 Two rosters are many-to-many on the interview, so joining them would multiply
 rows rather than add columns. Those links are recorded but cannot be merged.
 
-The merge is saved with the dataset it produces, so **Rebuild from sources** on
-that dataset re-runs it after a later round arrives. That is the point of saving
-it rather than repeating it by hand.
+The merge is saved with the dataset it produces. **Rebuild from sources** re-runs
+it on demand, and a merged dataset rebuilds itself automatically whenever a
+source is replaced by a newer export or changed by a command — including a merge
+of a merge, which waits for the merge underneath it to finish first.
 
 ## Getting data in
 
@@ -87,23 +121,46 @@ tab-delimited (`.tab`, `.tsv`), Excel, and `.zip` archives of them.
 **An export archive becomes one dataset per file inside it**, because a Survey
 Solutions export holds one file per roster level — the interview, the household
 members, the people abroad — and those are different tables, not different
-rounds.
+rounds. The paradata file comes in with the rest of them.
 
-Upload a later round's archive and each of its files is *appended* to the
-dataset already holding that file name, so September and October meet where they
-belong. A `source_file` column records which archive each row came from, so the
-rounds stay distinguishable.
+Upload a later round's archive and each of its files goes to the dataset already
+holding that file name. **When a dataset already holds that file** is where you
+say what happens next:
+
+- **Replace its data** (the default) swaps that dataset's data and keeps its
+  identity, so every relationship, merge, chart, indicator, quality rule and
+  dashboard widget built on it goes on working. Use it for a fresh export of
+  everything collected so far — which is what a live monitoring tool wants: the
+  variables are the same, only the interviews are newer.
+- **Add its rows to what is there** appends, for an export that contains only
+  what is new. A `source_file` column records which archive each row came from,
+  so the rounds stay distinguishable. Appending a cumulative export counts the
+  same interviews twice.
+
+What survives a replacement, and is put back automatically:
+
+- the dataset's id, so nothing pointing at it breaks,
+- variable and value labels you wrote by hand (the file does not carry them),
+- variables you generated with commands, replayed in the order you ran them,
+- datasets merged out of it, rebuilt from the new data.
 
 Two things it will tell you rather than let pass quietly:
 
-- If an interview appears in both the existing data and the new rows, they are
-  now counted twice. That usually means the export was set to cumulative rather
-  than incremental.
+- On an append, if an interview appears in both the existing data and the new
+  rows, they are now counted twice. That usually means the export was set to
+  cumulative rather than incremental.
 - If a same-named file from a different survey does not share enough columns, it
-  is not appended onto yours; it becomes its own dataset.
+  is not written over yours; it becomes its own dataset.
 
 A file too large to hold in memory is read in chunks automatically. Nothing
 changes for you except that the import reports it.
+
+An upload over 48 MB is handed to the background worker rather than read while
+you wait: the browser says *Importing…* and watches it, and a census roster
+export that takes minutes no longer depends on a connection staying open for
+all of them. An upload over the platform's limit is refused before it is sent,
+with the size and the limit in the message — the limit is `MAX_UPLOAD_MB` on
+the server, and an administrator can raise it.
 
 Stata and SPSS are the best choice because they carry variable labels and value
 labels; those are read and used everywhere in the interface.
@@ -122,9 +179,37 @@ with **Replace data** for an uploaded file. Charts, dashboards, indicators and
 quality checks that point at it keep working, provided variable names have not
 changed.
 
+### Tidying up
+
+The dataset list groups datasets by project, and each group collapses — one
+survey export is eight datasets, and four rounds of it is thirty-two.
+
+Tick several datasets and **Delete selected** removes them in one confirmation,
+or use **Delete all** on a project's group to clear a whole round. Anything the
+merge or a chart depends on goes with it, so read the confirmation.
+
+**Rename** on a dataset gives it a name and a description of your own. An
+archive names each dataset after the file inside it, which is how a project
+ends up holding `R_demographics` and `roster_pp`; those are the names the export
+chose, and this is where they become the names your team uses. Nothing breaks:
+charts, indicators and merges point at the dataset, not at its name.
+
+### Taking a dataset out
+
+**Stata**, **CSV** and **Excel** on a dataset download the whole table. All
+three are written from the data the platform is actually querying, not from
+whatever was uploaded — so a merged dataset, which never had a file of its own,
+downloads like any other, and so does a dataset changed by commands.
+
+Prefer **Stata**: it carries the variable labels and, where the codes are whole
+numbers, the value labels. CSV carries neither. Excel stops at a million rows
+and says so rather than writing a file Excel would refuse to open.
+
+Downloading is a manager's action, and it is recorded in the audit log.
+
 ## Looking at a dataset
 
-The dataset page has four tabs:
+The dataset page has four tabs, and a fifth for managers:
 
 - **Variables** — every variable with its label, type, missing count, distinct
   count and range. Variables missing on more than 20% of records are highlighted.
@@ -135,6 +220,51 @@ The dataset page has four tabs:
 - **Field progress** — submissions over time, interviews per interviewer and
   supervisor, status breakdown, coverage by area and a GPS map. Appears
   automatically when the relevant columns are recognised.
+- **Command** — the Stata-style script box, below. Managers only.
+
+### Naming variables and their codes
+
+An export often arrives with neither name nor labels: a column called `DEM_SEX`
+holding 1 and 2, which a table then prints as "1.0" and "2.0". On the
+**Variables** tab, **Labels** on any row lets you write the variable's label and
+a label for each of its codes.
+
+Nothing about the data changes — only what the platform calls it, everywhere it
+is shown: axis labels, legends, cross-tab headers, filter dropdowns. Labels you
+write are kept on the dataset as well as on the variable, so a newer export
+replacing the file does not wipe them.
+
+### The command box
+
+**Command** runs a Stata-style script against the dataset, one command per
+line, in the order written. The useful subset:
+
+| Command | Example |
+|---|---|
+| `gen` | `gen adult = age >= 18` |
+| `replace` | `replace adult = 0 if age == .` |
+| `egen` | `egen hh_total = total(income), by(interview__key)` |
+| `egen` (rowwise) | `egen answered = rownonmiss(q1 q2 q3)` |
+| `label variable` | `label variable adult "Adult (18+)"` |
+| `label define` / `label values` | `label define yesno 0 "No" 1 "Yes"` then `label values adult yesno` |
+| `rename` | `rename DEM_SEX sex` |
+| `drop` / `keep` | `drop if interview__status != 100` |
+
+`egen` supports `total`, `sum`, `mean`, `count`, `min`, `max`, `median`, `sd`,
+`group` and `tag` down a column (with `by()`), and `rowtotal`, `rowmean`,
+`rowmiss`, `rownonmiss`, `rowmax`, `rowmin` across a row. Comments (`*`, `//`)
+and continuations (`///`) work as in a do-file. Ctrl/⌘+Enter runs the script.
+
+A line that fails stops the script and says which line and why. Everything above
+it has already run, as in a do-file, so it stays — the log tells you what got
+through.
+
+Commands are **recorded on the dataset and replayed** after a newer export
+replaces it. A variable somebody generated is not in the export file, so without
+that it would vanish on exactly the upload this platform is built around, taking
+every chart built on it. The history is listed under the box: **Edit** puts a
+command back in the box, and **Clear** stops the replay without undoing what the
+commands already did.
 
 ## Explore
 
@@ -144,14 +274,17 @@ The dataset page has four tabs:
 
 1. **Group by** one or two variables. Dates offer a grain (day, week, month,
    quarter, year). Numeric variables can be binned by width. The first grouping
-   can keep the top N categories and fold the rest into "Other".
+   can keep the top N categories and fold the rest into "Other". Any variable
+   can be grouped on, `interview__key` included — a variable with a value per
+   row says how many values it has beside its name, and the row limit decides
+   how much comes back.
 2. **Measure**: count, share of total, sum, mean, median, min, max, standard
    deviation, percentiles or distinct count. Add several measures to compare
    them side by side. Any measure can be weighted by a numeric variable — pick
    your survey weight to get weighted estimates.
 3. **Filters**: as many conditions as you like, combined with all/any. Variables
    with value labels offer a dropdown of their labels.
-4. **Display**: chart type and row limit, then **Run query**.
+4. **Display**: how it is drawn, below. Then **Run query**.
 
 Results can be viewed as a chart or a table, exported to CSV or Excel, and saved
 as a chart for use on a dashboard. **Show SQL** reveals the generated query if
@@ -159,6 +292,33 @@ you want to check what was computed.
 
 If you are not sure where to start, **Suggested analyses** proposes charts built
 from the dataset's own variables — one click to run.
+
+#### Display
+
+| Control | What it does |
+|---|---|
+| Chart type | Bar, horizontal bar, stacked bar, horizontal stacked bar, population pyramid, line, area, donut, pie, scatter, heatmap, table |
+| Order | Leave the query's order, or sort by value or by label, ascending or descending |
+| Show only the top | Keep the largest N categories and fold the rest into one "Other" |
+| Value axis title | Name the value axis |
+| Axis from … to | Fix its minimum and maximum, so two charts can be compared |
+| Target line | A line across the plot with a label, e.g. the target this is read against |
+| Print the numbers on the chart | On bars and slices, up to 24 of them. Not offered on lines, where they collide |
+| Stack to 100% | Read composition rather than magnitude, on a stacked bar or area |
+| Smooth the line | Curve a line or area chart |
+| Row limit | How many rows the query returns |
+
+Controls that make no sense for the chart type are not offered, so the panel
+changes as you change the type.
+
+A **population pyramid** wants an age band on the first grouping and sex on the
+second; it draws the two sides back to back. Bands are ordered by the number
+they start with rather than as text, so "5–9" lands between "0–4" and "10–14"
+rather than after "45–49".
+
+Every chart with more than one series carries a legend, and every chart has a
+table toggle exposing the same numbers, because colour alone is never the only
+thing telling two series apart.
 
 ### Cross-tabulation
 
@@ -182,19 +342,74 @@ To build a dashboard:
 
 1. **Dashboards → New dashboard**. Choose the project it belongs to, or leave it
    in the shared area.
-2. **Add widget** — a saved chart, a saved cross-tabulation, an indicator tile,
-   a data quality panel, or a text note.
-3. **Move & resize** — drag widgets around and resize them; the layout saves
-   itself. Removing a widget does not need this: hover over it and use the ✕ in
-   its corner.
-4. **Pages** — **+ Page** adds one; double-click a tab to rename it. Each page
-   lays out on its own, and the tab strip only appears once there are two.
-5. **Colours** — the picker in the header sets which palette this dashboard's
+2. **Add widget** — see the list below.
+3. **Move & resize** — turns on dragging and resizing; the layout saves itself.
+4. **Edit** — hover a widget and use the ✎ to change anything about it: what it
+   shows, its title, its width and height, and which page it sits on. The ✕
+   beside it removes it. Both are there whether or not you are arranging.
+5. **Pages** — **+ Page** adds one; double-click a tab to rename it. Each page
+   lays out on its own and has its own filters.
+6. **Filters** — see below.
+7. **Appearance** — background, canvas and transparency; see below.
+8. **Colours** — the picker in the header sets which palette this dashboard's
    charts use. The alternatives are the same hues in a different order, chosen
    for how far apart neighbouring series stay for colour-blind readers.
-6. **Share link** — generates a read-only public URL, copied to your clipboard.
+9. **Share link** — generates a read-only public URL, copied to your clipboard.
    Anyone with the link can view the dashboard without an account. Press again
    to revoke it.
+
+### The widgets
+
+| Widget | Shows |
+|---|---|
+| **Saved chart or cross-tab** | A chart or a two-way table saved from Explore, re-run against current data |
+| **Indicator tile** | One tracked number with its target, status colour and trend — and optionally its breakdown drawn as a chart beneath |
+| **Data quality panel** | The last result of every check on a dataset, and how old the oldest one is |
+| **Text note** | A heading, an explanation, a caveat |
+| **Countdown to a date** | Time remaining to a deadline, ticking, with your own label and a message for when it passes |
+| **Map of interview locations** | GPS points from a dataset, grouped by coordinate. Click a point for its count or any aggregate, plus the detail columns you chose |
+| **Embedded HTML** | Whatever HTML you paste, rendered in a sandboxed frame — a logo, an embedded video, a link bar |
+| **How recent the data is** | When each dataset was last imported, and how old its newest record is |
+
+The **freshness** widget answers two questions, because a monitoring tool needs
+both. *When did the platform last receive data* says whether the import is
+running. *How recent is the newest record* says whether the field teams are
+still sending anything — an import that runs faithfully every morning and
+collects nothing new looks healthy by the first measure and is exactly what the
+second one catches. It turns amber after 24 hours and red after 72 by default;
+both thresholds are yours to set.
+
+It picks the date variable that says when a record happened — an interview date,
+a submission or sync timestamp — and deliberately ignores dates that are
+answers rather than moments, such as a date of birth. Where a dataset has no
+obvious one, or the wrong one is chosen, name the variable yourself on the
+widget.
+
+### Filters
+
+**Filters** on a dashboard adds controls its readers can use: pick a variable
+and every viewer gets a dropdown of its labels, which narrows every widget
+underneath.
+
+Filters belong to **the page they are on**, so a "Fieldwork" page can filter by
+interviewer while a "Coverage" page filters by district. A control only applies
+to widgets whose dataset actually has that variable; widgets that cannot answer
+it say so rather than quietly ignoring it.
+
+### Appearance
+
+**Appearance** in the header controls how the dashboard is dressed:
+
+- **Background** — a colour, or an uploaded image (PNG, JPEG, GIF or WebP, up to
+  8 MB), set to fill the page, fit whole, or repeat, with a fade slider so text
+  stays readable over it.
+- **Canvas width** — fit the window, or a fixed width that scrolls, for a
+  dashboard meant to go on a wall. **Columns** and **row height** set how fine
+  the grid underneath the widgets is.
+- **Widget transparency** — how much of the background shows through the
+  widgets, from solid to barely there.
+- **Behind the page tabs** — the colour of the tab band, so tabs stay visible
+  when the dashboard background happens to be the same colour as their text.
 
 ## Monitoring
 
@@ -210,7 +425,20 @@ An indicator is one tracked number.
 - a **direction** — with "higher is better", the indicator turns amber at or
   below the warning threshold and red at or below critical; with "lower is
   better" the logic reverses,
-- a **breakdown variable**, so the indicator can be expanded per region or team.
+- a **breakdown variable**, so the indicator can be expanded per region or team,
+- a **percentage**, where the number is a share rather than a count.
+
+**Percentages.** Filters pick the rows the indicator counts; *percent of* says
+what they are a share of. "Of all rows" divides by every row in the dataset
+before the indicator's own filters — that is how "% of interviews completed" is
+expressed. "Of those who answered" divides by the rows that answered the
+measured variable, which is the same question asked of a variable rather than of
+the file.
+
+**✎ on an indicator** edits all of it — the measure, the filters, the target and
+thresholds, the breakdown, even which dataset it reads. A threshold set before
+fieldwork started is a guess, and correcting one should not mean deleting the
+indicator and losing its history.
 
 Indicators recompute on a schedule and store a snapshot each time, which is what
 gives every indicator a trend line.

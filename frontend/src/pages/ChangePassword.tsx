@@ -51,7 +51,7 @@ export default function ChangePassword() {
     <div className="flex min-h-screen items-center justify-center bg-ink-50 p-4">
       <div className="w-full max-w-md">
         <div className="mb-6 flex items-center gap-2">
-          <span className="grid h-8 w-8 place-items-center rounded-md bg-brand-600 text-sm font-bold text-white">
+          <span className="grid h-8 w-8 place-items-center rounded-control bg-brand-600 text-sm font-bold text-white">
             S
           </span>
           <span className="text-lg font-semibold text-ink-900">SurveyHQ</span>
@@ -65,7 +65,7 @@ export default function ChangePassword() {
           </p>
 
           {error && (
-            <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+            <div className="mb-4 rounded-card border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
               {error}
             </div>
           )}

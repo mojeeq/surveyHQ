@@ -1,4 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap');
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
@@ -8,7 +7,16 @@
     -webkit-font-smoothing: antialiased;
   }
   body {
-    @apply bg-ink-50 text-ink-800 font-sans text-[14px] antialiased;
+    @apply bg-ink-100 text-ink-700 font-sans text-[13px] antialiased;
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply text-ink-900;
+  }
+  a {
+    @apply text-link;
   }
   * {
     @apply border-ink-200;
@@ -17,7 +25,7 @@
 
 @layer components {
   .card {
-    @apply bg-white rounded-xl border border-ink-200 shadow-card;
+    @apply bg-white rounded-card border border-ink-200 shadow-card;
   }
   .card-header {
     @apply px-5 py-4 border-b border-ink-200 flex items-center justify-between gap-3;
@@ -26,29 +34,30 @@
     @apply p-5;
   }
   .label {
-    @apply block text-xs font-semibold uppercase tracking-wide text-ink-500 mb-1.5;
+    @apply block text-xs font-medium text-ink-600 mb-1;
   }
   .input {
-    @apply w-full rounded-lg border border-ink-300 bg-white px-3 py-2 text-sm text-ink-900
+    @apply w-full rounded-control border border-ink-200 bg-white px-3 py-1.5 text-[13px] text-ink-700
            placeholder:text-ink-400 focus:border-brand-500 focus:outline-none
-           focus:ring-2 focus:ring-brand-500/20 disabled:bg-ink-100 disabled:text-ink-500;
+           focus:ring-2 focus:ring-brand-500/20 disabled:bg-ink-50 disabled:text-ink-500;
   }
   .btn {
-    @apply inline-flex items-center justify-center gap-2 rounded-lg px-3.5 py-2 text-sm
-           font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed
+    @apply inline-flex items-center justify-center gap-2 rounded-control px-3.5 py-1.5 text-[13px]
+           font-normal transition-colors disabled:opacity-50 disabled:cursor-not-allowed
            focus:outline-none focus:ring-2 focus:ring-offset-1;
   }
   .btn-primary {
-    @apply btn bg-brand-600 text-white hover:bg-brand-700 focus:ring-brand-500;
+    @apply btn bg-brand-500 text-white hover:bg-brand-600 focus:ring-brand-500;
   }
   .btn-secondary {
-    @apply btn bg-white text-ink-700 border border-ink-300 hover:bg-ink-50 focus:ring-ink-400;
+    @apply btn bg-white text-ink-700 border border-ink-200 hover:border-brand-400
+           hover:text-brand-600 focus:ring-ink-400;
   }
   .btn-danger {
     @apply btn bg-red-600 text-white hover:bg-red-700 focus:ring-red-500;
   }
   .btn-ghost {
-    @apply btn text-ink-600 hover:bg-ink-100 focus:ring-ink-300;
+    @apply btn text-ink-600 hover:bg-ink-50 hover:text-brand-600 focus:ring-ink-300;
   }
   .btn-sm {
     @apply px-2.5 py-1.5 text-xs;
@@ -56,15 +65,16 @@
   .table-base {
     @apply w-full text-sm border-collapse;
   }
+  /* Redash's table: a barely-there header wash, tight rows, no shouting. */
   .table-base thead th {
-    @apply bg-ink-100 text-left text-xs font-semibold uppercase tracking-wide
-           text-ink-600 px-3 py-2.5 border-b border-ink-200 whitespace-nowrap;
+    @apply bg-[rgba(102,136,153,0.03)] text-left text-[13px] font-medium
+           text-ink-900 px-2.5 py-[7px] border-b border-ink-200 whitespace-nowrap;
   }
   .table-base tbody td {
-    @apply px-3 py-2 border-b border-ink-100 align-top;
+    @apply px-2.5 py-[7px] border-b border-[#f0f0f0] align-top;
   }
   .table-base tbody tr:hover {
-    @apply bg-brand-50/40;
+    @apply bg-[rgba(102,136,153,0.05)];
   }
   .chip {
     @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium;
@@ -73,7 +83,7 @@
 
 /* react-grid-layout visuals */
 .react-grid-item.react-grid-placeholder {
-  @apply bg-brand-400/30 rounded-xl;
+  @apply bg-brand-400/30 rounded-card;
 }
 .react-grid-item > .react-resizable-handle {
   @apply opacity-0 transition-opacity;

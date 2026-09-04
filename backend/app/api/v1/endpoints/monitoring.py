@@ -55,6 +55,7 @@ from app.services.monitoring import (
 )
 from app.services.projects import (
     alert_rule_clause,
+    can_view,
     dataset_clause,
     in_project_clause,
     restrict,
@@ -126,6 +127,10 @@ def update_indicator(
 ) -> Indicator:
     indicator = _get_indicator(indicator_id, db, user)
     data = payload.model_dump(exclude_unset=True)
+    if data.get("dataset_id") and data["dataset_id"] != indicator.dataset_id:
+        # Moving it onto another dataset is a read of that dataset and a write
+        # into whatever project holds it, so both ends are checked.
+        get_dataset(data["dataset_id"], db, user)
     if "spec" in data and data["spec"] is not None:
         data["spec"] = payload.spec.model_dump(mode="json") if payload.spec else {}
     for field, value in data.items():
@@ -250,6 +255,49 @@ def _get_indicator(indicator_id: str, db: DbSession, user: User) -> Indicator:
 # --- alerts ----------------------------------------------------------------
 
 
+def _get_alert_rule(rule_id: str, db: DbSession, user: User) -> AlertRule:
+    """An alert rule the caller may reach, by way of what it watches.
+
+    A rule hangs off an indicator, or off a dataset directly, or off neither -
+    and each of those decides its project. Filtering the listing is not enough:
+    every route below takes an id, so without this a rule watching another
+    project's indicator stays readable, editable and deletable by anyone who
+    knows its id.
+    """
+    rule = db.get(AlertRule, rule_id)
+    if rule is None:
+        raise HTTPException(status_code=404, detail="Alert rule not found")
+    if rule.indicator_id:
+        indicator = db.get(Indicator, rule.indicator_id)
+        if indicator is not None:
+            get_dataset(indicator.dataset_id, db, user)
+            return rule
+    if rule.dataset_id:
+        get_dataset(rule.dataset_id, db, user)
+        return rule
+    # Tied to nothing in particular: a global rule, which lives in the shared
+    # area and follows the same rule as an unassigned dataset.
+    if not can_view(db, user, None):
+        raise HTTPException(status_code=404, detail="Alert rule not found")
+    return rule
+
+
+def _get_alert(alert_id: str, db: DbSession, user: User) -> Alert:
+    """An alert the caller may reach, by way of the rule that raised it."""
+    alert = db.get(Alert, alert_id)
+    if alert is None:
+        raise HTTPException(status_code=404, detail="Alert not found")
+    if alert.rule_id:
+        try:
+            _get_alert_rule(alert.rule_id, db, user)
+        except HTTPException:
+            # Say what the caller can verify: the alert is not theirs to see.
+            raise HTTPException(status_code=404, detail="Alert not found") from None
+    elif not can_view(db, user, None):
+        raise HTTPException(status_code=404, detail="Alert not found")
+    return alert
+
+
 @router.get("/alert-rules", response_model=list[AlertRuleOut])
 def list_alert_rules(
     db: DbSession, user: CurrentUser, project_id: str | None = None
@@ -287,6 +335,8 @@ def create_alert_rule(
 ) -> AlertRule:
     if payload.indicator_id:
         _get_indicator(payload.indicator_id, db, user)
+    if payload.dataset_id:
+        get_dataset(payload.dataset_id, db, user)
     rule = AlertRule(**payload.model_dump())
     db.add(rule)
     record(db, user=user, action="create_alert_rule", entity_type="alert_rule")
@@ -297,12 +347,17 @@ def create_alert_rule(
 
 @router.patch("/alert-rules/{rule_id}", response_model=AlertRuleOut)
 def update_alert_rule(
-    rule_id: str, payload: AlertRuleUpdate, db: DbSession, _: RequireManager
+    rule_id: str, payload: AlertRuleUpdate, db: DbSession, user: RequireManager
 ) -> AlertRule:
-    rule = db.get(AlertRule, rule_id)
-    if rule is None:
-        raise HTTPException(status_code=404, detail="Alert rule not found")
-    for field, value in payload.model_dump(exclude_unset=True).items():
+    rule = _get_alert_rule(rule_id, db, user)
+    changes = payload.model_dump(exclude_unset=True)
+    # Moving a rule onto another project's indicator or dataset is a write to
+    # that project, so it is checked against the destination as well.
+    if changes.get("indicator_id"):
+        _get_indicator(changes["indicator_id"], db, user)
+    if changes.get("dataset_id"):
+        get_dataset(changes["dataset_id"], db, user)
+    for field, value in changes.items():
         setattr(rule, field, value)
     db.commit()
     db.refresh(rule)
@@ -310,21 +365,17 @@ def update_alert_rule(
 
 
 @router.delete("/alert-rules/{rule_id}", response_model=Message)
-def delete_alert_rule(rule_id: str, db: DbSession, _: RequireManager) -> Message:
-    rule = db.get(AlertRule, rule_id)
-    if rule is None:
-        raise HTTPException(status_code=404, detail="Alert rule not found")
+def delete_alert_rule(rule_id: str, db: DbSession, user: RequireManager) -> Message:
+    rule = _get_alert_rule(rule_id, db, user)
     db.delete(rule)
     db.commit()
     return Message(detail="Alert rule deleted")
 
 
 @router.post("/alert-rules/{rule_id}/test", response_model=dict)
-def test_alert_rule(rule_id: str, db: DbSession, _: RequireManager) -> dict[str, Any]:
+def test_alert_rule(rule_id: str, db: DbSession, user: RequireManager) -> dict[str, Any]:
     """Evaluate a rule right now without waiting for the scheduler."""
-    rule = db.get(AlertRule, rule_id)
-    if rule is None:
-        raise HTTPException(status_code=404, detail="Alert rule not found")
+    rule = _get_alert_rule(rule_id, db, user)
     if rule.indicator_id:
         indicator = db.get(Indicator, rule.indicator_id)
         if indicator:
@@ -367,9 +418,7 @@ def list_alerts(
 
 @router.post("/alerts/{alert_id}/acknowledge", response_model=AlertOut)
 def acknowledge_alert(alert_id: str, db: DbSession, user: CurrentUser) -> Alert:
-    alert = db.get(Alert, alert_id)
-    if alert is None:
-        raise HTTPException(status_code=404, detail="Alert not found")
+    alert = _get_alert(alert_id, db, user)
     alert.status = AlertStatus.acknowledged
     alert.acknowledged_at = utcnow()
     alert.acknowledged_by = user.id
@@ -379,10 +428,8 @@ def acknowledge_alert(alert_id: str, db: DbSession, user: CurrentUser) -> Alert:
 
 
 @router.post("/alerts/{alert_id}/resolve", response_model=AlertOut)
-def resolve_alert(alert_id: str, db: DbSession, _: CurrentUser) -> Alert:
-    alert = db.get(Alert, alert_id)
-    if alert is None:
-        raise HTTPException(status_code=404, detail="Alert not found")
+def resolve_alert(alert_id: str, db: DbSession, user: CurrentUser) -> Alert:
+    alert = _get_alert(alert_id, db, user)
     alert.status = AlertStatus.resolved
     alert.resolved_at = utcnow()
     db.commit()

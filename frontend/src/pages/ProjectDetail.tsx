@@ -633,7 +633,7 @@ function RelationshipsTab({
           )}
 
           {selected && (
-            <div className="mt-4 rounded-lg border border-brand-200 bg-brand-50 p-4">
+            <div className="mt-4 rounded-card border border-brand-200 bg-brand-50 p-4">
               <p className="text-sm font-medium text-ink-900">
                 {selected.left_name} → {selected.right_name}
               </p>
@@ -826,7 +826,7 @@ function MergeModal({
             : 'None selected means every column.'
         }
       >
-        <div className="max-h-52 overflow-auto rounded-lg border border-ink-200 p-2">
+        <div className="max-h-52 overflow-auto rounded-card border border-ink-200 p-2">
           {available.map((variable) => (
             <label
               key={variable.name}

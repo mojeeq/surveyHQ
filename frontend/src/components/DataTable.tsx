@@ -17,7 +17,7 @@ export default function DataTable({
 }) {
   if (!rows.length) return <EmptyState icon="◌" title={emptyLabel} />
   return (
-    <div className="overflow-auto rounded-lg border border-ink-200" style={{ maxHeight }}>
+    <div className="overflow-auto rounded-card border border-ink-200" style={{ maxHeight }}>
       <table className="table-base">
         <thead className="sticky top-0 z-10">
           <tr>

@@ -19,6 +19,7 @@ import type {
   Project,
   QueryResult,
   QuerySpec,
+  Variable,
 } from '@/lib/types'
 import ChartCard from '@/components/ChartCard'
 import type { BuildOptions } from '@/lib/charts'
@@ -65,6 +66,17 @@ const CHART_TYPES: { value: ChartType; label: string }[] = [
   { value: 'table', label: 'Table' },
 ]
 
+/** How a variable reads in a picker.
+ *
+ *  A variable with a value per row will tabulate to as many rows as the limit
+ *  allows, which is fine when it is what you asked for and a surprise when it
+ *  is not. Saying how many distinct values it holds is the difference.
+ */
+function optionLabel(v: Variable): string {
+  const named = v.label ? `${v.name} — ${v.label}` : v.name
+  return v.n_unique > 200 ? `${named} (${formatNumber(v.n_unique)} values)` : named
+}
+
 export default function Explore() {
   const [params, setParams] = useSearchParams()
   const toast = useToast()
@@ -109,10 +121,12 @@ export default function Explore() {
   })
 
   const variables = dataset.data?.variables ?? []
-  const groupable = useMemo(
-    () => variables.filter((v) => v.var_type !== 'text' || v.n_unique <= 200),
-    [variables],
-  )
+  // Every variable can be grouped on, including the ones with a value per row.
+  // Hiding them was meant to keep a 20,000-row tabulation out of the way, but
+  // it hid interview__key - and "one row per interview, with these columns" is
+  // a thing people legitimately want to tabulate. The count travels with the
+  // name instead, and the row limit still decides how much comes back.
+  const groupable = useMemo(() => variables.filter((v) => !v.is_hidden), [variables])
   const numeric = useMemo(() => variables.filter((v) => v.var_type === 'numeric'), [variables])
 
   if (datasets.isLoading) return <Loading />
@@ -286,7 +300,7 @@ function AggregateBuilder({
           {dimensions.map((dimension, index) => {
             const variable = allVariables.find((v) => v.name === dimension.variable)
             return (
-              <div key={index} className="mb-3 rounded-lg border border-ink-200 p-3">
+              <div key={index} className="mb-3 rounded-card border border-ink-200 p-3">
                 <div className="flex items-center gap-2">
                   <select
                     className="input flex-1 py-1.5 text-xs"
@@ -301,7 +315,7 @@ function AggregateBuilder({
                   >
                     {groupable.map((v) => (
                       <option key={v.name} value={v.name}>
-                        {v.label ? `${v.name} — ${v.label}` : v.name}
+                        {optionLabel(v)}
                       </option>
                     ))}
                   </select>
@@ -385,7 +399,7 @@ function AggregateBuilder({
           {measures.map((measure, index) => {
             const definition = AGGREGATIONS.find((a) => a.value === measure.agg)
             return (
-              <div key={index} className="mb-3 space-y-2 rounded-lg border border-ink-200 p-3">
+              <div key={index} className="mb-3 space-y-2 rounded-card border border-ink-200 p-3">
                 <div className="flex items-center gap-2">
                   <select
                     className="input flex-1 py-1.5 text-xs"
@@ -442,7 +456,7 @@ function AggregateBuilder({
                   >
                     {numeric.map((v) => (
                       <option key={v.name} value={v.name}>
-                        {v.label ? `${v.name} — ${v.label}` : v.name}
+                        {optionLabel(v)}
                       </option>
                     ))}
                   </select>
@@ -741,7 +755,7 @@ function AggregateBuilder({
               )}
               <ChartCard result={result} chartType={chartType} height={420} display={display} />
               {showSql && (
-                <pre className="mt-4 overflow-x-auto rounded-lg bg-ink-900 p-3 text-xs text-ink-100">
+                <pre className="mt-4 overflow-x-auto rounded-card bg-ink-900 p-3 text-xs text-ink-100">
                   {result.sql}
                 </pre>
               )}
@@ -889,7 +903,7 @@ function CrosstabBuilder({
             >
               {groupable.map((v) => (
                 <option key={v.name} value={v.name}>
-                  {v.label ? `${v.name} — ${v.label}` : v.name}
+                  {optionLabel(v)}
                 </option>
               ))}
             </select>
@@ -902,7 +916,7 @@ function CrosstabBuilder({
             >
               {groupable.map((v) => (
                 <option key={v.name} value={v.name}>
-                  {v.label ? `${v.name} — ${v.label}` : v.name}
+                  {optionLabel(v)}
                 </option>
               ))}
             </select>

@@ -110,7 +110,7 @@ export default function Alerts() {
                 <button
                   key={option.value}
                   onClick={() => setStatusFilter(option.value)}
-                  className={`rounded-lg px-3 py-1.5 text-xs font-medium ${
+                  className={`rounded-card px-3 py-1.5 text-xs font-medium ${
                     statusFilter === option.value
                       ? 'bg-ink-800 text-white'
                       : 'bg-white text-ink-600 hover:bg-ink-100'

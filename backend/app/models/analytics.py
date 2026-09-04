@@ -114,9 +114,10 @@ class Dashboard(UUIDMixin, TimestampMixin, Base):
         String(40), default="default", server_default=text("'default'")
     )
     # How the dashboard is dressed: {"background_color": "#0f172a",
-    # "background_image": "<file>", "background_fit": "cover", "dim": 0.3}. A
-    # dict rather than columns because it is presentation, changes often, and
-    # nothing queries it.
+    # "background_image": "<file>", "background_fit": "cover", "fade": 0.3,
+    # "canvas_width": 2000, "columns": 12, "row_height": 74,
+    # "widget_opacity": 0.6, "tab_background": "#ffffff"}. A dict rather than
+    # columns because it is presentation, changes often, and nothing queries it.
     appearance: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'"))
     is_public: Mapped[bool] = mapped_column(Boolean, default=False)
     public_token: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)

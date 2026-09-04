@@ -363,7 +363,7 @@ function ConnectionModal({
     >
       {testResult && (
         <div
-          className={`mb-4 rounded-lg border px-3 py-2 text-sm ${
+          className={`mb-4 rounded-card border px-3 py-2 text-sm ${
             testResult.ok
               ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
               : 'border-red-200 bg-red-50 text-red-800'
@@ -653,7 +653,7 @@ function ImportModal({ connection, onClose }: { connection: Connection; onClose:
             {questionnaires.data.map((questionnaire) => (
               <label
                 key={questionnaire.identity}
-                className="flex cursor-pointer items-center gap-3 rounded-lg border border-ink-200 px-3 py-2.5 hover:bg-ink-50"
+                className="flex cursor-pointer items-center gap-3 rounded-card border border-ink-200 px-3 py-2.5 hover:bg-ink-50"
               >
                 <input
                   type="checkbox"

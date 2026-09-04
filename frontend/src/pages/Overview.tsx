@@ -197,7 +197,7 @@ function IndicatorTile({ indicator }: { indicator: IndicatorValue }) {
   const state = STATE_TONE[indicator.status] ?? STATE_TONE.unknown
   const progress = indicator.progress_percent
   return (
-    <div className="rounded-lg border border-ink-200 p-4">
+    <div className="rounded-card border border-ink-200 p-4">
       <div className="flex items-start justify-between gap-2">
         <p className="text-sm font-medium text-ink-700">{indicator.name}</p>
         <Badge tone={state.tone} icon={state.icon}>
