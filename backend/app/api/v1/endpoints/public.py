@@ -4,16 +4,39 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import select
 
-from app.api.deps import DbSession
-from app.api.v1.endpoints.dashboards import _render_widgets, background_response
+from app.api.deps import DbSession, client_ip
+from app.api.v1.endpoints.dashboards import (
+    _render_widgets,
+    background_response,
+    restrict_to_visible,
+    visible_variables,
+)
+from app.core.rate_limit import enforce
 from app.models import Dashboard
 from app.schemas.analytics import DashboardDetail
 from app.schemas.query import FilterGroup
 
-router = APIRouter()
+# The only unauthenticated routes in the platform, and the expensive one among
+# them scans a Parquet file per widget. A dashboard opening costs a handful of
+# calls and then one per refresh, so this is far above what viewing needs -
+# including a whole office behind one address - and far below what it takes to
+# read a dataset out through repeated queries.
+PUBLIC_REQUESTS_PER_MINUTE = 120
+
+
+def rate_limit_public(request: Request) -> None:
+    enforce(
+        f"public:{client_ip(request) or 'unknown'}",
+        PUBLIC_REQUESTS_PER_MINUTE,
+        60,
+        "This dashboard is being requested too quickly. Wait a moment and reload.",
+    )
+
+
+router = APIRouter(dependencies=[Depends(rate_limit_public)])
 
 
 @router.get("/site", response_model=dict)
@@ -67,8 +90,15 @@ def render_shared_dashboard(
     filters: FilterGroup | None = None,
     every_widget_but: str = "",
 ) -> dict[str, Any]:
-    """A shared dashboard renders like any other, click-to-filter included."""
+    """A shared dashboard renders like any other, click-to-filter included.
+
+    With one difference: the filter is held to what the dashboard displays. A
+    signed-in analyst filtering by a column no widget shows is using the
+    dataset they already have; an anonymous visitor doing it is asking the
+    dataset questions the link never offered to answer.
+    """
     dashboard = _get_shared(token, db)
+    filters = restrict_to_visible(filters, visible_variables(db, dashboard))
     return _render_widgets(db, dashboard, filters, every_widget_but)
 
 

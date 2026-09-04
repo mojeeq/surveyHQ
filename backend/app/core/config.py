@@ -54,6 +54,11 @@ class Settings(BaseSettings):
     # Redis / Celery
     redis_url: str = "redis://redis:6379/0"
 
+    # Rate limiting. On by default; the switch exists so a test can run a
+    # hundred logins without tripping it, and so an operator behind a proxy that
+    # collapses every visitor onto one address can turn it off knowingly.
+    rate_limit_enabled: bool = True
+
     # Storage
     storage_dir: str = "/data"
     max_upload_mb: int = 512

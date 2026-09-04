@@ -15,6 +15,7 @@ import pytest
 
 from app.services.archives import (
     SOURCE_COLUMN,
+    _copy_member,
     combine,
     extract_members,
     group_by_schema,
@@ -158,3 +159,79 @@ def test_member_names_cannot_escape_the_extraction_directory(tmp_path):
     assert [m.name for m in members] == ["escaped.dta"]
     assert members[0].path.resolve().parent == work.resolve()
     assert not (tmp_path.parent / "escaped.dta").exists()
+
+
+def test_a_member_that_expands_past_the_budget_is_refused(tmp_path, monkeypatch):
+    """A zip caps what was uploaded, never what comes out of it.
+
+    Survey data compresses so well that a small archive can hold an enormous
+    file, and a deliberately built one can hold an effectively unbounded one.
+    Reading a member with source.read() put all of it in memory before anything
+    had a chance to object.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "max_upload_mb", 1)  # budget: 20 MB
+
+    archive = tmp_path / "bomb.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as handle:
+        # Zeroes compress to almost nothing; on disk this archive is tiny.
+        handle.writestr("huge.csv", b"0" * (40 * 1024 * 1024))
+
+    with pytest.raises(IngestError, match="expand to more than"):
+        extract_members(archive, tmp_path / "out")
+
+
+def test_members_that_are_each_small_but_add_up_are_refused(tmp_path, monkeypatch):
+    """The budget is for the archive, not for one file inside it.
+
+    A per-member cap alone is no cap: two hundred members just under it expand
+    to two hundred times as much.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "max_upload_mb", 1)  # budget: 20 MB
+
+    archive = tmp_path / "many.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as handle:
+        for index in range(8):
+            handle.writestr(f"part{index}.csv", b"0" * (4 * 1024 * 1024))
+
+    with pytest.raises(IngestError, match="expand to more than"):
+        extract_members(archive, tmp_path / "out")
+
+
+def test_a_member_that_lies_about_its_size_is_a_readable_error(tmp_path):
+    """An archive cannot understate a member and have it unpacked anyway.
+
+    zipfile checks the length and CRC against the header as it reads, so a
+    forged size fails there rather than slipping past the budget. What that
+    used to give was a BadZipFile escaping as a 500; it should be the same 422
+    as any other unreadable archive, and it must not leave the part that was
+    written on disk.
+    """
+    archive = tmp_path / "forged.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as handle:
+        handle.writestr("round1.csv", b"id,region\n" + b"1,North\n" * 1000)
+
+    # Rewrite the central directory entry to claim the member is tiny.
+    with zipfile.ZipFile(archive) as source:
+        forged = source.infolist()[0]
+        forged.file_size = 4
+        destination = tmp_path / "out"
+        destination.mkdir()
+        with pytest.raises(IngestError, match="damaged"):
+            _copy_member(source, forged, destination / "round1.csv", 1024 * 1024)
+        assert list(destination.iterdir()) == []
+
+
+def test_a_normal_archive_is_unaffected(tmp_path):
+    """The cap is far above anything a real export reaches."""
+    frame = pd.DataFrame({"id": range(10), "region": ["North"] * 10})
+    archive = tmp_path / "round.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.write(_stata(tmp_path / "round1.dta", frame), "round1.dta")
+
+    members = extract_members(archive, tmp_path / "out")
+    assert [member.name for member in members] == ["round1.dta"]
+    assert len(members[0].frame) == 10

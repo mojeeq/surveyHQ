@@ -43,7 +43,8 @@ Everything lives in `.env`. Values worth attention:
 | `DASHBOARD_DOMAIN` | The domain shared dashboards are named under, e.g. `dash.example.org`. Needs the wildcard DNS record and certificate above. Empty hides the feature. |
 | `CORS_ORIGINS` | Comma separated. Must include your real domain in production. |
 | `WEB_PORT` | Host port for the web interface. Default 8080. |
-| `MAX_UPLOAD_MB` | The upload ceiling, and the only one: nginx no longer enforces a second. An upload over it is refused with a message naming the size and the limit, before the body is transferred. |
+| `MAX_UPLOAD_MB` | The upload ceiling, and the only one: nginx no longer enforces a second. An upload over it is refused with a message naming the size and the limit, before the body is transferred. It also bounds how far a zip may expand once opened — twenty times this — so an archive built to exhaust memory is refused rather than unpacked. |
+| `RATE_LIMIT_ENABLED` | Caps sign-in attempts and requests to shared dashboards. Leave it on. Turn it off only if every visitor reaches you from one address, as behind some corporate proxies, where they would share one budget. |
 | `SYNC_TICK_MINUTES` | How often the scheduler checks for due imports. A connection set to import at a time of day cannot be honoured more precisely than this. |
 | `MONITOR_TICK_MINUTES` | How often indicators, alerts and checks are evaluated. |
 
@@ -230,9 +231,18 @@ make logs        # watch the rollout
 ```
 
 The schema is brought up to date at start-up: new tables are created, new
-nullable columns are added to existing tables, and new values are added to
-existing PostgreSQL enum types. Between them these cover every change the schema
-has needed so far, and the API logs each one it applies.
+nullable columns are added to existing tables, indexes the models declare but
+the database lacks are created, and new values are added to existing PostgreSQL
+enum types. Between them these cover every change the schema has needed so far,
+and the API logs each one it applies.
+
+The index step matters on databases that have been running a while. `ALTER TABLE
+ADD COLUMN` adds the column and nothing else, so every index declared on a column
+the models grew later was missing on exactly the installations that had been
+upgraded most often — including the unique ones, which are constraints rather
+than mere speed. If a unique index cannot be created because rows already violate
+it, the error names the index and the platform starts anyway; the duplicate rows
+have to be settled by hand before it can be applied.
 
 What is *not* automatic is anything destructive - dropping, renaming or retyping
 a column, or adding one that is `NOT NULL` with no default. Those need a real

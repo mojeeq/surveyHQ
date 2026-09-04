@@ -13,6 +13,7 @@ from sqlalchemy import select
 from app.api.deps import CurrentUser, DbSession, RequireManager
 from app.core.crypto import decrypt, encrypt
 from app.core.logging import get_logger
+from app.core.rate_limit import enforce
 from app.models import Connection, Job, JobStatus, JobType, Role, SyncRun, User
 from app.schemas.common import Message
 from app.schemas.connection import (
@@ -34,6 +35,20 @@ from app.services.survey_solutions import (
 
 logger = get_logger(__name__)
 router = APIRouter()
+
+# Testing a connection makes this server fetch a URL the caller chose. Managers
+# are trusted, so this is not a wall - it is what turns "probe every port on the
+# internal network" from a script into an afternoon.
+TESTS_PER_MINUTE = 10
+
+
+def _throttle_tests(user: User) -> None:
+    enforce(
+        f"connection-test:{user.id}",
+        TESTS_PER_MINUTE,
+        60,
+        "Too many connection tests. Wait a minute and try again.",
+    )
 
 
 def _to_out(connection: Connection) -> ConnectionOut:
@@ -178,6 +193,7 @@ def test_connection(
     connection_id: str, db: DbSession, user: RequireManager
 ) -> ConnectionTestResult:
     connection = _editable(connection_id, db, user)
+    _throttle_tests(user)
     if not connection.username or not connection.password_encrypted:
         return ConnectionTestResult(
             ok=False, message="Set an API user name and password before testing."
@@ -207,9 +223,10 @@ def test_connection(
 
 @router.post("/test", response_model=ConnectionTestResult)
 def test_unsaved_connection(
-    payload: ConnectionCreate, _: RequireManager
+    payload: ConnectionCreate, user: RequireManager
 ) -> ConnectionTestResult:
     """Let the UI validate credentials before the connection is saved."""
+    _throttle_tests(user)
     try:
         with SurveySolutionsClient(
             base_url=payload.base_url,

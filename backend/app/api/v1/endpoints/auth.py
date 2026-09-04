@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DbSession, client_ip
 from app.core.config import settings
+from app.core.rate_limit import enforce
 from app.core.security import (
     create_access_token,
     generate_api_key,
@@ -30,9 +31,35 @@ from app.services.audit import record
 router = APIRouter()
 
 
+# Deliberately per minute rather than per hour: a person who has mistyped their
+# password five times pauses for a minute, which is barely an interruption, while
+# a machine working through a word list is cut to a rate that will not finish.
+LOGIN_ATTEMPTS_PER_IP = 10
+LOGIN_ATTEMPTS_PER_ACCOUNT = 5
+LOGIN_WINDOW_SECONDS = 60
+
+
 @router.post("/login", response_model=Token)
 def login(payload: LoginRequest, db: DbSession, request: Request) -> Token:
-    user = db.scalar(select(User).where(User.email == payload.email.lower()))
+    # Counted before the password is checked, so an attempt costs a caller
+    # whether or not it was right - otherwise guessing is free until it works.
+    # Both keys are needed: per-address alone lets a botnet spread its guesses
+    # at one account, and per-account alone lets one address work through every
+    # account it can name.
+    email = payload.email.lower()
+    address = client_ip(request) or "unknown"
+    too_many = (
+        "Too many sign-in attempts. Wait a minute and try again."
+    )
+    enforce(f"login:ip:{address}", LOGIN_ATTEMPTS_PER_IP, LOGIN_WINDOW_SECONDS, too_many)
+    enforce(
+        f"login:account:{email}",
+        LOGIN_ATTEMPTS_PER_ACCOUNT,
+        LOGIN_WINDOW_SECONDS,
+        too_many,
+    )
+
+    user = db.scalar(select(User).where(User.email == email))
     if user is None or not verify_password(payload.password, user.hashed_password):
         # Same message either way so the endpoint cannot enumerate accounts
         raise HTTPException(

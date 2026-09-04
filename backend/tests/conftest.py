@@ -26,6 +26,10 @@ os.environ.update(
     FIRST_ADMIN_EMAIL="admin@example.com",
     FIRST_ADMIN_PASSWORD="test-password-123",
     ENVIRONMENT="test",
+    # Off by default, or a suite that signs in more than a handful of times
+    # would start refusing its own logins. The tests that cover the limiter
+    # turn it back on around themselves.
+    RATE_LIMIT_ENABLED="false",
 )
 
 import numpy as np  # noqa: E402

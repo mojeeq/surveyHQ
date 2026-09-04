@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from sqlalchemy import inspect, select, text
-from sqlalchemy.schema import CreateColumn
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.schema import CreateColumn, CreateIndex
 
 from app.core.config import settings
 from app.core.logging import get_logger
@@ -55,6 +56,53 @@ def ensure_columns() -> None:
                     text(f'ALTER TABLE "{table.name}" ADD COLUMN {definition}')
                 )
             logger.info("Added missing column %s.%s", table.name, column.name)
+
+
+def ensure_indexes() -> None:
+    """Create indexes the models declare but an existing database lacks.
+
+    ALTER TABLE ADD COLUMN adds the column and nothing else, so every index
+    declared on a column that reached a live database that way is missing -
+    including the unique ones. That is not only slow. A unique index is a
+    constraint: without it, two requests can each check that a hostname is free
+    and then both take it. The Python check in set_hostname exists because of
+    exactly this gap; this closes it at the database, where it belongs.
+
+    Only indexes are created here. A unique constraint declared as a table
+    argument rather than on the column is left alone, because adding one to a
+    table that already violates it fails, and there is no safe automatic answer
+    to which of the duplicate rows should go.
+    """
+    inspector = inspect(engine)
+    existing_tables = set(inspector.get_table_names())
+
+    for table in Base.metadata.sorted_tables:
+        if table.name not in existing_tables:
+            continue
+        present = {index["name"] for index in inspector.get_indexes(table.name)}
+        # A unique column is served by a unique constraint on some backends and
+        # by an index on others; either way the name is taken and reusing it
+        # would fail, so both count as present.
+        present |= {
+            constraint["name"]
+            for constraint in inspector.get_unique_constraints(table.name)
+        }
+        for index in table.indexes:
+            if index.name in present:
+                continue
+            statement = str(CreateIndex(index).compile(dialect=engine.dialect))
+            try:
+                with engine.begin() as connection:
+                    connection.execute(text(statement))
+            except SQLAlchemyError as exc:
+                # A unique index over rows that already violate it cannot be
+                # created. Report which one and carry on: the rest of the
+                # schema, and the application, are still fine without it.
+                logger.error(
+                    "Could not create index %s on %s: %s", index.name, table.name, exc
+                )
+                continue
+            logger.info("Created missing index %s on %s", index.name, table.name)
 
 
 def ensure_enum_values() -> None:
@@ -148,5 +196,6 @@ def initialise() -> None:
     settings.ensure_directories()
     create_tables()
     ensure_columns()
+    ensure_indexes()
     ensure_enum_values()
     create_first_admin()
