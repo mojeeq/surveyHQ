@@ -28,6 +28,9 @@ Runs on Ubuntu with Docker. One command to install.
 - A later archive **replaces** what it matches by default, keeping each
   dataset's identity, so nothing built on it has to be redone. Choose *append*
   instead for genuinely incremental exports.
+- Several archives at once are appended together, one dataset per member file,
+  each stamped with the questionnaire version it came from — which is what a
+  form revised mid-fieldwork needs. Connections stamp the version themselves.
 - A large upload is imported by the background worker, so a census-sized export
   does not depend on a browser connection staying open while it is read.
 - Variable labels and value labels are preserved, so charts read "Female"

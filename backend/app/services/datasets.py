@@ -300,6 +300,24 @@ def append_frame_into_dataset(
 ARCHIVE_MEMBER_KEY = "archive_member"
 
 
+def merge_imports(into: ArchiveImport, step: ArchiveImport) -> ArchiveImport:
+    """Fold one archive's report into the running one for a whole upload.
+
+    Several archives uploaded together are one import as far as the person who
+    started it is concerned, so they get one report rather than three.
+    """
+    seen = {dataset.id for dataset in into.datasets}
+    into.datasets.extend(d for d in step.datasets if d.id not in seen)
+    into.created.extend(step.created)
+    into.appended.extend(step.appended)
+    into.replaced.extend(step.replaced)
+    into.skipped.extend(step.skipped)
+    into.warnings.extend(step.warnings)
+    into.replaced_ids.extend(i for i in step.replaced_ids if i not in into.replaced_ids)
+    into.rows += step.rows
+    return into
+
+
 @dataclass
 class ArchiveImport:
     """What one archive upload did, per member file."""
@@ -369,6 +387,7 @@ def load_archive_as_datasets(
     name_prefix: str = "",
     mode: str = "replace",
     after_replace: Callable[[Session, Dataset], list[str]] | None = None,
+    stamp: tuple[str, str] | None = None,
 ) -> ArchiveImport:
     """Import an archive as one dataset per member file.
 
@@ -389,6 +408,11 @@ def load_archive_as_datasets(
 
     combine_all is a separate escape hatch for an archive that really does hold
     several rounds of one table: every member goes into a single dataset.
+
+    stamp is (column, value) written onto every row this archive brings in -
+    the questionnaire version, usually. Three exports of versions 9, 10 and 11
+    append into one dataset per member file, and without a stamp there is
+    nothing in the rows to say which questionnaire each was answered on.
     """
     workdir = Path(tempfile.mkdtemp(prefix="surveyhq-archive-"))
     outcome = ArchiveImport()
@@ -428,6 +452,17 @@ def load_archive_as_datasets(
             # the member name is the same in every round, so it would say nothing
             # about which round a row came from.
             frame[SOURCE_COLUMN] = archive_name
+            if stamp:
+                column, value = stamp
+                if column in frame.columns:
+                    # Overwriting an answer with a version number would be a
+                    # silent loss of data, so the stamp gives way and says so.
+                    outcome.warnings.append(
+                        f"'{column}' is already a variable in {member.name}, so "
+                        "it was left alone rather than stamped"
+                    )
+                else:
+                    frame[column] = value
 
             existing = find_archive_sibling(
                 db, key, project_id, {str(c) for c in frame.columns}
@@ -451,6 +486,8 @@ def load_archive_as_datasets(
                     had = {v.name for v in existing.variables}
                     labels = dict(member.variable_labels)
                     labels.setdefault(SOURCE_COLUMN, "Archive this row was imported from")
+                    if stamp:
+                        labels.setdefault(stamp[0], "Questionnaire version of this row")
                     ingested = ingest_frame(
                         frame,
                         labels,
@@ -497,6 +534,8 @@ def load_archive_as_datasets(
             )
             labels = dict(member.variable_labels)
             labels.setdefault(SOURCE_COLUMN, "Archive this row was imported from")
+            if stamp:
+                labels.setdefault(stamp[0], "Questionnaire version of this row")
             _apply_ingest(
                 db,
                 dataset,

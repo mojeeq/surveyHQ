@@ -121,6 +121,30 @@ holding a body nobody was reading any more, reported the refusal as a bad
 gateway. nginx now enforces no ceiling of its own (`client_max_body_size 0`):
 one place decides, and it is the place that can say what the limit is.
 
+## One survey, several questionnaire versions
+
+A form revised during fieldwork exports as separate versions holding the same
+member file names, and they belong in one dataset per file. That is a do-file
+every survey statistician has written: open the newest, append the others, stamp
+each with the version it came from.
+
+Several archives in one upload do it directly. They are imported in order - the
+first under the mode asked for, the rest appended - so each archive's member
+file meets the dataset holding that name, and the per-archive report is folded
+into one report for the upload. Differing variables are unioned rather than
+refused, because a variable added in a later version is genuinely absent from
+the earlier rows rather than an error, and the import says which ones that was.
+
+The stamp is the part that makes the result analysable: a column carrying each
+archive's label, so the versions stay tellable apart once they are one table.
+It gives way to a variable of the same name already in the data and reports
+that it did - writing a version number over an answer would be a silent loss,
+and the whole point of the column is to add information rather than replace it.
+
+A connection stamps `questionnaire_version` by itself, from the version the
+export was taken at, so the same combined dataset builds itself from scheduled
+imports without anybody naming anything.
+
 ## Derived variables
 
 `stata.py` implements the idioms - `gen`, `replace`, `egen`, `label`, `rename`,
@@ -152,6 +176,12 @@ A dashboard is a set of widgets on a grid, across named pages. Widgets carry a
 `page` index into the dashboard's `pages` list, so moving one between pages is a
 field change rather than a re-layout, and every dashboard from before pages
 existed is a dashboard with one unnamed page.
+
+That index is also why reordering and deleting pages are server-side calls
+rather than a page list the browser rewrites: the list and the widgets have to
+move together. Rewriting only the list leaves every widget on whichever page
+took its old number - which is what deleting a page used to do to the pages
+after it.
 
 Every widget type renders through one `POST /dashboards/{id}/data` call, each
 branch returning a shape its component knows: a chart or cross-tab re-runs its

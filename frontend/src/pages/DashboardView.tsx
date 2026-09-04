@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useMemo, useState } from 'react'
+import { type CSSProperties, useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import GridLayout, { type Layout } from 'react-grid-layout'
 import 'react-grid-layout/css/styles.css'
@@ -53,8 +53,34 @@ const ROW_HEIGHT = 74
 // short of the edge instead of butting against it.
 const CANVAS_PADDING = 16
 
+/** A few grounds that sit under a chart without fighting it. */
+const WIDGET_COLOURS: { label: string; value: string }[] = [
+  { label: 'Paper', value: '#f7f8f9' },
+  { label: 'Mist', value: '#e8eef5' },
+  { label: 'Sand', value: '#f5f0e6' },
+  { label: 'Sage', value: '#e9f1ea' },
+  { label: 'Slate', value: '#334155' },
+]
+
 const appearanceOf = (dashboard: Dashboard | undefined): Appearance =>
   (dashboard?.appearance ?? {}) as Appearance
+
+/** The card colour for one widget, at the dashboard's transparency.
+ *
+ *  A widget colour and the dashboard's see-through setting are two different
+ *  wishes, and doing one should not cancel the other - so the colour is the
+ *  one chosen and the alpha is the dashboard's either way.
+ */
+function cardStyle(widget: Widget, opacity: number): CSSProperties | undefined {
+  const chosen = (widget.config as { background?: string } | undefined)?.background
+  if (!chosen) {
+    return opacity < 1 ? { backgroundColor: `rgba(255,255,255,${opacity})` } : undefined
+  }
+  const hex = chosen.replace('#', '')
+  if (hex.length !== 6) return { backgroundColor: chosen }
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16))
+  return { backgroundColor: `rgba(${r},${g},${b},${opacity})` }
+}
 
 export default function DashboardView({ publicToken }: { publicToken?: string }) {
   const { id = '' } = useParams()
@@ -170,6 +196,23 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
 
   const savePages = useMutation({
     mutationFn: (pages: { name: string }[]) => api.patch(`/dashboards/${id}`, { pages }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['dashboard', id] }),
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  const movePage = useMutation({
+    mutationFn: ({ from, to }: { from: number; to: number }) =>
+      api.post(`/dashboards/${id}/pages/move`, { from, to }),
+    onSuccess: (_data, variables) => {
+      queryClient.invalidateQueries({ queryKey: ['dashboard', id] })
+      // Stay on the page that moved rather than on the position it left.
+      setActivePage(variables.to)
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  const removePage = useMutation({
+    mutationFn: (index: number) => api.delete(`/dashboards/${id}/pages/${index}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['dashboard', id] }),
     onError: (error: Error) => toast.push(error.message, 'error'),
   })
@@ -343,6 +386,8 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         band={appearance.tab_background}
         onSelect={setActivePage}
         onChange={(next) => savePages.mutate(next)}
+        onMove={(from, to) => movePage.mutate({ from, to })}
+        onRemove={(index) => removePage.mutate(index)}
       />
 
       {!widgets.length ? (
@@ -388,13 +433,11 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
             <div
               key={widget.id}
               className="card overflow-hidden"
-              // Let the dashboard's own background through the card. The charts
+              // A widget's own colour if it has one, the dashboard's paper if
+              // not - and either way the dashboard's transparency, so the
+              // background shows through both the same amount. The charts
               // inside draw on a transparent canvas, so they come with it.
-              style={
-                widgetOpacity < 1
-                  ? { backgroundColor: `rgba(255,255,255,${widgetOpacity})` }
-                  : undefined
-              }
+              style={cardStyle(widget, widgetOpacity)}
             >
               <ErrorBoundary what={`"${widget.title || 'this widget'}"`}>
               <WidgetFrame
@@ -613,6 +656,8 @@ function PageTabs({
   band,
   onSelect,
   onChange,
+  onMove,
+  onRemove,
 }: {
   pages: { name?: string }[]
   active: number
@@ -625,6 +670,8 @@ function PageTabs({
   band?: string
   onSelect: (index: number) => void
   onChange: (pages: { name: string }[]) => void
+  onMove: (from: number, to: number) => void
+  onRemove: (index: number) => void
 }) {
   const named = Array.from({ length: count }, (_, index) => ({
     name: pages[index]?.name || `Page ${index + 1}`,
@@ -661,7 +708,10 @@ function PageTabs({
       return
     }
     if (!confirm(`Delete the page "${named[index].name}"?`)) return
-    onChange(named.filter((_, i) => i !== index))
+    // Deleted on the server, which renumbers the pages after it along with
+    // their widgets. Filtering the list here would leave those widgets on
+    // whichever page ended up at their old number.
+    onRemove(index)
     onSelect(Math.max(0, index - 1))
   }
 
@@ -711,12 +761,30 @@ function PageTabs({
             Rename
           </button>
           {count > 1 && (
-            <button
-              className="btn-ghost btn-sm text-red-600"
-              onClick={() => removePage(active)}
-            >
-              Delete page
-            </button>
+            <>
+              <button
+                className={`btn-ghost btn-sm ${onDark ? 'text-white/80' : 'text-ink-500'}`}
+                onClick={() => onMove(active, active - 1)}
+                disabled={active === 0}
+                title="Move this page earlier"
+              >
+                ◀
+              </button>
+              <button
+                className={`btn-ghost btn-sm ${onDark ? 'text-white/80' : 'text-ink-500'}`}
+                onClick={() => onMove(active, active + 1)}
+                disabled={active === count - 1}
+                title="Move this page later"
+              >
+                ▶
+              </button>
+              <button
+                className="btn-ghost btn-sm text-red-600"
+                onClick={() => removePage(active)}
+              >
+                Delete page
+              </button>
+            </>
           )}
         </>
       )}
@@ -1774,6 +1842,39 @@ function EditWidgetModal({
           />
         </Field>
       </div>
+
+      <Field
+        label="Background"
+        hint="This widget's own colour. The dashboard's transparency still applies to it."
+      >
+        <div className="flex items-center gap-2">
+          <input
+            type="color"
+            className="h-9 w-12 cursor-pointer rounded-control border border-ink-200"
+            value={config.background || '#ffffff'}
+            onChange={(event) => set({ background: event.target.value })}
+          />
+          {WIDGET_COLOURS.map((colour) => (
+            <button
+              key={colour.value}
+              className={`h-7 w-7 rounded-control border ${
+                config.background === colour.value ? 'border-brand-500' : 'border-ink-200'
+              }`}
+              style={{ backgroundColor: colour.value }}
+              title={colour.label}
+              onClick={() => set({ background: colour.value })}
+            />
+          ))}
+          {config.background && (
+            <button
+              className="btn-ghost btn-sm"
+              onClick={() => set({ background: undefined })}
+            >
+              Default
+            </button>
+          )}
+        </div>
+      </Field>
 
       {kind === 'chart' && (
         <Field label="Chart">

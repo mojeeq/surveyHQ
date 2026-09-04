@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import shutil
 from pathlib import Path
 from typing import Annotated, Any
@@ -57,11 +58,13 @@ from app.schemas.query import FilterGroup
 from app.services import stata
 from app.services.audit import record
 from app.services.datasets import (
+    ArchiveImport,
     append_file_into_dataset,
     create_dataset_record,
     delete_dataset_files,
     load_archive_as_datasets,
     load_file_into_dataset,
+    merge_imports,
 )
 from app.services.derived import propagate_labels, rebuild_dependents
 from app.services.download import FORMATS as DOWNLOAD_FORMATS
@@ -125,27 +128,36 @@ def _queue_import(
     *,
     user: Any,
     dataset: Dataset | None,
-    upload_path: Path,
-    filename: str,
+    upload_paths: list[Path],
+    filenames: list[str],
     written: int,
     project_id: str | None,
     combine_all: bool,
     name_prefix: str,
     mode: str,
+    labels: list[str],
+    version_column: str,
 ) -> Job:
     """Hand a large upload to the worker and answer with the job watching it."""
+    title = (
+        f"Import {filenames[0]}"
+        if len(filenames) == 1
+        else f"Import {len(filenames)} archives"
+    )
     job = Job(
         job_type=JobType.ingest,
         status=JobStatus.queued,
-        title=f"Import {filename}",
+        title=title,
         params={
-            "upload_path": str(upload_path),
-            "filename": filename,
+            "upload_paths": [str(path) for path in upload_paths],
+            "filenames": filenames,
             "dataset_id": dataset.id if dataset else "",
             "project_id": project_id or "",
             "combine_all": combine_all,
             "name_prefix": name_prefix,
             "mode": mode,
+            "labels": labels,
+            "version_column": version_column,
             "bytes": written,
         },
         created_by=user.id,
@@ -157,7 +169,7 @@ def _queue_import(
         action="upload_dataset",
         entity_type="dataset",
         entity_id=dataset.id if dataset else None,
-        detail={"filename": filename, "queued": True, "bytes": written},
+        detail={"files": filenames, "queued": True, "bytes": written},
     )
     db.commit()
     db.refresh(job)
@@ -199,13 +211,17 @@ async def upload_dataset(
     request: Request,
     db: DbSession,
     user: RequireManager,
-    file: Annotated[UploadFile, File(description="Stata, SPSS, CSV, tab or Excel file")],
+    file: Annotated[
+        list[UploadFile], File(description="Stata, SPSS, CSV, tab, Excel or zip files")
+    ],
     name: Annotated[str, Form()] = "",
     description: Annotated[str, Form()] = "",
     tags: Annotated[str, Form()] = "",
     combine_all: Annotated[bool, Form()] = False,
     project_id: Annotated[str, Form()] = "",
     mode: Annotated[str, Form()] = "replace",
+    labels: Annotated[str, Form()] = "",
+    version_column: Annotated[str, Form()] = "",
 ) -> DatasetDetail | ArchiveImportOut | JobOut:
     """Upload a data file, or an export archive, and ingest it immediately.
 
@@ -223,17 +239,57 @@ async def upload_dataset(
 
     Pass combine_all for the other case: an archive that really does hold
     several rounds of one table, which goes into a single dataset instead.
+
+    Several archives can be uploaded at once, which is the case a questionnaire
+    revised mid-fieldwork produces: three exports, one per version, holding the
+    same member file names. They are imported in the order given - the first
+    under `mode`, the rest appended onto what it produced - so the interview
+    level of all three ends up in one dataset, as do the rosters and the
+    paradata. `labels` is a JSON list parallel to the files, and
+    `version_column` names a variable each file's label is written into, which
+    is what keeps the versions tellable apart afterwards.
     """
-    filename = Path(file.filename or "upload.dat").name
-    suffix = Path(filename).suffix.lower()
-    if suffix not in SUPPORTED_EXTENSIONS and suffix != ".zip":
+    uploads = list(file)
+    if not uploads:
+        raise HTTPException(status_code=422, detail="Choose a file to upload")
+
+    names = [Path(item.filename or "upload.dat").name for item in uploads]
+    suffixes = [Path(item).suffix.lower() for item in names]
+    for one, suffix in zip(names, suffixes, strict=True):
+        if suffix not in SUPPORTED_EXTENSIONS and suffix != ".zip":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"'{suffix or one}' is not a supported format. Upload a .zip "
+                    "archive, or one of: " + ", ".join(sorted(SUPPORTED_EXTENSIONS))
+                ),
+            )
+    if len(uploads) > 1 and any(suffix != ".zip" for suffix in suffixes):
         raise HTTPException(
-            status_code=400,
+            status_code=422,
             detail=(
-                f"'{suffix or filename}' is not a supported format. Upload a .zip "
-                "archive, or one of: " + ", ".join(sorted(SUPPORTED_EXTENSIONS))
+                "Uploading several files at once appends export archives "
+                "together, so every one of them has to be a .zip."
             ),
         )
+
+    try:
+        stamps = [str(one) for one in json.loads(labels)] if labels.strip() else []
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="labels must be a JSON list") from exc
+    if stamps and len(stamps) != len(uploads):
+        raise HTTPException(
+            status_code=422, detail="Give a label for every file, or none at all"
+        )
+    stamp_column = version_column.strip()
+    if stamp_column and not stamps:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Nothing to write into '{stamp_column}': the files have no labels",
+        )
+
+    filename = names[0]
+    suffix = suffixes[0]
 
     if project_id and not can_edit(db, user, project_id, Role.manager):
         raise HTTPException(
@@ -282,62 +338,85 @@ async def upload_dataset(
         )
     )
 
-    upload_path = settings.uploads_path / f"{dataset.id if dataset else uuid4().hex}{suffix}"
+    saved: list[Path] = []
     written = 0
     try:
-        with open(upload_path, "wb") as handle:
-            while chunk := await file.read(1024 * 1024):
-                written += len(chunk)
-                if written > max_bytes:
-                    raise HTTPException(
-                        status_code=413,
-                        detail=f"File exceeds the {settings.max_upload_mb} MB upload limit",
-                    )
-                handle.write(chunk)
+        for index, (item, item_suffix) in enumerate(zip(uploads, suffixes, strict=True)):
+            target = settings.uploads_path / (
+                f"{dataset.id}{item_suffix}"
+                if dataset is not None and index == 0
+                else f"{uuid4().hex}{item_suffix}"
+            )
+            saved.append(target)
+            with open(target, "wb") as handle:
+                while chunk := await item.read(1024 * 1024):
+                    written += len(chunk)
+                    if written > max_bytes:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=(
+                                f"This upload exceeds the {settings.max_upload_mb} MB "
+                                "limit"
+                            ),
+                        )
+                    handle.write(chunk)
     except HTTPException:
-        upload_path.unlink(missing_ok=True)
+        for path in saved:
+            path.unlink(missing_ok=True)
         db.rollback()
         raise
     finally:
-        await file.close()
+        for item in uploads:
+            await item.close()
 
     if written > INLINE_IMPORT_LIMIT:
         return _queue_import(
             db,
             user=user,
             dataset=dataset,
-            upload_path=upload_path,
-            filename=filename,
+            upload_paths=saved,
+            filenames=names,
             written=written,
             project_id=project_id or None,
             combine_all=combine_all,
             name_prefix=name.strip(),
             mode=mode,
+            labels=stamps,
+            version_column=stamp_column,
         )
 
     try:
         if archive:
-            outcome = load_archive_as_datasets(
-                db,
-                archive_path=upload_path,
-                archive_name=filename,
-                project_id=project_id or None,
-                created_by=user.id,
-                combine_all=combine_all,
-                name_prefix=name.strip(),
-                mode=mode,
-                # Variables somebody generated are not in the export, so a
-                # replacement drops them and everything built on them. The
-                # recorded commands are run again on the new data.
-                after_replace=stata.replay,
-            )
+            outcome = ArchiveImport()
+            for index, (path, one) in enumerate(zip(saved, names, strict=True)):
+                # The first archive lands under the mode that was asked for; the
+                # rest are appended onto what it produced, which is what makes
+                # three questionnaire versions one dataset per member file
+                # rather than three.
+                step = load_archive_as_datasets(
+                    db,
+                    archive_path=path,
+                    archive_name=one,
+                    project_id=project_id or None,
+                    created_by=user.id,
+                    combine_all=combine_all,
+                    name_prefix=name.strip(),
+                    mode=mode if index == 0 else "append",
+                    # Variables somebody generated are not in the export, so a
+                    # replacement drops them and everything built on them. The
+                    # recorded commands are run again on the new data.
+                    after_replace=stata.replay,
+                    stamp=(stamp_column, stamps[index]) if stamp_column else None,
+                )
+                outcome = merge_imports(outcome, step)
         else:
-            load_file_into_dataset(db, dataset, upload_path)
+            load_file_into_dataset(db, dataset, saved[0])
     except IngestError as exc:
         db.commit()  # keep the failed record so the user can see why
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     finally:
-        upload_path.unlink(missing_ok=True)
+        for path in saved:
+            path.unlink(missing_ok=True)
 
     # Whatever was merged out of the replaced files is holding the previous
     # export's join until it is re-run. Nothing on a dashboard would say so:

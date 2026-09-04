@@ -137,6 +137,21 @@ takes memory from every other request.
 An upload larger than `MAX_UPLOAD_MB` answers **413** from the declared length,
 before the body is read, and the message names both the size and the limit.
 
+Several archives can be sent in one request by repeating the `file` field. They
+are imported in order — the first under `mode`, the rest appended — which is
+how a questionnaire revised mid-fieldwork becomes one dataset per member file.
+`labels` is a JSON list parallel to the files and `version_column` names a
+variable each label is written into; a variable of that name already in the data
+is left alone and reported in `warnings`.
+
+```
+-F "file=@VANLFS_v11.zip" -F "file=@VANLFS_v10.zip" -F "file=@VANLFS_v9.zip" \
+-F 'labels=["11","10","9"]' -F "version_column=version"
+```
+
+Imports from a connection stamp `questionnaire_version` by themselves, from the
+version the export was taken at.
+
 `POST /datasets/upload` takes `mode` alongside the file: `replace` (the default)
 swaps the data of each dataset an archive's files match, keeping their ids so
 everything built on them survives; `append` adds the rows instead. `combine_all`
@@ -240,8 +255,13 @@ POST   /dashboards/charts/{id}/data       run a saved chart
 GET/POST/PATCH/DELETE /dashboards[/{id}]
 POST   /dashboards/{id}/widgets                                 [analyst]
 PATCH  /dashboards/{id}/widgets/{wid}     change anything about a widget: what it
-                                          shows, its title, size, or page
+                                          shows, its title, size, page, or its
+                                          own background colour (config.background)
                                                                 [analyst]
+POST   /dashboards/{id}/pages/move        {"from": i, "to": j} - moves a page and
+                                          renumbers the widgets with it [analyst]
+DELETE /dashboards/{id}/pages/{index}     remove an empty page, renumbering the
+                                          ones after it            [analyst]
 DELETE /dashboards/{id}/widgets/{wid}                           [analyst]
 PUT    /dashboards/{id}/background        upload a background image (PNG, JPEG,
                                           GIF or WebP, 8 MB)    [analyst]
