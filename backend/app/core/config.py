@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     project_name: str = "susoDash"
     environment: str = "production"
     public_url: str = "http://localhost:8080"
+    # The domain shared dashboards are named under, e.g. "dash.example.org",
+    # so a dashboard can answer on labour-force.dash.example.org. Empty turns
+    # the feature off, because without a wildcard DNS record and a wildcard
+    # certificate for it, a name would resolve to nothing.
+    dashboard_domain: str = ""
     log_level: str = "INFO"
     api_v1_prefix: str = "/api/v1"
 

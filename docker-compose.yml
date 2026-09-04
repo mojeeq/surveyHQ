@@ -17,6 +17,7 @@ x-backend-env: &backend-env
   ENVIRONMENT: ${ENVIRONMENT:-production}
   PROJECT_NAME: ${PROJECT_NAME:-susoDash}
   PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+  DASHBOARD_DOMAIN: ${DASHBOARD_DOMAIN:-}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
   SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env}
   ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}

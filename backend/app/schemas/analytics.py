@@ -131,6 +131,7 @@ class DashboardOut(BaseModel):
     appearance: dict[str, Any] = Field(default_factory=dict)
     is_public: bool = False
     public_token: str | None = None
+    public_hostname: str | None = None
     refresh_interval_seconds: int = 0
     created_at: dt.datetime
     updated_at: dt.datetime
@@ -138,6 +139,12 @@ class DashboardOut(BaseModel):
 
 class DashboardDetail(DashboardOut):
     widgets: list[WidgetOut] = Field(default_factory=list)
+
+
+class HostnameIn(BaseModel):
+    """A name for a shared dashboard: a label, or the whole hostname."""
+
+    hostname: str = ""
 
 
 class QueryRequest(BaseModel):

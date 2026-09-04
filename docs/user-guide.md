@@ -363,6 +363,9 @@ To build a dashboard:
 9. **Share link** — generates a read-only public URL, copied to your clipboard.
    Anyone with the link can view the dashboard without an account. Press again
    to revoke it.
+10. **Give it a name** — where an administrator has configured a dashboard
+    domain, a shared dashboard can also answer on its own address, such as
+    `labour-force.dash.example.org`. See below.
 
 ### The widgets
 
@@ -390,6 +393,31 @@ a submission or sync timestamp — and deliberately ignores dates that are
 answers rather than moments, such as a date of birth. Where a dataset has no
 obvious one, or the wrong one is chosen, name the variable yourself on the
 widget.
+
+### Giving a dashboard its own address
+
+A share link ends in a 64-character token. That is what makes it safe to send
+to one person — nobody guesses it — but it is not something you can put on a
+poster or read down a phone line.
+
+Where an administrator has set a dashboard domain, **Give it a name…** beside
+the share link assigns one: type `labour-force` and the dashboard answers on
+`labour-force.dash.example.org`, showing exactly what the share link shows,
+logo and colours and all.
+
+**A name is not a secret.** It is meant to be typed from memory, so anyone who
+guesses it reaches the dashboard. Naming is publishing, and it is worth being
+deliberate about which dashboards get one. Two rules follow from that:
+
+- only an already-shared dashboard can be given a name;
+- turning sharing off removes the name too, so an address never resolves to
+  something nobody may read.
+
+Names live under the one configured domain, and reserved names — the platform's
+own address, `www`, `api`, `admin` and similar — cannot be taken. If the option
+is not there, no domain is configured; an administrator sets `DASHBOARD_DOMAIN`
+along with the DNS record and certificate described in
+[deployment.md](deployment.md).
 
 ### Filters
 

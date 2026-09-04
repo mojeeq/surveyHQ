@@ -121,6 +121,13 @@ class Dashboard(UUIDMixin, TimestampMixin, Base):
     appearance: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'"))
     is_public: Mapped[bool] = mapped_column(Boolean, default=False)
     public_token: Mapped[str | None] = mapped_column(String(64), unique=True, index=True)
+    # A hostname this dashboard answers on, e.g. "labour-force.dash.gov.vu".
+    # Unique so two dashboards cannot claim one name - though the uniqueness
+    # that matters is checked in Python as well, because a column added to an
+    # existing database by ALTER TABLE arrives without its index.
+    public_hostname: Mapped[str | None] = mapped_column(
+        String(253), unique=True, index=True
+    )
     refresh_interval_seconds: Mapped[int] = mapped_column(Integer, default=0)
     created_by: Mapped[str | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True

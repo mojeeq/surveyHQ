@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, HTTPException, Response
+from fastapi import APIRouter, HTTPException, Request, Response
 from sqlalchemy import select
 
 from app.api.deps import DbSession
@@ -14,6 +14,34 @@ from app.schemas.analytics import DashboardDetail
 from app.schemas.query import FilterGroup
 
 router = APIRouter()
+
+
+@router.get("/site", response_model=dict)
+def resolve_host(request: Request, db: DbSession) -> dict[str, Any]:
+    """Whether the host this was asked on is a published dashboard.
+
+    The app is one bundle served for every hostname, so it cannot know from the
+    URL alone whether it is the platform or somebody's results page. It asks
+    here once, before deciding what to render.
+
+    Only a hostname explicitly assigned to a shared dashboard matches. The Host
+    header is a request header like any other - it is looked up, never trusted.
+    """
+    host = (request.headers.get("host") or "").split(":")[0].strip().lower()
+    if not host:
+        return {"dashboard": None}
+    dashboard = db.scalar(
+        select(Dashboard).where(
+            Dashboard.public_hostname == host, Dashboard.is_public.is_(True)
+        )
+    )
+    if dashboard is None or not dashboard.public_token:
+        return {"dashboard": None}
+    # The token is handed over because this host already grants what the token
+    # grants: the same read-only dashboard, to anybody who reaches it.
+    return {
+        "dashboard": {"token": dashboard.public_token, "name": dashboard.name},
+    }
 
 
 def _get_shared(token: str, db: DbSession) -> Dashboard:

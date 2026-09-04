@@ -39,7 +39,8 @@ Everything lives in `.env`. Values worth attention:
 | `SECRET_KEY` | Signs session tokens. Changing it signs everyone out. |
 | `ENCRYPTION_KEY` | Encrypts stored Survey Solutions passwords. **Losing it means re-entering every server credential.** |
 | `FIRST_ADMIN_EMAIL` / `FIRST_ADMIN_PASSWORD` | Used only on the very first boot, when no users exist. |
-| `PUBLIC_URL` | The URL people use. Appears in alert emails. |
+| `PUBLIC_URL` | The URL people use. Appears in alert emails, and is a name no dashboard may take. |
+| `DASHBOARD_DOMAIN` | The domain shared dashboards are named under, e.g. `dash.example.org`. Needs the wildcard DNS record and certificate above. Empty hides the feature. |
 | `CORS_ORIGINS` | Comma separated. Must include your real domain in production. |
 | `WEB_PORT` | Host port for the web interface. Default 8080. |
 | `MAX_UPLOAD_MB` | The upload ceiling, and the only one: nginx no longer enforces a second. An upload over it is refused with a message naming the size and the limit, before the body is transferred. |
@@ -121,6 +122,69 @@ CORS_ORIGINS=https://surveyhq.example.org
 
 The long `proxy_read_timeout` matters: importing a large questionnaire from
 Survey Solutions can keep a request open for minutes.
+
+## Giving dashboards their own addresses
+
+A shared dashboard can answer on its own subdomain — `labour-force.dash.example.org`
+rather than a link ending in a 64-character token. The platform side is one
+setting; the rest is DNS and a certificate, done once for all dashboards
+present and future.
+
+**1. One wildcard DNS record.** Point every name under your chosen domain at
+this server:
+
+```
+*.dash.example.org.   A   203.0.113.10
+```
+
+**2. One wildcard certificate.** Let's Encrypt issues wildcards only through
+the DNS-01 challenge, which proves control by writing a TXT record — so this
+needs an API token for wherever your DNS is hosted. Caddy is the least work:
+
+```
+{
+    # The DNS provider plugin has to be in the build:
+    #   xcaddy build --with github.com/caddy-dns/cloudflare
+    acme_dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+}
+
+susodash.example.org, *.dash.example.org {
+    reverse_proxy localhost:8080
+    request_body {
+        max_size 2GB
+    }
+}
+```
+
+Both names go to the same place. susoDash decides from the `Host` header
+whether a request is the platform or one of its published dashboards, so no
+per-dashboard configuration is ever needed. If you use nginx instead, the same
+applies: keep `server_name` covering `*.dash.example.org`, pass `Host` through
+unchanged (`proxy_set_header Host $host`, which the bundled config already
+does), and obtain the wildcard with `certbot --dns-<provider>`.
+
+**3. Tell the platform the domain.** In `.env`:
+
+```
+DASHBOARD_DOMAIN=dash.example.org
+```
+
+Restart, and **Share link → Give it a name…** appears on every shared
+dashboard. Leave the setting empty and the option is hidden, because a name
+would resolve to nothing.
+
+### What a name is, and is not
+
+The share link's token is unguessable, which is what makes it safe to send to
+one person. A name is the opposite by design — it is meant to be typed from
+memory — so a named dashboard is reachable by anyone who guesses the name.
+Naming is publishing. The interface says so at the point of naming, and:
+
+- only a dashboard that is already shared can be given a name;
+- turning sharing off removes the name with it, so a DNS record never resolves
+  to something nobody may read;
+- names live under the configured domain only, and the platform's own hostname
+  and a list of reserved labels (`www`, `api`, `admin`, …) cannot be taken.
 
 ## Firewall
 

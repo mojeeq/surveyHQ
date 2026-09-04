@@ -434,6 +434,8 @@ export interface Dashboard {
   appearance: Appearance
   is_public: boolean
   public_token: string | null
+  /** A hostname this dashboard also answers on, e.g. "labour-force.dash.gov.vu". */
+  public_hostname?: string | null
   refresh_interval_seconds: number
   created_at: string
   updated_at: string

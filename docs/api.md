@@ -253,11 +253,28 @@ DELETE /dashboards/{id}/logo                                    [analyst]
 POST   /dashboards/{id}/data              render every widget; the body may carry
                                           filter conditions to narrow them
 POST   /dashboards/{id}/share?enable=true public link           [analyst]
+PUT    /dashboards/{id}/hostname          give a shared dashboard its own
+                                          address, or "" to remove it
+                                                                [analyst]
 GET    /public/dashboards/{token}         no authentication
 POST   /public/dashboards/{token}/data    no authentication
 GET    /public/dashboards/{token}/background  no authentication
 GET    /public/dashboards/{token}/logo        no authentication
+GET    /public/site                           no authentication; says whether the
+                                              host this was asked on is a named
+                                              dashboard
 ```
+
+`PUT /{id}/hostname` takes `{"hostname": "labour-force"}` — a bare label or the
+whole name, both meaning the same thing. It answers 422 for a name outside the
+configured `DASHBOARD_DOMAIN`, a reserved label or the platform's own address,
+409 if another dashboard holds it or the dashboard is not shared. Turning
+sharing off clears it.
+
+`GET /public/site` reads the request's `Host` header and returns
+`{"dashboard": {"token": …, "name": …}}` when that host is assigned to a shared
+dashboard, and `{"dashboard": null}` otherwise. The bundle is served for every
+hostname, so this is how it knows which of the two it is.
 
 A dashboard carries `pages` (named, each widget holding the index of the one it
 sits on), `filters` (the controls offered to viewers, each belonging to a page),
