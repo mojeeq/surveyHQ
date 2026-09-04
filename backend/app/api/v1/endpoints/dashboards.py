@@ -56,6 +56,11 @@ from app.services.dashboard_assets import (
     save_background,
 )
 from app.services.datasets import dataset_is_queryable
+from app.services.freshness import (
+    DEFAULT_CRITICAL_HOURS,
+    DEFAULT_WARN_HOURS,
+)
+from app.services.freshness import report as freshness_report
 from app.services.geo import points as geo_points
 from app.services.monitoring import (
     evaluate_indicator,
@@ -683,6 +688,32 @@ def _render_widget(
             "breakdown_variable": indicator.breakdown_variable if wants_breakdown else "",
             "computed_at": computed_at.isoformat() if computed_at else None,
         }
+
+    if widget.widget_type.value == "freshness":
+        config = widget.config or {}
+        chosen = list(config.get("dataset_ids") or [])
+        if widget.dataset_id and not chosen:
+            chosen = [widget.dataset_id]
+        now = utcnow()
+        lines = []
+        for dataset_id in chosen[:20]:
+            dataset = db.get(Dataset, dataset_id)
+            if dataset is None:
+                continue
+            lines.append(
+                freshness_report(
+                    dataset,
+                    now,
+                    date_column=str((config.get("date_variables") or {}).get(dataset_id, "")),
+                    warn_hours=float(config.get("warn_hours") or DEFAULT_WARN_HOURS),
+                    critical_hours=float(
+                        config.get("critical_hours") or DEFAULT_CRITICAL_HOURS
+                    ),
+                )
+            )
+        if not lines:
+            return {"error": "This widget has no datasets to watch"}
+        return {"type": "freshness", "datasets": lines, "as_of": now.isoformat()}
 
     if widget.widget_type.value == "html":
         # Sent as written and rendered by the browser in a sandboxed frame, so

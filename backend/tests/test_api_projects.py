@@ -1273,3 +1273,138 @@ def test_a_relationship_can_be_made_by_hand_between_any_two_columns(client, auth
     )
     assert bad.status_code == 422
     assert "not_a_column" in bad.json()["detail"]
+
+
+def test_deleting_a_project_can_take_everything_with_it(client, auth_headers):
+    """A round that is finished with is finished with. Moving eight datasets to
+    the shared area to delete them one at a time is not tidying up."""
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Finished round"}
+    ).json()
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "finished.zip",
+                _zip_bytes(
+                    {
+                        "finished_main.dta": _stata_bytes(
+                            pd.DataFrame({"interview__id": ["i1"], "province": [1.0]})
+                        ),
+                        "finished_people.dta": _stata_bytes(
+                            pd.DataFrame({"interview__id": ["i1"], "age": [30.0]})
+                        ),
+                    }
+                ),
+                "application/zip",
+            )
+        },
+        data={"project_id": project["id"]},
+    ).json()
+    dataset_id = uploaded["datasets"][0]["id"]
+
+    # Everything a project accumulates
+    client.post(f"/api/v1/relationships/detect?project_id={project['id']}", headers=auth_headers)
+    chart = client.post(
+        "/api/v1/dashboards/charts",
+        headers=auth_headers,
+        json={
+            "name": "Doomed chart",
+            "dataset_id": dataset_id,
+            "chart_type": "bar",
+            "spec": {"query": {"measures": [{"agg": "count"}]}},
+        },
+    ).json()
+    indicator = client.post(
+        "/api/v1/monitoring/indicators",
+        headers=auth_headers,
+        json={
+            "name": "Doomed indicator",
+            "dataset_id": dataset_id,
+            "spec": {"measures": [{"agg": "count"}]},
+        },
+    ).json()
+    rule = client.post(
+        "/api/v1/monitoring/quality-rules",
+        headers=auth_headers,
+        json={
+            "name": "Doomed check",
+            "dataset_id": dataset_id,
+            "check_type": "missing_rate",
+            "config": {"variable": "province", "threshold": 0.5},
+        },
+    ).json()
+    dashboard = client.post(
+        "/api/v1/dashboards",
+        headers=auth_headers,
+        json={"name": "Doomed dashboard", "project_id": project["id"]},
+    ).json()
+
+    response = client.delete(
+        f"/api/v1/projects/{project['id']}?contents=delete", headers=auth_headers
+    )
+    assert response.status_code == 200, response.text
+    assert "2 dataset(s)" in response.json()["detail"]
+
+    # None of it survives, and none of it is left in the shared area
+    for path in (
+        f"/api/v1/datasets/{dataset_id}",
+        f"/api/v1/dashboards/{dashboard['id']}",
+        f"/api/v1/dashboards/charts/{chart['id']}",
+        f"/api/v1/monitoring/indicators/{indicator['id']}/refresh",
+    ):
+        assert client.get(path, headers=auth_headers).status_code in (404, 405), path
+    assert not [
+        d
+        for d in client.get("/api/v1/datasets?limit=200", headers=auth_headers).json()["items"]
+        if d["name"].startswith("finished_")
+    ]
+    assert rule["id"] not in {
+        r["id"]
+        for r in client.get("/api/v1/monitoring/quality-rules", headers=auth_headers).json()
+    }
+    # This project's relationships specifically; the suite has others of its own.
+    assert not [
+        r
+        for r in client.get("/api/v1/relationships", headers=auth_headers).json()
+        if r["left_name"].startswith("finished_") or r["right_name"].startswith("finished_")
+    ]
+
+
+def test_deleting_a_project_still_releases_its_data_by_default(client, auth_headers):
+    """The old behaviour, and the one somebody gets by not asking for the other."""
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Dissolved only"}
+    ).json()
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "released.zip",
+                _zip_bytes(
+                    {"released.dta": _stata_bytes(pd.DataFrame({"id": ["a"], "v": [1.0]}))}
+                ),
+                "application/zip",
+            )
+        },
+        data={"project_id": project["id"]},
+    ).json()
+    dataset_id = uploaded["datasets"][0]["id"]
+
+    response = client.delete(f"/api/v1/projects/{project['id']}", headers=auth_headers)
+    assert response.status_code == 200
+    assert "moved to the shared area" in response.json()["detail"]
+
+    survivor = client.get(f"/api/v1/datasets/{dataset_id}", headers=auth_headers)
+    assert survivor.status_code == 200
+    assert survivor.json()["project_id"] is None

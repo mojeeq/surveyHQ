@@ -66,6 +66,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
   const [filterValues, setFilterValues] = useState<Record<string, string>>({})
   const [editingFilters, setEditingFilters] = useState(false)
   const [editingStyle, setEditingStyle] = useState(false)
+  const [editingWidget, setEditingWidget] = useState<Widget | null>(null)
   const [width, setWidth] = useState(1200)
 
   const isPublic = Boolean(publicToken)
@@ -202,6 +203,11 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
   const backgroundUrl = useBackgroundImage(basePath, appearance)
   const canvas = canvasStyle(appearance, backgroundUrl)
   const onDarkGround = Boolean(canvas) && isDark(appearance.background_color)
+  // The tabs sit on their own band when one is set, so what they have to stay
+  // readable against is that band rather than the dashboard's background.
+  const tabsOnDark = appearance.tab_background
+    ? isDark(appearance.tab_background)
+    : onDarkGround
 
   const layout: Layout[] = useMemo(
     () =>
@@ -321,7 +327,8 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         count={pageCount}
         canEdit={!isPublic && can('analyst')}
         widgetsOnPage={widgets.length}
-        onDark={onDarkGround}
+        onDark={tabsOnDark}
+        band={appearance.tab_background}
         onSelect={setActivePage}
         onChange={(next) => savePages.mutate(next)}
       />
@@ -387,6 +394,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
                 theme={dashboard.data!.theme ?? 'default'}
                 pageNames={pageNames}
                 onMove={(toPage) => moveWidget.mutate({ widgetId: widget.id, page: toPage })}
+                onEdit={() => setEditingWidget(widget)}
                 onRemove={() => {
                   if (confirm(`Remove "${widget.title || 'this widget'}" from the dashboard?`))
                     removeWidget.mutate(widget.id)
@@ -402,6 +410,14 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
 
       {adding && (
         <AddWidgetModal dashboardId={id} page={page} onClose={() => setAdding(false)} />
+      )}
+      {editingWidget && (
+        <EditWidgetModal
+          dashboardId={id}
+          widget={editingWidget}
+          pageNames={pageNames}
+          onClose={() => setEditingWidget(null)}
+        />
       )}
       {editingStyle && (
         <AppearanceModal
@@ -434,6 +450,7 @@ function WidgetFrame({
   theme,
   pageNames,
   onMove,
+  onEdit,
   onRemove,
 }: {
   widget: Widget
@@ -446,6 +463,7 @@ function WidgetFrame({
   /** Every page on this dashboard, so a widget can be sent to another one. */
   pageNames: string[]
   onMove: (page: number) => void
+  onEdit: () => void
   onRemove: () => void
 }) {
   return (
@@ -473,6 +491,18 @@ function WidgetFrame({
               </option>
             ))}
           </select>
+        )}
+        {canEdit && (
+          <button
+            className={`btn-ghost btn-sm shrink-0 text-ink-500 transition-opacity ${
+              editing ? 'opacity-100' : 'opacity-0 focus:opacity-100 group-hover:opacity-100'
+            }`}
+            onClick={onEdit}
+            title="Edit this widget"
+            aria-label={`Edit ${widget.title || 'widget'}`}
+          >
+            ✎
+          </button>
         )}
         {canEdit && (
           // Removal used to live only inside Arrange mode with nothing saying
@@ -516,6 +546,8 @@ function WidgetFrame({
           <QualityWidget payload={payload} />
         ) : payload.type === 'crosstab' ? (
           <CrosstabTable result={payload.result} compact fill />
+        ) : payload.type === 'freshness' ? (
+          <FreshnessWidget payload={payload} />
         ) : payload.type === 'map' ? (
           <MapWidget
             points={payload.points ?? []}
@@ -566,6 +598,7 @@ function PageTabs({
   canEdit,
   widgetsOnPage,
   onDark,
+  band,
   onSelect,
   onChange,
 }: {
@@ -574,8 +607,10 @@ function PageTabs({
   count: number
   canEdit: boolean
   widgetsOnPage: number
-  /** Set when the dashboard's background is dark enough to swallow ink text. */
+  /** Set when whatever is behind the tabs is dark enough to swallow ink text. */
   onDark: boolean
+  /** A colour to lay behind the strip, for a background that swallows it. */
+  band?: string
   onSelect: (index: number) => void
   onChange: (pages: { name: string }[]) => void
 }) {
@@ -624,7 +659,8 @@ function PageTabs({
     <div
       className={`mb-4 flex flex-wrap items-center gap-1 border-b ${
         onDark ? 'border-white/25' : 'border-ink-200'
-      }`}
+      } ${band ? 'rounded-t-lg px-2' : ''}`}
+      style={band ? { backgroundColor: band } : undefined}
     >
       {(count > 1 || canEdit) &&
         named.map((page, index) => (
@@ -705,6 +741,59 @@ function HtmlWidget({ html }: { html: string }) {
       referrerPolicy="no-referrer"
       className="h-full min-h-[120px] w-full border-0"
     />
+  )
+}
+
+/**
+ * How recent the data is, which is two questions.
+ *
+ * When the platform last received data says whether the import is running.
+ * When the newest record in it was collected says whether the field teams are
+ * still sending anything - and an import that runs faithfully every morning
+ * and collects nothing new is healthy by the first measure and broken by the
+ * second, which is the failure this widget exists to catch.
+ */
+function FreshnessWidget({ payload }: { payload: any }) {
+  const lines: any[] = payload.datasets ?? []
+  return (
+    <div className="flex h-full flex-col gap-2 overflow-auto">
+      {lines.map((line) => {
+        const colour =
+          STATUS_COLORS[line.status as keyof typeof STATUS_COLORS] ?? STATUS_COLORS.unknown
+        return (
+          <div key={line.dataset_id} className="flex items-start gap-2.5">
+            <span
+              className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full"
+              style={{ backgroundColor: colour }}
+              // The dot is colour; the words beside it carry the same meaning,
+              // so it is never the only thing saying whether this is stale.
+              aria-hidden
+            />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium text-ink-800">{line.name}</p>
+              <p className="text-xs text-ink-500">
+                Imported {relativeTime(line.imported_at)}
+                {line.latest_record_at ? (
+                  <>
+                    {' · newest record '}
+                    {relativeTime(line.latest_record_at)}
+                  </>
+                ) : line.date_variable ? null : (
+                  <span className="text-ink-400"> · no date column to read</span>
+                )}
+              </p>
+              {line.error && <p className="text-xs text-amber-700">{line.error}</p>}
+            </div>
+            <span className="shrink-0 text-xs tabular-nums text-ink-400">
+              {formatNumber(line.rows)} rows
+            </span>
+          </div>
+        )
+      })}
+      {!lines.length && (
+        <p className="py-6 text-center text-sm text-ink-400">Nothing to report</p>
+      )}
+    </div>
   )
 }
 
@@ -895,7 +984,14 @@ function AddWidgetModal({
   const toast = useToast()
   const queryClient = useQueryClient()
   const [kind, setKind] = useState<
-    'chart' | 'indicator' | 'quality' | 'text' | 'countdown' | 'map' | 'html'
+    | 'chart'
+    | 'indicator'
+    | 'quality'
+    | 'text'
+    | 'countdown'
+    | 'map'
+    | 'html'
+    | 'freshness'
   >('chart')
   const [datasetId, setDatasetId] = useState('')
   const [chartId, setChartId] = useState('')
@@ -912,6 +1008,7 @@ function AddWidgetModal({
   const [detail, setDetail] = useState<string[]>([])
   const [tiles, setTiles] = useState('')
   const [html, setHtml] = useState('')
+  const [freshnessDatasets, setFreshnessDatasets] = useState<string[]>([])
 
   const charts = useQuery({ queryKey: ['charts'], queryFn: () => api.get<Chart[]>('/dashboards/charts') })
   const indicators = useQuery({
@@ -921,7 +1018,7 @@ function AddWidgetModal({
   const datasets = useQuery({
     queryKey: ['datasets'],
     queryFn: () => api.get<Page<Dataset>>('/datasets?limit=200'),
-    enabled: kind === 'quality' || kind === 'map',
+    enabled: kind === 'quality' || kind === 'map' || kind === 'freshness',
   })
   // The map needs the variables, to know which column holds the coordinates.
   const chosenDataset = useQuery({
@@ -943,6 +1040,8 @@ function AddWidgetModal({
                 ? 'Interview locations'
                 : kind === 'html'
                   ? 'Embedded content'
+                  : kind === 'freshness'
+                    ? 'Data freshness'
               : kind === 'countdown'
                 ? deadlineLabel || 'Countdown'
                 : indicators.data?.find((i) => i.id === indicatorId)?.name) ||
@@ -962,6 +1061,8 @@ function AddWidgetModal({
                 detail,
                 ...(tiles.trim() ? { tiles: tiles.trim() } : {}),
               }
+            : kind === 'freshness'
+              ? { dataset_ids: freshnessDatasets, warn_hours: 24, critical_hours: 72 }
             : kind === 'html'
               ? { html }
             : kind === 'indicator'
@@ -976,6 +1077,8 @@ function AddWidgetModal({
         layout:
           kind === 'map'
             ? { w: 6, h: 6 }
+            : kind === 'freshness'
+            ? { w: 4, h: 4 }
             : kind === 'countdown'
             ? { w: 3, h: 3 }
             : kind === 'indicator'
@@ -1006,7 +1109,8 @@ function AddWidgetModal({
     (kind === 'text' && content) ||
     (kind === 'countdown' && deadline && !Number.isNaN(Date.parse(deadline))) ||
     (kind === 'map' && datasetId && latitude && longitude) ||
-    (kind === 'html' && html.trim())
+    (kind === 'html' && html.trim()) ||
+    (kind === 'freshness' && freshnessDatasets.length)
 
   return (
     <Modal
@@ -1037,6 +1141,7 @@ function AddWidgetModal({
           <option value="countdown">Countdown to a date</option>
           <option value="map">Map of interview locations</option>
           <option value="html">Embedded HTML</option>
+          <option value="freshness">How recent the data is</option>
         </select>
       </Field>
 
@@ -1246,6 +1351,16 @@ function AddWidgetModal({
             </>
           ) : null}
         </>
+      )}
+
+      {kind === 'freshness' && (
+        <FreshnessFields
+          datasets={datasets.data?.items ?? []}
+          config={{ dataset_ids: freshnessDatasets }}
+          onChange={(patch) =>
+            patch.dataset_ids && setFreshnessDatasets(patch.dataset_ids as string[])
+          }
+        />
       )}
 
       {kind === 'html' && (
@@ -1464,5 +1579,455 @@ function FilterControlsModal({
         </div>
       )}
     </Modal>
+  )
+}
+
+
+/**
+ * Everything about a widget that is already on the board.
+ *
+ * Before this, a widget was fixed once added: a countdown pointing at last
+ * month's deadline, or a map on the wrong coordinate column, had to be deleted
+ * and built again, losing its place in the layout.
+ *
+ * Its kind is the one thing not editable here. A chart widget and a map widget
+ * have nothing in common but a title, so turning one into the other is adding
+ * a different widget rather than editing this one.
+ */
+function EditWidgetModal({
+  dashboardId,
+  widget,
+  pageNames,
+  onClose,
+}: {
+  dashboardId: string
+  widget: Widget
+  pageNames: string[]
+  onClose: () => void
+}) {
+  const toast = useToast()
+  const queryClient = useQueryClient()
+  const [title, setTitle] = useState(widget.title ?? '')
+  const [page, setPage] = useState(widget.page ?? 0)
+  const [width, setWidth] = useState(Number(widget.layout?.w ?? 6))
+  const [height, setHeight] = useState(Number(widget.layout?.h ?? 4))
+  const [config, setConfig] = useState<Record<string, any>>({ ...(widget.config ?? {}) })
+  const [chartId, setChartId] = useState(widget.chart_id ?? '')
+  const [indicatorId, setIndicatorId] = useState(widget.indicator_id ?? '')
+  const [datasetId, setDatasetId] = useState(widget.dataset_id ?? '')
+
+  const kind = widget.widget_type
+  const set = (patch: Record<string, any>) => setConfig({ ...config, ...patch })
+
+  const charts = useQuery({
+    queryKey: ['charts'],
+    queryFn: () => api.get<Chart[]>('/dashboards/charts'),
+    enabled: kind === 'chart',
+  })
+  const indicators = useQuery({
+    queryKey: ['indicators'],
+    queryFn: () => api.get<Indicator[]>('/monitoring/indicators'),
+    enabled: kind === 'indicator',
+  })
+  const datasets = useQuery({
+    queryKey: ['datasets'],
+    queryFn: () => api.get<Page<Dataset>>('/datasets?limit=200'),
+    enabled: kind === 'quality' || kind === 'map' || kind === 'freshness',
+  })
+  const mapDataset = useQuery({
+    queryKey: ['dataset', datasetId],
+    queryFn: () => api.get<Dataset>(`/datasets/${datasetId}`),
+    enabled: kind === 'map' && Boolean(datasetId),
+  })
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.patch(`/dashboards/${dashboardId}/widgets/${widget.id}`, {
+        title,
+        page,
+        config: {
+          ...config,
+          ...(kind === 'map' || kind === 'quality' ? { dataset_id: datasetId } : {}),
+        },
+        // Sent whole, so a resize here lands the same way a drag does.
+        layout: { ...(widget.layout ?? {}), w: width, h: height },
+      }),
+    onSuccess: () => {
+      toast.push('Widget updated', 'success')
+      queryClient.invalidateQueries({ queryKey: ['dashboard', dashboardId] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard-data', dashboardId] })
+      onClose()
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  // The pieces a widget references live on the widget row rather than in its
+  // config, so they are saved separately - the same PATCH the board uses.
+  const saveReferences = useMutation({
+    mutationFn: () =>
+      api.patch(`/dashboards/${dashboardId}`, {
+        widgets: [
+          {
+            id: widget.id,
+            title,
+            widget_type: widget.widget_type,
+            chart_id: kind === 'chart' ? chartId || null : widget.chart_id,
+            indicator_id: kind === 'indicator' ? indicatorId || null : widget.indicator_id,
+            dataset_id:
+              kind === 'quality' || kind === 'map' ? datasetId || null : widget.dataset_id,
+            config,
+            layout: { ...(widget.layout ?? {}), w: width, h: height },
+            position: widget.position,
+            page,
+          },
+        ],
+      }),
+  })
+
+  const numericVariables = (mapDataset.data?.variables ?? []).filter(
+    (v) => v.var_type === 'numeric',
+  )
+
+  const referencesChanged =
+    (kind === 'chart' && chartId !== (widget.chart_id ?? '')) ||
+    (kind === 'indicator' && indicatorId !== (widget.indicator_id ?? '')) ||
+    ((kind === 'quality' || kind === 'map') && datasetId !== (widget.dataset_id ?? ''))
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`Edit "${widget.title || widget.widget_type}"`}
+      wide
+      footer={
+        <>
+          <button className="btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="btn-primary"
+            onClick={async () => {
+              // The whole-dashboard PATCH would drop the other pages' widgets
+              // if it were the only call, so it runs only when something it
+              // alone can change actually changed.
+              if (referencesChanged) await saveReferences.mutateAsync()
+              save.mutate()
+            }}
+            disabled={save.isPending}
+          >
+            Save changes
+          </button>
+        </>
+      }
+    >
+      <div className="grid gap-x-4 sm:grid-cols-2">
+        <Field label="Title">
+          <input
+            className="input"
+            value={title}
+            onChange={(event) => setTitle(event.target.value)}
+          />
+        </Field>
+        <Field label="Page">
+          <select
+            className="input"
+            value={page}
+            onChange={(event) => setPage(Number(event.target.value))}
+          >
+            {pageNames.map((name, index) => (
+              <option key={index} value={index}>
+                {name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Width (columns)">
+          <input
+            className="input"
+            type="number"
+            min={1}
+            max={24}
+            value={width}
+            onChange={(event) => setWidth(Number(event.target.value) || 1)}
+          />
+        </Field>
+        <Field label="Height (rows)">
+          <input
+            className="input"
+            type="number"
+            min={1}
+            max={24}
+            value={height}
+            onChange={(event) => setHeight(Number(event.target.value) || 1)}
+          />
+        </Field>
+      </div>
+
+      {kind === 'chart' && (
+        <Field label="Chart">
+          <select
+            className="input"
+            value={chartId}
+            onChange={(event) => setChartId(event.target.value)}
+          >
+            {charts.data?.map((chart) => (
+              <option key={chart.id} value={chart.id}>
+                {chart.name} ({chart.chart_type === 'crosstab' ? 'cross-tab' : chart.chart_type})
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+
+      {kind === 'indicator' && (
+        <>
+          <Field label="Indicator">
+            <select
+              className="input"
+              value={indicatorId}
+              onChange={(event) => setIndicatorId(event.target.value)}
+            >
+              {indicators.data?.map((indicator) => (
+                <option key={indicator.id} value={indicator.id}>
+                  {indicator.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <label className="mb-4 flex items-center gap-2 text-sm text-ink-700">
+            <input
+              type="checkbox"
+              checked={Boolean(config.show_breakdown)}
+              onChange={(event) => set({ show_breakdown: event.target.checked })}
+            />
+            Show the breakdown chart under the number
+          </label>
+        </>
+      )}
+
+      {(kind === 'quality' || kind === 'map') && (
+        <Field label="Dataset">
+          <select
+            className="input"
+            value={datasetId}
+            onChange={(event) => setDatasetId(event.target.value)}
+          >
+            <option value="">Choose a dataset…</option>
+            {datasets.data?.items.map((dataset) => (
+              <option key={dataset.id} value={dataset.id}>
+                {dataset.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+
+      {kind === 'map' && (
+        <>
+          <div className="grid gap-x-4 sm:grid-cols-2">
+            <Field label="Latitude">
+              <select
+                className="input"
+                value={config.latitude ?? ''}
+                onChange={(event) => set({ latitude: event.target.value })}
+              >
+                <option value="">Choose…</option>
+                {numericVariables.map((v) => (
+                  <option key={v.name} value={v.name}>
+                    {v.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Longitude">
+              <select
+                className="input"
+                value={config.longitude ?? ''}
+                onChange={(event) => set({ longitude: event.target.value })}
+              >
+                <option value="">Choose…</option>
+                {numericVariables.map((v) => (
+                  <option key={v.name} value={v.name}>
+                    {v.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          <Field label="What each pin counts">
+            <div className="flex gap-2">
+              <select
+                className="input w-56"
+                value={config.measure_agg ?? 'count'}
+                onChange={(event) => set({ measure_agg: event.target.value })}
+              >
+                <option value="count">How many records</option>
+                <option value="sum">Total of</option>
+                <option value="mean">Average of</option>
+                <option value="max">Highest</option>
+                <option value="min">Lowest</option>
+              </select>
+              {(config.measure_agg ?? 'count') !== 'count' && (
+                <select
+                  className="input"
+                  value={config.measure_variable ?? ''}
+                  onChange={(event) => set({ measure_variable: event.target.value })}
+                >
+                  <option value="">Choose a variable…</option>
+                  {numericVariables.map((v) => (
+                    <option key={v.name} value={v.name}>
+                      {v.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          </Field>
+          <Field label="Map tiles" hint="Blank uses OpenStreetMap.">
+            <input
+              className="input font-mono text-xs"
+              value={config.tiles ?? ''}
+              placeholder={DEFAULT_TILES}
+              onChange={(event) => set({ tiles: event.target.value })}
+            />
+          </Field>
+        </>
+      )}
+
+      {kind === 'text' && (
+        <Field label="Text">
+          <textarea
+            className="input"
+            rows={4}
+            value={config.content ?? ''}
+            onChange={(event) => set({ content: event.target.value })}
+          />
+        </Field>
+      )}
+
+      {kind === 'html' && (
+        <Field label="HTML" hint="Rendered in a sandboxed frame.">
+          <textarea
+            className="input font-mono text-xs"
+            rows={8}
+            value={config.html ?? ''}
+            onChange={(event) => set({ html: event.target.value })}
+          />
+        </Field>
+      )}
+
+      {kind === 'countdown' && (
+        <>
+          <Field label="Counting down to">
+            <input
+              type="datetime-local"
+              className="input"
+              value={toLocalInput(config.target)}
+              onChange={(event) =>
+                set({
+                  target: event.target.value
+                    ? new Date(event.target.value).toISOString()
+                    : '',
+                })
+              }
+            />
+          </Field>
+          <Field label="Caption">
+            <input
+              className="input"
+              value={config.label ?? ''}
+              onChange={(event) => set({ label: event.target.value })}
+            />
+          </Field>
+          <Field label="When it runs out">
+            <input
+              className="input"
+              value={config.expired_text ?? ''}
+              placeholder="Time is up"
+              onChange={(event) => set({ expired_text: event.target.value })}
+            />
+          </Field>
+        </>
+      )}
+
+      {kind === 'freshness' && (
+        <FreshnessFields
+          datasets={datasets.data?.items ?? []}
+          config={config}
+          onChange={set}
+        />
+      )}
+    </Modal>
+  )
+}
+
+/** An ISO instant as the value a datetime-local input wants. */
+function toLocalInput(iso: unknown): string {
+  if (!iso || typeof iso !== 'string') return ''
+  const when = new Date(iso)
+  if (Number.isNaN(when.getTime())) return ''
+  const pad = (n: number) => String(n).padStart(2, '0')
+  return `${when.getFullYear()}-${pad(when.getMonth() + 1)}-${pad(when.getDate())}T${pad(
+    when.getHours(),
+  )}:${pad(when.getMinutes())}`
+}
+
+/** Which datasets the freshness widget watches, and when to call them stale. */
+function FreshnessFields({
+  datasets,
+  config,
+  onChange,
+}: {
+  datasets: Dataset[]
+  config: Record<string, any>
+  onChange: (patch: Record<string, any>) => void
+}) {
+  const chosen: string[] = config.dataset_ids ?? []
+  const toggle = (id: string) =>
+    onChange({
+      dataset_ids: chosen.includes(id)
+        ? chosen.filter((existing) => existing !== id)
+        : [...chosen, id],
+    })
+
+  return (
+    <>
+      <Field label="Datasets to watch" hint="Each gets a line saying how recent it is.">
+        <div className="grid max-h-52 gap-1 overflow-auto sm:grid-cols-2">
+          {datasets.map((dataset) => (
+            <label key={dataset.id} className="flex items-center gap-2 text-sm text-ink-700">
+              <input
+                type="checkbox"
+                checked={chosen.includes(dataset.id)}
+                onChange={() => toggle(dataset.id)}
+              />
+              <span className="truncate">{dataset.name}</span>
+            </label>
+          ))}
+        </div>
+      </Field>
+      <div className="grid gap-x-4 sm:grid-cols-2">
+        <Field label="Amber after (hours)">
+          <input
+            className="input"
+            type="number"
+            min={1}
+            value={config.warn_hours ?? 24}
+            onChange={(event) => onChange({ warn_hours: Number(event.target.value) || 24 })}
+          />
+        </Field>
+        <Field label="Red after (hours)">
+          <input
+            className="input"
+            type="number"
+            min={1}
+            value={config.critical_hours ?? 72}
+            onChange={(event) =>
+              onChange({ critical_hours: Number(event.target.value) || 72 })
+            }
+          />
+        </Field>
+      </div>
+    </>
   )
 }

@@ -314,7 +314,8 @@ export interface SyncRun {
 }
 
 export type ChartType =
-  | 'bar' | 'horizontal_bar' | 'stacked_bar' | 'line' | 'area' | 'pie'
+  | 'bar' | 'horizontal_bar' | 'stacked_bar' | 'horizontal_stacked_bar'
+  | 'population_pyramid' | 'line' | 'area' | 'pie'
   | 'donut' | 'scatter' | 'table' | 'kpi' | 'heatmap' | 'crosstab' | 'map'
   | 'gauge' | 'funnel'
 
@@ -360,6 +361,7 @@ export type WidgetType =
   | 'countdown'
   | 'map'
   | 'html'
+  | 'freshness'
 
 export interface Widget {
   id: string
@@ -393,6 +395,8 @@ export interface Appearance {
   canvas_width?: number
   /** 0-1: how opaque the widget cards are, so the background shows through. */
   widget_opacity?: number
+  /** A band behind the page tabs, for when the background swallows them. */
+  tab_background?: string
 }
 
 export interface Dashboard {
