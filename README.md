@@ -1,6 +1,6 @@
 # SurveyHQ
 
-A self-hosted platform for monitoring survey data collection. Connect it to a
+A self-hosted platform for monitoring survey/census data collection. Connect it to a
 Survey Solutions server or upload Stata files, then tabulate, chart, and watch
 field work through dashboards, indicators, alerts and automated quality checks.
 
