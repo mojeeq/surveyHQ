@@ -40,6 +40,8 @@ export default function ProjectDetail() {
   const navigate = useNavigate()
   const toast = useToast()
   const queryClient = useQueryClient()
+  const [deleting, setDeleting] = useState(false)
+  const [confirmName, setConfirmName] = useState('')
   const [tab, setTab] = useState<'data' | 'model' | 'members'>('data')
 
   const project = useQuery({
@@ -64,10 +66,12 @@ export default function ProjectDetail() {
   const canManage = project.data?.your_role === 'manager' || project.data?.your_role === 'admin'
 
   const remove = useMutation({
-    mutationFn: () => api.delete(`/projects/${id}`),
-    onSuccess: () => {
-      toast.push('Project deleted; its data moved to the shared area', 'success')
+    mutationFn: (contents: 'release' | 'delete') =>
+      api.delete<{ detail: string }>(`/projects/${id}?contents=${contents}`),
+    onSuccess: (result) => {
+      toast.push(result.detail, 'success')
       queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['datasets'] })
       navigate('/projects')
     },
     onError: (error: Error) => toast.push(error.message, 'error'),
@@ -90,15 +94,7 @@ export default function ProjectDetail() {
             {canManage && (
               <button
                 className="btn-secondary text-red-600"
-                onClick={() => {
-                  if (
-                    confirm(
-                      `Delete "${project.data!.name}"? Its datasets and dashboards are kept ` +
-                        'and moved to the shared area.',
-                    )
-                  )
-                    remove.mutate()
-                }}
+                onClick={() => setDeleting(true)}
               >
                 Delete project
               </button>
@@ -106,6 +102,61 @@ export default function ProjectDetail() {
           </>
         }
       />
+
+      {deleting && (
+        <Modal
+          open
+          onClose={() => setDeleting(false)}
+          title={`Delete "${project.data.name}"`}
+          footer={
+            <>
+              <button className="btn-secondary" onClick={() => setDeleting(false)}>
+                Cancel
+              </button>
+              <button
+                className="btn-secondary"
+                onClick={() => remove.mutate('release')}
+                disabled={remove.isPending}
+              >
+                Delete, keep the data
+              </button>
+              <button
+                className="btn-primary bg-red-600 hover:bg-red-700"
+                onClick={() => remove.mutate('delete')}
+                // Typing the name is the guard on the irreversible half: this
+                // destroys the datasets themselves and everything built on them.
+                disabled={remove.isPending || confirmName.trim() !== project.data!.name}
+              >
+                Delete everything
+              </button>
+            </>
+          }
+        >
+          <p className="text-sm text-ink-600">
+            <strong>Delete, keep the data</strong> dissolves the project and moves its datasets
+            and dashboards to the shared area, where they go on working.
+          </p>
+          <p className="mt-2 text-sm text-ink-600">
+            <strong>Delete everything</strong> also destroys those datasets and their files, and
+            everything built on them — charts, indicators and their history, quality checks,
+            alert rules and the alerts they raised, relationships, and this project's dashboards.
+            It cannot be undone. Connections are kept: a connection is a server and its
+            credentials, which outlive the project.
+          </p>
+          <Field
+            label={`Type "${project.data.name}" to confirm the second one`}
+            hint="Only needed for deleting the data."
+          >
+            <input
+              className="input"
+              value={confirmName}
+              onChange={(event) => setConfirmName(event.target.value)}
+              placeholder={project.data.name}
+              autoFocus
+            />
+          </Field>
+        </Modal>
+      )}
 
       <Tabs
         tabs={[
