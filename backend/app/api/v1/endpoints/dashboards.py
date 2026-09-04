@@ -72,7 +72,14 @@ from app.services.monitoring import (
     indicator_status,
     progress_percent,
 )
-from app.services.projects import can_edit, can_view, dataset_clause, restrict, scope_for
+from app.services.projects import (
+    can_edit,
+    can_view,
+    dataset_clause,
+    in_project_clause,
+    restrict,
+    scope_for,
+)
 from app.services.query_engine import (
     DatasetContext,
     QueryError,
@@ -87,13 +94,28 @@ router = APIRouter()
 
 
 @router.get("/charts", response_model=list[ChartOut])
-def list_charts(db: DbSession, user: CurrentUser, dataset_id: str = "") -> list[Chart]:
+def list_charts(
+    db: DbSession,
+    user: CurrentUser,
+    dataset_id: str = "",
+    project_id: str | None = None,
+) -> list[Chart]:
+    """Saved charts, optionally only the ones belonging to a project.
+
+    A chart takes its project from its dataset, like everything else built on
+    one. `project_id=none` is the shared area, which is a real place rather
+    than the absence of a filter.
+    """
     statement = restrict(
         select(Chart).order_by(Chart.created_at.desc()),
         dataset_clause(db, user, Chart.dataset_id),
     )
     if dataset_id:
         statement = statement.where(Chart.dataset_id == dataset_id)
+    if project_id is not None:
+        statement = statement.where(
+            in_project_clause(Chart.dataset_id, "" if project_id == "none" else project_id)
+        )
     return list(db.scalars(statement).all())
 
 

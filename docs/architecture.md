@@ -121,6 +121,30 @@ holding a body nobody was reading any more, reported the refusal as a bad
 gateway. nginx now enforces no ceiling of its own (`client_max_body_size 0`):
 one place decides, and it is the place that can say what the limit is.
 
+## Appending onto stored data
+
+Two things have to be true before a frame can be concatenated onto a dataset,
+and both were once left to luck.
+
+The columns have to be in the same namespace. Ingest cleans names on the way
+in, so a stored dataset's columns are the cleaned ones while an incoming file's
+are whatever the file says. Concatenating the two aligns on the name, so any
+name cleaning changes becomes two columns - the old rows under one, the new
+rows under the other, both half empty. The incoming frame is cleaned first now.
+
+And the variable metadata has to be replaced, not added to. It used to be
+deleted through the dataset's own `variables` collection, which still holds the
+previous pass's objects when two archives are imported in one transaction: the
+second pass deleted nothing and added a second row per variable. The delete is
+a statement now, and the collection is expired behind it. Two rows per variable
+is what makes a dataset look like its columns have been shuffled - the listing
+shows everything twice, and a lookup by name lands on whichever row came first.
+
+A third thing is checked rather than fixed: a questionnaire revised between
+rounds can reuse a code for a different answer. The rows append cleanly, but
+they are then displayed under the labels the dataset already had - so the
+conflict is reported instead of being left to be noticed in a tabulation.
+
 ## One survey, several questionnaire versions
 
 A form revised during fieldwork exports as separate versions holding the same

@@ -600,26 +600,61 @@ def field_progress(
 
 
 @router.get("/summary", response_model=dict)
-def monitoring_summary(db: DbSession, user: CurrentUser) -> dict[str, Any]:
-    """Headline numbers for the landing page, counting only what this user sees."""
-    rules = alert_rule_clause(db, user)
-    open_alerts = db.scalars(
-        restrict(
-            select(Alert).where(Alert.status == AlertStatus.open).limit(500),
-            None if rules is None else Alert.rule_id.in_(select(AlertRule.id).where(rules)),
-        )
-    ).all()
-    indicators = db.scalars(
-        restrict(
-            select(Indicator).where(Indicator.is_active.is_(True)),
-            dataset_clause(db, user, Indicator.dataset_id),
-        )
-    ).all()
-    datasets = db.scalars(
-        restrict(select(Dataset), scope_for(db, user).filter(Dataset.project_id))
-    ).all()
+def monitoring_summary(
+    db: DbSession, user: CurrentUser, project_id: str | None = None
+) -> dict[str, Any]:
+    """Headline numbers for the landing page, counting only what this user sees.
 
+    project_id narrows every count to one project - `none` for the shared area
+    - so the overview answers "how is this round going" rather than only "how
+    is everything going".
+    """
+    scoped = project_id is not None
+    target = "" if project_id == "none" else (project_id or "")
+    rules = alert_rule_clause(db, user)
+    alert_statement = restrict(
+        select(Alert).where(Alert.status == AlertStatus.open).limit(500),
+        None if rules is None else Alert.rule_id.in_(select(AlertRule.id).where(rules)),
+    )
+    if project_id is not None:
+        alert_statement = alert_statement.where(
+            Alert.rule_id.in_(
+                select(AlertRule.id).where(
+                    in_project_clause(
+                        AlertRule.dataset_id, "" if project_id == "none" else project_id
+                    )
+                    | AlertRule.indicator_id.in_(
+                        select(Indicator.id).where(
+                            in_project_clause(
+                                Indicator.dataset_id,
+                                "" if project_id == "none" else project_id,
+                            )
+                        )
+                    )
+                )
+            )
+        )
+    open_alerts = db.scalars(alert_statement).all()
+    indicator_statement = restrict(
+        select(Indicator).where(Indicator.is_active.is_(True)),
+        dataset_clause(db, user, Indicator.dataset_id),
+    )
+    dataset_statement = restrict(
+        select(Dataset), scope_for(db, user).filter(Dataset.project_id)
+    )
     quality = dataset_clause(db, user, QualityRule.dataset_id)
+    if scoped:
+        indicator_statement = indicator_statement.where(
+            in_project_clause(Indicator.dataset_id, target)
+        )
+        dataset_statement = dataset_statement.where(
+            Dataset.project_id == (target or None)
+        )
+        in_project = in_project_clause(QualityRule.dataset_id, target)
+        quality = in_project if quality is None else (quality & in_project)
+    indicators = db.scalars(indicator_statement).all()
+    datasets = db.scalars(dataset_statement).all()
+
     failing_checks = db.scalars(
         restrict(
             select(QualityResult)

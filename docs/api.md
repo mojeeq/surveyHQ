@@ -251,6 +251,8 @@ ones are pruned as new runs land.
 
 ```
 GET/POST/PATCH/DELETE /dashboards/charts[/{id}]
+                                          ?project_id= narrows the listing to one
+                                          project's charts (none = shared area)
 POST   /dashboards/charts/{id}/data       run a saved chart
 GET/POST/PATCH/DELETE /dashboards[/{id}]
 POST   /dashboards/{id}/widgets                                 [analyst]
