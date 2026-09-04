@@ -27,7 +27,8 @@ or dashboard and click the project button in its header to move it. Moving needs
 manager rights on *both* projects, so nobody can take a dataset out of a project
 they have no say over.
 
-Monitoring, Data quality and Alerts each have a project filter at the top, so a
+Overview, Monitoring, Data quality and Alerts each have a project filter at the
+top, so a
 round in the field can be looked at on its own rather than alongside every other
 survey the platform holds. Connections belong to a project too: someone who can
 reach one project sees that project's servers and its imported archives, and
@@ -159,6 +160,11 @@ Two things make the result usable afterwards:
 - **Variables that differ between versions are unioned, not refused.** A
   variable added in version 11 is blank for the version 9 rows, and the import
   reports which variables that applied to.
+- **A code that changed meaning is reported.** If a revised questionnaire uses
+  the same code for a different answer, the rows are still appended but they
+  are shown under the labels the dataset already had — so the import says which
+  variables recoded, and it is worth checking before trusting a tabulation
+  across versions.
 
 Use ▲ beside a file to change the order. The first file is the base, as it is
 in a do-file that opens one export and appends the others onto it.
@@ -388,7 +394,10 @@ To build a dashboard:
 
 1. **Dashboards → New dashboard**. Choose the project it belongs to, or leave it
    in the shared area.
-2. **Add widget** — see the list below.
+2. **Add widget** — see the list below. A dashboard that belongs to a project
+   is offered that project's charts, indicators and datasets rather than every
+   one on the platform; a dashboard in the shared area belongs to no project,
+   so it goes on seeing everything you can.
 3. **Move & resize** — turns on dragging and resizing; the layout saves itself.
 4. **Edit** — hover a widget and use the ✎ to change anything about it: what it
    shows, its title, its width and height, its background colour, and which

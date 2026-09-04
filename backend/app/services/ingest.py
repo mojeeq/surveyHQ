@@ -68,6 +68,24 @@ def _clean_column_name(name: Any, index: int) -> str:
     return re.sub(r"[\r\n\t]+", " ", text)[:300]
 
 
+def clean_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    """Rename a frame's columns to the names storage would give them.
+
+    Ingest cleans names on the way in, so a stored dataset's columns are the
+    cleaned ones. Anything that lines a fresh frame up against stored data -
+    appending, most of all - has to put both in the same namespace first, or
+    pandas aligns "a\nb" against "a b" as two different columns and the rows
+    each end up under a name the other half of the data has never heard of.
+    """
+    original = list(frame.columns)
+    cleaned = _deduplicate(
+        [_clean_column_name(name, index) for index, name in enumerate(original)]
+    )
+    if cleaned == [str(name) for name in original]:
+        return frame
+    return frame.rename(columns=dict(zip(original, cleaned, strict=True)))
+
+
 def _deduplicate(names: list[str]) -> list[str]:
     seen: dict[str, int] = {}
     result: list[str] = []

@@ -268,3 +268,65 @@ def test_an_alert_raised_by_another_project_cannot_be_acknowledged(
         ).status_code
         == 404
     )
+
+
+# --- narrowing to one project ---------------------------------------------
+
+
+def test_saved_charts_can_be_asked_for_one_project(
+    client, auth_headers, home_project, dataset_id
+):
+    """The widget picker offers this dashboard's charts, not the platform's."""
+    chart = client.post(
+        "/api/v1/dashboards/charts",
+        headers=auth_headers,
+        json={
+            "name": "Shared-area chart",
+            "dataset_id": dataset_id,
+            "chart_type": "bar",
+            "spec": {"query": {"measures": [{"agg": "count", "alias": "n"}]}},
+        },
+    )
+    assert chart.status_code == 201, chart.text
+    chart_id = chart.json()["id"]
+
+    # The dataset sits in the shared area, so that is where its chart is.
+    shared = client.get(
+        "/api/v1/dashboards/charts", headers=auth_headers, params={"project_id": "none"}
+    ).json()
+    assert chart_id in [c["id"] for c in shared]
+
+    elsewhere = client.get(
+        "/api/v1/dashboards/charts",
+        headers=auth_headers,
+        params={"project_id": home_project["id"]},
+    ).json()
+    assert chart_id not in [c["id"] for c in elsewhere]
+
+    # No project asked for is still everything.
+    everything = client.get("/api/v1/dashboards/charts", headers=auth_headers).json()
+    assert chart_id in [c["id"] for c in everything]
+
+    client.delete(f"/api/v1/dashboards/charts/{chart_id}", headers=auth_headers)
+
+
+def test_the_overview_counts_one_project_when_asked(
+    client, auth_headers, other_project, dataset_id
+):
+    """Overview answers "how is this round going", not only "how is everything"."""
+    everything = client.get("/api/v1/monitoring/summary", headers=auth_headers).json()
+    assert everything["datasets"] >= 1
+
+    empty = client.get(
+        "/api/v1/monitoring/summary",
+        headers=auth_headers,
+        params={"project_id": other_project["id"]},
+    ).json()
+    assert empty["datasets"] == 0
+    assert empty["total_records"] == 0
+    assert empty["indicators"] == 0
+
+    shared = client.get(
+        "/api/v1/monitoring/summary", headers=auth_headers, params={"project_id": "none"}
+    ).json()
+    assert shared["datasets"] >= 1, "the shared area is a real place, not no filter"

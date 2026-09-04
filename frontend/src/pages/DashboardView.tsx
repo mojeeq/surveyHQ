@@ -524,11 +524,17 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
       </div>
 
       {adding && (
-        <AddWidgetModal dashboardId={id} page={page} onClose={() => setAdding(false)} />
+        <AddWidgetModal
+          dashboardId={id}
+          projectId={dashboard.data!.project_id}
+          page={page}
+          onClose={() => setAdding(false)}
+        />
       )}
       {editingWidget && (
         <EditWidgetModal
           dashboardId={id}
+          projectId={dashboard.data!.project_id}
           widget={editingWidget}
           pageNames={pageNames}
           onClose={() => setEditingWidget(null)}
@@ -1124,10 +1130,14 @@ function IndicatorWidget({ payload, theme }: { payload: any; theme: string }) {
 
 function AddWidgetModal({
   dashboardId,
+  projectId,
   page,
   onClose,
 }: {
   dashboardId: string
+  /** The dashboard's project, so the picker offers its charts and not every
+   *  chart on the platform. Null is the shared area, which is its own place. */
+  projectId: string | null
   /** The page being looked at, which is where a new widget belongs. */
   page: number
   onClose: () => void
@@ -1161,14 +1171,22 @@ function AddWidgetModal({
   const [html, setHtml] = useState('')
   const [freshnessDatasets, setFreshnessDatasets] = useState<string[]>([])
 
-  const charts = useQuery({ queryKey: ['charts'], queryFn: () => api.get<Chart[]>('/dashboards/charts') })
+  // A dashboard about one round has no use for another round's charts, and a
+  // list of everything is where the right one gets lost. A dashboard in the
+  // shared area belongs to no project, so there is nothing to narrow to and it
+  // goes on seeing everything the user can.
+  const scope = projectId ? `&project_id=${projectId}` : ''
+  const charts = useQuery({
+    queryKey: ['charts', projectId],
+    queryFn: () => api.get<Chart[]>(`/dashboards/charts?${scope.slice(1)}`),
+  })
   const indicators = useQuery({
-    queryKey: ['indicators'],
-    queryFn: () => api.get<Indicator[]>('/monitoring/indicators'),
+    queryKey: ['indicators', projectId],
+    queryFn: () => api.get<Indicator[]>(`/monitoring/indicators?${scope.slice(1)}`),
   })
   const datasets = useQuery({
-    queryKey: ['datasets'],
-    queryFn: () => api.get<Page<Dataset>>('/datasets?limit=200'),
+    queryKey: ['datasets', projectId],
+    queryFn: () => api.get<Page<Dataset>>(`/datasets?limit=200${scope}`),
     enabled: kind === 'quality' || kind === 'map' || kind === 'freshness',
   })
   // The map needs the variables, to know which column holds the coordinates.
@@ -1747,11 +1765,14 @@ function FilterControlsModal({
  */
 function EditWidgetModal({
   dashboardId,
+  projectId,
   widget,
   pageNames,
   onClose,
 }: {
   dashboardId: string
+  /** The dashboard's project: the same set of charts the picker offered. */
+  projectId: string | null
   widget: Widget
   pageNames: string[]
   onClose: () => void
@@ -1771,18 +1792,27 @@ function EditWidgetModal({
   const set = (patch: Record<string, any>) => setConfig({ ...config, ...patch })
 
   const charts = useQuery({
-    queryKey: ['charts'],
-    queryFn: () => api.get<Chart[]>('/dashboards/charts'),
+    queryKey: ['charts', projectId],
+    queryFn: () =>
+      api.get<Chart[]>(
+        `/dashboards/charts${projectId ? `?project_id=${projectId}` : ''}`,
+      ),
     enabled: kind === 'chart',
   })
   const indicators = useQuery({
-    queryKey: ['indicators'],
-    queryFn: () => api.get<Indicator[]>('/monitoring/indicators'),
+    queryKey: ['indicators', projectId],
+    queryFn: () =>
+      api.get<Indicator[]>(
+        `/monitoring/indicators${projectId ? `?project_id=${projectId}` : ''}`,
+      ),
     enabled: kind === 'indicator',
   })
   const datasets = useQuery({
-    queryKey: ['datasets'],
-    queryFn: () => api.get<Page<Dataset>>('/datasets?limit=200'),
+    queryKey: ['datasets', projectId],
+    queryFn: () =>
+      api.get<Page<Dataset>>(
+        `/datasets?limit=200${projectId ? `&project_id=${projectId}` : ''}`,
+      ),
     enabled: kind === 'quality' || kind === 'map' || kind === 'freshness',
   })
   const mapDataset = useQuery({

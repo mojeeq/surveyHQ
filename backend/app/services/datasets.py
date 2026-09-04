@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pandas as pd
 from slugify import slugify
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -32,6 +32,7 @@ from app.services.ingest import (
     MISSING_TAG_SUFFIX,
     IngestError,
     IngestResult,
+    clean_columns,
     detect_monitoring_fields,
     ingest_file,
     ingest_frame,
@@ -117,9 +118,15 @@ def _apply_ingest(db: Session, dataset: Dataset, result: IngestResult) -> Datase
     Shared by every route data arrives on so that variables, counts, detected
     monitoring fields and status are recorded identically each time.
     """
-    # Replace variable metadata wholesale; the parquet file is the source of truth
-    for existing in list(dataset.variables):
-        db.delete(existing)
+    # Replace variable metadata wholesale; the parquet file is the source of
+    # truth. Deleted by statement rather than through dataset.variables: when
+    # two archives are appended in one transaction, the collection still holds
+    # the first pass's objects from before they were flushed, so deleting
+    # through it left them behind and the dataset ended up with two rows per
+    # variable - a Variables tab listing everything twice, and a lookup by name
+    # landing on whichever row came first.
+    db.execute(delete(Variable).where(Variable.dataset_id == dataset.id))
+    db.expire(dataset, ["variables"])
     db.flush()
 
     # Labels somebody wrote by hand are not in the file and would be lost every
@@ -224,6 +231,32 @@ def append_file_into_dataset(
     return append_frame_into_dataset(db, dataset, frame, variable_labels, value_labels)
 
 
+def _recoded_warnings(
+    kept: dict[str, dict[str, str]], incoming: dict[str, dict[str, str]]
+) -> list[str]:
+    """Variables whose codes mean something different in the appended file."""
+    conflicts: list[str] = []
+    for name, codes in incoming.items():
+        established = kept.get(name)
+        if not established or not codes:
+            continue
+        changed = [
+            code
+            for code, label in codes.items()
+            if code in established and str(established[code]) != str(label)
+        ]
+        if changed:
+            conflicts.append(f"{name} ({len(changed)} code(s))")
+    if not conflicts:
+        return []
+    return [
+        "The appended file labels the same codes differently for "
+        + ", ".join(sorted(conflicts)[:5])
+        + ". The rows were appended, but they are shown under this dataset's "
+        "existing labels - check that the answer options did not change."
+    ]
+
+
 def append_frame_into_dataset(
     db: Session,
     dataset: Dataset,
@@ -241,6 +274,12 @@ def append_frame_into_dataset(
             f"'{dataset.name}' has no data to append to yet. Upload into it first."
         )
     existing = pd.read_parquet(dataset.storage_path)
+    # The stored frame's columns were cleaned on the way in and the incoming
+    # one's have not been, so they are put in the same namespace before they
+    # are lined up. Without this, any name that cleaning changes concatenates
+    # as two separate columns: the old rows under one, the new rows under the
+    # other, and both half empty.
+    frame = clean_columns(frame)
 
     if SOURCE_COLUMN not in existing.columns:
         # The dataset predates this column; label what is already there rather
@@ -276,6 +315,11 @@ def append_frame_into_dataset(
         kept_labels.setdefault(key, value)
     for key, value in value_labels.items():
         kept_value_labels.setdefault(key, value)
+    # A questionnaire revised between rounds can reuse a code for a different
+    # answer. The appended rows are then shown under the labels the dataset
+    # already had, which reads as one variable's values appearing under
+    # another's meaning - so it is reported rather than left to be noticed.
+    warnings.extend(_recoded_warnings(kept_value_labels, value_labels))
 
     _apply_ingest(
         db,

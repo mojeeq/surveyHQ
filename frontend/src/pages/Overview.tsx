@@ -1,10 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import ReactECharts from 'echarts-for-react'
 import { api } from '@/lib/api'
 import { buildSparkline, STATUS_COLORS } from '@/lib/charts'
 import { formatNumber, formatValue, relativeTime } from '@/lib/format'
 import type { Alert, Dataset, IndicatorValue, MonitoringSummary, Page } from '@/lib/types'
+import ProjectFilter, { projectParam } from '@/components/ProjectFilter'
 import { Badge, Card, EmptyState, ErrorNote, Loading, PageHeader, Stat } from '@/components/ui'
 
 const STATE_TONE = {
@@ -15,22 +17,29 @@ const STATE_TONE = {
 } as const
 
 export default function Overview() {
+  // Null is every project at once, which is what the page has always shown.
+  const [project, setProject] = useState<string | null>(null)
+  const scope = projectParam(project)
+
   const summary = useQuery({
-    queryKey: ['monitoring-summary'],
-    queryFn: () => api.get<MonitoringSummary>('/monitoring/summary'),
+    queryKey: ['monitoring-summary', project],
+    queryFn: () =>
+      api.get<MonitoringSummary>(`/monitoring/summary?${scope.slice(1)}`),
     refetchInterval: 60_000,
   })
   const indicators = useQuery({
-    queryKey: ['indicator-values'],
-    queryFn: () => api.get<IndicatorValue[]>('/monitoring/indicators/values'),
+    queryKey: ['indicator-values', project],
+    queryFn: () =>
+      api.get<IndicatorValue[]>(`/monitoring/indicators/values?trend_points=30${scope}`),
   })
   const datasets = useQuery({
-    queryKey: ['datasets', 'recent'],
-    queryFn: () => api.get<Page<Dataset>>('/datasets?limit=6'),
+    queryKey: ['datasets', 'recent', project],
+    queryFn: () => api.get<Page<Dataset>>(`/datasets?limit=6${scope}`),
   })
   const alerts = useQuery({
-    queryKey: ['alerts', 'open'],
-    queryFn: () => api.get<Alert[]>('/monitoring/alerts?status=open&limit=5'),
+    queryKey: ['alerts', 'open', project],
+    queryFn: () =>
+      api.get<Alert[]>(`/monitoring/alerts?status=open&limit=5${scope}`),
   })
 
   if (summary.isLoading) return <Loading label="Loading your overview" />
@@ -43,6 +52,7 @@ export default function Overview() {
       <PageHeader
         title="Overview"
         description="Field progress, indicator health and anything that needs attention."
+        actions={<ProjectFilter value={project} onChange={setProject} />}
       />
 
       <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
