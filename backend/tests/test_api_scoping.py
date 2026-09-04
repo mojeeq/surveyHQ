@@ -10,7 +10,19 @@ from __future__ import annotations
 
 import pytest
 
-from tests.test_api_projects import _headers, project  # noqa: F401
+from tests.test_api_projects import _headers
+
+
+@pytest.fixture
+def home_project(client, auth_headers) -> dict:
+    """The one project the restricted manager belongs to."""
+    response = client.post(
+        "/api/v1/projects",
+        headers=auth_headers,
+        json={"name": "Their own round", "description": ""},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
 
 
 @pytest.fixture
@@ -66,11 +78,11 @@ def restricted_manager(client, auth_headers) -> tuple[dict, dict[str, str]]:
 
 
 @pytest.fixture
-def member_headers(client, auth_headers, project, restricted_manager) -> dict[str, str]:
-    """The restricted manager, a member of `project` and nothing else."""
+def member_headers(client, auth_headers, home_project, restricted_manager) -> dict[str, str]:
+    """The restricted manager, a member of one project and nothing else."""
     user, headers = restricted_manager
     added = client.put(
-        f"/api/v1/projects/{project['id']}/members",
+        f"/api/v1/projects/{home_project['id']}/members",
         headers=auth_headers,
         json={"user_id": user["id"], "role": "manager"},
     )

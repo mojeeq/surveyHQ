@@ -41,7 +41,6 @@ from app.models import (
     Variable,
 )
 from app.schemas.common import Message, Page
-from app.schemas.monitoring import JobOut
 from app.schemas.dataset import (
     ArchiveImportOut,
     BulkDeleteRequest,
@@ -53,6 +52,7 @@ from app.schemas.dataset import (
     VariableOut,
     VariableUpdate,
 )
+from app.schemas.monitoring import JobOut
 from app.schemas.query import FilterGroup
 from app.services import stata
 from app.services.audit import record
