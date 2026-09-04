@@ -102,7 +102,9 @@ Runs on Ubuntu with Docker. One command to install.
   tab strip.
 - A choice of chart palettes, each an ordering of the same validated hues,
   ranked by how far apart neighbouring series stay for colour-blind readers.
-- Read-only public links for people who should not have accounts.
+- Read-only public links for people who should not have accounts, and — with
+  one wildcard DNS record and certificate — a dashboard of its own address:
+  `labour-force.dash.example.org` rather than a link ending in a token.
 - Roles: viewer, analyst, manager, administrator.
 - API keys for scripts, plus an OpenAPI spec at `/api/docs`.
 

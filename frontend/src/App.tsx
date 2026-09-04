@@ -1,4 +1,6 @@
 import { Navigate, Route, Routes } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
+import { api, tokenStore } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { Loading } from '@/components/ui'
 import Layout from '@/components/Layout'
@@ -36,7 +38,37 @@ function RequireAdmin({ children }: { children: JSX.Element }) {
   return children
 }
 
+/** Whether this hostname is a published dashboard rather than the platform.
+ *
+ *  One bundle is served for every hostname, so the URL alone cannot say which
+ *  of the two this is. The check is skipped for anyone already signed in -
+ *  they are using the app, and making them wait for it would delay every load.
+ *  For a visitor with no session it runs first, because otherwise a published
+ *  results page would flash a sign-in form before finding itself.
+ */
+function useHostDashboard() {
+  const signedIn = Boolean(tokenStore.get())
+  const query = useQuery({
+    queryKey: ['host-site'],
+    queryFn: () => api.get<{ dashboard: { token: string; name: string } | null }>(
+      '/public/site',
+    ),
+    enabled: !signedIn,
+    staleTime: Infinity,
+    retry: false,
+  })
+  if (signedIn) return { loading: false, token: null }
+  return { loading: query.isPending, token: query.data?.dashboard?.token ?? null }
+}
+
 export default function App() {
+  const host = useHostDashboard()
+
+  if (host.loading) return <Loading label="Loading" />
+  // A named dashboard answers on its own hostname at any path, so a link deep
+  // into it - or a refresh - lands on the dashboard rather than on a 404.
+  if (host.token) return <SharedDashboard token={host.token} />
+
   return (
     <Routes>
       <Route path="/login" element={<Login />} />

@@ -37,6 +37,7 @@ from app.schemas.analytics import (
     DashboardDetail,
     DashboardOut,
     DashboardUpdate,
+    HostnameIn,
     WidgetIn,
     WidgetPatch,
 )
@@ -63,6 +64,8 @@ from app.services.freshness import (
 )
 from app.services.freshness import report as freshness_report
 from app.services.geo import points as geo_points
+from app.services.hostnames import HostnameError
+from app.services.hostnames import normalise as normalise_hostname
 from app.services.monitoring import (
     evaluate_indicator,
     indicator_status,
@@ -552,12 +555,74 @@ def share_dashboard(
         dashboard.public_token = new_public_token()
     if not enable:
         dashboard.public_token = None
+        # A name pointing at a dashboard nobody may read is a dead address, and
+        # a confusing one: the DNS record still resolves. Sharing off takes the
+        # name with it.
+        dashboard.public_hostname = None
     record(
         db,
         user=user,
         action="share_dashboard" if enable else "unshare_dashboard",
         entity_type="dashboard",
         entity_id=dashboard_id,
+    )
+    db.commit()
+    db.refresh(dashboard)
+    return dashboard
+
+
+@router.put("/{dashboard_id}/hostname", response_model=DashboardOut)
+def set_hostname(
+    dashboard_id: str, payload: HostnameIn, db: DbSession, user: RequireAnalyst
+) -> Dashboard:
+    """Give a shared dashboard its own address, or take it away with "".
+
+    The name is a subdomain of the one configured domain, which is what keeps
+    the deployment to a single wildcard DNS record and certificate. Both a bare
+    label and the whole hostname are accepted, because both are what people
+    paste.
+    """
+    dashboard = _get_dashboard(dashboard_id, db, user)
+
+    if not (payload.hostname or "").strip():
+        dashboard.public_hostname = None
+        db.commit()
+        db.refresh(dashboard)
+        return dashboard
+
+    if not dashboard.is_public:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "Share the dashboard first. A name is a second way in to a "
+                "dashboard that is already public, not a way of publishing it."
+            ),
+        )
+    try:
+        hostname = normalise_hostname(payload.hostname)
+    except HostnameError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    taken = db.scalar(
+        select(Dashboard).where(
+            Dashboard.public_hostname == hostname, Dashboard.id != dashboard.id
+        )
+    )
+    if taken is not None:
+        # Checked here rather than left to the unique index: the column reaches
+        # an existing database through ALTER TABLE, which carries no index.
+        raise HTTPException(
+            status_code=409, detail=f"'{hostname}' already belongs to another dashboard"
+        )
+
+    dashboard.public_hostname = hostname
+    record(
+        db,
+        user=user,
+        action="name_dashboard",
+        entity_type="dashboard",
+        entity_id=dashboard_id,
+        detail={"hostname": hostname},
     )
     db.commit()
     db.refresh(dashboard)

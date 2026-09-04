@@ -10,10 +10,18 @@ export default defineConfig({
   server: {
     port: 5173,
     host: true,
-    // During development the API runs separately; in Docker nginx proxies instead.
+    // A dashboard can answer on its own hostname, and the dev server refuses
+    // hosts it does not know. Production is nginx with `server_name _`, which
+    // accepts any name; this is what lets the same thing be tried locally.
+    allowedHosts: (process.env.DASHBOARD_DOMAIN
+      ? [`.${process.env.DASHBOARD_DOMAIN}`]
+      : []
+    ).concat(['localhost', '127.0.0.1']),
+    // The Host header has to survive the proxy, or the API cannot tell which
+    // dashboard the browser asked for.
     proxy: {
-      '/api': { target: 'http://localhost:8000', changeOrigin: true },
-      '/health': { target: 'http://localhost:8000', changeOrigin: true },
+      '/api': { target: 'http://localhost:8000', changeOrigin: false },
+      '/health': { target: 'http://localhost:8000', changeOrigin: false },
     },
   },
   build: {

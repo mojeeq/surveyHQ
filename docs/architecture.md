@@ -329,6 +329,37 @@ frontend/src/
   pages/        one per route
 ```
 
+## A dashboard with its own address
+
+A shared dashboard can answer on a subdomain of one configured domain -
+`labour-force.dash.example.org`. One domain rather than any domain is the whole
+design: it makes the deployment a single wildcard DNS record and a single
+wildcard certificate, so naming a dashboard is a field in the interface rather
+than work on the server.
+
+The bundle is served for every hostname, so the browser cannot tell from the
+URL whether it is looking at the platform or at somebody's results page. It
+asks `/public/site`, which reads the request's `Host` header and answers only
+for a host explicitly assigned to a shared dashboard - the header is looked up,
+never trusted. The check is skipped for anyone already signed in, since they
+are using the app and it would delay every load; for a visitor with no session
+it runs first, because otherwise a published page would flash a sign-in form
+before finding itself.
+
+What changes with a name is the security model, and it changes in kind. A share
+token is 64 random characters: the address *is* the secret, which is what makes
+it safe to send to one person. A name is meant to be typed from memory, so
+anyone who guesses it is in. Naming is therefore publishing, and the platform
+treats it that way: only an already-shared dashboard can be named, unsharing
+removes the name (a DNS record resolving to something nobody may read is worse
+than a dead one), the platform's own hostname and a list of reserved labels are
+refused, and the interface says all of this at the point of naming rather than
+leaving it to be discovered.
+
+Uniqueness is checked in Python as well as declared on the column, because the
+column reaches an existing database through `ALTER TABLE ADD COLUMN`, which
+carries no index with it.
+
 ## Reading a whole table, and a whole map
 
 Two ceilings existed because a browser has to draw what comes back, and both

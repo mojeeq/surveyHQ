@@ -13,6 +13,7 @@ from app.db.base import utcnow
 from app.models import AuditLog, Job, Notification
 from app.schemas.common import Message, Page
 from app.schemas.monitoring import JobOut, NotificationOut
+from app.services.hostnames import base_domain as dashboard_domain
 
 router = APIRouter()
 
@@ -115,5 +116,9 @@ def platform_info(_: CurrentUser) -> dict[str, Any]:
         "environment": settings.environment,
         "mail_enabled": settings.mail_enabled,
         "max_upload_mb": settings.max_upload_mb,
+        # Empty means no wildcard DNS record and certificate are configured, so
+        # the interface does not offer to name a dashboard something that would
+        # resolve to nothing.
+        "dashboard_domain": dashboard_domain(),
         "supported_formats": [".dta", ".sav", ".csv", ".tab", ".tsv", ".xlsx", ".xls"],
     }

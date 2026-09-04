@@ -316,15 +316,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
       />
 
       {dashboard.data!.is_public && !isPublic && (
-        <div className="mb-4 flex items-center gap-2 rounded-card border border-brand-200 bg-brand-50 px-4 py-2.5 text-sm text-brand-800">
-          <Badge tone="info" icon="⇗">
-            Public
-          </Badge>
-          <span>Anyone with this link can view the dashboard:</span>
-          <code className="rounded bg-white px-2 py-0.5 text-xs">
-            {location.origin}/shared/{dashboard.data!.public_token}
-          </code>
-        </div>
+        <PublicLinkBar dashboard={dashboard.data!} canEdit={can('analyst')} />
       )}
 
       {/* Everything the dashboard is read for sits on the canvas: the filters
@@ -2049,5 +2041,126 @@ function FreshnessFields({
         </Field>
       </div>
     </>
+  )
+}
+
+
+/** The public link, and the name it can also answer on.
+ *
+ *  A token URL is unguessable, which is what makes it safe to paste to one
+ *  person. A hostname is the opposite by design - it is meant to be typed from
+ *  memory - so the two sit together here and the difference is stated rather
+ *  than left to be discovered.
+ */
+function PublicLinkBar({
+  dashboard,
+  canEdit,
+}: {
+  dashboard: Dashboard
+  canEdit: boolean
+}) {
+  const toast = useToast()
+  const queryClient = useQueryClient()
+  const [naming, setNaming] = useState(false)
+  const [label, setLabel] = useState('')
+
+  const info = useQuery({
+    queryKey: ['platform-info'],
+    queryFn: () => api.get<{ dashboard_domain: string }>('/system/info'),
+    staleTime: 5 * 60 * 1000,
+  })
+  const domain = info.data?.dashboard_domain ?? ''
+
+  const save = useMutation({
+    mutationFn: (hostname: string) =>
+      api.put<Dashboard>(`/dashboards/${dashboard.id}/hostname`, { hostname }),
+    onSuccess: (updated) => {
+      queryClient.invalidateQueries({ queryKey: ['dashboard', dashboard.id] })
+      setNaming(false)
+      setLabel('')
+      toast.push(
+        updated.public_hostname
+          ? `This dashboard now answers on ${updated.public_hostname}`
+          : 'The name was removed',
+        'success',
+      )
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  return (
+    <div className="mb-4 rounded-card border border-brand-200 bg-brand-50 px-4 py-2.5 text-sm text-brand-800">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge tone="info" icon="⇗">
+          Public
+        </Badge>
+        <span>Anyone with this link can view the dashboard:</span>
+        <code className="rounded bg-white px-2 py-0.5 text-xs">
+          {location.origin}/shared/{dashboard.public_token}
+        </code>
+      </div>
+
+      {dashboard.public_hostname && (
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <span>It also answers on:</span>
+          <a
+            className="rounded bg-white px-2 py-0.5 font-mono text-xs"
+            href={`https://${dashboard.public_hostname}`}
+            target="_blank"
+            rel="noreferrer"
+          >
+            {dashboard.public_hostname}
+          </a>
+          {canEdit && (
+            <button
+              className="btn-ghost btn-sm text-red-600"
+              onClick={() => save.mutate('')}
+              disabled={save.isPending}
+            >
+              Remove the name
+            </button>
+          )}
+        </div>
+      )}
+
+      {canEdit && !dashboard.public_hostname && domain && !naming && (
+        <button className="btn-ghost btn-sm mt-1" onClick={() => setNaming(true)}>
+          Give it a name…
+        </button>
+      )}
+
+      {canEdit && naming && domain && (
+        <div className="mt-2">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <input
+              className="input w-56 py-1 text-xs"
+              placeholder="labour-force"
+              value={label}
+              autoFocus
+              onChange={(event) => setLabel(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter' && label.trim()) save.mutate(label.trim())
+                if (event.key === 'Escape') setNaming(false)
+              }}
+            />
+            <span className="font-mono text-xs">.{domain}</span>
+            <button
+              className="btn-primary btn-sm"
+              onClick={() => save.mutate(label.trim())}
+              disabled={!label.trim() || save.isPending}
+            >
+              Assign
+            </button>
+            <button className="btn-ghost btn-sm" onClick={() => setNaming(false)}>
+              Cancel
+            </button>
+          </div>
+          <p className="mt-1.5 text-xs text-brand-800/80">
+            A name is meant to be typed from memory, so it is not a secret the way
+            the link above is: anyone who guesses it reaches this dashboard.
+          </p>
+        </div>
+      )}
+    </div>
   )
 }
