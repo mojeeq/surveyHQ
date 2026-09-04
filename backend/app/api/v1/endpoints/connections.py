@@ -135,11 +135,11 @@ def update_connection(
     connection = _editable(connection_id, db, user)
     data = payload.model_dump(exclude_unset=True)
     password = data.pop("password", None)
-    if "project_id" in data and data["project_id"] != connection.project_id:
-        # Moving a connection is a write to where it is going as well as to
-        # where it was, so both ends are checked.
-        if not can_edit(db, user, data["project_id"], Role.manager):
-            raise HTTPException(status_code=404, detail="Project not found")
+    # Moving a connection is a write to where it is going as well as to where
+    # it was, so both ends are checked.
+    moving = "project_id" in data and data["project_id"] != connection.project_id
+    if moving and not can_edit(db, user, data["project_id"], Role.manager):
+        raise HTTPException(status_code=404, detail="Project not found")
     for field, value in data.items():
         setattr(connection, field, value)
     if password:
