@@ -38,6 +38,7 @@ from app.schemas.analytics import (
     DashboardOut,
     DashboardUpdate,
     HostnameIn,
+    PageMove,
     WidgetIn,
     WidgetPatch,
 )
@@ -569,6 +570,81 @@ def share_dashboard(
     db.commit()
     db.refresh(dashboard)
     return dashboard
+
+
+@router.post("/{dashboard_id}/pages/move", response_model=DashboardDetail)
+def move_page(
+    dashboard_id: str, payload: PageMove, db: DbSession, user: RequireAnalyst
+) -> Dashboard:
+    """Move a page to another position, taking its widgets with it.
+
+    A widget records the page it is on as an index into the page list, so
+    reordering the list without renumbering the widgets would leave every
+    widget on the page that happens to sit where its old number now points.
+    Both halves have to move together, which is why this is one call rather
+    than a page list the browser rewrites.
+    """
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    pages = list(dashboard.pages or [])
+    if len(pages) < 2:
+        raise HTTPException(status_code=409, detail="There is only one page to move")
+    if not (0 <= payload.from_index < len(pages)) or not (0 <= payload.to_index < len(pages)):
+        raise HTTPException(status_code=422, detail="That position does not exist")
+    if payload.from_index == payload.to_index:
+        return dashboard
+
+    moved = pages.pop(payload.from_index)
+    pages.insert(payload.to_index, moved)
+    dashboard.pages = pages
+    _renumber(dashboard, _moved_positions(payload.from_index, payload.to_index))
+    db.commit()
+    db.refresh(dashboard)
+    return dashboard
+
+
+@router.delete("/{dashboard_id}/pages/{index}", response_model=DashboardDetail)
+def delete_page(
+    dashboard_id: str, index: int, db: DbSession, user: RequireAnalyst
+) -> Dashboard:
+    """Remove a page, and renumber the ones after it along with their widgets."""
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    pages = list(dashboard.pages or [])
+    if len(pages) < 2:
+        raise HTTPException(
+            status_code=409, detail="A dashboard keeps at least one page"
+        )
+    if not 0 <= index < len(pages):
+        raise HTTPException(status_code=422, detail="That page does not exist")
+    if any((widget.page or 0) == index for widget in dashboard.widgets):
+        raise HTTPException(
+            status_code=409,
+            detail="Move or remove this page's widgets before deleting it",
+        )
+
+    pages.pop(index)
+    dashboard.pages = pages
+    # Everything after the hole moves down one. Without this the widgets on
+    # those pages would keep pointing at the position their page used to hold.
+    for widget in dashboard.widgets:
+        if (widget.page or 0) > index:
+            widget.page = (widget.page or 0) - 1
+    db.commit()
+    db.refresh(dashboard)
+    return dashboard
+
+
+def _moved_positions(source: int, target: int) -> dict[int, int]:
+    """Where each old page index ends up after one page moves."""
+    order = list(range(max(source, target) + 1))
+    order.insert(target, order.pop(source))
+    return {old: new for new, old in enumerate(order)}
+
+
+def _renumber(dashboard: Dashboard, mapping: dict[int, int]) -> None:
+    for widget in dashboard.widgets:
+        current = widget.page or 0
+        if current in mapping:
+            widget.page = mapping[current]
 
 
 @router.put("/{dashboard_id}/hostname", response_model=DashboardOut)

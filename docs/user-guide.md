@@ -137,6 +137,38 @@ say what happens next:
   so the rounds stay distinguishable. Appending a cumulative export counts the
   same interviews twice.
 
+### A questionnaire that changed mid-fieldwork
+
+A form revised during collection exports as separate versions, each a zip
+holding the same member file names. They belong in one dataset per file, with
+something in the rows to say which version each interview was answered on.
+
+Choose **several archives at once** and that is what happens. They are imported
+in the order listed — the first under your replace/append choice, the rest
+appended onto what it produced — so every archive's interview file meets the
+interview file, each roster meets its roster, and the paradata meets the
+paradata.
+
+Two things make the result usable afterwards:
+
+- **A label per file**, written into a variable you name (`version` by default).
+  Give the three archives `11`, `10` and `9` and you can tabulate by version,
+  cross-tabulate against it, or filter a dashboard to one form. A variable of
+  that name already in the data is left alone rather than written over, and the
+  import says so.
+- **Variables that differ between versions are unioned, not refused.** A
+  variable added in version 11 is blank for the version 9 rows, and the import
+  reports which variables that applied to.
+
+Use ▲ beside a file to change the order. The first file is the base, as it is
+in a do-file that opens one export and appends the others onto it.
+
+Imports from a Survey Solutions connection do the same thing on their own: each
+questionnaire version's rows are stamped with `questionnaire_version`, so
+syncing several versions in append mode builds the same combined dataset.
+
+### What survives a replacement
+
 What survives a replacement, and is put back automatically:
 
 - the dataset's id, so nothing pointing at it breaks,
@@ -351,10 +383,13 @@ To build a dashboard:
 2. **Add widget** — see the list below.
 3. **Move & resize** — turns on dragging and resizing; the layout saves itself.
 4. **Edit** — hover a widget and use the ✎ to change anything about it: what it
-   shows, its title, its width and height, and which page it sits on. The ✕
-   beside it removes it. Both are there whether or not you are arranging.
-5. **Pages** — **+ Page** adds one; double-click a tab to rename it. Each page
-   lays out on its own and has its own filters.
+   shows, its title, its width and height, its background colour, and which
+   page it sits on. The ✕ beside it removes it. Both are there whether or not
+   you are arranging. A widget's own colour still takes the dashboard's
+   transparency, so the two settings do not cancel each other.
+5. **Pages** — **+ Page** adds one; double-click a tab to rename it, and ◀ ▶
+   move it earlier or later. A page takes its widgets with it, so reordering is
+   safe. Each page lays out on its own and has its own filters.
 6. **Filters** — see below.
 7. **Appearance** — background, canvas and transparency; see below.
 8. **Colours** — the picker in the header sets which palette this dashboard's

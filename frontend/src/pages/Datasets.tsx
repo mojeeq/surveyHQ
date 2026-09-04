@@ -467,6 +467,9 @@ function UploadModal({
   const [projectId, setProjectId] = useState(initialProject)
   const [mode, setMode] = useState<'replace' | 'append'>('replace')
   const [isZip, setIsZip] = useState(false)
+  /** The files to import, in the order they will be imported. */
+  const [chosen, setChosen] = useState<{ file: File; label: string }[]>([])
+  const [versionColumn, setVersionColumn] = useState('version')
   const [busy, setBusy] = useState(false)
   const [stage, setStage] = useState<'' | 'uploading' | 'importing'>('')
   const info = useQuery({
@@ -484,8 +487,7 @@ function UploadModal({
   }, [open, initialProject])
 
   const submit = async () => {
-    const file = fileRef.current?.files?.[0]
-    if (!file) {
+    if (!chosen.length) {
       setError('Choose a file to upload.')
       return
     }
@@ -493,19 +495,27 @@ function UploadModal({
     // spending twenty minutes uploading a file that was always going to be
     // refused. The limit comes from the server, so the two cannot drift.
     const limitMb = info.data?.max_upload_mb ?? 0
-    if (limitMb > 0 && file.size > limitMb * 1024 * 1024) {
+    const total = chosen.reduce((sum, item) => sum + item.file.size, 0)
+    if (limitMb > 0 && total > limitMb * 1024 * 1024) {
       setError(
-        `${file.name} is ${formatBytes(file.size)} and the limit is ${limitMb} MB. ` +
-          'Raise MAX_UPLOAD_MB in .env and restart, or upload the archive files one at a time.',
+        `${chosen.length > 1 ? 'These files come to' : `${chosen[0].file.name} is`} ` +
+          `${formatBytes(total)} and the limit is ${limitMb} MB. ` +
+          'Raise MAX_UPLOAD_MB in .env and restart, or upload them one at a time.',
       )
       return
     }
     setBusy(true)
     setError('')
-    setStage(file.size > BACKGROUND_BYTES ? 'uploading' : 'importing')
+    setStage(total > BACKGROUND_BYTES ? 'uploading' : 'importing')
     const form = new FormData()
-    form.append('file', file)
-    form.append('name', name || (isZip ? '' : file.name.replace(/\.[^.]+$/, '')))
+    for (const item of chosen) form.append('file', item.file)
+    const first = chosen[0].file
+    form.append('name', name || (isZip ? '' : first.name.replace(/\.[^.]+$/, '')))
+    if (chosen.length > 1 || versionColumn.trim()) {
+      // Parallel to the files, in the order they will be imported.
+      form.append('labels', JSON.stringify(chosen.map((item) => item.label)))
+      form.append('version_column', versionColumn.trim())
+    }
     form.append('description', description)
     form.append('tags', tags)
     form.append('combine_all', String(combineAll))
@@ -597,18 +607,93 @@ function UploadModal({
 
       <Field
         label="Data file"
-        hint="Stata (.dta), SPSS (.sav), CSV, tab-delimited, Excel, or a .zip of them. Variable and value labels are kept."
+        hint="Stata (.dta), SPSS (.sav), CSV, tab-delimited, Excel, or .zip archives. Choose several archives to append them together."
       >
         <input
           ref={fileRef}
           type="file"
+          multiple
           accept={ACCEPTED}
           className="input py-1.5"
-          onChange={(event) =>
-            setIsZip(Boolean(event.target.files?.[0]?.name.toLowerCase().endsWith('.zip')))
-          }
+          onChange={(event) => {
+            const files = Array.from(event.target.files ?? [])
+            setIsZip(files.some((f) => f.name.toLowerCase().endsWith('.zip')))
+            setChosen(
+              files.map((file) => ({
+                file,
+                // The version number in the file name is the usual answer, so
+                // it is offered rather than demanded.
+                label: file.name.replace(/\.[^.]+$/, '').match(/(\d+)\D*$/)?.[1] ?? '',
+              })),
+            )
+          }}
         />
       </Field>
+
+      {chosen.length > 1 && (
+        <div className="mb-4 rounded-card border border-brand-200 bg-brand-50 p-3">
+          <p className="text-sm text-brand-900">
+            These are imported <strong>in this order</strong>: the first under the
+            choice below, the rest appended onto what it produces. Each file
+            inside them meets its own kind — the interview level with the
+            interview level, each roster with its roster, the paradata with the
+            paradata.
+          </p>
+          <ol className="mt-2 space-y-1.5">
+            {chosen.map((item, index) => (
+              <li key={item.file.name} className="flex items-center gap-2 text-sm">
+                <span className="w-5 shrink-0 text-right text-xs text-brand-800/70">
+                  {index + 1}.
+                </span>
+                <button
+                  className="btn-ghost btn-sm shrink-0 px-1 py-0"
+                  title="Import this one earlier"
+                  disabled={index === 0}
+                  onClick={() => {
+                    const next = [...chosen]
+                    ;[next[index - 1], next[index]] = [next[index], next[index - 1]]
+                    setChosen(next)
+                  }}
+                >
+                  ▲
+                </button>
+                <span className="min-w-0 flex-1 truncate text-brand-900">
+                  {item.file.name}
+                </span>
+                <span className="shrink-0 text-xs text-brand-800/70">
+                  {formatBytes(item.file.size)}
+                </span>
+                <input
+                  className="input w-24 py-1 text-xs"
+                  placeholder="version"
+                  value={item.label}
+                  onChange={(event) =>
+                    setChosen(
+                      chosen.map((one, i) =>
+                        i === index ? { ...one, label: event.target.value } : one,
+                      ),
+                    )
+                  }
+                />
+              </li>
+            ))}
+          </ol>
+          <div className="mt-3">
+            <label className="label">Record which file each row came from in</label>
+            <input
+              className="input py-1 text-xs"
+              placeholder="version"
+              value={versionColumn}
+              onChange={(event) => setVersionColumn(event.target.value)}
+            />
+            <p className="mt-1 text-xs text-brand-800/80">
+              A variable holding each file&rsquo;s label above, so the versions stay
+              tellable apart once they are in one dataset. Leave it empty to skip.
+              A variable of that name already in the data is left alone.
+            </p>
+          </div>
+        </div>
+      )}
 
       {isZip && (
         <div className="mb-4 rounded-card border border-brand-200 bg-brand-50 p-3">

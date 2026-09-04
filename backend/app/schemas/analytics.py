@@ -141,6 +141,15 @@ class DashboardDetail(DashboardOut):
     widgets: list[WidgetOut] = Field(default_factory=list)
 
 
+class PageMove(BaseModel):
+    """Move the page at one position to another."""
+
+    from_index: int = Field(ge=0, alias="from")
+    to_index: int = Field(ge=0, alias="to")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
 class HostnameIn(BaseModel):
     """A name for a shared dashboard: a label, or the whole hostname."""
 

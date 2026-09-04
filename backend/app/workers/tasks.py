@@ -31,7 +31,12 @@ from app.models import (
     SyncRun,
     SyncStatus,
 )
-from app.services.datasets import load_archive_as_datasets, load_file_into_dataset
+from app.services.datasets import (
+    ArchiveImport,
+    load_archive_as_datasets,
+    load_file_into_dataset,
+    merge_imports,
+)
 from app.services.derived import rebuild_dependents
 from app.services.ingest import IngestError
 from app.services.monitoring import evaluate_alert_rule, refresh_indicator
@@ -123,6 +128,12 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
                         archive=archive,
                         project_id=project_id,
                         mode=mode,
+                        # A questionnaire revised mid-fieldwork exports as a
+                        # separate version, and importing several of them in
+                        # append mode is how they become one dataset. Without
+                        # this there would be nothing in the rows to say which
+                        # version each interview was answered on.
+                        version=questionnaire.version if questionnaire else None,
                         summary=summary,
                     )
                     with session_scope() as db:
@@ -194,6 +205,11 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
 
 ARCHIVES_KEPT = 5
 
+# Written onto every row a sync imports, so three questionnaire versions
+# appended into one dataset stay tellable apart afterwards. Named for what it
+# is rather than "version", which a questionnaire may well use itself.
+QUESTIONNAIRE_VERSION_COLUMN = "questionnaire_version"
+
 
 def archives_path() -> Path:
     return settings.storage_path / "sync-archives"
@@ -226,6 +242,7 @@ def _import_export_archive(
     project_id: str | None,
     mode: str,
     summary: dict[str, Any],
+    version: int | None = None,
 ) -> dict[str, Any]:
     """Import a whole export, the same way an uploaded archive is imported.
 
@@ -245,6 +262,7 @@ def _import_export_archive(
             created_by=None,
             name_prefix="",
             mode=mode,
+            stamp=(QUESTIONNAIRE_VERSION_COLUMN, str(version)) if version else None,
         )
         rebuilt = rebuild_dependents(db, result.replaced_ids)
         db.flush()
@@ -392,29 +410,42 @@ def run_upload_import(self: Any, job_id: str) -> dict[str, Any]:
         params = dict(job.params or {})
         created_by = job.created_by
 
-    upload_path = Path(str(params.get("upload_path") or ""))
-    filename = str(params.get("filename") or upload_path.name)
-    archive = upload_path.suffix.lower() == ".zip"
+    upload_paths = [Path(str(one)) for one in (params.get("upload_paths") or [])]
+    filenames = [str(one) for one in (params.get("filenames") or [])]
+    if not filenames:
+        filenames = [path.name for path in upload_paths]
+    labels = [str(one) for one in (params.get("labels") or [])]
+    version_column = str(params.get("version_column") or "")
+    archive = bool(upload_paths) and upload_paths[0].suffix.lower() == ".zip"
     summary: dict[str, Any] = {}
 
     try:
-        if not upload_path.is_file():
+        if not upload_paths or not all(path.is_file() for path in upload_paths):
             raise IngestError("The uploaded file is no longer on the server.")
         with session_scope() as db:
             if archive:
                 from app.services import stata
 
-                outcome = load_archive_as_datasets(
-                    db,
-                    archive_path=upload_path,
-                    archive_name=filename,
-                    project_id=str(params.get("project_id") or "") or None,
-                    created_by=created_by,
-                    combine_all=bool(params.get("combine_all")),
-                    name_prefix=str(params.get("name_prefix") or ""),
-                    mode=str(params.get("mode") or "replace"),
-                    after_replace=stata.replay,
-                )
+                outcome = ArchiveImport()
+                mode = str(params.get("mode") or "replace")
+                for index, (path, one) in enumerate(
+                    zip(upload_paths, filenames, strict=True)
+                ):
+                    step = load_archive_as_datasets(
+                        db,
+                        archive_path=path,
+                        archive_name=one,
+                        project_id=str(params.get("project_id") or "") or None,
+                        created_by=created_by,
+                        combine_all=bool(params.get("combine_all")),
+                        name_prefix=str(params.get("name_prefix") or ""),
+                        # The first lands under the mode asked for; the rest are
+                        # appended onto what it produced.
+                        mode=mode if index == 0 else "append",
+                        after_replace=stata.replay,
+                        stamp=(version_column, labels[index]) if version_column else None,
+                    )
+                    outcome = merge_imports(outcome, step)
                 rebuilt = rebuild_dependents(db, outcome.replaced_ids)
                 db.flush()
                 warnings = list(outcome.warnings)
@@ -448,7 +479,7 @@ def run_upload_import(self: Any, job_id: str) -> dict[str, Any]:
                 dataset = db.get(Dataset, str(params.get("dataset_id") or ""))
                 if dataset is None:
                     raise IngestError("The dataset record for this upload is gone.")
-                load_file_into_dataset(db, dataset, upload_path)
+                load_file_into_dataset(db, dataset, upload_paths[0])
                 db.flush()
                 summary = {
                     "datasets": [
@@ -472,7 +503,8 @@ def run_upload_import(self: Any, job_id: str) -> dict[str, Any]:
                 job.error = str(exc) or exc.__class__.__name__
         return {"error": str(exc)}
     finally:
-        upload_path.unlink(missing_ok=True)
+        for path in upload_paths:
+            path.unlink(missing_ok=True)
 
     with session_scope() as db:
         job = db.get(Job, job_id)
