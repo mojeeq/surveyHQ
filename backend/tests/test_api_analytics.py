@@ -1656,3 +1656,228 @@ def test_an_html_widget_carries_its_markup_through(client, auth_headers):
     payload = next(iter(rendered["widgets"].values()))
     assert payload["type"] == "html"
     assert payload["html"] == "<h1>Round 3</h1><p>Enumeration closes Friday.</p>"
+
+
+def test_a_freshness_widget_reports_both_kinds_of_recent(client, auth_headers):
+    """An import that runs faithfully and collects nothing new looks healthy by
+    one measure. The newest record in the data is what catches it."""
+    import datetime as dt
+
+    import pandas as pd
+
+    recent = dt.datetime.now(dt.UTC) - dt.timedelta(hours=2)
+    old = dt.datetime.now(dt.UTC) - dt.timedelta(days=9)
+    frame = pd.DataFrame(
+        {
+            "interview__key": ["a", "b"],
+            "interview__date": [
+                pd.Timestamp(old).tz_localize(None),
+                pd.Timestamp(recent).tz_localize(None),
+            ],
+            "age": [30.0, 40.0],
+        }
+    )
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": ("fresh.zip", _zip_bytes({"fresh.dta": _stata_bytes(frame)}), "application/zip")
+        },
+    ).json()
+    dataset_id = uploaded["datasets"][0]["id"]
+
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "How fresh"}
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={
+            "title": "Data freshness",
+            "widget_type": "freshness",
+            "config": {"dataset_ids": [dataset_id], "warn_hours": 24, "critical_hours": 72},
+        },
+    )
+
+    rendered = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json={"op": "and", "conditions": [], "groups": []},
+    ).json()
+    payload = next(iter(rendered["widgets"].values()))
+    assert payload["type"] == "freshness"
+
+    line = payload["datasets"][0]
+    assert line["rows"] == 2
+    # Just imported, so that half is fresh
+    assert line["hours_since_import"] < 1
+    # But the newest interview in it is two hours old, and the date column was
+    # found without being configured
+    assert line["date_variable"] == "interview__date"
+    assert 1.5 < line["hours_since_record"] < 3
+    assert line["status"] == "ok"
+
+
+def test_a_dataset_whose_newest_record_is_old_is_reported_stale(client, auth_headers):
+    import datetime as dt
+
+    import pandas as pd
+
+    stale = dt.datetime.now(dt.UTC) - dt.timedelta(days=9)
+    frame = pd.DataFrame(
+        {
+            "interview__key": ["a"],
+            "interview__date": [pd.Timestamp(stale).tz_localize(None)],
+        }
+    )
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": ("stale.zip", _zip_bytes({"stale.dta": _stata_bytes(frame)}), "application/zip")
+        },
+    ).json()
+    dataset_id = uploaded["datasets"][0]["id"]
+
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Gone quiet"}
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={
+            "widget_type": "freshness",
+            "config": {"dataset_ids": [dataset_id], "warn_hours": 24, "critical_hours": 72},
+        },
+    )
+    rendered = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json={"op": "and", "conditions": [], "groups": []},
+    ).json()
+    line = next(iter(rendered["widgets"].values()))["datasets"][0]
+
+    # The import is minutes old; the data in it is nine days old, and the
+    # widget is judged on the staler of the two.
+    assert line["hours_since_import"] < 1
+    assert line["hours_since_record"] > 200
+    assert line["status"] == "critical"
+
+
+def test_a_freshness_widget_with_no_datasets_says_so(client, auth_headers):
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Watching nothing"}
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={"widget_type": "freshness", "config": {}},
+    )
+    rendered = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json={"op": "and", "conditions": [], "groups": []},
+    ).json()
+    assert "no datasets" in next(iter(rendered["widgets"].values()))["error"]
+
+
+def test_a_birthday_is_not_how_recent_the_data_is(client, auth_headers):
+    """Found on real data: the freshness widget read member_birth_date and
+    reported a survey collected this morning as a year and a half stale.
+
+    A person's birthday is an answer, not the moment a record arrived, and
+    neither is the questionnaire's own configured reference period. Saying
+    "no date column" is better than either.
+    """
+    import datetime as dt
+
+    import pandas as pd
+
+    long_ago = pd.Timestamp(dt.datetime(1990, 5, 1))
+    frame = pd.DataFrame(
+        {
+            "interview__key": ["a"],
+            "member_birth_date": [long_ago],
+            "CUSTOM_DATE_START": [pd.Timestamp(dt.datetime(2024, 1, 1))],
+        }
+    )
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "birthdays.zip",
+                _zip_bytes({"birthdays.dta": _stata_bytes(frame)}),
+                "application/zip",
+            )
+        },
+    ).json()
+    dataset_id = uploaded["datasets"][0]["id"]
+
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Not a birthday"}
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={"widget_type": "freshness", "config": {"dataset_ids": [dataset_id]}},
+    )
+    rendered = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json={"op": "and", "conditions": [], "groups": []},
+    ).json()
+    line = next(iter(rendered["widgets"].values()))["datasets"][0]
+
+    assert line["date_variable"] == ""
+    assert line["latest_record_at"] is None
+    # Judged on the import alone, which just happened
+    assert line["status"] == "ok"
+
+
+def test_the_date_column_can_be_named_when_the_guess_is_wrong(client, auth_headers):
+    import datetime as dt
+
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        {
+            "interview__key": ["a"],
+            "member_birth_date": [pd.Timestamp(dt.datetime(1990, 5, 1))],
+        }
+    )
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "named-date.zip",
+                _zip_bytes({"named_date.dta": _stata_bytes(frame)}),
+                "application/zip",
+            )
+        },
+    ).json()
+    dataset_id = uploaded["datasets"][0]["id"]
+
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Named date"}
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={
+            "widget_type": "freshness",
+            "config": {
+                "dataset_ids": [dataset_id],
+                "date_variables": {dataset_id: "member_birth_date"},
+            },
+        },
+    )
+    rendered = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json={"op": "and", "conditions": [], "groups": []},
+    ).json()
+    line = next(iter(rendered["widgets"].values()))["datasets"][0]
+    assert line["date_variable"] == "member_birth_date"
+    assert line["hours_since_record"] > 100_000

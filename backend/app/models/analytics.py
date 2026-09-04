@@ -34,6 +34,10 @@ class ChartType(str, enum.Enum):
     crosstab = "crosstab"
     map = "map"
     gauge = "gauge"
+    # A stacked bar lying on its side, and the two-sided bar that a population
+    # by age and sex is always drawn as.
+    horizontal_stacked_bar = "horizontal_stacked_bar"
+    population_pyramid = "population_pyramid"
     funnel = "funnel"
 
 
@@ -48,6 +52,7 @@ class WidgetType(str, enum.Enum):
     countdown = "countdown"
     map = "map"
     html = "html"
+    freshness = "freshness"
 
 
 class SavedQuery(UUIDMixin, TimestampMixin, Base):

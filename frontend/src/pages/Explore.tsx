@@ -54,6 +54,8 @@ const CHART_TYPES: { value: ChartType; label: string }[] = [
   { value: 'bar', label: 'Bar' },
   { value: 'horizontal_bar', label: 'Horizontal bar' },
   { value: 'stacked_bar', label: 'Stacked bar' },
+  { value: 'horizontal_stacked_bar', label: 'Horizontal stacked bar' },
+  { value: 'population_pyramid', label: 'Population pyramid' },
   { value: 'line', label: 'Line' },
   { value: 'area', label: 'Area' },
   { value: 'donut', label: 'Donut' },
@@ -479,7 +481,14 @@ function AggregateBuilder({
         </Card>
 
         <Card title="Display">
-          <Field label="Chart type">
+          <Field
+            label="Chart type"
+            hint={
+              chartType === 'population_pyramid'
+                ? 'Group by an age band and then by sex: the bands become the axis, the two sexes the two sides.'
+                : undefined
+            }
+          >
             <select
               className="input py-1.5 text-xs"
               value={chartType}

@@ -2,17 +2,26 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException
 from slugify import slugify
 from sqlalchemy import func, select, update
 
 from app.api.deps import CurrentUser, DbSession, RequireManager
 from app.models import (
+    AlertRule,
+    Chart,
+    Connection,
     Dashboard,
     Dataset,
+    DatasetRelationship,
+    Indicator,
     Project,
     ProjectMember,
+    QualityRule,
     Role,
+    SavedQuery,
     User,
 )
 from app.schemas.common import Message
@@ -26,6 +35,8 @@ from app.schemas.project import (
     ProjectUpdate,
 )
 from app.services.audit import record
+from app.services.dashboard_assets import remove_background
+from app.services.datasets import delete_dataset_files
 from app.services.projects import (
     can_edit,
     effective_role,
@@ -100,17 +111,99 @@ def update_project(
 
 
 @router.delete("/{project_id}", response_model=Message)
-def delete_project(project_id: str, db: DbSession, user: CurrentUser) -> Message:
-    """Delete the project itself; its datasets and dashboards return to the
-    shared area rather than being destroyed with it."""
+def delete_project(
+    project_id: str,
+    db: DbSession,
+    user: CurrentUser,
+    contents: Literal["release", "delete"] = "release",
+) -> Message:
+    """Delete the project, and either release its contents or destroy them.
+
+    Releasing is the old behaviour and stays the default: a project is an
+    organising idea, and dissolving one need not throw away the data organised
+    by it. But a round that is finished with is finished with, and moving eight
+    datasets to the shared area to delete them one at a time is not tidying up
+    - so contents="delete" takes the lot.
+
+    What "the lot" means: the project's datasets and their stored files, and
+    everything hanging off them - charts, indicators and their history, quality
+    rules and results, alert rules and the alerts they raised, relationships,
+    and any dataset merged out of them - plus its dashboards and their widgets.
+    Connections are released rather than deleted: a connection is a server and
+    a set of credentials, which outlive the project pointed at it.
+    """
     project = _editable_project(project_id, db, user, Role.manager)
     name = project.name
+
+    if contents == "delete":
+        # Deleted through the ORM rather than by statement, so the cascades
+        # declared on the relationships run and nothing is left orphaned.
+        datasets = list(db.scalars(select(Dataset).where(Dataset.project_id == project_id)))
+        dashboards = list(
+            db.scalars(select(Dashboard).where(Dashboard.project_id == project_id))
+        )
+        relationships = list(
+            db.scalars(
+                select(DatasetRelationship).where(
+                    DatasetRelationship.project_id == project_id
+                )
+            )
+        )
+        for relationship in relationships:
+            db.delete(relationship)
+        for dashboard in dashboards:
+            remove_background(dashboard.id)
+            db.delete(dashboard)
+
+        # Everything hanging off those datasets, deleted by name rather than
+        # left to ON DELETE CASCADE. The constraint is real on PostgreSQL and
+        # silently absent on SQLite, which does not enforce foreign keys unless
+        # asked - so relying on it makes the same delete behave differently on
+        # the two databases this runs on.
+        ids = [dataset.id for dataset in datasets]
+        if ids:
+            indicators = list(
+                db.scalars(select(Indicator).where(Indicator.dataset_id.in_(ids)))
+            )
+            for indicator in indicators:
+                db.delete(indicator)  # its snapshots go with it
+            rules = list(
+                db.scalars(select(AlertRule).where(AlertRule.dataset_id.in_(ids)))
+            )
+            for rule in rules:
+                db.delete(rule)  # and the alerts it raised
+            for quality_rule in db.scalars(
+                select(QualityRule).where(QualityRule.dataset_id.in_(ids))
+            ):
+                db.delete(quality_rule)
+            for chart in db.scalars(select(Chart).where(Chart.dataset_id.in_(ids))):
+                db.delete(chart)
+            for query in db.scalars(select(SavedQuery).where(SavedQuery.dataset_id.in_(ids))):
+                db.delete(query)
+            db.flush()
+
+        for dataset in datasets:
+            delete_dataset_files(dataset)
+            db.delete(dataset)
+        removed = {
+            "datasets": len(datasets),
+            "dashboards": len(dashboards),
+            "relationships": len(relationships),
+        }
+        summary = (
+            f"Project '{name}' deleted, with {removed['datasets']} dataset(s), "
+            f"{removed['dashboards']} dashboard(s) and everything built on them"
+        )
+    else:
+        removed = {}
+        summary = f"Project '{name}' deleted; its data moved to the shared area"
+
     # Released here rather than by ON DELETE SET NULL. On a database upgraded in
     # place the project_id column is added by ALTER TABLE, which carries no
     # foreign key, so the constraint would not fire and the rows would be left
     # pointing at a project that no longer exists - visible to nobody but an
     # administrator. Doing it explicitly works the same either way.
-    for model in (Dataset, Dashboard):
+    for model in (Dataset, Dashboard, DatasetRelationship, Connection):
         db.execute(
             update(model).where(model.project_id == project_id).values(project_id=None)
         )
@@ -122,9 +215,9 @@ def delete_project(project_id: str, db: DbSession, user: CurrentUser) -> Message
         action="project.delete",
         entity_type="project",
         entity_id=project_id,
-        detail={"name": name},
+        detail={"name": name, "contents": contents, **removed},
     )
-    return Message(detail=f"Project '{name}' deleted; its data moved to the shared area")
+    return Message(detail=summary)
 
 
 # --- membership -------------------------------------------------------------

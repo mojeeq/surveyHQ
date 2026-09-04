@@ -280,6 +280,45 @@ export default function AppearanceModal({
         />
       </Field>
 
+      <Field
+        label="Behind the page tabs"
+        hint="A band under the tab strip. Worth setting when the background is close to the colour of the text on it."
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className={`h-8 rounded border-2 px-3 text-xs ${
+              draft.tab_background ? 'border-ink-200 text-ink-600' : 'border-brand-600 text-brand-700'
+            }`}
+            onClick={() => setDraft({ ...draft, tab_background: '' })}
+          >
+            None
+          </button>
+          {['#ffffff', '#0f172a', '#334155', '#f8fafc'].map((colour) => (
+            <button
+              key={colour}
+              type="button"
+              aria-label={`Tab band ${colour}`}
+              aria-pressed={draft.tab_background === colour}
+              onClick={() => setDraft({ ...draft, tab_background: colour })}
+              className={`h-8 w-8 rounded border-2 ${
+                draft.tab_background === colour
+                  ? 'border-brand-600 ring-2 ring-brand-200'
+                  : 'border-ink-200'
+              }`}
+              style={{ backgroundColor: colour }}
+            />
+          ))}
+          <input
+            type="color"
+            className="h-8 w-12 cursor-pointer rounded border border-ink-200 bg-white"
+            title="Any other colour"
+            value={draft.tab_background || '#ffffff'}
+            onChange={(event) => setDraft({ ...draft, tab_background: event.target.value })}
+          />
+        </div>
+      </Field>
+
       <Field label="Background colour">
         <div className="flex flex-wrap items-center gap-2">
           {BACKGROUNDS.map((option) => (

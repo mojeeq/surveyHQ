@@ -287,6 +287,18 @@ function pivot(result: QueryResult) {
 }
 
 /**
+ * Compare two category labels, as numbers when they are numbers.
+ *
+ * Age bands come back as "0", "5", "10", ... and sorting those as text puts 5
+ * between 45 and 50, which on a pyramid is a chart nobody can read.
+ */
+function byLabel(left: string, right: string): number {
+  const [x, y] = [Number(left), Number(right)]
+  if (left !== '' && right !== '' && Number.isFinite(x) && Number.isFinite(y)) return x - y
+  return left.localeCompare(right)
+}
+
+/**
  * Order the categories, and fold the tail into one "Other".
  *
  * Both are reading aids rather than data changes: a bar chart of forty
@@ -312,10 +324,10 @@ function shape(
       order = order.sort((a, b) => totals[a] - totals[b])
       break
     case 'label_asc':
-      order = order.sort((a, b) => categories[a].localeCompare(categories[b]))
+      order = order.sort((a, b) => byLabel(categories[a], categories[b]))
       break
     case 'label_desc':
-      order = order.sort((a, b) => categories[b].localeCompare(categories[a]))
+      order = order.sort((a, b) => byLabel(categories[b], categories[a]))
       break
     default:
       break
@@ -583,12 +595,116 @@ export function buildChartOption(
         })),
       }
 
+    case 'population_pyramid': {
+      // Two groups back to back on a shared age axis. The left one is drawn
+      // negative and the axis labelled with absolute numbers, which is the
+      // only trick in it: nobody reads "-4,000 men".
+      if (series.length !== 2) {
+        return {
+          ...common,
+          legend: { show: false },
+          title: {
+            text: 'A pyramid needs exactly two groups',
+            subtext:
+              series.length < 2
+                ? 'Add a second grouping - sex, usually - alongside the age bands.'
+                : `This has ${series.length}. Filter it down to two, or use a bar chart.`,
+            left: 'center',
+            top: 'middle',
+            textStyle: { color: INK.muted, ...BASE_TEXT, fontSize: 13 },
+            subtextStyle: { color: INK.muted, ...BASE_TEXT },
+          },
+          xAxis: { show: false },
+          yAxis: { show: false },
+          series: [],
+        }
+      }
+      const [left, right] = series
+      const magnitude = (value: unknown) => Math.abs(Number(value ?? 0))
+      return {
+        ...common,
+        grid: { left: 8, right: 24, top: 40, bottom: 8, containLabel: true },
+        tooltip: {
+          ...tooltipBase,
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          formatter: (params: any) => {
+            const list = Array.isArray(params) ? params : [params]
+            const rows = list
+              .map(
+                (p: any) =>
+                  `${p.marker} ${p.seriesName}: <b>${formatNumber(
+                    magnitude(p.value),
+                    options.decimals ?? 0,
+                  )}</b>`,
+              )
+              .join('<br/>')
+            return `${list[0]?.axisValueLabel ?? ''}<br/>${rows}`
+          },
+        },
+        xAxis: {
+          ...valueAxis(options.valueTitle ?? ''),
+          axisLabel: {
+            color: INK.muted,
+            ...BASE_TEXT,
+            formatter: (value: number) => formatNumber(Math.abs(value)),
+          },
+        },
+        yAxis: { type: 'category', data: categories, ...axisCommon(0) },
+        series: [
+          {
+            name: left.name,
+            type: 'bar',
+            stack: 'pyramid',
+            data: left.data.map((value) => -magnitude(value)),
+            barMaxWidth: 42,
+            itemStyle: { borderRadius: [4, 0, 0, 4] },
+            label: options.showValues
+              ? {
+                  show: categories.length <= MAX_LABELLED,
+                  position: 'left',
+                  color: INK.muted,
+                  ...BASE_TEXT,
+                  formatter: (params: any) =>
+                    formatNumber(magnitude(params.value), options.decimals ?? 0),
+                }
+              : { show: false },
+          },
+          {
+            name: right.name,
+            type: 'bar',
+            stack: 'pyramid',
+            data: right.data.map((value) => magnitude(value)),
+            barMaxWidth: 42,
+            itemStyle: { borderRadius: [0, 4, 4, 0] },
+            label: options.showValues
+              ? {
+                  show: categories.length <= MAX_LABELLED,
+                  position: 'right',
+                  color: INK.muted,
+                  ...BASE_TEXT,
+                  formatter: (params: any) =>
+                    formatNumber(magnitude(params.value), options.decimals ?? 0),
+                }
+              : { show: false },
+          },
+        ],
+      }
+    }
+
     case 'bar':
     case 'horizontal_bar':
     case 'stacked_bar':
+    case 'horizontal_stacked_bar':
     default: {
-      const horizontal = chartType === 'horizontal_bar' || options.horizontal
-      const stacked = chartType === 'stacked_bar' || options.stacked
+      const horizontal =
+        chartType === 'horizontal_bar' ||
+        chartType === 'horizontal_stacked_bar' ||
+        options.horizontal
+      const stacked =
+        chartType === 'stacked_bar' ||
+        chartType === 'horizontal_stacked_bar' ||
+        options.stacked
       const categoryAxis = {
         type: 'category' as const,
         data: categories,
