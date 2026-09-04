@@ -25,6 +25,7 @@ import httpx
 from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_exponential
 
 from app.core.logging import get_logger
+from app.services.net_guard import UnsafeAddressError, check_url
 
 logger = get_logger(__name__)
 
@@ -107,6 +108,13 @@ class ExportJob:
         )
 
 
+def _refuse_unsafe_address(request: httpx.Request) -> None:
+    try:
+        check_url(str(request.url))
+    except UnsafeAddressError as exc:
+        raise SurveySolutionsError(str(exc)) from exc
+
+
 class SurveySolutionsClient:
     """Thin, synchronous wrapper. Use as a context manager."""
 
@@ -130,6 +138,11 @@ class SurveySolutionsClient:
             timeout=timeout or DEFAULT_TIMEOUT,
             follow_redirects=True,
             headers={"Accept": "application/json", "User-Agent": "susoDash/1.0"},
+            # Checked per request rather than once on base_url, because
+            # follow_redirects is on: a server that answered with a redirect to
+            # 169.254.169.254 would otherwise be followed there with the
+            # credentials attached. The hook fires for a redirect too.
+            event_hooks={"request": [_refuse_unsafe_address]},
         )
 
     def __enter__(self) -> SurveySolutionsClient:

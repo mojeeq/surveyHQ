@@ -243,6 +243,91 @@ def _is_crosstab(spec: dict[str, Any]) -> bool:
     return bool(spec.get("crosstab"))
 
 
+def _spec_variables(raw: dict[str, Any]) -> set[str]:
+    """The variables a stored widget query groups on, best effort.
+
+    A spec that no longer validates is a broken widget, not a reason to fail
+    the whole dashboard, and it puts nothing on screen either way.
+    """
+    try:
+        spec = QuerySpec.model_validate(raw.get("query", raw))
+    except Exception:  # noqa: BLE001 - an unreadable spec simply shows nothing
+        return set()
+    return {dimension.variable for dimension in spec.dimensions if dimension.variable}
+
+
+def visible_variables(db: DbSession, dashboard: Dashboard) -> set[str]:
+    """Every variable this dashboard puts on screen.
+
+    Used to bound what a filter arriving from outside may name. A dashboard's
+    widgets are drawn from a whole dataset, and a filter is evaluated against
+    that dataset rather than against the widget, so an arbitrary filter is a
+    question about any column in the file - including the ones the dashboard
+    deliberately does not show. Ask "how many interviews have phone number
+    5551234" and a count of one is an answer, repeated until it is a list.
+
+    What is already on screen carries no such risk: filtering by a category the
+    viewer can read off an axis tells them nothing they could not see. So the
+    axes are the allowance, along with the filter controls the author put on the
+    dashboard themselves - which together are exactly what the shared page's UI
+    can produce: a click on a mark, or a choice from a dropdown that was put
+    there to be chosen from.
+    """
+    names: set[str] = {
+        str((control or {}).get("variable") or "")
+        for control in (dashboard.filters or [])
+        if isinstance(control, dict)
+    }
+    for widget in dashboard.widgets:
+        config = widget.config or {}
+        if widget.chart_id:
+            chart = db.get(Chart, widget.chart_id)
+            if chart is None:
+                continue
+            spec = chart.spec or {}
+            if _is_crosstab(spec):
+                crosstab = spec.get("crosstab") or {}
+                names.update(
+                    str(crosstab.get(key) or "")
+                    for key in ("row_variable", "column_variable")
+                )
+            else:
+                names.update(_spec_variables(spec))
+            continue
+        if widget.widget_type.value == "map":
+            names.update(str(config.get(key) or "") for key in ("latitude", "longitude"))
+            names.update(str(name) for name in (config.get("detail") or []))
+            names.add(str(config.get("measure_variable") or ""))
+            continue
+        if widget.widget_type.value == "indicator" and widget.indicator_id:
+            if config.get("show_breakdown"):
+                indicator = db.get(Indicator, widget.indicator_id)
+                if indicator is not None and indicator.breakdown_variable:
+                    names.add(indicator.breakdown_variable)
+            continue
+        names.update(_spec_variables(config))
+    names.discard("")
+    return names
+
+
+def restrict_to_visible(
+    filters: FilterGroup | None, allowed: set[str]
+) -> FilterGroup | None:
+    """Drop every condition naming something the dashboard does not show."""
+    if filters is None or filters.is_empty():
+        return filters
+
+    def prune(group: FilterGroup) -> FilterGroup:
+        return FilterGroup(
+            op=group.op,
+            conditions=[c for c in group.conditions if c.variable in allowed],
+            groups=[prune(g) for g in group.groups],
+        )
+
+    pruned = prune(filters)
+    return None if pruned.is_empty() else pruned
+
+
 def _validate_chart_spec(spec: dict[str, Any]) -> None:
     try:
         if _is_crosstab(spec):

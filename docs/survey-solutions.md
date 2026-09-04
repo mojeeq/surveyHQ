@@ -150,6 +150,20 @@ Network or DNS. From the host:
 If the server uses a self-signed certificate, turn off **Verify the server's TLS
 certificate** on the connection — only on a network you trust.
 
+**"... is a link-local address" or "... points at this server itself"**
+The platform will not fetch a survey server from `127.0.0.1`, `localhost`, or
+the `169.254.x.x` range. The first two are susoDash's own container rather than
+a Survey Solutions server, and the third is where cloud providers put the
+metadata service that hands out machine credentials to anything that asks — so
+a URL pointing there, whether mistyped or planted, is refused rather than
+followed. A server on your own network is fine: `10.x`, `192.168.x` and
+`172.16-31.x` are all allowed, because that is where Survey Solutions usually
+lives. Enter the address as it is reached from the susoDash host.
+
+**"Too many connection tests"**
+Testing a connection makes this server fetch a URL you chose, so it is capped at
+ten a minute per user. Wait a minute.
+
 **"The export archive contained no data files"**
 The questionnaire has no interviews matching the selected status. Set interview
 status to `All` and try again.

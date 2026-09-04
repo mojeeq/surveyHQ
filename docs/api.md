@@ -33,6 +33,12 @@ curl https://surveyhq.example.org/api/v1/datasets \
 
 An API key carries the role of the user who created it.
 
+Sign-in is rate limited: ten attempts a minute from one address, five a minute
+against one account, counted whether or not the password was right. Over either,
+the endpoint answers `429` with a `Retry-After` header. A script that signs in
+once and reuses its token never meets this; one that signs in per request will.
+Prefer an API key for scripts — it is not rate limited, and it does not expire.
+
 ## Endpoints
 
 Every listing returns only what the caller may reach. A dataset, dashboard or
@@ -449,6 +455,7 @@ A response:
 | 409 | The dataset is not ready to query |
 | 413 | Upload exceeds `MAX_UPLOAD_MB` |
 | 422 | The file could not be parsed, or the request body is invalid |
+| 429 | Too many sign-in attempts, or too many requests to a shared dashboard. `Retry-After` says how long to wait |
 | 502 | The Survey Solutions server could not be reached or refused the request |
 
 Errors carry a readable `detail`:

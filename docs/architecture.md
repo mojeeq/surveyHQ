@@ -423,8 +423,32 @@ refused, and the interface says all of this at the point of naming rather than
 leaving it to be discovered.
 
 Uniqueness is checked in Python as well as declared on the column, because the
-column reaches an existing database through `ALTER TABLE ADD COLUMN`, which
-carries no index with it.
+column reaches an existing database through `ALTER TABLE ADD COLUMN`. That used
+to carry no index with it at all; start-up now creates the indexes an upgraded
+database is missing, so the constraint is real again, and the Python check stays
+as the one that produces a sentence rather than a database error.
+
+### What a visitor may ask a shared dashboard
+
+A widget is drawn from a whole dataset, and a filter is evaluated against that
+dataset rather than against the widget. So an unrestricted filter on a public
+link is a question about any column in the file, including the ones the
+dashboard deliberately does not show — and a count is an answer. Filter to one
+respondent's identifier and the tile says whether that person is in the data.
+Repeat, and a read-only link is a lookup service for a file nobody published.
+
+So the public render route holds a filter to what the dashboard displays: the
+variables its widgets group on, plus the filter controls its author put on it.
+Both are publishing decisions, and together they are exactly what the shared
+page's UI can produce — a click on a mark, or a choice from a dropdown that was
+put there to be chosen from. Anything else is dropped rather than refused: a
+`422` for a column that exists and a different answer for one that does not
+would itself be the lookup, and no honest visitor can send one, because the
+shared page has no way to compose it.
+
+The restriction belongs to the link, not to the dashboard. A signed-in analyst
+keeps the whole filter grammar on the same dashboard, because they already have
+the dataset and narrowing them would protect nothing.
 
 ## Reading a whole table, and a whole map
 

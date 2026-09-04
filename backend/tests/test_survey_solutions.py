@@ -280,3 +280,32 @@ def test_an_export_is_kept_as_the_zip_it_arrived_as(tmp_path):
             "members.dta",
             "interview__actions.dta",
         }
+
+
+@respx.mock
+def test_a_redirect_to_the_metadata_service_is_not_followed():
+    """The check has to be per request, not once on base_url.
+
+    follow_redirects is on, so a server that answered with a redirect to
+    169.254.169.254 would otherwise be followed there - with the connection's
+    credentials attached, by a client that was pointed at a perfectly ordinary
+    public address.
+    """
+    respx.get(f"{BASE}/primary/api/v1/questionnaires").mock(
+        return_value=httpx.Response(
+            302, headers={"Location": "http://169.254.169.254/latest/meta-data/"}
+        )
+    )
+    with (
+        SurveySolutionsClient(BASE, "user", "pass") as client,
+        pytest.raises(SurveySolutionsError, match="link-local"),
+    ):
+        client.list_questionnaires()
+
+
+def test_a_connection_pointed_at_the_platform_itself_is_refused():
+    with (
+        SurveySolutionsClient("http://127.0.0.1:8000", "user", "pass") as client,
+        pytest.raises(SurveySolutionsError, match="this server itself"),
+    ):
+        client.list_questionnaires()
