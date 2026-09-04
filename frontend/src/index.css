@@ -76,8 +76,11 @@
   .table-base tbody tr:hover {
     @apply bg-[rgba(102,136,153,0.05)];
   }
+  /* Square, like everything else here. A pill reads as decoration; a status
+     belongs in the same rectangular vocabulary as the tables and cards it sits
+     among. */
   .chip {
-    @apply inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium;
+    @apply inline-flex items-center gap-1 rounded-control border px-2 py-0.5 text-xs font-medium;
   }
 }
 
