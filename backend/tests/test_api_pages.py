@@ -111,3 +111,84 @@ def test_the_last_page_stays(client, auth_headers):
     )
     assert refused.status_code == 409, refused.text
     client.delete(f"/api/v1/dashboards/{created['id']}", headers=auth_headers)
+
+
+def test_a_click_filter_leaves_the_widget_it_was_clicked_on_alone(
+    client, auth_headers, dataset_id
+):
+    """Cross-filtering: every widget narrows except the one holding the marks.
+
+    Narrowing the clicked chart to the one bar just chosen would take away the
+    means of choosing another, so it renders unfiltered while the rest follow.
+    """
+    detail = client.get(f"/api/v1/datasets/{dataset_id}", headers=auth_headers).json()
+    grouping = next(
+        v for v in detail["variables"] if v["var_type"] == "categorical" and v["n_unique"] > 1
+    )
+    values = client.get(
+        f"/api/v1/datasets/{dataset_id}/variables/{grouping['name']}/values",
+        headers=auth_headers,
+    ).json()
+    chosen = str(values[0]["label"] or values[0]["value"])
+
+    chart = client.post(
+        "/api/v1/dashboards/charts",
+        headers=auth_headers,
+        json={
+            "name": "By category",
+            "dataset_id": dataset_id,
+            "chart_type": "bar",
+            "spec": {
+                "query": {
+                    "dimensions": [{"variable": grouping["name"]}],
+                    "measures": [{"agg": "count", "alias": "n"}],
+                    "limit": 100,
+                }
+            },
+        },
+    ).json()
+
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Click filter"}
+    ).json()
+    ids = []
+    for title in ("Clicked", "Follows"):
+        added = client.post(
+            f"/api/v1/dashboards/{dashboard['id']}/widgets",
+            headers=auth_headers,
+            json={"widget_type": "chart", "title": title, "chart_id": chart["id"]},
+        )
+        assert added.status_code == 201, added.text
+        ids.append(added.json()["widgets"][-1]["id"])
+    clicked, follows = ids
+
+    filters = {
+        "op": "and",
+        "conditions": [
+            {"variable": grouping["name"], "operator": "eq", "value": chosen, "use_label": True}
+        ],
+        "groups": [],
+    }
+    rendered = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json=filters,
+        params={"every_widget_but": clicked},
+    )
+    assert rendered.status_code == 200, rendered.text
+    widgets = rendered.json()["widgets"]
+
+    # The one that was clicked still shows every category to click next.
+    assert len(widgets[clicked]["result"]["rows"]) == len(
+        client.post(
+            f"/api/v1/dashboards/{dashboard['id']}/data", headers=auth_headers, json={}
+        ).json()["widgets"][clicked]["result"]["rows"]
+    )
+    # The other one is down to the category that was clicked.
+    assert len(widgets[follows]["result"]["rows"]) == 1
+
+    # The chart says what it groups on, which is how a click knows what it means.
+    assert widgets[clicked]["grouped_on"] == [grouping["name"]]
+
+    client.delete(f"/api/v1/dashboards/{dashboard['id']}", headers=auth_headers)
+    client.delete(f"/api/v1/dashboards/charts/{chart['id']}", headers=auth_headers)

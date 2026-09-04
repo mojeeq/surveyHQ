@@ -376,6 +376,14 @@ any other widget.
 Any Explore result can be saved as a chart. Saved charts live under
 **Dashboards → Saved charts**, each showing live data.
 
+**Edit** on a saved chart opens it back in Explore with everything it was built
+from already filled in — the grouping, the measure, the filters, the chart type
+and how it is drawn — and runs it, so you are looking at the chart you are
+about to change. Change the variable, add a filter, switch it to a horizontal
+bar, then **Save changes**: it writes back to the same chart, so every
+dashboard showing it follows. **Stop editing** leaves it as it was. Saved
+cross-tabulations edit the same way, in the cross-tabulation tab.
+
 To build a dashboard:
 
 1. **Dashboards → New dashboard**. Choose the project it belongs to, or leave it
@@ -454,6 +462,23 @@ is not there, no domain is configured; an administrator sets `DASHBOARD_DOMAIN`
 along with the DNS record and certificate described in
 [deployment.md](deployment.md).
 
+### Filtering by clicking a chart
+
+Click a bar, a slice or a table row and the rest of the page follows it. Click
+the Shefa bar on "Interviews by province" and every other widget on that page
+shows Shefa only, with a bar across the top saying what is selected and a
+**Clear** beside it.
+
+The chart you clicked is deliberately left alone — it is the thing you are
+clicking, and narrowing it to the one bar you just chose would take away the
+means of choosing another. Clicking the same mark again lets go of it, and
+changing page clears it, since a selection means nothing to widgets reading
+another dataset.
+
+It stacks with the filter controls below: a click narrows whatever they have
+already narrowed. Widgets whose dataset has no such variable say so rather than
+quietly ignoring it, exactly as with the controls.
+
 ### Filters
 
 **Filters** on a dashboard adds controls its readers can use: pick a variable
@@ -466,6 +491,10 @@ to widgets whose dataset actually has that variable; widgets that cannot answer
 it say so rather than quietly ignoring it.
 
 ### Making it yours
+
+**Click the dashboard's title** to open these controls — or use **Appearance**,
+which is the same thing.
+
 
 A dashboard is usually the thing a survey team shows other people, and it
 belongs to them rather than to the platform. **Appearance → Header** is where it

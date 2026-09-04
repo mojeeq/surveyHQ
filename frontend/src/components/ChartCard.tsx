@@ -20,6 +20,7 @@ export default function ChartCard({
   showToggle = true,
   theme,
   display,
+  onSelect,
 }: {
   result: QueryResult
   chartType: ChartType
@@ -33,6 +34,8 @@ export default function ChartCard({
   theme?: string
   /** How this chart is drawn: order, top-N, labels, a target line. */
   display?: BuildOptions
+  /** Called with the category a click landed on, for filtering by it. */
+  onSelect?: (category: string) => void
 }) {
   const [view, setView] = useState<'chart' | 'table'>('chart')
   const container = useRef<HTMLDivElement>(null)
@@ -73,7 +76,25 @@ export default function ChartCard({
             </thead>
             <tbody>
               {result.rows.map((row, rowIndex) => (
-                <tr key={rowIndex}>
+                <tr
+                  key={rowIndex}
+                  className={onSelect ? 'cursor-pointer' : undefined}
+                  onClick={
+                    onSelect
+                      ? () => {
+                          // The first dimension column is what the row stands
+                          // for, the same thing a bar stands for.
+                          const at = result.columns.findIndex(
+                            (column) => column.type === 'dimension',
+                          )
+                          const value = at >= 0 ? row[at] : null
+                          if (value !== null && value !== undefined) {
+                            onSelect(String(value))
+                          }
+                        }
+                      : undefined
+                  }
+                >
                   {row.map((value, cellIndex) => (
                     <td
                       key={cellIndex}
@@ -104,6 +125,20 @@ export default function ChartCard({
         style={fill ? { flex: 1, minHeight: 0, width: '100%' } : { height, width: '100%' }}
         opts={{ renderer: 'canvas' }}
         notMerge
+        onEvents={
+          onSelect
+            ? {
+                // The category axis label, which is the dimension value the
+                // bar or slice stands for. A pie hands it over as `name`; a
+                // bar chart gives the axis value there too.
+                click: (params: { name?: string; value?: unknown }) => {
+                  const category = params?.name ?? String(params?.value ?? '')
+                  if (category) onSelect(category)
+                },
+              }
+            : undefined
+        }
+        className={onSelect ? 'cursor-pointer' : undefined}
       />
     </div>
   )

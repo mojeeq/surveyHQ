@@ -99,7 +99,11 @@ Runs on Ubuntu with Docker. One command to install.
   link.
 - Every widget is editable in place — what it shows, its title, its size — and
   can be moved to another page.
-- Filter controls per page, so each page asks its own question.
+- Filter controls per page, so each page asks its own question — and click a
+  bar, slice or row to filter the rest of the page by it, the chart you clicked
+  staying whole so you can pick another.
+- Saved charts edit where they were built: **Edit** reopens one in Explore with
+  its query filled in, and saving writes back to it.
 - Dashboard appearance: background colour or image, canvas width, grid columns
   and row height, per-dashboard widget transparency, and a colour for the page
   tab strip.

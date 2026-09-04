@@ -62,10 +62,14 @@ def read_shared_dashboard(token: str, db: DbSession) -> DashboardDetail:
 
 @router.post("/dashboards/{token}/data", response_model=dict)
 def render_shared_dashboard(
-    token: str, db: DbSession, filters: FilterGroup | None = None
+    token: str,
+    db: DbSession,
+    filters: FilterGroup | None = None,
+    every_widget_but: str = "",
 ) -> dict[str, Any]:
+    """A shared dashboard renders like any other, click-to-filter included."""
     dashboard = _get_shared(token, db)
-    return _render_widgets(db, dashboard, filters)
+    return _render_widgets(db, dashboard, filters, every_widget_but)
 
 
 @router.get("/dashboards/{token}/background")
