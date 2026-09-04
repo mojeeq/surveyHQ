@@ -33,6 +33,10 @@ class IndicatorCreate(BaseModel):
 class IndicatorUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
+    # An indicator can be pointed at another dataset, which is what editing one
+    # onto this round's data amounts to. The spec travels with it, because the
+    # variables it names belong to the dataset it came from.
+    dataset_id: str | None = None
     spec: QuerySpec | None = None
     unit: str | None = None
     value_format: str | None = None

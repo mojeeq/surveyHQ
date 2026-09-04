@@ -8,7 +8,7 @@ export default function SharedDashboard() {
     <div className="min-h-screen bg-ink-50">
       <header className="border-b border-ink-200 bg-white px-6 py-3">
         <div className="mx-auto flex max-w-[1500px] items-center gap-2">
-          <span className="grid h-7 w-7 place-items-center rounded-md bg-brand-600 text-sm font-bold text-white">
+          <span className="grid h-7 w-7 place-items-center rounded-control bg-brand-600 text-sm font-bold text-white">
             S
           </span>
           <span className="text-sm font-semibold text-ink-900">SurveyHQ</span>

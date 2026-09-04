@@ -42,6 +42,7 @@ export default function Monitoring() {
   const toast = useToast()
   const queryClient = useQueryClient()
   const [creating, setCreating] = useState(false)
+  const [editing, setEditing] = useState<Indicator | null>(null)
   const [project, setProject] = useState<string | null>(null)
 
   const values = useQuery({
@@ -137,6 +138,7 @@ export default function Monitoring() {
                 value={value}
                 definition={definition}
                 canManage={can('manager')}
+                onEdit={definition ? () => setEditing(definition) : undefined}
                 onDelete={() => {
                   if (confirm(`Delete the indicator "${value.name}"?`))
                     remove.mutate(value.indicator_id)
@@ -148,6 +150,9 @@ export default function Monitoring() {
       )}
 
       {creating && <IndicatorModal onClose={() => setCreating(false)} />}
+      {editing && (
+        <IndicatorModal indicator={editing} onClose={() => setEditing(null)} />
+      )}
     </>
   )
 }
@@ -156,11 +161,13 @@ function IndicatorCard({
   value,
   definition,
   canManage,
+  onEdit,
   onDelete,
 }: {
   value: IndicatorValue
   definition?: Indicator
   canManage: boolean
+  onEdit?: () => void
   onDelete: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -182,6 +189,17 @@ function IndicatorCard({
           <Badge tone={state.tone} icon={state.icon}>
             {state.label}
           </Badge>
+          {canManage && onEdit && (
+            // A threshold set before fieldwork started is a guess, and the
+            // whole indicator had to be deleted and rebuilt to correct it.
+            <button
+              className="btn-ghost btn-sm text-ink-500"
+              onClick={onEdit}
+              title="Edit this indicator"
+            >
+              ✎
+            </button>
+          )}
           {canManage && (
             <button className="btn-ghost btn-sm text-red-600" onClick={onDelete}>
               ✕
@@ -303,20 +321,61 @@ const MEASURES: {
 type MeasureKind = 'records' | 'answered' | 'sum' | 'mean' | 'median' | 'distinct'
 type PercentOf = '' | 'all_rows' | 'answered'
 
-function IndicatorModal({ onClose }: { onClose: () => void }) {
+/** Which of the measures above produced this indicator's spec.
+ *
+ *  An indicator stores a query, not the choice that built it, so editing one
+ *  means reading the choice back out: the aggregate plus whether it names a
+ *  variable is enough to tell them apart.
+ */
+function measureKindOf(indicator: Indicator): MeasureKind {
+  const measure = indicator.spec?.measures?.[0]
+  if (!measure) return 'records'
+  const named = Boolean(measure.variable)
+  const match = MEASURES.find((m) => m.agg === measure.agg && m.needsVariable === named)
+  return match?.value ?? 'records'
+}
+
+function IndicatorModal({
+  indicator,
+  onClose,
+}: {
+  indicator?: Indicator
+  onClose: () => void
+}) {
   const toast = useToast()
   const queryClient = useQueryClient()
-  const [datasetId, setDatasetId] = useState('')
-  const [name, setName] = useState('')
-  const [kind, setKind] = useState<MeasureKind>('records')
-  const [variable, setVariable] = useState('')
-  const [where, setWhere] = useState<FilterGroup>(emptyFilter())
-  const [percentOf, setPercentOf] = useState<PercentOf>('')
-  const [breakdown, setBreakdown] = useState('')
-  const [target, setTarget] = useState('')
-  const [warning, setWarning] = useState('')
-  const [critical, setCritical] = useState('')
-  const [direction, setDirection] = useState<Direction>('higher_is_better')
+  const editing = Boolean(indicator)
+  const [datasetId, setDatasetId] = useState(indicator?.dataset_id ?? '')
+  const [name, setName] = useState(indicator?.name ?? '')
+  const [kind, setKind] = useState<MeasureKind>(
+    indicator ? measureKindOf(indicator) : 'records',
+  )
+  const [variable, setVariable] = useState(
+    indicator?.spec?.measures?.[0]?.variable ?? '',
+  )
+  const [where, setWhere] = useState<FilterGroup>(
+    indicator?.spec?.filters ?? emptyFilter(),
+  )
+  const [percentOf, setPercentOf] = useState<PercentOf>(indicator?.percent_of ?? '')
+  const [breakdown, setBreakdown] = useState(indicator?.breakdown_variable ?? '')
+  const [target, setTarget] = useState(
+    indicator?.target_value === null || indicator?.target_value === undefined
+      ? ''
+      : String(indicator.target_value),
+  )
+  const [warning, setWarning] = useState(
+    indicator?.warning_threshold === null || indicator?.warning_threshold === undefined
+      ? ''
+      : String(indicator.warning_threshold),
+  )
+  const [critical, setCritical] = useState(
+    indicator?.critical_threshold === null || indicator?.critical_threshold === undefined
+      ? ''
+      : String(indicator.critical_threshold),
+  )
+  const [direction, setDirection] = useState<Direction>(
+    indicator?.direction ?? 'higher_is_better',
+  )
 
   const datasets = useQuery({
     queryKey: ['datasets', 'ready'],
@@ -340,8 +399,8 @@ function IndicatorModal({ onClose }: { onClose: () => void }) {
   const canBePercent = kind === 'records' || kind === 'answered'
 
   const create = useMutation({
-    mutationFn: () =>
-      api.post('/monitoring/indicators', {
+    mutationFn: () => {
+      const body = {
         name,
         dataset_id: datasetId,
         spec: {
@@ -366,9 +425,13 @@ function IndicatorModal({ onClose }: { onClose: () => void }) {
         warning_threshold: warning ? Number(warning) : null,
         critical_threshold: critical ? Number(critical) : null,
         direction,
-      }),
+      }
+      return indicator
+        ? api.patch(`/monitoring/indicators/${indicator.id}`, body)
+        : api.post('/monitoring/indicators', body)
+    },
     onSuccess: () => {
-      toast.push('Indicator created', 'success')
+      toast.push(editing ? 'Indicator saved' : 'Indicator created', 'success')
       queryClient.invalidateQueries({ queryKey: ['indicator-values'] })
       queryClient.invalidateQueries({ queryKey: ['indicators'] })
       onClose()
@@ -382,7 +445,7 @@ function IndicatorModal({ onClose }: { onClose: () => void }) {
     <Modal
       open
       onClose={onClose}
-      title="New indicator"
+      title={editing ? `Edit ${indicator!.name}` : 'New indicator'}
       wide
       footer={
         <>
@@ -395,7 +458,7 @@ function IndicatorModal({ onClose }: { onClose: () => void }) {
             disabled={!ready || create.isPending}
           >
             {create.isPending && <Spinner className="h-4 w-4 text-white" />}
-            Create indicator
+            {editing ? 'Save changes' : 'Create indicator'}
           </button>
         </>
       }

@@ -13,7 +13,7 @@ from sqlalchemy import select
 from app.api.deps import CurrentUser, DbSession, RequireManager
 from app.core.crypto import decrypt, encrypt
 from app.core.logging import get_logger
-from app.models import Connection, Job, JobStatus, JobType, SyncRun
+from app.models import Connection, Job, JobStatus, JobType, Role, SyncRun, User
 from app.schemas.common import Message
 from app.schemas.connection import (
     ConnectionCreate,
@@ -26,6 +26,7 @@ from app.schemas.connection import (
 )
 from app.schemas.monitoring import JobOut
 from app.services.audit import record
+from app.services.projects import can_edit, can_view, restrict, scope_for
 from app.services.survey_solutions import (
     SurveySolutionsClient,
     SurveySolutionsError,
@@ -51,16 +52,37 @@ def _client(connection: Connection) -> SurveySolutionsClient:
     )
 
 
-def _get(connection_id: str, db: DbSession) -> Connection:
+def _get(connection_id: str, db: DbSession, user: User) -> Connection:
+    """A connection the caller may reach.
+
+    Every route here takes an id, and a connection is not an innocuous record:
+    it names a server, it can be made to import, and its runs hand back the raw
+    export. Scoping the listing alone would leave all of that reachable to
+    anyone who knew the id.
+    """
     connection = db.get(Connection, connection_id)
-    if connection is None:
+    if connection is None or not can_view(db, user, connection.project_id):
+        raise HTTPException(status_code=404, detail="Connection not found")
+    return connection
+
+
+def _editable(connection_id: str, db: DbSession, user: User) -> Connection:
+    """The same, for a call that changes something or pulls data through it."""
+    connection = _get(connection_id, db, user)
+    if not can_edit(db, user, connection.project_id, Role.manager):
         raise HTTPException(status_code=404, detail="Connection not found")
     return connection
 
 
 @router.get("", response_model=list[ConnectionOut])
-def list_connections(db: DbSession, _: CurrentUser) -> list[ConnectionOut]:
-    rows = db.scalars(select(Connection).order_by(Connection.created_at.desc())).all()
+def list_connections(db: DbSession, user: CurrentUser) -> list[ConnectionOut]:
+    rows = db.scalars(
+        # A connection carries the project its imports land in, so it is
+        # scoped by that like everything else that has one.
+        restrict(
+            select(Connection), scope_for(db, user).filter(Connection.project_id)
+        ).order_by(Connection.created_at.desc())
+    ).all()
     return [_to_out(c) for c in rows]
 
 
@@ -68,6 +90,8 @@ def list_connections(db: DbSession, _: CurrentUser) -> list[ConnectionOut]:
 def create_connection(
     payload: ConnectionCreate, db: DbSession, user: RequireManager
 ) -> ConnectionOut:
+    if payload.project_id and not can_edit(db, user, payload.project_id, Role.manager):
+        raise HTTPException(status_code=404, detail="Project not found")
     connection = Connection(
         name=payload.name,
         base_url=payload.base_url,
@@ -100,17 +124,22 @@ def create_connection(
 
 
 @router.get("/{connection_id}", response_model=ConnectionOut)
-def read_connection(connection_id: str, db: DbSession, _: CurrentUser) -> ConnectionOut:
-    return _to_out(_get(connection_id, db))
+def read_connection(connection_id: str, db: DbSession, user: CurrentUser) -> ConnectionOut:
+    return _to_out(_get(connection_id, db, user))
 
 
 @router.patch("/{connection_id}", response_model=ConnectionOut)
 def update_connection(
     connection_id: str, payload: ConnectionUpdate, db: DbSession, user: RequireManager
 ) -> ConnectionOut:
-    connection = _get(connection_id, db)
+    connection = _editable(connection_id, db, user)
     data = payload.model_dump(exclude_unset=True)
     password = data.pop("password", None)
+    if "project_id" in data and data["project_id"] != connection.project_id:
+        # Moving a connection is a write to where it is going as well as to
+        # where it was, so both ends are checked.
+        if not can_edit(db, user, data["project_id"], Role.manager):
+            raise HTTPException(status_code=404, detail="Project not found")
     for field, value in data.items():
         setattr(connection, field, value)
     if password:
@@ -129,7 +158,7 @@ def update_connection(
 
 @router.delete("/{connection_id}", response_model=Message)
 def delete_connection(connection_id: str, db: DbSession, user: RequireManager) -> Message:
-    connection = _get(connection_id, db)
+    connection = _editable(connection_id, db, user)
     name = connection.name
     db.delete(connection)
     record(
@@ -146,9 +175,9 @@ def delete_connection(connection_id: str, db: DbSession, user: RequireManager) -
 
 @router.post("/{connection_id}/test", response_model=ConnectionTestResult)
 def test_connection(
-    connection_id: str, db: DbSession, _: RequireManager
+    connection_id: str, db: DbSession, user: RequireManager
 ) -> ConnectionTestResult:
-    connection = _get(connection_id, db)
+    connection = _editable(connection_id, db, user)
     if not connection.username or not connection.password_encrypted:
         return ConnectionTestResult(
             ok=False, message="Set an API user name and password before testing."
@@ -204,9 +233,9 @@ def test_unsaved_connection(
 
 @router.get("/{connection_id}/questionnaires", response_model=list[QuestionnaireOut])
 def list_questionnaires(
-    connection_id: str, db: DbSession, _: CurrentUser
+    connection_id: str, db: DbSession, user: CurrentUser
 ) -> list[QuestionnaireOut]:
-    connection = _get(connection_id, db)
+    connection = _get(connection_id, db, user)
     try:
         with _client(connection) as client:
             questionnaires = client.list_questionnaires()
@@ -229,14 +258,14 @@ def list_questionnaires(
 def list_interviews(
     connection_id: str,
     db: DbSession,
-    _: CurrentUser,
+    user: CurrentUser,
     questionnaire_id: str = "",
     version: int | None = None,
     status: str = "",
     limit: int = Query(default=200, le=1000),
 ) -> dict[str, Any]:
     """Live interview summaries straight from the server, without exporting."""
-    connection = _get(connection_id, db)
+    connection = _get(connection_id, db, user)
     try:
         with _client(connection) as client:
             interviews: list[dict[str, Any]] = []
@@ -263,11 +292,16 @@ def trigger_sync(
     connection_id: str, payload: SyncRequest, db: DbSession, user: RequireManager
 ) -> Job:
     """Queue an export + import run for the selected questionnaires."""
-    connection = _get(connection_id, db)
+    connection = _editable(connection_id, db, user)
     if not connection.username or not connection.password_encrypted:
         raise HTTPException(
             status_code=400, detail="This connection has no credentials configured."
         )
+    target_project = payload.project_id or connection.project_id
+    if target_project and not can_edit(db, user, target_project, Role.manager):
+        # The import creates datasets in that project, so aiming one at a
+        # project the caller does not manage is a write they may not make.
+        raise HTTPException(status_code=404, detail="Project not found")
     questionnaires = payload.questionnaires or connection.questionnaires
     if not questionnaires:
         raise HTTPException(
@@ -286,7 +320,7 @@ def trigger_sync(
             "connection_id": connection.id,
             "questionnaires": questionnaires,
             "interview_status": payload.interview_status or connection.interview_status,
-            "project_id": payload.project_id or connection.project_id,
+            "project_id": target_project,
             "mode": payload.mode,
         },
         created_by=user.id,
@@ -324,14 +358,14 @@ def trigger_sync(
 
 @router.get("/{connection_id}/runs/{run_id}/archive")
 def download_sync_archive(
-    connection_id: str, run_id: str, db: DbSession, _: CurrentUser
+    connection_id: str, run_id: str, db: DbSession, user: CurrentUser
 ) -> Response:
     """The export zip exactly as the server sent it.
 
     Worth keeping and worth handing back: it is the only record of what was
     actually imported, and it can be re-uploaded like any other archive.
     """
-    _get(connection_id, db)
+    _get(connection_id, db, user)
     run = db.get(SyncRun, run_id)
     if run is None or run.connection_id != connection_id:
         raise HTTPException(status_code=404, detail="Sync run not found")
@@ -351,9 +385,9 @@ def download_sync_archive(
 
 @router.get("/{connection_id}/runs", response_model=list[SyncRunOut])
 def list_sync_runs(
-    connection_id: str, db: DbSession, _: CurrentUser, limit: int = 20
+    connection_id: str, db: DbSession, user: CurrentUser, limit: int = 20
 ) -> list[SyncRunOut]:
-    _get(connection_id, db)
+    _get(connection_id, db, user)
     runs = db.scalars(
         select(SyncRun)
         .where(SyncRun.connection_id == connection_id)

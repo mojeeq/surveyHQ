@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRef, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
-import { api } from '@/lib/api'
+import { api, downloadFile } from '@/lib/api'
 import { formatBytes, formatNumber, formatDate, titleCase } from '@/lib/format'
 import type { Dataset, FrequencyResult, SummaryStats, Variable } from '@/lib/types'
 import { useAuth } from '@/hooks/useAuth'
@@ -40,6 +40,7 @@ export default function DatasetDetail() {
   const [inspecting, setInspecting] = useState<Variable | null>(null)
   const [labelling, setLabelling] = useState<Variable | null>(null)
   const [appending, setAppending] = useState(false)
+  const [renaming, setRenaming] = useState(false)
 
   const toast = useToast()
   const queryClient = useQueryClient()
@@ -107,9 +108,29 @@ export default function DatasetDetail() {
                 Append data
               </button>
             )}
+            {can('manager') && (
+              <>
+                <button className="btn-secondary" onClick={() => setRenaming(true)}>
+                  Rename
+                </button>
+                <DownloadMenu dataset={data} />
+              </>
+            )}
           </>
         }
       />
+
+      {renaming && (
+        <RenameModal
+          dataset={data}
+          onClose={() => setRenaming(false)}
+          onDone={() => {
+            setRenaming(false)
+            dataset.refetch()
+            queryClient.invalidateQueries({ queryKey: ['datasets'] })
+          }}
+        />
+      )}
 
       <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Stat label="Rows" value={formatNumber(data.row_count)} />
@@ -132,7 +153,7 @@ export default function DatasetDetail() {
             {Object.entries(monitoringFields).map(([role, column]) => (
               <span
                 key={role}
-                className="rounded-lg border border-ink-200 bg-ink-50 px-2.5 py-1.5 text-xs"
+                className="rounded-card border border-ink-200 bg-ink-50 px-2.5 py-1.5 text-xs"
               >
                 <span className="font-semibold text-ink-700">{titleCase(role)}</span>
                 <span className="mx-1 text-ink-400">→</span>
@@ -555,7 +576,7 @@ function FrequencyModal({
               }}
             />
           </div>
-          <div className="overflow-auto rounded-lg border border-ink-200">
+          <div className="overflow-auto rounded-card border border-ink-200">
             <table className="table-base">
               <thead>
                 <tr>
@@ -633,7 +654,7 @@ function AppendModal({ datasetId, onClose }: { datasetId: string; onClose: () =>
       }
     >
       {error && (
-        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+        <div className="mb-4 rounded-card border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
           {error}
         </div>
       )}
@@ -974,6 +995,134 @@ function CommandPanel({ datasetId }: { datasetId: string }) {
           </ul>
         </Card>
       </div>
+    </div>
+  )
+}
+
+/** Rename a dataset, and describe it.
+ *
+ *  An archive names each dataset after the file inside it, which is how a
+ *  project ends up holding R_demographics and roster_pp. Those are the names
+ *  the export chose; this is where they become the names the team uses.
+ */
+function RenameModal({
+  dataset,
+  onClose,
+  onDone,
+}: {
+  dataset: Dataset
+  onClose: () => void
+  onDone: () => void
+}) {
+  const toast = useToast()
+  const [name, setName] = useState(dataset.name)
+  const [description, setDescription] = useState(dataset.description ?? '')
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.patch<Dataset>(`/datasets/${dataset.id}`, {
+        name: name.trim(),
+        description,
+      }),
+    onSuccess: () => {
+      toast.push('Renamed', 'success')
+      onDone()
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Rename dataset"
+      footer={
+        <>
+          <button className="btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="btn-primary"
+            onClick={() => save.mutate()}
+            disabled={!name.trim() || save.isPending}
+          >
+            Save
+          </button>
+        </>
+      }
+    >
+      <Field label="Name">
+        <input
+          className="input"
+          value={name}
+          autoFocus
+          onChange={(event) => setName(event.target.value)}
+        />
+      </Field>
+      <Field
+        label="Description"
+        hint="What this table holds, and anything the next person should know about it."
+      >
+        <textarea
+          className="input"
+          rows={3}
+          value={description}
+          onChange={(event) => setDescription(event.target.value)}
+        />
+      </Field>
+    </Modal>
+  )
+}
+
+/** Download the whole dataset.
+ *
+ *  Stata first because it is the one that carries the labels; a merged dataset
+ *  has no file of its own, so all three are written from what the platform
+ *  actually queries.
+ */
+function DownloadMenu({ dataset }: { dataset: Dataset }) {
+  const toast = useToast()
+  const [busy, setBusy] = useState('')
+
+  const download = async (format: 'dta' | 'csv' | 'xlsx') => {
+    setBusy(format)
+    try {
+      await downloadFile(
+        `/datasets/${dataset.id}/download?format=${format}`,
+        null,
+        `${dataset.slug || 'dataset'}.${format}`,
+        'GET',
+      )
+    } catch (error) {
+      toast.push(error instanceof Error ? error.message : 'Download failed', 'error')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  return (
+    <div className="inline-flex overflow-hidden rounded-card border border-ink-200">
+      {([
+        ['dta', 'Stata'],
+        ['csv', 'CSV'],
+        ['xlsx', 'Excel'],
+      ] as const).map(([format, label], index) => (
+        <button
+          key={format}
+          className={`px-2.5 py-1.5 text-xs font-medium text-ink-700 hover:bg-ink-50 disabled:opacity-60 ${
+            index > 0 ? 'border-l border-ink-200' : ''
+          }`}
+          onClick={() => download(format)}
+          disabled={Boolean(busy)}
+          title={
+            format === 'dta'
+              ? 'Download with variable and value labels'
+              : `Download as ${label}`
+          }
+        >
+          {busy === format ? '…' : label}
+        </button>
+      ))}
     </div>
   )
 }

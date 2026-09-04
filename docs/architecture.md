@@ -105,6 +105,22 @@ would be lost every morning if they were not put back:
    rounds, so a merge of a merge is rebuilt only once the merge underneath it
    has been.
 
+## Where an upload is read
+
+Small uploads are read in the request. Anything over 48 MB is written to disk,
+handed to the worker as a job, and answered with that job, which the browser
+polls. Two reasons, both of which a census roster export hits at once: reading
+it takes longer than any proxy holds a request open, and reading it in the API
+process takes memory away from every other request being served.
+
+The size limit is checked in middleware, from the declared content length,
+before the body is read. It used to be checked in the route - which runs only
+after the whole multipart body has been received and written to disk - so an
+over-limit file was transferred in full and then refused, and nginx, left
+holding a body nobody was reading any more, reported the refusal as a bad
+gateway. nginx now enforces no ceiling of its own (`client_max_body_size 0`):
+one place decides, and it is the place that can say what the limit is.
+
 ## Derived variables
 
 `stata.py` implements the idioms - `gen`, `replace`, `egen`, `label`, `rename`,
@@ -235,6 +251,13 @@ shuts the shared area off for them, which is what makes "this person sees one
 project and nothing else" expressible without first assigning everything else to
 a project.
 
+Connections are scoped by the project their imports land in, and alert rules by
+what they watch - the indicator's dataset, their own, or, tied to neither, the
+shared area. Both are reached by id from every route that acts on them, so both
+check on the id rather than trusting a filtered listing. A connection is worth
+saying out loud: it names a server, it can be made to import, and its runs hand
+back the raw export, so an unscoped one is not a stale row in a list.
+
 `services/projects.py` answers the two questions every endpoint has - which rows
 may this user see, and may they change this one - so neither is re-derived,
 slightly differently, per endpoint. Enforcement sits in the lookups
@@ -299,6 +322,18 @@ frontend/src/
   components/   layout, chart card, data table, filter builder, UI primitives
   pages/        one per route
 ```
+
+## The look of it
+
+The interface follows Redash's own theme values - `#2196f3` primary, `#edecec`
+page, `#e8e8e8` borders, `#595959` text on `#333` headings, 13px system font,
+3px panels and 2px controls, and the `#191c22` navy its sidebar has always
+been. They live as Tailwind tokens in `tailwind.config.js`, so the palette is
+changed in one place rather than component by component.
+
+The chart series palette is deliberately not from there. Page furniture can be
+any colour; a chart's colours carry meaning, and the palette in `lib/charts.ts`
+is validated for colour-vision deficiency separation. See below.
 
 ## Chart colour
 

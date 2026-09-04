@@ -26,6 +26,8 @@ Runs on Ubuntu with Docker. One command to install.
 - A later archive **replaces** what it matches by default, keeping each
   dataset's identity, so nothing built on it has to be redone. Choose *append*
   instead for genuinely incremental exports.
+- A large upload is imported by the background worker, so a census-sized export
+  does not depend on a browser connection staying open while it is read.
 - Variable labels and value labels are preserved, so charts read "Female"
   rather than "2" — and you can write your own where the export has none.
 
@@ -44,7 +46,8 @@ Runs on Ubuntu with Docker. One command to install.
 - Derive variables with a Stata-style script — `gen`, `replace`, `egen`,
   `label`, `rename`, `drop`, `keep`, with `if` conditions — recorded and
   replayed automatically after the next export replaces the data.
-- Export any result to CSV or Excel.
+- Export any result to CSV or Excel, or download a whole dataset as Stata (with
+  its labels), CSV or Excel — merged datasets included.
 
 **Monitor it**
 - Indicators: a tracked number with a target and warning/critical thresholds,
@@ -254,8 +257,8 @@ More in [docs/architecture.md](docs/architecture.md).
 - Survey Solutions passwords are encrypted at rest with Fernet, because the API
   needs the real password on every call and cannot use a hash.
 - Four roles gate every write: viewer < analyst < manager < administrator.
-- Project access is enforced where a dataset, dashboard or chart is looked up,
-  not route by route, so it covers the query endpoints too - listing alone would
+- Project access is enforced where a dataset, dashboard, chart, connection,
+  alert rule or alert is looked up, not route by route, so it covers the query endpoints too - listing alone would
   leave a dataset readable to anyone who knew its id. A resource outside your
   reach answers 404 rather than 403, so responses cannot be used to enumerate
   other people's projects.

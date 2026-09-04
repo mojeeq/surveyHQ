@@ -35,7 +35,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
           <div
             key={toast.id}
             role="status"
-            className={`flex items-start gap-2 rounded-lg border px-4 py-3 text-sm shadow-pop ${TONES[toast.level]}`}
+            className={`flex items-start gap-2 rounded-card border px-4 py-3 text-sm shadow-pop ${TONES[toast.level]}`}
           >
             <span aria-hidden>{ICONS[toast.level]}</span>
             <span className="flex-1">{toast.message}</span>

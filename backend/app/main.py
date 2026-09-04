@@ -69,6 +69,36 @@ app.add_middleware(
 
 
 @app.middleware("http")
+async def refuse_oversized_upload(request: Request, call_next):  # type: ignore[no-untyped-def]
+    """Answer an over-limit upload before its body is read.
+
+    The size check used to live in the upload route, which runs only after the
+    whole multipart body has been received and parsed. So a file over the limit
+    was transferred in full, written to disk, and only then refused - and a
+    proxy in front, holding a body nobody was reading any more, reported the
+    whole thing as a bad gateway rather than as the size limit it was. Here it
+    is decided from the declared length, before any of it is read.
+    """
+    if request.method == "POST" and request.url.path.endswith("/datasets/upload"):
+        declared = request.headers.get("content-length", "")
+        limit = settings.max_upload_mb * 1024 * 1024
+        # A megabyte of slack for the form fields travelling with the file.
+        if declared.isdigit() and int(declared) > limit + 1024 * 1024:
+            return JSONResponse(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                content={
+                    "detail": (
+                        f"This upload is {int(declared) / (1024 * 1024):,.0f} MB and "
+                        f"the limit is {settings.max_upload_mb} MB. Raise "
+                        "MAX_UPLOAD_MB in .env and restart, or upload the "
+                        "archive's files one at a time."
+                    )
+                },
+            )
+    return await call_next(request)
+
+
+@app.middleware("http")
 async def add_timing_header(request: Request, call_next):  # type: ignore[no-untyped-def]
     started = time.perf_counter()
     response = await call_next(request)

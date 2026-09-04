@@ -23,7 +23,7 @@ export function Loading({ label = 'Loading' }: { label?: string }) {
 export function ErrorNote({ error, retry }: { error: unknown; retry?: () => void }) {
   const message = error instanceof Error ? error.message : 'Something went wrong'
   return (
-    <div className="rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+    <div className="rounded-card border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
       <div className="flex items-start gap-2">
         <span aria-hidden>⚠</span>
         <div className="flex-1">
@@ -159,7 +159,7 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className={`relative w-full ${wide ? 'max-w-4xl' : 'max-w-lg'} rounded-xl bg-white shadow-pop`}
+        className={`relative w-full ${wide ? 'max-w-4xl' : 'max-w-lg'} rounded-card bg-white shadow-pop`}
       >
         <header className="flex items-center justify-between border-b border-ink-200 px-5 py-4">
           <h2 className="text-base font-semibold text-ink-900">{title}</h2>

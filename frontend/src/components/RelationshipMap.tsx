@@ -103,7 +103,7 @@ export default function RelationshipMap({
         if (element) cards.current.set(dataset.id, element)
         else cards.current.delete(dataset.id)
       }}
-      className={`rounded-lg border px-3 py-2 shadow-sm ${tone}`}
+      className={`rounded-card border px-3 py-2 shadow-sm ${tone}`}
     >
       <p className="text-sm font-medium text-ink-900">{dataset.name}</p>
       <p className="text-[11px] text-ink-500">
@@ -179,7 +179,7 @@ export default function RelationshipMap({
             <li key={link.id}>
               <button
                 onClick={() => onSelect(link.id === selectedId ? null : link)}
-                className={`flex w-full flex-wrap items-center gap-2 rounded-lg border px-3 py-2 text-left text-sm transition-colors ${
+                className={`flex w-full flex-wrap items-center gap-2 rounded-card border px-3 py-2 text-left text-sm transition-colors ${
                   link.id === selectedId
                     ? 'border-brand-400 bg-brand-50'
                     : 'border-ink-200 hover:bg-ink-50'

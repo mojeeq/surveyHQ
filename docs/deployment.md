@@ -42,7 +42,7 @@ Everything lives in `.env`. Values worth attention:
 | `PUBLIC_URL` | The URL people use. Appears in alert emails. |
 | `CORS_ORIGINS` | Comma separated. Must include your real domain in production. |
 | `WEB_PORT` | Host port for the web interface. Default 8080. |
-| `MAX_UPLOAD_MB` | Upload ceiling. Raise `client_max_body_size` in `frontend/nginx.conf` to match if you go above 1 GB. |
+| `MAX_UPLOAD_MB` | The upload ceiling, and the only one: nginx no longer enforces a second. An upload over it is refused with a message naming the size and the limit, before the body is transferred. |
 | `SYNC_TICK_MINUTES` | How often the scheduler checks for due imports. A connection set to import at a time of day cannot be honoured more precisely than this. |
 | `MONITOR_TICK_MINUTES` | How often indicators, alerts and checks are evaluated. |
 
@@ -218,6 +218,12 @@ The API container is down or unhealthy.
 docker compose logs api --tail=50
 curl localhost:8080/health
 ```
+
+**A large upload never finishes**
+
+Uploads over 48 MB are imported by the worker, so the file is transferred, a
+job is created, and nothing happens if the worker is not running. The job says
+so under **Administration → Background jobs**.
 
 **Imports stay queued forever**
 

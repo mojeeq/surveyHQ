@@ -29,7 +29,7 @@ export default function CrosstabTable({
   return (
     <div className={`flex flex-col ${fill ? 'h-full min-h-0' : ''}`}>
       <div
-        className={`overflow-auto rounded-lg border border-ink-200 ${
+        className={`overflow-auto rounded-card border border-ink-200 ${
           fill ? 'min-h-0 flex-1' : ''
         }`}
         style={!fill && maxHeight ? { maxHeight } : undefined}

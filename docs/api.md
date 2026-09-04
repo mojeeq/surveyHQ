@@ -117,6 +117,8 @@ GET    /datasets/{id}/variables           variable list
 PATCH  /datasets/{id}/variables/{v}       set the variable's label and the labels
                                           of its codes             [manager]
 GET    /datasets/{id}/preview             raw rows
+GET    /datasets/{id}/download?format=      the whole dataset as a file: dta
+                                          (with labels), csv or xlsx [manager]
 GET    /datasets/{id}/variables/{v}/values  distinct values
 POST   /datasets/{id}/command             run a Stata-style script [manager]
 GET    /datasets/{id}/commands            what will be replayed after a replace
@@ -124,6 +126,16 @@ DELETE /datasets/{id}/commands            stop replaying them, without undoing
                                           what they did            [manager]
 GET    /datasets/{id}/tags                tags in use
 ```
+
+An upload larger than 48 MB is imported by the worker rather than in the
+request, and answers with a **job** instead of a dataset - poll
+`GET /system/jobs/{id}` and read its `result` when it succeeds, which carries
+the same report the inline path returns. Reading a census roster export takes
+longer than any proxy holds a request open, and doing it in the API process
+takes memory from every other request.
+
+An upload larger than `MAX_UPLOAD_MB` answers **413** from the declared length,
+before the body is read, and the message names both the size and the limit.
 
 `POST /datasets/upload` takes `mode` alongside the file: `replace` (the default)
 swaps the data of each dataset an archive's files match, keeping their ids so
@@ -190,6 +202,13 @@ GET    /connections/{id}/runs             import history; has_archive says wheth
 GET    /connections/{id}/runs/{run}/archive  download that export zip exactly as
                                           the server sent it
 ```
+
+Connections are scoped by their project, like everything else that has one:
+listings are filtered, and every route above answers 404 for a connection
+outside the caller's reach - including `/questionnaires`, `/interviews`,
+`/sync` and the archive download, each of which reaches the server or its data.
+Aiming an import at a project the caller does not manage is refused the same
+way.
 
 A connection carries where its imports land and when they happen:
 
@@ -265,6 +284,14 @@ the conditions its own dataset has variables for, and reports the rest in
 Indicators, alerts, alert rules, quality rules and quality results all accept
 `project_id` to narrow a listing to one project (`none` for the shared area);
 a resource takes its project from its dataset.
+
+Scope is enforced on the id, not only on the listing. An alert rule is reached
+through its indicator's dataset, or its own, or - tied to neither - through the
+shared area; an alert through the rule that raised it. Editing, deleting,
+testing, acknowledging and resolving all answer 404 outside that reach, and a
+rule cannot be moved onto an indicator or dataset the caller cannot reach.
+An indicator can be moved between datasets with `dataset_id`, which is checked
+at both ends.
 
 ```
 GET/POST/PATCH/DELETE /monitoring/indicators[/{id}]

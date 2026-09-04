@@ -29,7 +29,9 @@ they have no say over.
 
 Monitoring, Data quality and Alerts each have a project filter at the top, so a
 round in the field can be looked at on its own rather than alongside every other
-survey the platform holds.
+survey the platform holds. Connections belong to a project too: someone who can
+reach one project sees that project's servers and its imported archives, and
+not anybody else's.
 
 ### Giving someone one project only
 
@@ -153,6 +155,13 @@ Two things it will tell you rather than let pass quietly:
 A file too large to hold in memory is read in chunks automatically. Nothing
 changes for you except that the import reports it.
 
+An upload over 48 MB is handed to the background worker rather than read while
+you wait: the browser says *Importing…* and watches it, and a census roster
+export that takes minutes no longer depends on a connection staying open for
+all of them. An upload over the platform's limit is refused before it is sent,
+with the size and the limit in the message — the limit is `MAX_UPLOAD_MB` on
+the server, and an administrator can raise it.
+
 Stata and SPSS are the best choice because they carry variable labels and value
 labels; those are read and used everywhere in the interface.
 
@@ -178,6 +187,25 @@ survey export is eight datasets, and four rounds of it is thirty-two.
 Tick several datasets and **Delete selected** removes them in one confirmation,
 or use **Delete all** on a project's group to clear a whole round. Anything the
 merge or a chart depends on goes with it, so read the confirmation.
+
+**Rename** on a dataset gives it a name and a description of your own. An
+archive names each dataset after the file inside it, which is how a project
+ends up holding `R_demographics` and `roster_pp`; those are the names the export
+chose, and this is where they become the names your team uses. Nothing breaks:
+charts, indicators and merges point at the dataset, not at its name.
+
+### Taking a dataset out
+
+**Stata**, **CSV** and **Excel** on a dataset download the whole table. All
+three are written from the data the platform is actually querying, not from
+whatever was uploaded — so a merged dataset, which never had a file of its own,
+downloads like any other, and so does a dataset changed by commands.
+
+Prefer **Stata**: it carries the variable labels and, where the codes are whole
+numbers, the value labels. CSV carries neither. Excel stops at a million rows
+and says so rather than writing a file Excel would refuse to open.
+
+Downloading is a manager's action, and it is recorded in the audit log.
 
 ## Looking at a dataset
 
@@ -246,7 +274,10 @@ commands already did.
 
 1. **Group by** one or two variables. Dates offer a grain (day, week, month,
    quarter, year). Numeric variables can be binned by width. The first grouping
-   can keep the top N categories and fold the rest into "Other".
+   can keep the top N categories and fold the rest into "Other". Any variable
+   can be grouped on, `interview__key` included — a variable with a value per
+   row says how many values it has beside its name, and the row limit decides
+   how much comes back.
 2. **Measure**: count, share of total, sum, mean, median, min, max, standard
    deviation, percentiles or distinct count. Add several measures to compare
    them side by side. Any measure can be weighted by a numeric variable — pick
@@ -403,6 +434,11 @@ before the indicator's own filters — that is how "% of interviews completed" i
 expressed. "Of those who answered" divides by the rows that answered the
 measured variable, which is the same question asked of a variable rather than of
 the file.
+
+**✎ on an indicator** edits all of it — the measure, the filters, the target and
+thresholds, the breakdown, even which dataset it reads. A threshold set before
+fieldwork started is a guess, and correcting one should not mean deleting the
+indicator and losing its history.
 
 Indicators recompute on a schedule and store a snapshot each time, which is what
 gives every indicator a trend line.

@@ -5,7 +5,7 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { formatBytes, formatNumber, relativeTime } from '@/lib/format'
-import type { ArchiveImport, Dataset, Page, Project } from '@/lib/types'
+import type { ArchiveImport, Dataset, Job, Page, Project } from '@/lib/types'
 import ProjectPicker from '@/components/ProjectPicker'
 import {
   Badge,
@@ -154,7 +154,7 @@ export default function Datasets() {
       </div>
 
       {selected.size > 0 && (
-        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-lg border border-brand-200 bg-brand-50 px-4 py-2.5 text-sm">
+        <div className="mb-4 flex flex-wrap items-center gap-3 rounded-card border border-brand-200 bg-brand-50 px-4 py-2.5 text-sm">
           <span className="font-medium text-brand-900">
             {selected.size} dataset{selected.size === 1 ? '' : 's'} selected
           </span>
@@ -415,6 +415,38 @@ function StatusBadge({ status }: { status: Dataset['status'] }) {
   return <Badge tone="warning" icon="◷">{status}</Badge>
 }
 
+
+// Uploads above this are imported by the worker, so the answer to the POST is
+// a job rather than a dataset. It matches the server's own threshold; being
+// wrong either way only changes which word the button shows.
+const BACKGROUND_BYTES = 48 * 1024 * 1024
+
+function isJob(body: Dataset | ArchiveImport | Job): body is Job {
+  return 'job_type' in body
+}
+
+/** Watch a queued import to its end, and answer as the inline path would.
+ *
+ *  The worker records the same report the request used to return, so the modal
+ *  that shows what an archive did does not need to know which path ran it.
+ */
+async function waitForImport(job: Job): Promise<Dataset | ArchiveImport> {
+  const deadline = Date.now() + 2 * 60 * 60 * 1000
+  for (;;) {
+    if (job.status === 'success') return job.result as unknown as ArchiveImport
+    if (job.status === 'failed' || job.status === 'cancelled') {
+      throw new Error(job.error || 'The import failed.')
+    }
+    if (Date.now() > deadline) {
+      throw new Error(
+        'The import is still running. Watch it under Administration \u2192 Background jobs.',
+      )
+    }
+    await new Promise((resolve) => setTimeout(resolve, 2000))
+    job = await api.get<Job>(`/system/jobs/${job.id}`)
+  }
+}
+
 function UploadModal({
   open,
   projectId: initialProject,
@@ -436,6 +468,12 @@ function UploadModal({
   const [mode, setMode] = useState<'replace' | 'append'>('replace')
   const [isZip, setIsZip] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [stage, setStage] = useState<'' | 'uploading' | 'importing'>('')
+  const info = useQuery({
+    queryKey: ['platform-info'],
+    queryFn: () => api.get<{ max_upload_mb: number }>('/system/info'),
+    staleTime: 5 * 60 * 1000,
+  })
   const [error, setError] = useState('')
   const [result, setResult] = useState<ArchiveImport | null>(null)
 
@@ -451,8 +489,20 @@ function UploadModal({
       setError('Choose a file to upload.')
       return
     }
+    // Checked here as well as on the server, because the alternative is
+    // spending twenty minutes uploading a file that was always going to be
+    // refused. The limit comes from the server, so the two cannot drift.
+    const limitMb = info.data?.max_upload_mb ?? 0
+    if (limitMb > 0 && file.size > limitMb * 1024 * 1024) {
+      setError(
+        `${file.name} is ${formatBytes(file.size)} and the limit is ${limitMb} MB. ` +
+          'Raise MAX_UPLOAD_MB in .env and restart, or upload the archive files one at a time.',
+      )
+      return
+    }
     setBusy(true)
     setError('')
+    setStage(file.size > BACKGROUND_BYTES ? 'uploading' : 'importing')
     const form = new FormData()
     form.append('file', file)
     form.append('name', name || (isZip ? '' : file.name.replace(/\.[^.]+$/, '')))
@@ -462,7 +512,13 @@ function UploadModal({
     form.append('project_id', projectId)
     form.append('mode', mode)
     try {
-      const body = await api.upload<Dataset | ArchiveImport>('/datasets/upload', form)
+      let body = await api.upload<Dataset | ArchiveImport | Job>('/datasets/upload', form)
+      if (isJob(body)) {
+        // Too big to read inside the request, so the worker has it and this
+        // watches the job it left behind.
+        setStage('importing')
+        body = await waitForImport(body)
+      }
       queryClient.invalidateQueries({ queryKey: ['datasets'] })
       queryClient.invalidateQueries({ queryKey: ['projects'] })
 
@@ -485,6 +541,7 @@ function UploadModal({
       setError(err instanceof Error ? err.message : 'Upload failed')
     } finally {
       setBusy(false)
+      setStage('')
     }
   }
 
@@ -522,13 +579,17 @@ function UploadModal({
           </button>
           <button className="btn-primary" onClick={submit} disabled={busy}>
             {busy && <Spinner className="h-4 w-4 text-white" />}
-            Upload and import
+            {stage === 'uploading'
+              ? 'Uploading\u2026'
+              : stage === 'importing'
+                ? 'Importing\u2026'
+                : 'Upload and import'}
           </button>
         </>
       }
     >
       {error && (
-        <div className="mb-4 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+        <div className="mb-4 rounded-card border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
           {error}
         </div>
       )}
@@ -550,7 +611,7 @@ function UploadModal({
       </Field>
 
       {isZip && (
-        <div className="mb-4 rounded-lg border border-brand-200 bg-brand-50 p-3">
+        <div className="mb-4 rounded-card border border-brand-200 bg-brand-50 p-3">
           <p className="text-sm text-brand-900">
             Each file inside becomes its own dataset, because an export holds one
             file per roster level — the interview, the household members, the
@@ -657,7 +718,7 @@ function ArchiveResult({ result }: { result: ArchiveImport }) {
       {result.warnings.map((warning) => (
         <p
           key={warning}
-          className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
+          className="rounded-card border border-amber-300 bg-amber-50 px-3 py-2 text-sm text-amber-900"
         >
           ⚠ {warning}
         </p>
