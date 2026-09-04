@@ -23,6 +23,40 @@ export const BACKGROUNDS: { label: string; value: string }[] = [
   { label: 'Midnight', value: '#0f172a' },
 ]
 
+/** Title faces, as stacks rather than downloads.
+ *
+ *  Every one of these is already on the machine, so a dashboard on a field
+ *  office screen with no internet still renders in the face it was designed
+ *  in - which a webfont would not.
+ */
+export const TITLE_FONTS: { label: string; value: string; stack: string }[] = [
+  { label: 'Interface', value: '', stack: '' },
+  {
+    label: 'Grotesque',
+    value: 'grotesque',
+    stack: '"Helvetica Neue", Helvetica, Arial, sans-serif',
+  },
+  {
+    label: 'Serif',
+    value: 'serif',
+    stack: 'Georgia, "Times New Roman", "Nimbus Roman", serif',
+  },
+  {
+    label: 'Slab',
+    value: 'slab',
+    stack: '"Rockwell", "Roboto Slab", "DejaVu Serif", Georgia, serif',
+  },
+  {
+    label: 'Monospace',
+    value: 'mono',
+    stack: 'ui-monospace, "SFMono-Regular", Menlo, "DejaVu Sans Mono", monospace',
+  },
+]
+
+export function titleFontStack(value?: string): string | undefined {
+  return TITLE_FONTS.find((f) => f.value === value)?.stack || undefined
+}
+
 /** Whether text on this colour has to be light. Null means no colour is set. */
 export function isDark(color?: string): boolean {
   const hex = (color ?? '').replace('#', '')
@@ -41,10 +75,14 @@ export function isDark(color?: string): boolean {
  * version stamp is in the dependencies: the file name never changes, so
  * replacing the image would otherwise go on showing the old one.
  */
-export function useBackgroundImage(basePath: string, appearance: Appearance | undefined) {
+export function useBackgroundImage(
+  basePath: string,
+  appearance: Appearance | undefined,
+  kind: 'background' | 'logo' = 'background',
+) {
   const [url, setUrl] = useState<string | null>(null)
-  const name = appearance?.background_image
-  const version = appearance?.background_version
+  const name = kind === 'logo' ? appearance?.logo_image : appearance?.background_image
+  const version = kind === 'logo' ? appearance?.logo_version : appearance?.background_version
 
   useEffect(() => {
     if (!name) {
@@ -54,7 +92,7 @@ export function useBackgroundImage(basePath: string, appearance: Appearance | un
     let objectUrl: string | null = null
     let cancelled = false
     api
-      .getBlob(`${basePath}/background`)
+      .getBlob(`${basePath}/${kind}`)
       .then((blob) => {
         if (cancelled) return
         objectUrl = URL.createObjectURL(blob)
@@ -67,7 +105,7 @@ export function useBackgroundImage(basePath: string, appearance: Appearance | un
       cancelled = true
       if (objectUrl) URL.revokeObjectURL(objectUrl)
     }
-  }, [basePath, name, version])
+  }, [basePath, kind, name, version])
 
   return url
 }
@@ -111,6 +149,7 @@ export default function AppearanceModal({
   const toast = useToast()
   const queryClient = useQueryClient()
   const fileInput = useRef<HTMLInputElement>(null)
+  const logoInput = useRef<HTMLInputElement>(null)
   const [draft, setDraft] = useState<Appearance>({
     background_fit: 'cover',
     fade: 0,
@@ -199,6 +238,35 @@ export default function AppearanceModal({
     onError: (error: Error) => toast.push(error.message, 'error'),
   })
 
+  const uploadLogo = useMutation({
+    mutationFn: (file: File) => {
+      const form = new FormData()
+      form.append('file', file)
+      return api.put<{ appearance: Appearance }>(`/dashboards/${dashboardId}/logo`, form)
+    },
+    onSuccess: (updated) => {
+      setDraft((current) => ({ ...current, ...updated.appearance }))
+      toast.push('Logo uploaded', 'success')
+      refresh()
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  const removeLogo = useMutation({
+    mutationFn: () => api.delete<{ appearance: Appearance }>(`/dashboards/${dashboardId}/logo`),
+    onSuccess: (updated) => {
+      setDraft((current) => ({
+        ...current,
+        ...updated.appearance,
+        logo_image: undefined,
+        logo_version: undefined,
+      }))
+      toast.push('Logo removed', 'info')
+      refresh()
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
   const color = draft.background_color ?? ''
 
   return (
@@ -217,6 +285,146 @@ export default function AppearanceModal({
         </>
       }
     >
+      <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-ink-500">
+        Header
+      </p>
+
+      <Field
+        label="Logo"
+        hint="Shown beside the dashboard's title, and on its shared link. PNG, JPEG, GIF or WebP, up to 8 MB."
+      >
+        <input
+          ref={logoInput}
+          type="file"
+          accept="image/png,image/jpeg,image/gif,image/webp"
+          className="hidden"
+          onChange={(event) => {
+            const file = event.target.files?.[0]
+            if (file) uploadLogo.mutate(file)
+            event.target.value = ''
+          }}
+        />
+        <div className="flex items-center gap-2">
+          <button
+            className="btn-secondary btn-sm"
+            onClick={() => logoInput.current?.click()}
+            disabled={uploadLogo.isPending}
+          >
+            {uploadLogo.isPending
+              ? 'Uploading…'
+              : draft.logo_image
+                ? 'Replace logo'
+                : 'Upload a logo'}
+          </button>
+          {draft.logo_image && (
+            <button
+              className="btn-ghost btn-sm text-red-600"
+              onClick={() => removeLogo.mutate()}
+              disabled={removeLogo.isPending}
+            >
+              Remove
+            </button>
+          )}
+        </div>
+      </Field>
+
+      {draft.logo_image && (
+        <Field label={`Logo height: ${draft.logo_height ?? 32}px`}>
+          <input
+            type="range"
+            className="w-full"
+            min={20}
+            max={96}
+            step={4}
+            value={draft.logo_height ?? 32}
+            onChange={(event) =>
+              setDraft({ ...draft, logo_height: Number(event.target.value) })
+            }
+          />
+        </Field>
+      )}
+
+      <div className="grid grid-cols-2 gap-3">
+        <Field label={`Title size: ${draft.title_size ?? 24}px`}>
+          <input
+            type="range"
+            className="w-full"
+            min={16}
+            max={64}
+            step={2}
+            value={draft.title_size ?? 24}
+            onChange={(event) => setDraft({ ...draft, title_size: Number(event.target.value) })}
+          />
+        </Field>
+        <Field label="Title font">
+          <select
+            className="input"
+            value={draft.title_font ?? ''}
+            onChange={(event) => setDraft({ ...draft, title_font: event.target.value })}
+          >
+            {TITLE_FONTS.map((font) => (
+              <option key={font.value} value={font.value}>
+                {font.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Title colour">
+          <div className="flex items-center gap-2">
+            <input
+              type="color"
+              className="h-9 w-12 cursor-pointer rounded-control border border-ink-200"
+              value={draft.title_color || '#333333'}
+              onChange={(event) => setDraft({ ...draft, title_color: event.target.value })}
+            />
+            {draft.title_color && (
+              <button
+                className="btn-ghost btn-sm"
+                onClick={() => setDraft({ ...draft, title_color: undefined })}
+              >
+                Default
+              </button>
+            )}
+          </div>
+        </Field>
+        <Field label="Alignment">
+          <select
+            className="input"
+            value={draft.title_align ?? 'left'}
+            onChange={(event) =>
+              setDraft({ ...draft, title_align: event.target.value as 'left' | 'center' })
+            }
+          >
+            <option value="left">Left</option>
+            <option value="center">Centred</option>
+          </select>
+        </Field>
+      </div>
+
+      <label className="mb-3 flex items-center gap-2 text-sm text-ink-700">
+        <input
+          type="checkbox"
+          checked={Boolean(draft.header_rule)}
+          onChange={(event) => setDraft({ ...draft, header_rule: event.target.checked })}
+        />
+        A rule under the header
+      </label>
+      <label className="mb-4 flex items-center gap-2 text-sm text-ink-700">
+        <input
+          type="checkbox"
+          checked={Boolean(draft.hide_subtitle)}
+          onChange={(event) => setDraft({ ...draft, hide_subtitle: event.target.checked })}
+        />
+        Hide the description under the title
+      </label>
+
+      <p className="mb-3 mt-5 border-t border-ink-200 pt-4 text-xs font-semibold uppercase tracking-wide text-ink-500">
+        Canvas
+      </p>
+
       <Field
         label="Canvas width"
         hint="Wider than the window gives more room to spread out, and scrolls sideways to reach it."

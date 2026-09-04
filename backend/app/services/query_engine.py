@@ -638,8 +638,12 @@ def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabR
             col_keys.append(col_value)
         table[(row_value, col_value)] = float(value or 0)
 
-    row_keys = _sorted_keys(row_keys, row_info)[: request.max_categories]
-    col_keys = _sorted_keys(col_keys, col_info)[: request.max_categories]
+    all_rows = _sorted_keys(row_keys, row_info)
+    all_cols = _sorted_keys(col_keys, col_info)
+    row_keys = all_rows[: request.max_rows]
+    col_keys = all_cols[: request.max_columns]
+    rows_omitted = len(all_rows) - len(row_keys)
+    columns_omitted = len(all_cols) - len(col_keys)
 
     values = [[table.get((r, c)) for c in col_keys] for r in row_keys]
     row_totals = [sum(v or 0 for v in row) for row in values]
@@ -678,6 +682,8 @@ def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabR
         grand_total=grand_total,
         percentages=request.percentages,
         chi_square=chi_square,
+        rows_omitted=rows_omitted,
+        columns_omitted=columns_omitted,
     )
 
 

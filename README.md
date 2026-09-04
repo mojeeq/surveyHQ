@@ -1,4 +1,6 @@
-# SurveyHQ
+<img src="frontend/public/logo.svg" width="56" alt="">
+
+# susoDash
 
 A self-hosted platform for monitoring survey/census data collection. Connect it to a
 Survey Solutions server or upload Stata files, then tabulate, chart, and watch
@@ -34,7 +36,8 @@ Runs on Ubuntu with Docker. One command to install.
 **Analyse it**
 - Tabulate: one-way frequencies with valid and cumulative percentages.
 - Cross-tabulate: two-way tables with row/column/total percentages, chi-square
-  and Cramér's V.
+  and Cramér's V — up to 5,000 rows, so tabulating by interview key gives you
+  the whole table to scroll and export.
 - Aggregate: group by any variables, measure with count, sum, mean, median,
   percentiles, standard deviation or distinct count — optionally survey-weighted.
 - Filter with nested AND/OR conditions on any variable.
@@ -88,6 +91,9 @@ Runs on Ubuntu with Docker. One command to install.
   cross-tabulations, indicator tiles with their breakdown chart, data quality
   panels, notes, countdowns, GPS maps, embedded HTML and a data-freshness
   panel.
+- A dashboard wears your organisation's badge, not ours: upload a logo, set the
+  title's size, face, colour and alignment, and it all travels with the shared
+  link.
 - Every widget is editable in place — what it shows, its title, its size — and
   can be moved to another page.
 - Filter controls per page, so each page asks its own question.
@@ -190,7 +196,7 @@ make help              # everything else
 
 1. On your Survey Solutions server, create an **API user** and give it access to
    the workspace holding your survey.
-2. In SurveyHQ go to **Connections → Add connection** and enter the server URL
+2. In susoDash go to **Connections → Add connection** and enter the server URL
    (the site root, e.g. `https://demo.mysurvey.solutions`), the workspace name
    (usually `primary`), and the API user's credentials. Pick the project the
    imports should land in.

@@ -29,8 +29,19 @@ class BackgroundError(ValueError):
     """The uploaded bytes are not an image this can serve."""
 
 
+# The two images a dashboard can carry. They are stored apart so a logo and a
+# background can coexist for one dashboard, each still one file named after it.
+KINDS = {"background": "dashboard-backgrounds", "logo": "dashboard-logos"}
+
+
+def assets_path(kind: str = "background") -> Path:
+    if kind not in KINDS:
+        raise BackgroundError(f"'{kind}' is not an image a dashboard carries")
+    return get_settings().storage_path / KINDS[kind]
+
+
 def backgrounds_path() -> Path:
-    return get_settings().storage_path / "dashboard-backgrounds"
+    return assets_path("background")
 
 
 def sniff(data: bytes) -> tuple[str, str]:
@@ -43,16 +54,16 @@ def sniff(data: bytes) -> tuple[str, str]:
     raise BackgroundError("Upload a PNG, JPEG, GIF or WebP image")
 
 
-def save_background(dashboard_id: str, data: bytes) -> str:
+def save_background(dashboard_id: str, data: bytes, kind: str = "background") -> str:
     """Write the image and return the file name to store on the dashboard."""
     if not data:
         raise BackgroundError("The uploaded file is empty")
     if len(data) > MAX_BACKGROUND_BYTES:
         limit = MAX_BACKGROUND_BYTES // (1024 * 1024)
-        raise BackgroundError(f"Background images are limited to {limit} MB")
+        raise BackgroundError(f"Images are limited to {limit} MB")
 
     suffix, _ = sniff(data)
-    directory = backgrounds_path()
+    directory = assets_path(kind)
     directory.mkdir(parents=True, exist_ok=True)
     # One file per dashboard, named after it, so replacing a background leaves
     # nothing behind and a deleted dashboard's file is findable.
@@ -63,7 +74,9 @@ def save_background(dashboard_id: str, data: bytes) -> str:
     return name
 
 
-def background_file(dashboard_id: str, name: str | None) -> tuple[Path, str] | None:
+def background_file(
+    dashboard_id: str, name: str | None, kind: str = "background"
+) -> tuple[Path, str] | None:
     """Locate a stored background, or None if the dashboard has none on disk."""
     if not name:
         return None
@@ -71,7 +84,7 @@ def background_file(dashboard_id: str, name: str | None) -> tuple[Path, str] | N
     # JSON column an editor can PATCH, so it is checked rather than trusted.
     if Path(name).name != name or not name.startswith(f"{dashboard_id}."):
         return None
-    path = backgrounds_path() / name
+    path = assets_path(kind) / name
     if not path.is_file():
         return None
     try:
@@ -82,6 +95,12 @@ def background_file(dashboard_id: str, name: str | None) -> tuple[Path, str] | N
     return path, content_type
 
 
-def remove_background(dashboard_id: str) -> None:
-    for stale in backgrounds_path().glob(f"{dashboard_id}.*"):
+def remove_background(dashboard_id: str, kind: str = "background") -> None:
+    for stale in assets_path(kind).glob(f"{dashboard_id}.*"):
         stale.unlink(missing_ok=True)
+
+
+def remove_all(dashboard_id: str) -> None:
+    """Every image a dashboard owns, for when the dashboard itself goes."""
+    for kind in KINDS:
+        remove_background(dashboard_id, kind)

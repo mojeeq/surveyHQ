@@ -75,6 +75,18 @@ export default function CrosstabTable({
         </table>
       </div>
 
+      {!compact && ((result.rows_omitted ?? 0) > 0 || (result.columns_omitted ?? 0) > 0) && (
+        // A cut table still adds up, so nothing on screen would say the rest
+        // is missing unless it says so here.
+        <p className="mt-3 rounded-card border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          Showing {formatNumber(result.row_labels.length)} of{' '}
+          {formatNumber(result.row_labels.length + (result.rows_omitted ?? 0))} rows and{' '}
+          {formatNumber(result.column_labels.length)} of{' '}
+          {formatNumber(result.column_labels.length + (result.columns_omitted ?? 0))} columns.
+          The totals cover what is shown.
+        </p>
+      )}
+
       {!compact && result.chi_square && (
         <p className="mt-3 flex flex-wrap items-center gap-2 text-xs text-ink-500">
           <Badge tone="info">Chi-square</Badge>

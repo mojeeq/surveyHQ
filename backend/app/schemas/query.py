@@ -175,7 +175,13 @@ class CrosstabRequest(BaseModel):
     percentages: Literal["none", "row", "column", "total"] = "none"
     include_totals: bool = True
     use_labels: bool = True
-    max_categories: int = Field(default=50, ge=2, le=500)
+    # Rows and columns are not the same question. A table is read down: 5,000
+    # rows scroll perfectly well and export whole, which is what tabulating by
+    # interview key or enumeration area needs. Columns are read across, and a
+    # thousand of them is a scroll bar rather than a table - but it still
+    # exports, so the ceiling is generous rather than tasteful.
+    max_rows: int = Field(default=5_000, ge=2, le=100_000)
+    max_columns: int = Field(default=1_000, ge=2, le=10_000)
 
 
 class CrosstabResult(BaseModel):
@@ -189,6 +195,11 @@ class CrosstabResult(BaseModel):
     grand_total: float
     percentages: str = "none"
     chi_square: dict[str, Any] | None = None
+    # How many categories the data actually had, when that is more than was
+    # returned. Silently cutting a table is worse than a small table: the
+    # totals still add up, so nothing on screen says the rest is missing.
+    rows_omitted: int = 0
+    columns_omitted: int = 0
 
 
 class FrequencyRow(BaseModel):

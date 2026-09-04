@@ -1,4 +1,4 @@
-# SurveyHQ - survey monitoring platform
+# susoDash - survey monitoring platform
 #
 #   cp .env.example .env   # then edit every CHANGE-ME value
 #   docker compose up -d --build
@@ -6,11 +6,16 @@
 # The stack is: nginx (web) -> FastAPI (api) -> Postgres, with a Celery worker
 # and beat scheduler sharing the api image for background imports and monitoring.
 
+# The compose project name, the volume names, the database and the container
+# user stay "surveyhq" deliberately. They are not the brand - they are the
+# identifiers an existing installation's data is filed under, and renaming them
+# would leave a running platform pointing at a database and a volume that do
+# not exist. The name people see is set by PROJECT_NAME.
 name: surveyhq
 
 x-backend-env: &backend-env
   ENVIRONMENT: ${ENVIRONMENT:-production}
-  PROJECT_NAME: ${PROJECT_NAME:-SurveyHQ}
+  PROJECT_NAME: ${PROJECT_NAME:-susoDash}
   PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
   SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env}
@@ -33,7 +38,7 @@ x-backend-env: &backend-env
   SMTP_USER: ${SMTP_USER:-}
   SMTP_PASSWORD: ${SMTP_PASSWORD:-}
   SMTP_TLS: ${SMTP_TLS:-true}
-  SMTP_FROM: ${SMTP_FROM:-SurveyHQ <no-reply@example.com>}
+  SMTP_FROM: ${SMTP_FROM:-susoDash <no-reply@example.com>}
   SYNC_TICK_MINUTES: ${SYNC_TICK_MINUTES:-5}
   MONITOR_TICK_MINUTES: ${MONITOR_TICK_MINUTES:-15}
 

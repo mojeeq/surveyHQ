@@ -36,11 +36,11 @@ export default function Layout() {
           navigation is furniture, and keeping it out of the paper-white
           working area is what makes a dashboard read as the content. */}
       <aside className="hidden w-56 shrink-0 flex-col bg-sidebar lg:flex">
-        <div className="flex h-14 items-center gap-2 px-5">
-          <span className="grid h-7 w-7 place-items-center rounded-control bg-brand-500 text-sm font-bold text-white">
-            S
+        <div className="flex h-14 items-center gap-2.5 px-5">
+          <img src="/logo.svg" alt="" className="h-8 w-8" />
+          <span className="text-[16px] font-semibold text-white">
+            suso<span className="font-normal text-sidebar-text">Dash</span>
           </span>
-          <span className="text-[15px] font-semibold text-white">SurveyHQ</span>
         </div>
         <nav className="flex-1 space-y-0.5 overflow-y-auto p-3">
           {NAV.map((item) => (
@@ -56,7 +56,7 @@ export default function Layout() {
                 }`
               }
             >
-              <span className="w-4 text-center text-xs" aria-hidden>
+              <span className="w-5 text-center text-base leading-none" aria-hidden>
                 {item.icon}
               </span>
               {item.label}
@@ -73,14 +73,14 @@ export default function Layout() {
                 }`
               }
             >
-              <span className="w-4 text-center text-xs" aria-hidden>
+              <span className="w-5 text-center text-base leading-none" aria-hidden>
                 ⚙
               </span>
               Administration
             </NavLink>
           )}
         </nav>
-        <div className="p-3 text-xs text-sidebar-text/60">SurveyHQ v1.0</div>
+        <div className="p-3 text-xs text-sidebar-text/60">susoDash v1.0</div>
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
@@ -89,7 +89,10 @@ export default function Layout() {
             <button className="btn-ghost btn-sm" onClick={() => setMenuOpen(!menuOpen)}>
               ☰
             </button>
-            <span className="font-semibold">SurveyHQ</span>
+            <img src="/logo.svg" alt="" className="h-7 w-7" />
+            <span className="font-semibold">
+              suso<span className="font-normal text-ink-500">Dash</span>
+            </span>
           </div>
           <div className="hidden lg:block" />
 

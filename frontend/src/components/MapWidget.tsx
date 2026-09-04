@@ -71,7 +71,13 @@ export default function MapWidget({
 
   useEffect(() => {
     if (!container.current || map.current) return
-    map.current = L.map(container.current, { attributionControl: true }).setView([0, 0], 2)
+    // Canvas rather than one SVG node per point: a census enumerates every
+    // household at its own reading, so this is tens of thousands of circles,
+    // and the DOM is where that stops being a map and becomes a freeze.
+    map.current = L.map(container.current, {
+      attributionControl: true,
+      preferCanvas: true,
+    }).setView([0, 0], 2)
     setTilesFailed(false)
     const basemap = L.tileLayer(tiles, { attribution: ATTRIBUTION, maxZoom: 19 })
     // A server with no route to the tile host is a normal deployment, not a
@@ -102,14 +108,20 @@ export default function MapWidget({
         fillColor: '#3b82f6',
         fillOpacity: 0.6,
       })
-      const details = detail
-        .map(
-          (name) =>
-            `<div><span style="color:#64748b">${escape(name)}:</span> ${escape(point[name])}</div>`,
-        )
-        .join('')
-      marker.bindPopup(
-        `<div style="font:13px system-ui;min-width:150px">` +
+      // Built when the popup opens, not when the marker is made: the string is
+      // the expensive part, and at fifty thousand points all but one of them
+      // is work for a popup nobody opens.
+      marker.bindPopup(() => {
+        const details = detail
+          .map(
+            (name) =>
+              `<div><span style="color:#64748b">${escape(name)}:</span> ${escape(
+                point[name],
+              )}</div>`,
+          )
+          .join('')
+        return (
+          `<div style="font:13px system-ui;min-width:150px">` +
           `<div style="font-weight:600;margin-bottom:4px">${escape(measureLabel)}: ${escape(
             formatNumber(value),
           )}</div>` +
@@ -120,8 +132,9 @@ export default function MapWidget({
           `<div style="color:#94a3b8;margin-top:4px">${point.lat.toFixed(5)}, ${point.lon.toFixed(
             5,
           )}</div>` +
-          `</div>`,
-      )
+          `</div>`
+        )
+      })
       marker.addTo(layer.current)
     }
 

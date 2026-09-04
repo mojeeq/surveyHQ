@@ -1,6 +1,6 @@
 // Small presentational primitives shared across pages.
 
-import { type ReactNode, useEffect } from 'react'
+import { type CSSProperties, type ReactNode, useEffect } from 'react'
 
 export function Spinner({ className = 'h-5 w-5' }: { className?: string }) {
   return (
@@ -203,16 +203,35 @@ export function PageHeader({
   title,
   description,
   actions,
+  /** A dashboard dresses its own header: logo, title size, face and colour. */
+  logo,
+  titleStyle,
+  align = 'left',
+  rule = false,
 }: {
   title: string
   description?: string
   actions?: ReactNode
+  logo?: ReactNode
+  titleStyle?: CSSProperties
+  align?: 'left' | 'center'
+  rule?: boolean
 }) {
+  const centred = align === 'center'
   return (
-    <div className="mb-6 flex flex-wrap items-start justify-between gap-3">
-      <div>
-        <h1 className="text-xl font-semibold text-ink-900">{title}</h1>
-        {description && <p className="mt-1 text-sm text-ink-500">{description}</p>}
+    <div
+      className={`mb-6 flex flex-wrap items-start justify-between gap-3 ${
+        rule ? 'border-b border-ink-200 pb-4' : ''
+      } ${centred ? 'flex-col items-center text-center' : ''}`}
+    >
+      <div className={centred ? 'flex flex-col items-center gap-2' : 'flex items-center gap-3'}>
+        {logo}
+        <div>
+          <h1 className="text-xl font-semibold text-ink-900" style={titleStyle}>
+            {title}
+          </h1>
+          {description && <p className="mt-1 text-sm text-ink-500">{description}</p>}
+        </div>
       </div>
       {actions && <div className="flex items-center gap-2">{actions}</div>}
     </div>

@@ -1,6 +1,6 @@
 # Connecting to Survey Solutions
 
-Survey Solutions is the World Bank's CAPI system. SurveyHQ talks to a
+Survey Solutions is the World Bank's CAPI system. susoDash talks to a
 headquarters server through its REST API to list questionnaires, read interview
 summaries and run data exports.
 
@@ -49,7 +49,7 @@ can see; tick the ones you want and start the import.
 
 What happens next:
 
-1. SurveyHQ asks the server to prepare an export job.
+1. susoDash asks the server to prepare an export job.
 2. It polls until the server reports the job complete. Large surveys take
    minutes — this runs in the background, so you can close the page.
 3. It downloads the archive, keeps it, and unpacks the data files.
@@ -95,7 +95,7 @@ busy production server.
 
 ## Roster and multi-level data
 
-A Survey Solutions export contains one file per roster level, and SurveyHQ
+A Survey Solutions export contains one file per roster level, and susoDash
 imports all of them. The interview level is what field monitoring needs; the
 rosters are what analysis of people, plots or livestock needs.
 
@@ -105,7 +105,7 @@ merged into one for analysis. See the [user guide](user-guide.md#relating-and-me
 
 ## What gets recognised automatically
 
-After an import, SurveyHQ looks for the standard Survey Solutions columns and
+After an import, susoDash looks for the standard Survey Solutions columns and
 records what it finds:
 
 | Role | Columns it looks for |
@@ -166,7 +166,7 @@ connection.
 
 ## Reading interview status codes
 
-Stata exports store status as a number with a label attached. SurveyHQ shows the
+Stata exports store status as a number with a label attached. susoDash shows the
 label. The usual codes:
 
 | Code | Meaning |

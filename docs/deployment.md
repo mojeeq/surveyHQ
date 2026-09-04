@@ -1,6 +1,6 @@
 # Deployment
 
-Production notes for running SurveyHQ on an Ubuntu server.
+Production notes for running susoDash on an Ubuntu server.
 
 ## Requirements
 
@@ -17,7 +17,7 @@ compressed. Budget for keeping several rounds.
 
 Three other things share that volume: the uploads as received, the last five
 export archives per connection (tens of megabytes each), and dashboard
-background images (8 MB each at most). The archives prune themselves as new runs
+background and logo images (8 MB each at most). The archives prune themselves as new runs
 land; nothing else does.
 
 ## Install
@@ -141,7 +141,7 @@ make restore FILE=backups/surveyhq-....tar.gz
 ```
 
 Each archive holds the database dump, everything on the data volume — Parquet
-datasets, uploads, kept export archives and dashboard backgrounds — and a copy
+datasets, uploads, kept export archives and dashboard images — and a copy
 of `.env` (which carries `ENCRYPTION_KEY`). Treat archives as secrets.
 
 Nightly at 02:00, keeping the 14 most recent:

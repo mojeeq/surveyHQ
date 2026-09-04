@@ -179,7 +179,11 @@ Commands are recorded and replayed after a later export replaces the data.
 POST /analytics/query                              run a query specification
 POST /analytics/query/export?format=csv|xlsx       download the result
 GET  /analytics/datasets/{id}/frequency/{variable} one-way frequencies
-POST /analytics/datasets/{id}/crosstab             two-way table
+POST /analytics/datasets/{id}/crosstab             two-way table; max_rows
+                                                  (default 5,000) and max_columns
+                                                  (default 1,000) bound it, and the
+                                                  result reports rows_omitted and
+                                                  columns_omitted
 POST /analytics/datasets/{id}/crosstab/export      download it
 POST /analytics/datasets/{id}/summary              descriptive statistics
 POST /analytics/datasets/{id}/suggest              suggested analyses
@@ -243,12 +247,16 @@ PUT    /dashboards/{id}/background        upload a background image (PNG, JPEG,
                                           GIF or WebP, 8 MB)    [analyst]
 GET    /dashboards/{id}/background        the image itself
 DELETE /dashboards/{id}/background                              [analyst]
+PUT    /dashboards/{id}/logo              upload a header logo  [analyst]
+GET    /dashboards/{id}/logo              the logo itself
+DELETE /dashboards/{id}/logo                                    [analyst]
 POST   /dashboards/{id}/data              render every widget; the body may carry
                                           filter conditions to narrow them
 POST   /dashboards/{id}/share?enable=true public link           [analyst]
 GET    /public/dashboards/{token}         no authentication
 POST   /public/dashboards/{token}/data    no authentication
 GET    /public/dashboards/{token}/background  no authentication
+GET    /public/dashboards/{token}/logo        no authentication
 ```
 
 A dashboard carries `pages` (named, each widget holding the index of the one it
@@ -265,9 +273,16 @@ sits on), `filters` (the controls offered to viewers, each belonging to a page),
   "columns": 12,
   "row_height": 74,
   "widget_opacity": 0.6,
-  "tab_background": "#ffffff"
+  "tab_background": "#ffffff",
+
+  "logo_image": "…", "logo_version": "…", "logo_height": 44,
+  "title_size": 38, "title_font": "serif", "title_color": "#0b5e3c",
+  "title_align": "left", "header_rule": true, "hide_subtitle": false
 }
 ```
+
+`title_font` names a stack the frontend knows (`grotesque`, `serif`, `slab`,
+`mono`, or empty for the interface face) rather than carrying CSS.
 
 A widget is one of `chart`, `crosstab`, `indicator`, `quality`, `text`,
 `countdown`, `map`, `html` or `freshness`, and the rest of what it needs lives in
