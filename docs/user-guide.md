@@ -98,6 +98,13 @@ each becomes its own dataset when you upload the archive.
 Click a link to correct it. Changing anything marks it as yours, and detecting
 again never reverts it.
 
+The diagram lays itself out from the cardinalities - the interview table on top,
+its rosters hanging below - which is right until a project has enough tables
+that the lines cross each other. **Drag a box** to move it, and the links
+follow. Where you put it is remembered for that project in the browser you are
+using, since an arrangement is a way of looking at the model rather than part of
+it; **Tidy up** puts everything back where the layout computed.
+
 **Merge into a new dataset** joins two related datasets, letting you choose
 which columns to bring across and whether to keep every row of the left dataset
 or only matching ones. Watch the row count: joining 190 interviews to their 782
@@ -169,9 +176,20 @@ Two things make the result usable afterwards:
 Use ▲ beside a file to change the order. The first file is the base, as it is
 in a do-file that opens one export and appends the others onto it.
 
-Imports from a Survey Solutions connection do the same thing on their own: each
-questionnaire version's rows are stamped with `questionnaire_version`, so
-syncing several versions in append mode builds the same combined dataset.
+**From a Survey Solutions connection it is one tick.** The server lists every
+version as its own entry, so a questionnaire revised twice used to appear three
+times in a flat list with nothing saying they belonged together. Now the import
+dialog groups them: one row per questionnaire, saying "3 versions · v1-v3",
+with a tick-box that takes them all and individual boxes underneath if you want
+only some.
+
+They are imported oldest first into **one** dataset, with each version's rows
+stamped `questionnaire_version`. Only the first version honours your
+replace/append choice; the rest are appended onto it, whatever was chosen.
+That is not a detail: with "Replace their data" applied to each version in
+turn, v2 replaced v1 and v3 replaced v2, so a run that reported importing three
+versions left a dataset holding only the last one — and nothing announced it,
+the row count was simply lower than it should have been.
 
 ### What survives a replacement
 
@@ -446,6 +464,24 @@ answers rather than moments, such as a date of birth. Where a dataset has no
 obvious one, or the wrong one is chosen, name the variable yourself on the
 widget.
 
+### Reusing an embed
+
+An **Embedded HTML** widget holds a piece of markup - a map, a video, the
+bureau's own banner. The same one usually belongs on several dashboards, often
+across surveys, and pasting it into each widget let the copies drift: a
+corrected link was fixed in one place and left wrong in four.
+
+**Save to library** on the widget keeps it under a name; **Load from
+library** on any other HTML widget brings it back. A snippet saved to the
+shared area is offered in every project, which is the point; one saved to a
+project stays with it.
+
+Loading takes a *copy* of the markup rather than a live reference, deliberately.
+A widget that changed under its dashboard because somebody edited a shared
+snippet would be a worse surprise than one that is merely out of date - so
+editing a snippet changes the library, and removing one leaves the dashboards
+already built from it alone.
+
 ### Giving a dashboard its own address
 
 A share link ends in a 64-character token. That is what makes it safe to send
@@ -473,10 +509,18 @@ along with the DNS record and certificate described in
 
 ### Filtering by clicking a chart
 
-Click a bar, a slice or a table row and the rest of the page follows it. Click
-the Shefa bar on "Interviews by province" and every other widget on that page
-shows Shefa only, with a bar across the top saying what is selected and a
-**Clear** beside it.
+Click a mark and the rest of the page follows it. That means a bar, a slice, a
+point on a line or scatter, a heatmap cell, a table row, an indicator's
+breakdown bar, or the row and column headings of a cross-tab. Click the Shefa
+bar on "Interviews by province" and every other widget on that page shows Shefa
+only, with a bar across the top saying what is selected and a **Clear** beside
+it.
+
+A cross-tab is the one with two answers rather than one, so which heading you
+click decides which variable is used: a row heading filters by the row
+variable, a column heading by the column variable. The cells themselves are not
+clickable — a cell is both at once, and filtering by two things from one click
+is not what anyone expects of it.
 
 The chart you clicked is deliberately left alone — it is the thing you are
 clicking, and narrowing it to the one bar you just chose would take away the
@@ -499,6 +543,17 @@ interviewer while a "Coverage" page filters by district. A control only applies
 to widgets whose dataset actually has that variable; widgets that cannot answer
 it say so rather than quietly ignoring it.
 
+**Removing one** is the same dialog: untick it and save. If a filter's data has
+since left the page — the widget that brought its dataset was moved or deleted,
+or the variable now has too many values to filter by — it appears in its own
+section at the bottom with a **Remove** beside it. Such a filter used to be
+impossible to get rid of: it was still drawn on the bar, but the dialog had no
+tick-box to untick, and saving wrote it straight back.
+
+The bar itself can be made to fit the dashboard: **Appearance → Filter bar
+colour** sets its background, for when plain white floats oddly over a coloured
+one.
+
 ### Making it yours
 
 **Click the dashboard's title** to open these controls — or use **Appearance**,
@@ -520,6 +575,23 @@ says so:
 - **Title colour and alignment** — your colour, left or centred.
 - **A rule under the header**, and the option to **hide the description**, for
   when the title alone is the whole heading.
+
+### One widget at a time
+
+**✎ on a widget** sets what belongs to that widget rather than the whole
+dashboard: its own background colour, its own transparency, a font, a text
+colour, and - for a chart - the colour it leads with.
+
+Each falls back to the dashboard when it is left alone, so a single tile can be
+lifted off a busy background without lifting all of them.
+
+A chart's colour is a *lead* colour, not the only one. A chart with several
+series keeps distinct hues behind the one chosen, because painting every series
+the same colour leaves nothing but the legend telling them apart - and a
+colour-blind reader cannot use that either. Colours can be picked from the
+swatches, typed as a code like `#1F4E79`, or chosen with the system picker;
+the swatch row for marks is in an order already checked to stay readable for
+colour-blind readers.
 
 ### Appearance
 
@@ -551,6 +623,7 @@ An indicator is one tracked number.
   below the warning threshold and red at or below critical; with "lower is
   better" the logic reverses,
 - a **breakdown variable**, so the indicator can be expanded per region or team,
+- a **target for each group** of that breakdown, once one is chosen,
 - a **percentage**, where the number is a share rather than a count.
 
 **Percentages.** Filters pick the rows the indicator counts; *percent of* says
@@ -564,6 +637,22 @@ the file.
 thresholds, the breakdown, even which dataset it reads. A threshold set before
 fieldwork started is a guess, and correcting one should not mean deleting the
 indicator and losing its history.
+
+**A target per group.** A survey's quota is rarely one number: "6,000
+interviews" is really 3,500 in one province and 2,500 in another, or a set
+number of men and of women. Once a breakdown variable is chosen, each of its
+groups gets a target box, filled from the values actually in the data. A group
+left blank is judged against the overall target.
+
+The warning and critical thresholds scale with whichever target applies, so a
+province carrying a tenth of the quota trips its warning at a tenth of the
+count. Without that, every small province sat permanently in the red — and,
+worse, a group well behind its own quota could read as on track simply because
+the overall target is the sum of several unequal ones.
+
+On a dashboard, an indicator tile shows its breakdown as a chart when **Show
+the breakdown** is ticked on the widget, and clicking one of those bars filters
+the page by that group, like any other chart.
 
 Indicators recompute on a schedule and store a snapshot each time, which is what
 gives every indicator a trend line.

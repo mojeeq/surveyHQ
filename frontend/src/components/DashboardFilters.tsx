@@ -1,7 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import type { Dataset, FilterGroup, Page } from '@/lib/types'
-import { Field } from './ui'
 
 export interface FilterControl {
   /** The variable every widget that has it will be filtered on. */
@@ -28,26 +27,36 @@ export interface FilterControl {
 export default function DashboardFilters({
   controls,
   value,
+  background,
   onChange,
 }: {
   controls: FilterControl[]
   value: Record<string, string>
+  /** The bar's own colour, set in Appearance. Empty means plain white. */
+  background?: string
   onChange: (next: Record<string, string>) => void
 }) {
   if (!controls.length) return null
 
+  // A filter bar is chrome, not content: it should cost the dashboard as
+  // little vertical room as it can and still be operable. Label and control
+  // sit on one line rather than stacked, which halves the height, and the
+  // whole row wraps when there are more filters than fit.
   return (
-    <div className="mb-4 flex flex-wrap items-end gap-3 rounded-card border border-ink-200 bg-white px-4 py-3">
+    <div
+      className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-card border border-ink-200 px-3 py-2"
+      style={{ backgroundColor: background || '#ffffff' }}
+    >
       {controls.map((control) => (
         <FilterControlInput
-          key={`${control.dataset_id}:${control.variable}`}
+          key={controlKey(control)}
           control={control}
           value={value[control.variable] ?? ''}
           onChange={(next) => onChange({ ...value, [control.variable]: next })}
         />
       ))}
       {Object.values(value).some(Boolean) && (
-        <button className="btn-ghost btn-sm mb-1 text-ink-500" onClick={() => onChange({})}>
+        <button className="btn-ghost btn-sm text-ink-500" onClick={() => onChange({})}>
           Clear
         </button>
       )}
@@ -72,10 +81,13 @@ function FilterControlInput({
       ),
   })
 
+  const name = control.label || control.variable
   return (
-    <Field label={control.label || control.variable}>
+    <label className="flex items-center gap-1.5 text-xs text-ink-600">
+      <span className="whitespace-nowrap font-medium">{name}</span>
       <select
-        className="input w-48"
+        className="input h-7 w-40 py-0 text-xs"
+        aria-label={name}
         value={value}
         onChange={(event) => onChange(event.target.value)}
       >
@@ -86,7 +98,7 @@ function FilterControlInput({
           </option>
         ))}
       </select>
-    </Field>
+    </label>
   )
 }
 
@@ -115,6 +127,18 @@ export function toFilterGroup(
  *  per page has no page of its own and stays on the first one. */
 export function controlsForPage(controls: FilterControl[], page: number): FilterControl[] {
   return controls.filter((control) => (control.page ?? 0) === page)
+}
+
+/**
+ * What makes one control the same as another.
+ *
+ * The variable name alone is not enough. A Survey Solutions export puts
+ * interview__key in every level it produces, so a dashboard drawing on the
+ * interview level and a roster has two different controls with one name -
+ * and identifying them by name alone made ticking one tick both.
+ */
+export function controlKey(control: { dataset_id: string; variable: string }): string {
+  return `${control.dataset_id}::${control.variable}`
 }
 
 /** Variables worth offering as a filter: few enough values to pick from. */

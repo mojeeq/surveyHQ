@@ -97,7 +97,13 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
         with SurveySolutionsClient(**credentials) as client:
             catalogue = {q.identity: q for q in client.list_questionnaires()}
 
-            for identity in questionnaires:
+            plan = plan_version_imports(
+                questionnaires,
+                {identity: q.version for identity, q in catalogue.items()},
+                mode,
+            )
+
+            for identity, identity_mode in plan:
                 questionnaire = catalogue.get(identity)
                 title = questionnaire.title if questionnaire else identity
                 with session_scope() as db:
@@ -127,7 +133,7 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
                         title=title,
                         archive=archive,
                         project_id=project_id,
-                        mode=mode,
+                        mode=identity_mode,
                         # A questionnaire revised mid-fieldwork exports as a
                         # separate version, and importing several of them in
                         # append mode is how they become one dataset. Without
@@ -231,6 +237,40 @@ def prune_archives(connection_id: str, keep: int = ARCHIVES_KEPT) -> None:
         for run in runs[keep:]:
             Path(run.archive_path).unlink(missing_ok=True)
             run.archive_path = ""
+
+
+def plan_version_imports(
+    identities: list[str],
+    versions: dict[str, int],
+    mode: str,
+) -> list[tuple[str, str]]:
+    """Decide the order to import questionnaire versions in, and how.
+
+    A questionnaire revised mid-fieldwork lives on the server as several
+    versions of one questionnaire - v1, v2, v3 - with the interviews spread
+    across them. They are one survey and belong in one dataset, which is what
+    appending three exported zips by hand achieves.
+
+    So: version order, and only the first version of each questionnaire settles
+    what happens to what is already stored. Every later one is appended,
+    whatever the run asked for. Applying "replace" to each version in turn was
+    the bug: v2 wiped out v1 and v3 wiped out v2, and a run that reported
+    importing three versions left a dataset holding only the last. Nothing
+    announced it - the row count was just quietly too low.
+
+    An identity is ``guid$version``; the part before the ``$`` is the
+    questionnaire, and the same questionnaire under two versions is two
+    identities. An identity the catalogue does not know sorts first and is
+    otherwise treated normally, so an unknown version cannot silently drop out.
+    """
+    ordered = sorted(identities, key=lambda i: (i.split("$")[0], versions.get(i, 0)))
+    seen: set[str] = set()
+    plan: list[tuple[str, str]] = []
+    for identity in ordered:
+        questionnaire = identity.split("$")[0]
+        plan.append((identity, "append" if questionnaire in seen else mode))
+        seen.add(questionnaire)
+    return plan
 
 
 def _import_export_archive(

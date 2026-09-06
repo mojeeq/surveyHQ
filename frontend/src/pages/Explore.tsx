@@ -678,21 +678,22 @@ function AggregateBuilder({
           </Field>
 
           <div className="mb-3 space-y-1.5 text-xs text-ink-700">
-            {/* Numbers on the marks read on bars and slices; on a line they
-                collide with each other, so that combination is not offered. */}
-            {chartType !== 'line' && chartType !== 'area' && chartType !== 'scatter' && (
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  checked={Boolean(display.showValues)}
-                  onChange={(event) =>
-                    setDisplay({ ...display, showValues: event.target.checked })
-                  }
-                />
-                Print the numbers on the chart
-                <span className="text-ink-400">(up to 24 bars)</span>
-              </label>
-            )}
+            {/* Offered on every chart type. It used to be withheld from lines,
+                areas and scatters because a number on each of a hundred points
+                is unreadable - but on a twelve-month series it is exactly what
+                a printed report needs, and the count guard below already drops
+                the labels when there are too many marks to read. */}
+            <label className="flex items-center gap-2">
+              <input
+                type="checkbox"
+                checked={Boolean(display.showValues)}
+                onChange={(event) =>
+                  setDisplay({ ...display, showValues: event.target.checked })
+                }
+              />
+              Print the numbers on the chart
+              <span className="text-ink-400">(up to 24 marks)</span>
+            </label>
             {(chartType === 'stacked_bar' || chartType === 'area') && (
               <label className="flex items-center gap-2">
                 <input

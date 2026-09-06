@@ -26,6 +26,8 @@ class IndicatorCreate(BaseModel):
     critical_threshold: float | None = None
     direction: Direction = Direction.higher_is_better
     breakdown_variable: str = ""
+    # {"North": 400, "South": 600} - a quota per category of that breakdown.
+    breakdown_targets: dict[str, float] = Field(default_factory=dict)
     percent_of: Literal["", "all_rows", "answered"] = ""
     display_order: int = 0
 
@@ -45,6 +47,7 @@ class IndicatorUpdate(BaseModel):
     critical_threshold: float | None = None
     direction: Direction | None = None
     breakdown_variable: str | None = None
+    breakdown_targets: dict[str, float] | None = None
     percent_of: Literal["", "all_rows", "answered"] | None = None
     is_active: bool | None = None
     display_order: int | None = None
@@ -65,6 +68,8 @@ class IndicatorOut(BaseModel):
     critical_threshold: float | None = None
     direction: Direction
     breakdown_variable: str = ""
+    # {"North": 400, "South": 600} - a quota per category of that breakdown.
+    breakdown_targets: dict[str, float] = Field(default_factory=dict)
     percent_of: str = ""
     is_active: bool = True
     display_order: int = 0

@@ -177,6 +177,48 @@ export interface BuildOptions {
   referenceValue?: number | null
   referenceLabel?: string
   decimals?: number
+  /**
+   * The colour this widget's chart leads with.
+   *
+   * It takes the front of the theme's order rather than replacing it. A chart
+   * with one series is then simply the colour asked for; a chart with several
+   * keeps distinct hues behind it, because painting every series one colour
+   * would leave nothing but the legend telling them apart.
+   */
+  seriesColor?: string
+  /** Font for this widget's chart text. */
+  fontFamily?: string
+  /** Colour for this widget's chart text: axes, their names, and the legend. */
+  fontColor?: string
+}
+
+/**
+ * Put a widget's chosen font and text colour through a built option.
+ *
+ * The alternative was threading two more arguments into every axis, legend and
+ * tooltip helper in this file. Only text-bearing keys are touched, and marks
+ * are left alone: a bar's own colour is data, not text. Labels sitting *on* a
+ * mark keep their white too - they are placed against a filled shape, and
+ * recolouring them to match the axis is how they become unreadable.
+ */
+function applyTextStyle(node: unknown, font?: string, color?: string): void {
+  if (!font && !color) return
+  if (Array.isArray(node)) {
+    for (const item of node) applyTextStyle(item, font, color)
+    return
+  }
+  if (!node || typeof node !== 'object') return
+  const record = node as Record<string, unknown>
+  const TEXT_KEYS = ['textStyle', 'axisLabel', 'nameTextStyle', 'subtextStyle']
+  for (const key of TEXT_KEYS) {
+    const target = record[key]
+    if (target && typeof target === 'object' && !Array.isArray(target)) {
+      const text = target as Record<string, unknown>
+      if (font) text.fontFamily = font
+      if (color) text.color = color
+    }
+  }
+  for (const value of Object.values(record)) applyTextStyle(value, font, color)
 }
 
 /** A fixed value-axis range, when one is asked for. */
@@ -225,7 +267,13 @@ function markLabel(options: BuildOptions, position: 'top' | 'right' | 'inside', 
     position,
     color: position === 'inside' ? '#fff' : INK.muted,
     ...BASE_TEXT,
-    formatter: (params: any) => formatNumber(Number(params.value), options.decimals ?? 0),
+    // A mark's value is not always a bare number: a scatter point is [x, y]
+    // and a heatmap cell is [x, y, value], and Number() on either is NaN,
+    // which ECharts draws as a dash. The measure is the last element.
+    formatter: (params: any) => {
+      const raw = Array.isArray(params.value) ? params.value[params.value.length - 1] : params.value
+      return formatNumber(Number(raw), options.decimals ?? 0)
+    },
   }
 }
 
@@ -378,7 +426,21 @@ export function buildChartOption(
   chartType: ChartType,
   options: BuildOptions = {},
 ): EChartsOption {
-  const palette = themeColors(options.theme)
+  const option = buildOption(result, chartType, options)
+  applyTextStyle(option, options.fontFamily, options.fontColor)
+  return option
+}
+
+function buildOption(
+  result: QueryResult,
+  chartType: ChartType,
+  options: BuildOptions = {},
+): EChartsOption {
+  const themePalette = themeColors(options.theme)
+  const lead = options.seriesColor?.toLowerCase()
+  const palette = lead
+    ? [options.seriesColor!, ...themePalette.filter((c) => c.toLowerCase() !== lead)]
+    : themePalette
   const pivoted = pivot(result)
   const valueLabelText = pivoted.valueLabel
   const { categories, series } = shape(pivoted.categories, pivoted.series, options)
@@ -479,6 +541,7 @@ export function buildChartOption(
           {
             type: 'scatter',
             symbolSize: 10,
+            label: markLabel(options, 'top', categories.length),
             // 2px surface ring so overlapping points stay separable
             itemStyle: { color: palette[0], borderColor: INK.surface, borderWidth: 2 },
             data: categories.map((_, index) => [
@@ -528,6 +591,9 @@ export function buildChartOption(
           {
             type: 'heatmap',
             data: values,
+            // A heatmap's cells are large and few, so the number goes inside
+            // rather than above. The count is cells, not categories.
+            label: markLabel(options, 'inside', values.length),
             itemStyle: { borderColor: INK.surface, borderWidth: 2, borderRadius: 3 },
           },
         ],
@@ -545,7 +611,17 @@ export function buildChartOption(
             left: '10%',
             width: '80%',
             gap: 2,
-            label: { position: 'inside', color: '#fff', ...BASE_TEXT },
+            label: {
+              position: 'inside',
+              color: '#fff',
+              ...BASE_TEXT,
+              ...(options.showValues
+                ? {
+                    formatter: (params: any) =>
+                      `${params.name}  ${formatNumber(Number(params.value), options.decimals ?? 0)}`,
+                  }
+                : {}),
+            },
             itemStyle: { borderColor: INK.surface, borderWidth: 2 },
             data: categories.map((name, index) => ({
               name,
@@ -575,8 +651,11 @@ export function buildChartOption(
           type: 'line',
           data: entry.data,
           smooth: Boolean(options.smooth),
-          // A number on every point is unreadable on a line, so the labels
-          // toggle deliberately does not reach here - see the bar branch.
+          // Labels reach here too now, on request. A number on every point of
+          // a dense line is unreadable, which is why this is off by default
+          // and why markLabel drops it past MAX_LABELLED marks - but on a
+          // twelve-month series it is exactly what a report wants.
+          label: markLabel(options, 'top', categories.length),
           ...(index === 0 ? { markLine: referenceLine(options) } : {}),
           symbol: 'circle',
           symbolSize: 8,

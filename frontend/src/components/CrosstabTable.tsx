@@ -11,6 +11,7 @@ export default function CrosstabTable({
   compact = false,
   maxHeight,
   fill = false,
+  onSelect,
 }: {
   result: CrosstabResult
   compact?: boolean
@@ -19,6 +20,16 @@ export default function CrosstabTable({
    *  is resizable, so a fixed cap leaves the table its original size inside a
    *  container the user has just made taller - the same fault charts had. */
   fill?: boolean
+  /**
+   * Filter the page by a heading that was clicked.
+   *
+   * A cross-tab has two variables rather than a chart's one, so which was
+   * clicked has to travel with the value: a row heading means the row
+   * variable, a column heading the column one. Body cells are deliberately
+   * not clickable - a cell is the intersection of both, and filtering by two
+   * things at once from one click is not what anybody expects from it.
+   */
+  onSelect?: (variable: string, value: string) => void
 }) {
   const suffix = result.percentages === 'none' ? '' : '%'
   const showing = result.percentages !== 'none'
@@ -41,7 +52,13 @@ export default function CrosstabTable({
                 {result.row_variable} \ {result.column_variable}
               </th>
               {result.column_labels.map((label) => (
-                <th key={label} className="text-right">
+                <th
+                  key={label}
+                  className={`text-right ${onSelect ? 'cursor-pointer hover:bg-ink-200' : ''}`}
+                  onClick={
+                    onSelect ? () => onSelect(result.column_variable, label) : undefined
+                  }
+                >
                   {label}
                 </th>
               ))}
@@ -51,7 +68,14 @@ export default function CrosstabTable({
           <tbody>
             {result.row_labels.map((label, rowIndex) => (
               <tr key={label}>
-                <td className="sticky left-0 bg-white font-medium">{label}</td>
+                <td
+                  className={`sticky left-0 bg-white font-medium ${
+                    onSelect ? 'cursor-pointer hover:bg-ink-50' : ''
+                  }`}
+                  onClick={onSelect ? () => onSelect(result.row_variable, label) : undefined}
+                >
+                  {label}
+                </td>
                 {result.values[rowIndex].map((value, cellIndex) => (
                   <td key={cellIndex} className="text-right tabular-nums">
                     {value === null ? '–' : `${formatNumber(value, digits, showing)}${suffix}`}

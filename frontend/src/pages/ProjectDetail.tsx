@@ -569,6 +569,7 @@ function RelationshipsTab({
             datasets={datasets}
             relationships={relationships}
             selectedId={selected?.id ?? null}
+            storageKey={projectId}
             onSelect={setSelected}
           />
 
