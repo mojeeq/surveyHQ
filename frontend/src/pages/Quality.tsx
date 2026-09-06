@@ -427,7 +427,7 @@ function CheckModal({
         <option value="">Choose a variable…</option>
         {list.map((v) => (
           <option key={v.name} value={v.name}>
-            {v.label ? `${v.name} — ${v.label}` : v.name}
+            {v.label ? `${v.name} - ${v.label}` : v.name}
           </option>
         ))}
       </select>

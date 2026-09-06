@@ -207,7 +207,7 @@ export default function DatasetDetail() {
                   {filtered.map((variable) => (
                     <tr key={variable.id}>
                       <td className="font-mono text-xs text-ink-800">{variable.name}</td>
-                      <td className="max-w-xs truncate text-ink-600">{variable.label || '–'}</td>
+                      <td className="max-w-xs truncate text-ink-600">{variable.label || '-'}</td>
                       <td>
                         <Badge tone={TYPE_TONE[variable.var_type] ?? 'neutral'}>
                           {variable.var_type}
@@ -225,14 +225,14 @@ export default function DatasetDetail() {
                             {formatNumber(variable.n_missing)}
                           </span>
                         ) : (
-                          '–'
+                          '-'
                         )}
                       </td>
                       <td className="text-right tabular-nums">{formatNumber(variable.n_unique)}</td>
                       <td className="text-right tabular-nums text-xs text-ink-500">
                         {variable.min_value !== null && variable.max_value !== null
-                          ? `${formatNumber(variable.min_value, 1)} – ${formatNumber(variable.max_value, 1)}`
-                          : '–'}
+                          ? `${formatNumber(variable.min_value, 1)} - ${formatNumber(variable.max_value, 1)}`
+                          : '-'}
                       </td>
                       <td className="text-right whitespace-nowrap">
                         {can('manager') && (
@@ -300,7 +300,7 @@ function DataPreview({ datasetId, totalRows }: { datasetId: string; totalRows: n
   return (
     <Card
       title="Raw data"
-      subtitle={`Rows ${offset + 1}–${Math.min(offset + limit, totalRows)} of ${formatNumber(totalRows)}`}
+      subtitle={`Rows ${offset + 1}-${Math.min(offset + limit, totalRows)} of ${formatNumber(totalRows)}`}
       actions={
         <div className="flex gap-1">
           <button
@@ -380,7 +380,7 @@ function SummaryPanel({ datasetId, variables }: { datasetId: string; variables: 
                 {[row.count, row.missing, row.mean, row.std, row.min, row.p25, row.median, row.p75, row.max].map(
                   (value, index) => (
                     <td key={index} className="text-right tabular-nums">
-                      {value === null ? '–' : formatNumber(value, 2)}
+                      {value === null ? '-' : formatNumber(value, 2)}
                     </td>
                   ),
                 )}
@@ -920,7 +920,7 @@ function CommandPanel({ datasetId }: { datasetId: string }) {
           <p className="mt-2 text-xs text-ink-500">
             Lines run top to bottom and stop at the first error; what ran before it stays
             applied, as a do-file does. <code>*</code> and <code>//</code> are comments, and{' '}
-            <code>///</code> continues a line. Changes the data in place — every command is kept
+            <code>///</code> continues a line. Changes the data in place - every command is kept
             and re-run after a newer export replaces this dataset.
           </p>
 

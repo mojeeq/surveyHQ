@@ -17,8 +17,8 @@ image as the API), `postgres` and `redis`.
 
 A survey dataset is wide (hundreds of columns), read-only after import, and
 queried with aggregates rather than row lookups. Loading it into Postgres means
-either a table per dataset — schema migrations every time someone uploads a file
-— or a tall key/value table, which makes every cross-tab a self-join.
+either a table per dataset - schema migrations every time someone uploads a file
+- or a tall key/value table, which makes every cross-tab a self-join.
 
 Instead each dataset is written once to a Parquet file and queried in-process
 with DuckDB. Parquet is columnar and compressed, so a tabulation touches only the
@@ -50,7 +50,7 @@ specification:
 ```
 
 Being declarative means the same object can be stored on a chart, replayed by a
-scheduled job, rebuilt in the query builder, and exported — without the server
+scheduled job, rebuilt in the query builder, and exported - without the server
 templating SQL strings from user input.
 
 ### How injection is prevented
@@ -272,17 +272,17 @@ Celery handles anything that outlives a request:
 | Task | Trigger |
 |---|---|
 | `run_connection_sync` | On demand, or by the scheduler |
-| `schedule_due_syncs` | Every `SYNC_TICK_MINUTES` — decides which connections are due |
-| `refresh_all_indicators` | Every `MONITOR_TICK_MINUTES` — recomputes indicators, stores a snapshot, evaluates alert rules |
+| `schedule_due_syncs` | Every `SYNC_TICK_MINUTES` - decides which connections are due |
+| `refresh_all_indicators` | Every `MONITOR_TICK_MINUTES` - recomputes indicators, stores a snapshot, evaluates alert rules |
 | `run_all_quality_checks` | Every six hours |
-| `prune_history` | Nightly — trims snapshots, resolved alerts, old results and jobs |
+| `prune_history` | Nightly - trims snapshots, resolved alerts, old results and jobs |
 
 Indicator snapshots are what make trends possible: each refresh writes a
 timestamped value, so every indicator carries its own history without anyone
 configuring a time series.
 
-A connection is due either on an interval — every N minutes since its last
-import — or at times of day it lists, read in its own timezone.
+A connection is due either on an interval - every N minutes since its last
+import - or at times of day it lists, read in its own timezone.
 `services/scheduling.py` answers the second by asking when the most recent
 listed time last came round in that zone, and whether the last import was
 before it. That is a comparison against wall-clock history rather than a cron
@@ -299,14 +299,14 @@ and re-uploaded like any other archive.
 
 ## Monitoring model
 
-- **Indicator** — one query producing one number, plus a target, a warning and a
+- **Indicator** - one query producing one number, plus a target, a warning and a
   critical threshold, and a direction (higher or lower is better). The direction
   decides which side of a threshold counts as bad.
-- **Alert rule** — watches an indicator with a comparison and a threshold. On a
+- **Alert rule** - watches an indicator with a comparison and a threshold. On a
   match it raises an alert and notifies by in-app message and optionally email.
   A cooldown stops one ongoing problem generating a stream of alerts. When the
   value recovers, open alerts for that rule resolve themselves.
-- **Quality rule** — one of eight check types with a tolerance. The check fails
+- **Quality rule** - one of eight check types with a tolerance. The check fails
   when the share of offending rows exceeds it.
 
 ## Project scope
@@ -433,14 +433,14 @@ as the one that produces a sentence rather than a database error.
 A widget is drawn from a whole dataset, and a filter is evaluated against that
 dataset rather than against the widget. So an unrestricted filter on a public
 link is a question about any column in the file, including the ones the
-dashboard deliberately does not show — and a count is an answer. Filter to one
+dashboard deliberately does not show - and a count is an answer. Filter to one
 respondent's identifier and the tile says whether that person is in the data.
 Repeat, and a read-only link is a lookup service for a file nobody published.
 
 So the public render route holds a filter to what the dashboard displays: the
 variables its widgets group on, plus the filter controls its author put on it.
 Both are publishing decisions, and together they are exactly what the shared
-page's UI can produce — a click on a mark, or a choice from a dropdown that was
+page's UI can produce - a click on a mark, or a choice from a dropdown that was
 put there to be chosen from. Anything else is dropped rather than refused: a
 `422` for a column that exists and a different answer for one that does not
 would itself be the lookup, and no honest visitor can send one, because the
@@ -495,5 +495,5 @@ separation against the app's white surface. Two rules follow from that:
   toggle** exposing the same numbers.
 
 Sequential encodings (heatmaps) use a single blue ramp, light to dark. Status
-colours — ok, warning, critical — are reserved, never reused as a series colour,
+colours - ok, warning, critical - are reserved, never reused as a series colour,
 and always paired with an icon and a word.

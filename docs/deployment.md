@@ -12,7 +12,7 @@ Production notes for running susoDash on an Ubuntu server.
 | Disk | 20 GB | 50 GB+ |
 
 Disk depends on your data. A survey with 100,000 interviews and 500 variables
-stores as roughly 100–200 MB of Parquet, because Parquet is columnar and
+stores as roughly 100-200 MB of Parquet, because Parquet is columnar and
 compressed. Budget for keeping several rounds.
 
 Three other things share that volume: the uploads as received, the last five
@@ -43,7 +43,7 @@ Everything lives in `.env`. Values worth attention:
 | `DASHBOARD_DOMAIN` | The domain shared dashboards are named under, e.g. `dash.example.org`. Needs the wildcard DNS record and certificate above. Empty hides the feature. |
 | `CORS_ORIGINS` | Comma separated. Must include your real domain in production. |
 | `WEB_PORT` | Host port for the web interface. Default 8080. |
-| `MAX_UPLOAD_MB` | The upload ceiling, and the only one: nginx no longer enforces a second. An upload over it is refused with a message naming the size and the limit, before the body is transferred. It also bounds how far a zip may expand once opened — twenty times this — so an archive built to exhaust memory is refused rather than unpacked. |
+| `MAX_UPLOAD_MB` | The upload ceiling, and the only one: nginx no longer enforces a second. An upload over it is refused with a message naming the size and the limit, before the body is transferred. It also bounds how far a zip may expand once opened - twenty times this - so an archive built to exhaust memory is refused rather than unpacked. |
 | `RATE_LIMIT_ENABLED` | Caps sign-in attempts and requests to shared dashboards. Leave it on. Turn it off only if every visitor reaches you from one address, as behind some corporate proxies, where they would share one budget. |
 | `SYNC_TICK_MINUTES` | How often the scheduler checks for due imports. A connection set to import at a time of day cannot be honoured more precisely than this. |
 | `MONITOR_TICK_MINUTES` | How often indicators, alerts and checks are evaluated. |
@@ -60,7 +60,7 @@ The stack serves plain HTTP on `WEB_PORT`, bound for a reverse proxy in front.
 The API container is deliberately published only on `127.0.0.1`, so it is never
 reachable from outside the host.
 
-### Caddy (simplest — certificates handled for you)
+### Caddy (simplest - certificates handled for you)
 
 ```bash
 sudo apt install -y caddy
@@ -126,7 +126,7 @@ Survey Solutions can keep a request open for minutes.
 
 ## Giving dashboards their own addresses
 
-A shared dashboard can answer on its own subdomain — `labour-force.dash.example.org`
+A shared dashboard can answer on its own subdomain - `labour-force.dash.example.org`
 rather than a link ending in a 64-character token. The platform side is one
 setting; the rest is DNS and a certificate, done once for all dashboards
 present and future.
@@ -139,7 +139,7 @@ this server:
 ```
 
 **2. One wildcard certificate.** Let's Encrypt issues wildcards only through
-the DNS-01 challenge, which proves control by writing a TXT record — so this
+the DNS-01 challenge, which proves control by writing a TXT record - so this
 needs an API token for wherever your DNS is hosted. Caddy is the least work:
 
 ```
@@ -177,8 +177,8 @@ would resolve to nothing.
 ### What a name is, and is not
 
 The share link's token is unguessable, which is what makes it safe to send to
-one person. A name is the opposite by design — it is meant to be typed from
-memory — so a named dashboard is reachable by anyone who guesses the name.
+one person. A name is the opposite by design - it is meant to be typed from
+memory - so a named dashboard is reachable by anyone who guesses the name.
 Naming is publishing. The interface says so at the point of naming, and:
 
 - only a dashboard that is already shared can be given a name;
@@ -205,8 +205,8 @@ make backup                                   # ./backups/surveyhq-<timestamp>.t
 make restore FILE=backups/surveyhq-....tar.gz
 ```
 
-Each archive holds the database dump, everything on the data volume — Parquet
-datasets, uploads, kept export archives and dashboard images — and a copy
+Each archive holds the database dump, everything on the data volume - Parquet
+datasets, uploads, kept export archives and dashboard images - and a copy
 of `.env` (which carries `ENCRYPTION_KEY`). Treat archives as secrets.
 
 Nightly at 02:00, keeping the 14 most recent:
@@ -239,7 +239,7 @@ and the API logs each one it applies.
 The index step matters on databases that have been running a while. `ALTER TABLE
 ADD COLUMN` adds the column and nothing else, so every index declared on a column
 the models grew later was missing on exactly the installations that had been
-upgraded most often — including the unique ones, which are constraints rather
+upgraded most often - including the unique ones, which are constraints rather
 than mere speed. If a unique index cannot be created because rows already violate
 it, the error names the index and the platform starts anyway; the duplicate rows
 have to be settled by hand before it can be applied.
@@ -266,11 +266,11 @@ Each service has a Docker health check, so `docker compose ps` shows
 
 The default is sized for one field team. For a larger operation:
 
-- **More concurrent imports** — raise `--concurrency` on the `worker` service in
+- **More concurrent imports** - raise `--concurrency` on the `worker` service in
   `docker-compose.yml`, or run several worker containers.
-- **More concurrent users** — raise `--workers` on the `api` service. Roughly
+- **More concurrent users** - raise `--workers` on the `api` service. Roughly
   one worker per CPU core.
-- **Large datasets** — DuckDB is capped at 2 GB per query in
+- **Large datasets** - DuckDB is capped at 2 GB per query in
   `backend/app/services/query_engine.py` (`memory_limit`). Raise it if the host
   has the RAM.
 

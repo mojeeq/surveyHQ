@@ -18,42 +18,42 @@ Runs on Ubuntu with Docker. One command to install.
 
 **Get data in**
 - Connect to a Survey Solutions headquarters server and import interview data
-  through its export API — on demand, on an interval, or at set times of day in
+  through its export API - on demand, on an interval, or at set times of day in
   the connection's own timezone.
 - Upload Stata (`.dta`), SPSS (`.sav`), CSV, tab-delimited or Excel files, or a
   `.zip` export archive.
-- An archive becomes **one dataset per file inside it** — the interview level,
-  each roster level, and the paradata — because those are different tables, not
+- An archive becomes **one dataset per file inside it** - the interview level,
+  each roster level, and the paradata - because those are different tables, not
   different rounds.
 - A later archive **replaces** what it matches by default, keeping each
   dataset's identity, so nothing built on it has to be redone. Choose *append*
   instead for genuinely incremental exports.
 - Several archives at once are appended together, one dataset per member file,
-  each stamped with the questionnaire version it came from — which is what a
+  each stamped with the questionnaire version it came from - which is what a
   form revised mid-fieldwork needs. Connections stamp the version themselves.
 - A large upload is imported by the background worker, so a census-sized export
   does not depend on a browser connection staying open while it is read.
 - Variable labels and value labels are preserved, so charts read "Female"
-  rather than "2" — and you can write your own where the export has none.
+  rather than "2" - and you can write your own where the export has none.
 
 **Analyse it**
 - Tabulate: one-way frequencies with valid and cumulative percentages.
 - Cross-tabulate: two-way tables with row/column/total percentages, chi-square
-  and Cramér's V — up to 5,000 rows, so tabulating by interview key gives you
+  and Cramér's V - up to 5,000 rows, so tabulating by interview key gives you
   the whole table to scroll and export.
 - Aggregate: group by any variables, measure with count, sum, mean, median,
-  percentiles, standard deviation or distinct count — optionally survey-weighted.
+  percentiles, standard deviation or distinct count - optionally survey-weighted.
 - Filter with nested AND/OR conditions on any variable.
 - Bin numeric variables, truncate dates to day/week/month/quarter/year.
 - Chart it as a bar, horizontal bar, stacked bar, horizontal stacked bar,
   population pyramid, line, area, pie, donut, scatter, heatmap or table, with
   control over ordering, top-N, value labels, 100% stacking, axis title and
   range, and a target line.
-- Derive variables with a Stata-style script — `gen`, `replace`, `egen`,
-  `label`, `rename`, `drop`, `keep`, with `if` conditions — recorded and
+- Derive variables with a Stata-style script - `gen`, `replace`, `egen`,
+  `label`, `rename`, `drop`, `keep`, with `if` conditions - recorded and
   replayed automatically after the next export replaces the data.
 - Export any result to CSV or Excel, or download a whole dataset as Stata (with
-  its labels), CSV or Excel — merged datasets included.
+  its labels), CSV or Excel - merged datasets included.
 
 **Monitor it**
 - Indicators: a tracked number with a target and warning/critical thresholds,
@@ -67,7 +67,7 @@ Runs on Ubuntu with Docker. One command to install.
   consistency). The platform inspects each dataset and recommends the checks
   that suit it.
 - Field progress: submissions over time, interviews per interviewer and
-  supervisor, status breakdown, coverage by area and a map of GPS points — built
+  supervisor, status breakdown, coverage by area and a map of GPS points - built
   automatically from recognised Survey Solutions column names, with no setup.
 - Monitoring, data quality and alerts can all be viewed one project at a time.
 
@@ -75,7 +75,7 @@ Runs on Ubuntu with Docker. One command to install.
 - Projects group a survey round's datasets and dashboards, and decide who can
   reach them. Anything outside a project is a shared area every user can see.
 - Deleting a project either releases its contents to the shared area or deletes
-  the lot — datasets, dashboards, charts, indicators, rules and alerts — as you
+  the lot - datasets, dashboards, charts, indicators, rules and alerts - as you
   choose.
 - Relationships between a project's datasets are detected from the data, shown
   as a model diagram, correctable, declarable by hand, and clearable in bulk.
@@ -97,9 +97,9 @@ Runs on Ubuntu with Docker. One command to install.
 - A dashboard wears your organisation's badge, not ours: upload a logo, set the
   title's size, face, colour and alignment, and it all travels with the shared
   link.
-- Every widget is editable in place — what it shows, its title, its size — and
+- Every widget is editable in place - what it shows, its title, its size - and
   can be moved to another page.
-- Filter controls per page, so each page asks its own question — and click a
+- Filter controls per page, so each page asks its own question - and click a
   bar, slice or row to filter the rest of the page by it, the chart you clicked
   staying whole so you can pick another.
 - Saved charts edit where they were built: **Edit** reopens one in Explore with
@@ -109,8 +109,8 @@ Runs on Ubuntu with Docker. One command to install.
   tab strip.
 - A choice of chart palettes, each an ordering of the same validated hues,
   ranked by how far apart neighbouring series stay for colour-blind readers.
-- Read-only public links for people who should not have accounts, and — with
-  one wildcard DNS record and certificate — a dashboard of its own address:
+- Read-only public links for people who should not have accounts, and - with
+  one wildcard DNS record and certificate - a dashboard of its own address:
   `labour-force.dash.example.org` rather than a link ending in a token.
 - Roles: viewer, analyst, manager, administrator.
 - API keys for scripts, plus an OpenAPI spec at `/api/docs`.
@@ -120,7 +120,7 @@ Runs on Ubuntu with Docker. One command to install.
 ## Install on Ubuntu
 
 Ubuntu 22.04 or 24.04, 4 GB RAM minimum (8 GB recommended for large surveys).
-Nothing else is needed — the installer adds Docker if it is missing.
+Nothing else is needed - the installer adds Docker if it is missing.
 
 ### 1. Get the code onto the server
 
@@ -136,7 +136,7 @@ git clone https://github.com/mojeeq/surveyHQ.git surveyhq
 cd surveyhq
 ```
 
-That is everything — the platform lives on `main`.
+That is everything - the platform lives on `main`.
 
 ### 2. Run the installer
 
@@ -148,7 +148,7 @@ It installs Docker if needed, generates `.env` with fresh secrets, asks for an
 administrator email and a port, builds the images and starts everything.
 
 It prints the URL, the administrator email and the generated password when it
-finishes. **Write the password down** — it is stored only in `.env`.
+finishes. **Write the password down** - it is stored only in `.env`.
 
 ### 3. Open it
 
@@ -213,7 +213,7 @@ make help              # everything else
    see, which confirms both the URL and the permissions.
 4. Save, then press **Import data** and pick the questionnaires you want.
 
-Each questionnaire's export becomes one dataset per file in it — the interview
+Each questionnaire's export becomes one dataset per file in it - the interview
 level, every roster level and the paradata. Re-importing **replaces** those
 datasets in place, so saved charts, dashboards, indicators, quality rules,
 relationships, merges and derived variables keep working.
@@ -283,7 +283,7 @@ More in [docs/architecture.md](docs/architecture.md).
 - Public dashboard links are opt-in per dashboard and carry a random token.
 - Stata-style commands are parsed into a recognised set of operators and
   functions before any SQL is built, so what runs is only ever what was
-  understood — never the text as typed.
+  understood - never the text as typed.
 - Embedded HTML renders in a sandboxed frame with no access to the page around
   it, and uploaded dashboard backgrounds are identified from their bytes rather
   than their name or content type (SVG is refused: it can carry script).

@@ -98,6 +98,8 @@ const appearanceOf = (dashboard: Dashboard | undefined): Appearance =>
 
 /** The styling one widget carries of its own, over the dashboard's. */
 export interface WidgetStyle {
+  /** A sentence under the widget saying what the reader is looking at. */
+  caption?: string
   background?: string
   /** 0-1. Falls back to the dashboard's when this widget sets none. */
   opacity?: number
@@ -444,7 +446,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
             <strong>{drill.value}</strong>
           </span>
           <span className="text-xs text-brand-800/70">
-            — every widget on this page except &ldquo;{drill.label}&rdquo;
+            - every widget on this page except &ldquo;{drill.label}&rdquo;
           </span>
           <button className="btn-ghost btn-sm ml-auto" onClick={() => setDrill(null)}>
             Clear
@@ -685,13 +687,13 @@ function WidgetFrame({
         )}
         </div>
       </header>
-      <div className="flex min-h-0 flex-1 flex-col overflow-auto p-4">
+      <div className="flex min-h-0 flex-1 flex-col overflow-auto px-4 pb-2 pt-4">
         {/* A filter the widget's dataset has no column for is dropped rather
             than failing the query - which otherwise looks like a broken
             filter, since the widget goes on showing every row in silence. */}
         {payload?.filters_ignored?.length > 0 && (
           <p className="mb-2 shrink-0 text-[11px] text-amber-700">
-            Not filtered by {payload.filters_ignored.join(', ')} — this widget's
+            Not filtered by {payload.filters_ignored.join(', ')} - this widget's
             dataset does not have {payload.filters_ignored.length > 1 ? 'those' : 'that'}{' '}
             {payload.filters_ignored.length > 1 ? 'variables' : 'variable'}.
           </p>
@@ -759,6 +761,16 @@ function WidgetFrame({
           />
         ) : null}
       </div>
+
+      {/* A figure caption: below the thing it describes, as in a report, and
+          out of the way of the data at the top where the eye lands first.
+          shrink-0 so a long one is never squeezed to nothing by the chart
+          above it. */}
+      {style.caption && (
+        <p className="shrink-0 border-t border-ink-100 px-4 py-2 text-xs leading-snug text-ink-500">
+          {style.caption}
+        </p>
+      )}
     </div>
   )
 }
@@ -1125,6 +1137,50 @@ function IndicatorWidget({
   const breakdown: Record<string, number> = payload.breakdown ?? {}
   const groups = Object.entries(breakdown)
 
+  /**
+   * Each group's progress towards its own quota, drawn as one bar.
+   *
+   * Stacking the actual on top of the target would be arithmetic nonsense -
+   * 86 interviews plus a quota of 100 is not 186 of anything. What a quota
+   * chart has to show is how much of the target is done and how much is left,
+   * so the bar IS the target, split into what has been achieved and what is
+   * still to go. Read across, the coloured part is the actual and the whole
+   * bar is the quota, which is the comparison being asked for.
+   *
+   * Overshoot gets its own segment rather than being clipped: a region at 120
+   * of 100 must not look identical to one that has landed exactly on its quota.
+   *
+   * Only when some group actually has a target. An indicator broken down for
+   * interest would otherwise grow a "still to go" segment of nothing.
+   */
+  const progress: Record<
+    string,
+    { value: number; target: number | null; percent: number | null; status: string }
+  > = payload.breakdown_progress ?? {}
+  const hasTargets = groups.some(([key]) => (progress[key]?.target ?? null) !== null)
+
+  // "Lower is better" reads the other way round. A rejection rate with a
+  // target of 5% is a ceiling, not something to work towards: the space under
+  // it is headroom nobody is trying to fill, so there is no "still to go" -
+  // only whether the limit has been passed, which is bad rather than good.
+  const lowerIsBetter = payload.direction === 'lower_is_better'
+
+  const overLabel = lowerIsBetter ? 'Over the limit' : 'Over target'
+  const achievedLabel = lowerIsBetter ? 'Within the limit' : 'Achieved'
+  // Two segments when lower is better, three otherwise. Carrying a "still to
+  // go" of zero would put a series in the legend that can never be drawn.
+  const quotaSeries = lowerIsBetter
+    ? [achievedLabel, overLabel]
+    : [achievedLabel, 'Still to go', overLabel]
+
+  const quotaRows = groups.map(([key, value]) => {
+    const target = progress[key]?.target ?? null
+    const within = target === null ? value : Math.min(value, target)
+    const over = target === null ? 0 : Math.max(value - target, 0)
+    const left = target === null ? 0 : Math.max(target - value, 0)
+    return lowerIsBetter ? [key, within, over] : [key, within, left, over]
+  })
+
   return (
     <div className={`flex h-full flex-col ${groups.length ? '' : 'justify-center'}`}>
       <p className="text-3xl font-semibold tabular-nums text-ink-900">
@@ -1144,7 +1200,7 @@ function IndicatorWidget({
             />
           </div>
           <p className="mt-1.5 text-xs text-ink-500">
-            {payload.progress_percent?.toFixed(0) ?? '–'}% of {formatNumber(payload.target_value)}
+            {payload.progress_percent?.toFixed(0) ?? '-'}% of {formatNumber(payload.target_value)}
           </p>
         </>
       )}
@@ -1164,30 +1220,60 @@ function IndicatorWidget({
             fill
             theme={theme}
             result={{
-              columns: [
-                {
-                  name: 'group',
-                  label: payload.breakdown_variable || 'Group',
-                  type: 'dimension',
-                  data_type: 'text',
-                },
-                {
-                  name: 'value',
-                  label: payload.name ?? 'Value',
-                  type: 'measure',
-                  data_type: 'number',
-                },
-              ],
-              rows: groups.map(([key, value]) => [key, value]),
+              columns: hasTargets
+                ? [
+                    {
+                      name: 'group',
+                      label: payload.breakdown_variable || 'Group',
+                      type: 'dimension',
+                      data_type: 'text',
+                    },
+                    ...quotaSeries.map((label) => ({
+                      name: label,
+                      label,
+                      type: 'measure' as const,
+                      data_type: 'number' as const,
+                    })),
+                  ]
+                : [
+                    {
+                      name: 'group',
+                      label: payload.breakdown_variable || 'Group',
+                      type: 'dimension',
+                      data_type: 'text',
+                    },
+                    {
+                      name: 'value',
+                      label: payload.name ?? 'Value',
+                      type: 'measure',
+                      data_type: 'number',
+                    },
+                  ],
+              rows: hasTargets ? quotaRows : groups.map(([key, value]) => [key, value]),
               row_count: groups.length,
               truncated: false,
               sql: '',
               duration_ms: 0,
             }}
             display={{
-              // Each bar against its own quota, where one is set, so a region
-              // that is behind reads as behind rather than merely smaller.
-              showValues: true,
+              // Numbers on the marks only without targets. On the stacked form
+              // they would be printed on each segment, including the empty
+              // ones, and three labels across a short bar is a smear.
+              showValues: !hasTargets,
+              stacked: hasTargets,
+              showLegend: hasTargets,
+              // "Still to go" is an absence rather than a category, so it
+              // takes a neutral instead of a hue competing with the value
+              // beside it. Overshoot is not given a colour that asserts good
+              // or bad on its own: passing the target is good news for "higher
+              // is better" and bad news for "lower is better", so where it is
+              // bad it takes the warning tone and otherwise a paler tint of
+              // the achieved colour - more of the same thing, not a new one.
+              seriesColors: hasTargets
+                ? lowerIsBetter
+                  ? ['', STATUS_COLORS.critical]
+                  : ['', '#e1e0d9', '#9ec5f4']
+                : undefined,
             }}
             // An indicator's breakdown is a chart of a variable like any other,
             // so clicking a bar filters the page by it. It used to be the one
@@ -1237,6 +1323,7 @@ function AddWidgetModal({
   const [content, setContent] = useState('')
   const [deadline, setDeadline] = useState('')
   const [deadlineLabel, setDeadlineLabel] = useState('')
+  const [caption, setCaption] = useState('')
   const [showBreakdown, setShowBreakdown] = useState(true)
   const [latitude, setLatitude] = useState('')
   const [longitude, setLongitude] = useState('')
@@ -1296,8 +1383,8 @@ function AddWidgetModal({
         indicator_id: kind === 'indicator' ? indicatorId : null,
         dataset_id: kind === 'quality' || kind === 'map' ? datasetId : null,
         page,
-        config:
-          kind === 'map'
+        config: {
+          ...(kind === 'map'
             ? {
                 latitude,
                 longitude,
@@ -1318,7 +1405,9 @@ function AddWidgetModal({
               ? // A local datetime from the browser; sent as an instant so the
                 // count reads the same wherever the dashboard is opened.
                 { target: new Date(deadline).toISOString(), label: deadlineLabel }
-              : {},
+              : {}),
+          ...(caption.trim() ? { caption: caption.trim() } : {}),
+        },
         layout:
           kind === 'map'
             ? { w: 6, h: 6 }
@@ -1497,7 +1586,7 @@ function AddWidgetModal({
                     <option value="">Choose…</option>
                     {numericVariables.map((v) => (
                       <option key={v.name} value={v.name}>
-                        {v.label ? `${v.name} — ${v.label}` : v.name}
+                        {v.label ? `${v.name} - ${v.label}` : v.name}
                       </option>
                     ))}
                   </select>
@@ -1511,7 +1600,7 @@ function AddWidgetModal({
                     <option value="">Choose…</option>
                     {numericVariables.map((v) => (
                       <option key={v.name} value={v.name}>
-                        {v.label ? `${v.name} — ${v.label}` : v.name}
+                        {v.label ? `${v.name} - ${v.label}` : v.name}
                       </option>
                     ))}
                   </select>
@@ -1543,7 +1632,7 @@ function AddWidgetModal({
                       <option value="">Choose a variable…</option>
                       {numericVariables.map((v) => (
                         <option key={v.name} value={v.name}>
-                          {v.label ? `${v.name} — ${v.label}` : v.name}
+                          {v.label ? `${v.name} - ${v.label}` : v.name}
                         </option>
                       ))}
                     </select>
@@ -1659,6 +1748,19 @@ function AddWidgetModal({
 
       <Field label="Title" hint="Leave blank to use the chart or indicator name">
         <input className="input" value={title} onChange={(event) => setTitle(event.target.value)} />
+      </Field>
+
+      <Field
+        label="Caption"
+        hint="Optional. Shown under the widget - a sentence saying what the reader is looking at."
+      >
+        <textarea
+          className="input text-sm"
+          rows={2}
+          value={caption}
+          placeholder="Completed interviews only. Excludes the pilot round."
+          onChange={(event) => setCaption(event.target.value)}
+        />
       </Field>
     </Modal>
   )
@@ -1789,7 +1891,7 @@ function FilterControlsModal({
       <p className="mb-3 text-sm text-ink-500">
         These filters appear on this page only; every page has its own. A filter
         narrows each widget whose dataset carries the variable and says so on
-        any widget it could not reach — the variables below are the ones this
+        any widget it could not reach - the variables below are the ones this
         page's own datasets have.
       </p>
 
@@ -1840,7 +1942,7 @@ function FilterControlsModal({
                         />
                         <span className="truncate">
                           {variable.label
-                            ? `${variable.name} — ${variable.label}`
+                            ? `${variable.name} - ${variable.label}`
                             : variable.name}
                           <span className="text-ink-400"> ({variable.n_unique})</span>
                         </span>
@@ -1861,7 +1963,7 @@ function FilterControlsModal({
           </p>
           <p className="mt-1 text-sm text-amber-800">
             These filters are still drawn on the bar, but the data they came
-            from has left this page — the widget that brought it was moved or
+            from has left this page - the widget that brought it was moved or
             removed, or the variable now has too many values to filter by.
           </p>
           <ul className="mt-2 space-y-1">
@@ -2084,6 +2186,19 @@ function EditWidgetModal({
           />
         </Field>
       </div>
+
+      <Field
+        label="Caption"
+        hint="Shown under the widget. A sentence saying what the reader is looking at, or where the number comes from."
+      >
+        <textarea
+          className="input text-sm"
+          rows={2}
+          value={config.caption ?? ''}
+          placeholder="Completed interviews only. Excludes the pilot round."
+          onChange={(event) => set({ caption: event.target.value || undefined })}
+        />
+      </Field>
 
       <Field
         label="Background"

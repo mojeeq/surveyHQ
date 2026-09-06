@@ -16,7 +16,7 @@ export function formatNumber(
   digits = 0,
   fixed = false,
 ): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '–'
+  if (value === null || value === undefined || Number.isNaN(value)) return '-'
   // Written out in full, with thousands separators. A count of interviews is
   // a number somebody reconciles against another system: "21.4k" cannot be
   // checked against 21,400, and rounds away the four hundred that the person
@@ -28,7 +28,7 @@ export function formatNumber(
 }
 
 export function formatValue(value: number | null | undefined, format = 'number', unit = ''): string {
-  if (value === null || value === undefined || Number.isNaN(value)) return '–'
+  if (value === null || value === undefined || Number.isNaN(value)) return '-'
   switch (format) {
     case 'percent':
       return `${value.toFixed(1)}%`
@@ -42,7 +42,7 @@ export function formatValue(value: number | null | undefined, format = 'number',
 }
 
 export function formatCell(value: unknown): string {
-  if (value === null || value === undefined || value === '') return '–'
+  if (value === null || value === undefined || value === '') return '-'
   if (typeof value === 'number') {
     return Number.isInteger(value)
       ? value.toLocaleString()
@@ -63,7 +63,7 @@ export function formatBytes(bytes: number): string {
 }
 
 export function formatDate(value: string | null | undefined, withTime = false): string {
-  if (!value) return '–'
+  if (!value) return '-'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return value
   return withTime ? date.toLocaleString() : date.toLocaleDateString()

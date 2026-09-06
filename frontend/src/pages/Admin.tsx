@@ -127,7 +127,7 @@ function Users() {
         <tbody>
           {users.data!.items.map((user) => (
             <tr key={user.id}>
-              <td className="font-medium">{user.full_name || '–'}</td>
+              <td className="font-medium">{user.full_name || '-'}</td>
               <td className="text-ink-600">{user.email}</td>
               <td>
                 <select

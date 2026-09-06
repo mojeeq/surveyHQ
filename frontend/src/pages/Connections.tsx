@@ -218,7 +218,7 @@ function SyncBadge({ connection }: { connection: Connection }) {
     success: { tone: 'success', icon: '✓', label: 'Synced' },
     failed: { tone: 'danger', icon: '⚠', label: 'Failed' },
     running: { tone: 'warning', icon: '◷', label: 'Running' },
-    never: { tone: 'neutral', icon: '–', label: 'Never synced' },
+    never: { tone: 'neutral', icon: '-', label: 'Never synced' },
   } as const
   const state = map[connection.last_sync_status]
   return (
@@ -423,7 +423,7 @@ function ConnectionModal({
               update({ export_format: event.target.value as typeof form.export_format })
             }
           >
-            <option value="STATA">Stata (.dta) — keeps value labels</option>
+            <option value="STATA">Stata (.dta) - keeps value labels</option>
             <option value="Tabular">Tab-delimited</option>
             <option value="SPSS">SPSS (.sav)</option>
           </select>
@@ -718,7 +718,7 @@ function ImportModal({ connection, onClose }: { connection: Connection; onClose:
                       <p className="text-xs text-ink-500">
                         {group.versions.length === 1
                           ? `Version ${group.versions[0].version}`
-                          : `${group.versions.length} versions · v${group.versions[0].version}–v${
+                          : `${group.versions.length} versions · v${group.versions[0].version}-v${
                               group.versions[group.versions.length - 1].version
                             }`}
                         {group.variable && ` · ${group.variable}`}

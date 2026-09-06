@@ -1116,6 +1116,12 @@ def _render_widget(
             # the totals are.
             "breakdown_progress": breakdown_progress(indicator, breakdown),
             "breakdown_variable": indicator.breakdown_variable if wants_breakdown else "",
+            # Which way the indicator is meant to move. A quota chart reads
+            # differently for each: with "higher is better" the bar is progress
+            # towards the target and the shortfall is what is left to do; with
+            # "lower is better" the target is a ceiling and the headroom under
+            # it is not something anyone is trying to fill.
+            "direction": indicator.direction.value,
             "computed_at": computed_at.isoformat() if computed_at else None,
         }
 

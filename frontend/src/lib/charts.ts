@@ -186,6 +186,15 @@ export interface BuildOptions {
    * would leave nothing but the legend telling them apart.
    */
   seriesColor?: string
+  /**
+   * Colours for specific series, by position. An empty entry keeps the theme's
+   * colour for that slot, so only the series that need pinning are named.
+   *
+   * For the one case where a series is not a category: "still to go" on a
+   * quota chart is an absence, and giving it a hue would set it competing with
+   * the value beside it.
+   */
+  seriesColors?: string[]
   /** Font for this widget's chart text. */
   fontFamily?: string
   /** Colour for this widget's chart text: axes, their names, and the legend. */
@@ -438,9 +447,12 @@ function buildOption(
 ): EChartsOption {
   const themePalette = themeColors(options.theme)
   const lead = options.seriesColor?.toLowerCase()
-  const palette = lead
+  const ordered = lead
     ? [options.seriesColor!, ...themePalette.filter((c) => c.toLowerCase() !== lead)]
     : themePalette
+  const palette = options.seriesColors
+    ? ordered.map((colour, index) => options.seriesColors![index] || colour)
+    : ordered
   const pivoted = pivot(result)
   const valueLabelText = pivoted.valueLabel
   const { categories, series } = shape(pivoted.categories, pivoted.series, options)

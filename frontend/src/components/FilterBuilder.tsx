@@ -81,7 +81,7 @@ export default function FilterBuilder({
             >
               {variables.map((v) => (
                 <option key={v.name} value={v.name}>
-                  {v.label ? `${v.name} — ${v.label}` : v.name}
+                  {v.label ? `${v.name} - ${v.label}` : v.name}
                 </option>
               ))}
             </select>

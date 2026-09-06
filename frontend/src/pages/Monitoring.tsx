@@ -34,7 +34,7 @@ const STATE = {
   ok: { tone: 'success', icon: '✓', label: 'On track' },
   warning: { tone: 'warning', icon: '▲', label: 'Watch' },
   critical: { tone: 'danger', icon: '■', label: 'Critical' },
-  unknown: { tone: 'neutral', icon: '–', label: 'No data' },
+  unknown: { tone: 'neutral', icon: '-', label: 'No data' },
 } as const
 
 export default function Monitoring() {
@@ -230,7 +230,7 @@ function IndicatorCard({
             />
           </div>
           <p className="mt-1.5 text-xs text-ink-500">
-            {value.progress_percent?.toFixed(0) ?? '–'}% of target{' '}
+            {value.progress_percent?.toFixed(0) ?? '-'}% of target{' '}
             {formatNumber(value.target_value)}
           </p>
         </>
@@ -549,7 +549,7 @@ function IndicatorModal({
               <option value="">Choose a variable…</option>
               {choices.map((v) => (
                 <option key={v.name} value={v.name}>
-                  {v.label ? `${v.name} — ${v.label}` : v.name}
+                  {v.label ? `${v.name} - ${v.label}` : v.name}
                 </option>
               ))}
             </select>
@@ -602,7 +602,7 @@ function IndicatorModal({
             <option value="">No breakdown</option>
             {groupable.map((v) => (
               <option key={v.name} value={v.name}>
-                {v.label ? `${v.name} — ${v.label}` : v.name}
+                {v.label ? `${v.name} - ${v.label}` : v.name}
               </option>
             ))}
           </select>

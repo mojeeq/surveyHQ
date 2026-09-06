@@ -31,7 +31,7 @@ export interface MapPoint {
 
 /** Escapes text going into a popup: the values are survey data, not markup. */
 function escape(value: unknown): string {
-  return String(value ?? '–').replace(
+  return String(value ?? '-').replace(
     /[&<>"']/g,
     (character) =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!,
@@ -156,8 +156,8 @@ export default function MapWidget({
       <div ref={container} className="min-h-0 flex-1 rounded" />
       <p className="mt-1 shrink-0 text-[11px] text-ink-400">
         {points.length ? `${formatNumber(points.length)} location(s)` : 'No located interviews'}
-        {truncated && ' — showing the busiest only'}
-        {tilesFailed && ' — no map tiles: this server cannot reach the tile host'}
+        {truncated && ' - showing the busiest only'}
+        {tilesFailed && ' - no map tiles: this server cannot reach the tile host'}
       </p>
     </div>
   )

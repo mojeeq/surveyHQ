@@ -37,7 +37,7 @@ Sign-in is rate limited: ten attempts a minute from one address, five a minute
 against one account, counted whether or not the password was right. Over either,
 the endpoint answers `429` with a `Retry-After` header. A script that signs in
 once and reuses its token never meets this; one that signs in per request will.
-Prefer an API key for scripts — it is not rate limited, and it does not expire.
+Prefer an API key for scripts - it is not rate limited, and it does not expire.
 
 ## Endpoints
 
@@ -144,7 +144,7 @@ An upload larger than `MAX_UPLOAD_MB` answers **413** from the declared length,
 before the body is read, and the message names both the size and the limit.
 
 Several archives can be sent in one request by repeating the `file` field. They
-are imported in order — the first under `mode`, the rest appended — which is
+are imported in order - the first under `mode`, the rest appended - which is
 how a questionnaire revised mid-fieldwork becomes one dataset per member file.
 `labels` is a JSON list parallel to the files and `version_column` names a
 variable each label is written into; a variable of that name already in the data
@@ -296,7 +296,7 @@ GET    /public/site                           no authentication; says whether th
                                               dashboard
 ```
 
-`PUT /{id}/hostname` takes `{"hostname": "labour-force"}` — a bare label or the
+`PUT /{id}/hostname` takes `{"hostname": "labour-force"}` - a bare label or the
 whole name, both meaning the same thing. It answers 422 for a name outside the
 configured `DASHBOARD_DOMAIN`, a reserved label or the platform's own address,
 409 if another dashboard holds it or the dashboard is not shared. Turning
@@ -448,7 +448,7 @@ A response:
 
 | Status | Meaning |
 |---|---|
-| 400 | Invalid query — an unknown variable, or an impossible aggregation |
+| 400 | Invalid query - an unknown variable, or an impossible aggregation |
 | 401 | Missing or expired credentials |
 | 403 | Your role does not permit this |
 | 404 | Not found |
