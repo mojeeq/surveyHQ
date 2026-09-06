@@ -74,7 +74,7 @@ const CHART_TYPES: { value: ChartType; label: string }[] = [
  *  is not. Saying how many distinct values it holds is the difference.
  */
 function optionLabel(v: Variable): string {
-  const named = v.label ? `${v.name} — ${v.label}` : v.name
+  const named = v.label ? `${v.name} - ${v.label}` : v.name
   return v.n_unique > 200 ? `${named} (${formatNumber(v.n_unique)} values)` : named
 }
 
@@ -592,8 +592,8 @@ function AggregateBuilder({
             >
               <option value="value_desc">Largest first</option>
               <option value="value_asc">Smallest first</option>
-              <option value="label_asc">By name (A–Z)</option>
-              <option value="label_desc">By name (Z–A)</option>
+              <option value="label_asc">By name (A-Z)</option>
+              <option value="label_desc">By name (Z-A)</option>
               <option value="none">As the query returned them</option>
             </select>
           </Field>
@@ -986,12 +986,16 @@ function CrosstabBuilder({
     <div className="mt-4 grid gap-6 lg:grid-cols-[330px_1fr]">
       <div className="space-y-4">
         <Card title="Table setup">
-          <Field label="Rows">
+          <Field
+            label="Rows"
+            hint="Leave one of the two empty to tabulate a single variable on its own."
+          >
             <select
               className="input py-1.5 text-xs"
               value={rowVariable}
               onChange={(event) => setRowVariable(event.target.value)}
             >
+              <option value="">No rows</option>
               {groupable.map((v) => (
                 <option key={v.name} value={v.name}>
                   {optionLabel(v)}
@@ -1005,6 +1009,7 @@ function CrosstabBuilder({
               value={columnVariable}
               onChange={(event) => setColumnVariable(event.target.value)}
             >
+              <option value="">No columns</option>
               {groupable.map((v) => (
                 <option key={v.name} value={v.name}>
                   {optionLabel(v)}
@@ -1065,7 +1070,7 @@ function CrosstabBuilder({
         <button
           className="btn-primary w-full"
           onClick={() => run.mutate()}
-          disabled={run.isPending || !rowVariable || !columnVariable}
+          disabled={run.isPending || (!rowVariable && !columnVariable)}
         >
           {run.isPending && <Spinner className="h-4 w-4 text-white" />}
           Build table
@@ -1182,10 +1187,16 @@ function SaveCrosstabModal({
   const toast = useToast()
   const [name, setName] = useState(editing?.name ?? '')
 
+  // A one-way table is "region", not "region by " with nothing after it.
+  const defaultName =
+    request.row_variable && request.column_variable
+      ? `${request.row_variable} by ${request.column_variable}`
+      : request.row_variable || request.column_variable
+
   const save = useMutation({
     mutationFn: () => {
       const body = {
-        name: name || editing?.name || `${request.row_variable} by ${request.column_variable}`,
+        name: name || editing?.name || defaultName,
         dataset_id: datasetId,
         chart_type: 'crosstab',
         // A crosstab spec holds the request rather than a query, and the server
@@ -1231,7 +1242,7 @@ function SaveCrosstabModal({
           className="input"
           value={name}
           onChange={(event) => setName(event.target.value)}
-          placeholder={`${request.row_variable} by ${request.column_variable}`}
+          placeholder={defaultName}
         />
       </Field>
     </Modal>

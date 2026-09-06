@@ -37,6 +37,12 @@ export default function CrosstabTable({
   // A column of percentages read down the page wants a constant width, so
   // 50% stays "50.0%" beside 48.2%. Counts do not: they are whole numbers.
 
+  // A one-way table needs only one of the two total lines. The row total of a
+  // single column is that column, and printing it beside itself is a column of
+  // numbers that says nothing twice.
+  const showRowTotals = result.column_labels.length > 1
+  const showColumnTotals = result.row_labels.length > 1
+
   return (
     <div className={`flex flex-col ${fill ? 'h-full min-h-0' : ''}`}>
       <div
@@ -49,7 +55,12 @@ export default function CrosstabTable({
           <thead className="sticky top-0">
             <tr>
               <th className="sticky left-0 z-10 bg-ink-100">
-                {result.row_variable} \ {result.column_variable}
+                {/* A one-way table has only one variable, so the corner names
+                    that one rather than reading "region \ " with nothing
+                    after the slash. */}
+                {result.row_variable && result.column_variable
+                  ? `${result.row_variable} \ ${result.column_variable}`
+                  : result.row_variable || result.column_variable}
               </th>
               {result.column_labels.map((label) => (
                 <th
@@ -62,7 +73,7 @@ export default function CrosstabTable({
                   {label}
                 </th>
               ))}
-              <th className="text-right">Total</th>
+              {showRowTotals && <th className="text-right">Total</th>}
             </tr>
           </thead>
           <tbody>
@@ -78,23 +89,31 @@ export default function CrosstabTable({
                 </td>
                 {result.values[rowIndex].map((value, cellIndex) => (
                   <td key={cellIndex} className="text-right tabular-nums">
-                    {value === null ? '–' : `${formatNumber(value, digits, showing)}${suffix}`}
+                    {value === null ? '-' : `${formatNumber(value, digits, showing)}${suffix}`}
                   </td>
                 ))}
-                <td className="text-right font-semibold tabular-nums">
-                  {formatNumber(result.row_totals[rowIndex])}
-                </td>
+                {showRowTotals && (
+                  <td className="text-right font-semibold tabular-nums">
+                    {formatNumber(result.row_totals[rowIndex])}
+                  </td>
+                )}
               </tr>
             ))}
-            <tr className="bg-ink-50 font-semibold">
-              <td className="sticky left-0 bg-ink-50">Total</td>
-              {result.column_totals.map((total, index) => (
-                <td key={index} className="text-right tabular-nums">
-                  {formatNumber(total)}
-                </td>
-              ))}
-              <td className="text-right tabular-nums">{formatNumber(result.grand_total)}</td>
-            </tr>
+            {showColumnTotals && (
+              <tr className="bg-ink-50 font-semibold">
+                <td className="sticky left-0 bg-ink-50">Total</td>
+                {result.column_totals.map((total, index) => (
+                  <td key={index} className="text-right tabular-nums">
+                    {formatNumber(total)}
+                  </td>
+                ))}
+                {showRowTotals && (
+                  <td className="text-right tabular-nums">
+                    {formatNumber(result.grand_total)}
+                  </td>
+                )}
+              </tr>
+            )}
           </tbody>
         </table>
       </div>

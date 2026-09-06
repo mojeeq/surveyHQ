@@ -6,7 +6,7 @@ summaries and run data exports.
 
 ## What you need
 
-- The **server URL** — the site root, e.g. `https://demo.mysurvey.solutions`.
+- The **server URL** - the site root, e.g. `https://demo.mysurvey.solutions`.
   Not a path inside it: no `/primary`, no `/api`.
 - The **workspace** name. Most servers have one, called `primary`.
 - An **API user** with access to that workspace.
@@ -33,8 +33,8 @@ it can be revoked without disturbing anyone's login.
 | Server URL | `https://your-server.mysurvey.solutions` |
 | Workspace | `primary` unless you know otherwise |
 | API user name | The account you just created |
-| Password | Its password — encrypted before it is stored |
-| Export format | **Stata** (recommended — it carries variable and value labels) |
+| Password | Its password - encrypted before it is stored |
+| Export format | **Stata** (recommended - it carries variable and value labels) |
 | Interview status | `All`, or restrict to e.g. `ApprovedBySupervisor` |
 | Project | Which project the imported datasets belong to |
 
@@ -51,10 +51,10 @@ What happens next:
 
 1. susoDash asks the server to prepare an export job.
 2. It polls until the server reports the job complete. Large surveys take
-   minutes — this runs in the background, so you can close the page.
+   minutes - this runs in the background, so you can close the page.
 3. It downloads the archive, keeps it, and unpacks the data files.
-4. It imports **every** data file in it — the interview level, each roster
-   level, and the paradata — one dataset each.
+4. It imports **every** data file in it - the interview level, each roster
+   level, and the paradata - one dataset each.
 
 **Re-importing replaces those datasets in place**, keeping each one's identity,
 so saved charts, dashboards, indicators, quality rules, relationships, merges
@@ -62,30 +62,30 @@ and derived variables keep working as long as variable names are stable. That is
 the whole point: an export arrives every morning with the same variables and
 more interviews, and nothing downstream should have to be rebuilt.
 
-Choose *append* instead if your export really is incremental — each run holding
+Choose *append* instead if your export really is incremental - each run holding
 only what is new.
 
 Progress and history appear under **Recent imports** on the connection, and
 under **Administration → Background jobs**. Each run keeps the export zip
 exactly as the server sent it; **Download** on the run hands it back. It is the
 only record of what was actually imported, and it can be re-uploaded like any
-other archive. The last five per connection are kept — an export is tens of
+other archive. The last five per connection are kept - an export is tens of
 megabytes, and a connection syncing every six hours produces four a day.
 
 ## Scheduled imports
 
 Turn on **Import automatically**, then choose how the schedule is expressed:
 
-- **Every N minutes** — keeps the data no older than a known age. For daily
-  monitoring, 60–360 minutes is usually right.
-- **At set times** — e.g. `06:00` and `18:00`, listed as many as you like. This
+- **Every N minutes** - keeps the data no older than a known age. For daily
+  monitoring, 60-360 minutes is usually right.
+- **At set times** - e.g. `06:00` and `18:00`, listed as many as you like. This
   puts the import where the day has room for it: before the office opens, after
   the field teams sync their tablets. A monitoring dashboard is usually read at
   a particular hour, and the useful guarantee is that it was refreshed just
   before.
 
 Times are read in the connection's **timezone**, which you set alongside them.
-Fieldwork happens somewhere, and 06:00 means six in the morning there — in
+Fieldwork happens somewhere, and 06:00 means six in the morning there - in
 Vanuatu that is five the previous afternoon in UTC, so getting the zone wrong is
 a day's error, not an hour's.
 
@@ -119,9 +119,9 @@ records what it finds:
 | GPS | `latitude` / `longitude` and their prefixed variants |
 | Area | `region`, `province`, `district`, `admin1` |
 
-Whatever it finds drives the **Field progress** tab on the dataset — submissions
+Whatever it finds drives the **Field progress** tab on the dataset - submissions
 over time, interviews per interviewer and supervisor, status breakdown, coverage
-by area, GPS map — with no configuration. What it recognises is listed on the
+by area, GPS map - with no configuration. What it recognises is listed on the
 dataset page, so you can see exactly what was matched.
 
 Uploaded files with the same column names get the same treatment.
@@ -141,20 +141,20 @@ Usually the URL includes a path. Use the site root only. Also check the server
 is version 20.06 or later, which is where the v2 export API arrives.
 
 **"The server did not return JSON"**
-The URL points at the web interface rather than the API root — typically a
+The URL points at the web interface rather than the API root - typically a
 trailing path, or a login page being returned by a proxy in front of the server.
 
 **"Could not reach the Survey Solutions server"**
 Network or DNS. From the host:
 `curl -I https://your-server.mysurvey.solutions`.
 If the server uses a self-signed certificate, turn off **Verify the server's TLS
-certificate** on the connection — only on a network you trust.
+certificate** on the connection - only on a network you trust.
 
 **"... is a link-local address" or "... points at this server itself"**
 The platform will not fetch a survey server from `127.0.0.1`, `localhost`, or
 the `169.254.x.x` range. The first two are susoDash's own container rather than
 a Survey Solutions server, and the third is where cloud providers put the
-metadata service that hands out machine credentials to anything that asks — so
+metadata service that hands out machine credentials to anything that asks - so
 a URL pointing there, whether mistyped or planted, is refused rather than
 followed. A server on your own network is fine: `10.x`, `192.168.x` and
 `172.16-31.x` are all allowed, because that is where Survey Solutions usually
@@ -170,7 +170,7 @@ status to `All` and try again.
 
 **The scheduled import is not running**
 Check that **Import automatically** is on, that the connection lists at least
-one questionnaire, and — for a time-of-day schedule — that the timezone is the
+one questionnaire, and - for a time-of-day schedule - that the timezone is the
 one you meant. `SYNC_TICK_MINUTES` decides how often the scheduler looks; a
 time of day cannot be honoured more precisely than that.
 

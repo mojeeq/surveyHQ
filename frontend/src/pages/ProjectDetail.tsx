@@ -138,7 +138,7 @@ export default function ProjectDetail() {
           </p>
           <p className="mt-2 text-sm text-ink-600">
             <strong>Delete everything</strong> also destroys those datasets and their files, and
-            everything built on them — charts, indicators and their history, quality checks,
+            everything built on them - charts, indicators and their history, quality checks,
             alert rules and the alerts they raised, relationships, and this project's dashboards.
             It cannot be undone. Connections are kept: a connection is a server and its
             credentials, which outlive the project.
@@ -416,7 +416,7 @@ function AddMemberModal({
               <option value="">Choose a user…</option>
               {candidates.map((user) => (
                 <option key={user.id} value={user.id}>
-                  {user.full_name ? `${user.full_name} — ${user.email}` : user.email}
+                  {user.full_name ? `${user.full_name} - ${user.email}` : user.email}
                   {user.restricted_to_projects ? ' (project-only)' : ''}
                 </option>
               ))}
@@ -622,8 +622,8 @@ function RelationshipsTab({
             >
               <p className="text-sm text-ink-600">
                 Detection is a guess made from the data, and a wrong guess is easier to clear
-                out than to correct one at a time. Datasets already merged keep their data —
-                they hold their own copy — but they can no longer be re-run from a
+                out than to correct one at a time. Datasets already merged keep their data -
+                they hold their own copy - but they can no longer be re-run from a
                 relationship that is gone.
               </p>
               <p className="mt-2 text-sm text-ink-600">
@@ -845,7 +845,7 @@ function MergeModal({
                 }
               />
               <span className="truncate">
-                {variable.label ? `${variable.name} — ${variable.label}` : variable.name}
+                {variable.label ? `${variable.name} - ${variable.label}` : variable.name}
               </span>
             </label>
           ))}
@@ -981,7 +981,7 @@ function ManualRelationshipModal({
             <option value="">Choose a column…</option>
             {columns(left.data).map((variable) => (
               <option key={variable.name} value={variable.name}>
-                {variable.label ? `${variable.name} — ${variable.label}` : variable.name}
+                {variable.label ? `${variable.name} - ${variable.label}` : variable.name}
               </option>
             ))}
           </select>
@@ -995,7 +995,7 @@ function ManualRelationshipModal({
             <option value="">Choose a column…</option>
             {columns(right.data).map((variable) => (
               <option key={variable.name} value={variable.name}>
-                {variable.label ? `${variable.name} — ${variable.label}` : variable.name}
+                {variable.label ? `${variable.name} - ${variable.label}` : variable.name}
               </option>
             ))}
           </select>

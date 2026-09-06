@@ -2,7 +2,7 @@
 
 Tests default to SQLite in a temporary directory, which needs no services and is
 fast. Setting DATABASE_URL_OVERRIDE before running points the same suite at a
-real PostgreSQL instead — CI does that, because some faults only appear there
+real PostgreSQL instead - CI does that, because some faults only appear there
 (a shared enum type emitting CREATE TYPE twice, for one).
 """
 

@@ -726,7 +726,30 @@ def test_a_saved_crosstab_renders_as_a_dashboard_widget(client, auth_headers, da
     assert widget["result"]["grand_total"] == 200
 
 
-def test_an_invalid_crosstab_spec_is_rejected_on_save(client, auth_headers, dataset_id):
+def test_a_one_way_crosstab_saves(client, auth_headers, dataset_id):
+    """A single variable is a table in its own right, not a half-finished one.
+
+    This used to be refused for having no column variable, which meant saving
+    a plain frequency table required picking a second variable to cross it
+    with and then reading around it.
+    """
+    response = client.post(
+        "/api/v1/dashboards/charts",
+        headers=auth_headers,
+        json={
+            "name": "By region",
+            "dataset_id": dataset_id,
+            "chart_type": "crosstab",
+            "spec": {"crosstab": {"row_variable": "region"}},
+        },
+    )
+    assert response.status_code == 201, response.text
+
+
+def test_a_crosstab_spec_with_no_variables_is_rejected_on_save(
+    client, auth_headers, dataset_id
+):
+    """One of the two is enough; neither is not."""
     response = client.post(
         "/api/v1/dashboards/charts",
         headers=auth_headers,
@@ -734,7 +757,7 @@ def test_an_invalid_crosstab_spec_is_rejected_on_save(client, auth_headers, data
             "name": "Broken",
             "dataset_id": dataset_id,
             "chart_type": "crosstab",
-            "spec": {"crosstab": {"row_variable": "region"}},  # no column variable
+            "spec": {"crosstab": {"measure": {"agg": "count"}}},
         },
     )
     assert response.status_code == 422

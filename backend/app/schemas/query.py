@@ -168,8 +168,13 @@ class QueryResult(BaseModel):
 
 
 class CrosstabRequest(BaseModel):
-    row_variable: str
-    column_variable: str
+    # One of the two may be left empty, which asks for a one-way table: the
+    # frequencies of a single variable, which is what "tabulate this" usually
+    # means before anyone wants it crossed with something. Requiring both
+    # forced people to pick a second variable they did not want and then read
+    # around it.
+    row_variable: str = ""
+    column_variable: str = ""
     measure: Measure = Field(default_factory=Measure)
     filters: FilterGroup = Field(default_factory=FilterGroup)
     percentages: Literal["none", "row", "column", "total"] = "none"
@@ -182,6 +187,12 @@ class CrosstabRequest(BaseModel):
     # exports, so the ceiling is generous rather than tasteful.
     max_rows: int = Field(default=5_000, ge=2, le=100_000)
     max_columns: int = Field(default=1_000, ge=2, le=10_000)
+
+    @model_validator(mode="after")
+    def _needs_one_variable(self) -> CrosstabRequest:
+        if not self.row_variable and not self.column_variable:
+            raise ValueError("A tabulation needs a row variable, a column variable, or both")
+        return self
 
 
 class CrosstabResult(BaseModel):

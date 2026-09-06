@@ -635,7 +635,7 @@ function UploadModal({
           <p className="text-sm text-brand-900">
             These are imported <strong>in this order</strong>: the first under the
             choice below, the rest appended onto what it produces. Each file
-            inside them meets its own kind — the interview level with the
+            inside them meets its own kind - the interview level with the
             interview level, each roster with its roster, the paradata with the
             paradata.
           </p>
@@ -699,8 +699,8 @@ function UploadModal({
         <div className="mb-4 rounded-card border border-brand-200 bg-brand-50 p-3">
           <p className="text-sm text-brand-900">
             Each file inside becomes its own dataset, because an export holds one
-            file per roster level — the interview, the household members, the
-            people abroad — and those are different tables.
+            file per roster level - the interview, the household members, the
+            people abroad - and those are different tables.
           </p>
           <p className="mt-1.5 text-sm text-brand-900">
             Upload a later round&rsquo;s archive and each of its files is{' '}

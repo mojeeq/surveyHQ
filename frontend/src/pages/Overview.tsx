@@ -13,7 +13,7 @@ const STATE_TONE = {
   ok: { tone: 'success', icon: '✓', label: 'On track' },
   warning: { tone: 'warning', icon: '▲', label: 'Watch' },
   critical: { tone: 'danger', icon: '■', label: 'Critical' },
-  unknown: { tone: 'neutral', icon: '–', label: 'No data' },
+  unknown: { tone: 'neutral', icon: '-', label: 'No data' },
 } as const
 
 export default function Overview() {
@@ -229,7 +229,7 @@ function IndicatorTile({ indicator }: { indicator: IndicatorValue }) {
             />
           </div>
           <p className="mt-1 text-xs text-ink-500">
-            {progress?.toFixed(0) ?? '–'}% of target {formatNumber(indicator.target_value)}
+            {progress?.toFixed(0) ?? '-'}% of target {formatNumber(indicator.target_value)}
           </p>
         </>
       )}

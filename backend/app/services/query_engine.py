@@ -603,16 +603,46 @@ def execute_frequency(
     )
 
 
+# The single axis a one-way table gets in place of the variable it does not
+# have. It is a sentinel rather than a real value, so it can never collide with
+# a category that happens to be called "Count".
+_ONE_WAY = object()
+
+
+def _measure_label(measure: Measure) -> str:
+    """What to call the one column of a one-way table."""
+    if measure.agg == Aggregation.count:
+        return "Count"
+    return f"{measure.agg.value} of {measure.variable}" if measure.variable else measure.agg.value
+
+
 def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabResult:
-    """Two-way table with optional row/column/total percentages and chi-square."""
-    row_info = ctx.require(request.row_variable)
-    col_info = ctx.require(request.column_variable)
+    """A table of one or two variables.
+
+    With both a row and a column variable this is the two-way cross-tabulation
+    it has always been, percentages and chi-square included. With only one it
+    is that variable's frequencies, which is what "tabulate this" means before
+    anybody wants it crossed with something - and which used to require picking
+    a second variable you did not want and reading around it.
+
+    A one-way table keeps the two-way shape, with the missing side standing in
+    as a single row or column named after the measure. That way everything
+    downstream - the renderer, the export, the dashboard widget - needs to know
+    nothing about it.
+    """
+    row_info = ctx.require(request.row_variable) if request.row_variable else None
+    col_info = ctx.require(request.column_variable) if request.column_variable else None
+    if row_info is None and col_info is None:  # pragma: no cover - schema catches this
+        raise QueryError("A tabulation needs a row variable, a column variable, or both")
+
+    dimensions = []
+    if row_info is not None:
+        dimensions.append(Dimension(variable=request.row_variable, alias="__row"))
+    if col_info is not None:
+        dimensions.append(Dimension(variable=request.column_variable, alias="__col"))
 
     spec = QuerySpec(
-        dimensions=[
-            Dimension(variable=request.row_variable, alias="__row"),
-            Dimension(variable=request.column_variable, alias="__col"),
-        ],
+        dimensions=dimensions,
         measures=[Measure(**{**request.measure.model_dump(), "alias": "__value"})],
         filters=request.filters,
         limit=MAX_ROWS,
@@ -623,7 +653,20 @@ def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabR
     sql, params = builder.build_aggregate(spec)
     _, raw = run_sql(sql, params)
 
+    # Normalise to (row key, column key, value) whichever way round it came, so
+    # the counting below is the same for one variable and for two.
+    if row_info is not None and col_info is not None:
+        triples = list(raw)
+    elif row_info is not None:
+        triples = [(r, _ONE_WAY, v) for r, v in raw]
+    else:
+        triples = [(_ONE_WAY, c, v) for c, v in raw]
+
+    measure_name = _measure_label(request.measure)
+
     def cell_label(info: Any, value: Any) -> str:
+        if value is _ONE_WAY:
+            return measure_name
         if value is None:
             return MISSING_LABEL
         return str(_label_value(info, value) if request.use_labels else value)
@@ -631,7 +674,7 @@ def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabR
     row_keys: list[Any] = []
     col_keys: list[Any] = []
     table: dict[tuple[Any, Any], float] = {}
-    for row_value, col_value, value in raw:
+    for row_value, col_value, value in triples:
         if row_value not in row_keys:
             row_keys.append(row_value)
         if col_value not in col_keys:
@@ -654,7 +697,12 @@ def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabR
 
     chi_square = _chi_square(values, row_totals, column_totals, grand_total)
 
+    one_way = row_info is None or col_info is None
     if request.percentages != "none" and grand_total:
+        # A one-way table has one meaningful denominator - the total - because
+        # the axis it does not have is a single cell. Asking for "% of row" on
+        # a table one column wide would print 100% down the page.
+        basis = "total" if one_way else request.percentages
         percent_values: list[list[float | None]] = []
         for i, row in enumerate(values):
             new_row: list[float | None] = []
@@ -666,7 +714,7 @@ def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabR
                     "row": row_totals[i],
                     "column": column_totals[j],
                     "total": grand_total,
-                }[request.percentages]
+                }[basis]
                 new_row.append(round(value / base * 100, 2) if base else None)
             percent_values.append(new_row)
         values = percent_values
@@ -687,7 +735,11 @@ def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabR
     )
 
 
-def _sorted_keys(keys: list[Any], info: VariableInfo) -> list[Any]:
+def _sorted_keys(keys: list[Any], info: VariableInfo | None) -> list[Any]:
+    # The one-way sentinel is the only key on its axis, so there is nothing to
+    # sort and nothing it could be compared against.
+    if info is None:
+        return list(keys)
     non_null = [k for k in keys if k is not None]
     try:
         non_null.sort()

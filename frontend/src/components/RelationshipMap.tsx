@@ -23,10 +23,10 @@ import { Badge } from './ui'
  */
 
 const CARDINALITY_LABEL: Record<Cardinality, string> = {
-  one_to_one: '1 — 1',
-  one_to_many: '1 — ∗',
-  many_to_one: '∗ — 1',
-  many_to_many: '∗ — ∗',
+  one_to_one: '1 - 1',
+  one_to_many: '1 - ∗',
+  many_to_one: '∗ - 1',
+  many_to_many: '∗ - ∗',
 }
 
 interface Point {

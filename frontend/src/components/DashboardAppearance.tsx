@@ -445,9 +445,9 @@ export default function AppearanceModal({
             value={String(draft.columns ?? 12)}
             onChange={(event) => setDraft({ ...draft, columns: Number(event.target.value) })}
           >
-            <option value="12">12 — standard</option>
-            <option value="16">16 — finer</option>
-            <option value="24">24 — finest</option>
+            <option value="12">12 - standard</option>
+            <option value="16">16 - finer</option>
+            <option value="24">24 - finest</option>
           </select>
         </Field>
         <Field label="Row height" hint="Taller rows make every widget taller.">
