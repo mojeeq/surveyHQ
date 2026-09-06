@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import {
+  keepPreviousData,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from '@tanstack/react-query'
 import { type CSSProperties, useEffect, useMemo, useState } from 'react'
 import { useParams } from 'react-router-dom'
 import GridLayout, { type Layout } from 'react-grid-layout'
@@ -205,6 +210,12 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         withCrossFilter(toFilterGroup(pageControls, filterValues), drill),
       ),
     enabled: Boolean(dashboard.data),
+    // Keep showing the numbers already on screen while the filtered ones are
+    // fetched. Every filter change is a new query key, so without this each
+    // one tore the whole board down to spinners and rebuilt it - and going
+    // back to a selection you had already made was smooth only because that
+    // key happened to be cached. Now both directions read the same.
+    placeholderData: keepPreviousData,
     refetchInterval: dashboard.data?.refresh_interval_seconds
       ? dashboard.data.refresh_interval_seconds * 1000
       : false,
@@ -494,7 +505,14 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
       ) : (
         <div
           ref={(node) => node && setWidth(node.clientWidth)}
-          className={fixedWidth > width ? 'overflow-x-auto' : ''}
+          // Dimmed a little while the numbers on screen belong to the previous
+          // selection, so a click is acknowledged without the board being torn
+          // down. isPlaceholderData rather than isFetching on purpose: the
+          // latter is also true on the timed refresh, which would make a
+          // dashboard left up on a wall blink every minute for no reason.
+          className={`${fixedWidth > width ? 'overflow-x-auto' : ''} transition-opacity duration-200 ${
+            rendered.isPlaceholderData ? 'opacity-60' : 'opacity-100'
+          }`}
         >
         <GridLayout
           className="layout"
@@ -861,12 +879,17 @@ function PageTabs({
   if (count <= 1 && !canEdit) return null
 
   return (
+    // Two groups, not one run of buttons. The tabs wrap among themselves and
+    // the page controls stay together at the end: mixed into one wrapping row,
+    // a twelfth tab came to rest between "Rename" and "Delete page", where it
+    // reads as one of the controls rather than as a page.
     <div
-      className={`mb-4 flex flex-wrap items-center gap-1 border-b ${
+      className={`mb-4 flex flex-wrap items-end justify-between gap-x-2 border-b ${
         onDark ? 'border-white/25' : 'border-ink-200'
       } ${band ? 'rounded-t-lg px-2' : ''}`}
       style={band ? { backgroundColor: band } : undefined}
     >
+      <div className="flex min-w-0 flex-wrap items-center gap-x-1">
       {(count > 1 || canEdit) &&
         named.map((page, index) => (
           <button
@@ -887,8 +910,9 @@ function PageTabs({
             {page.name}
           </button>
         ))}
+      </div>
       {canEdit && (
-        <>
+        <div className="flex shrink-0 flex-wrap items-center gap-x-1 py-1">
           <button
             className={`btn-ghost btn-sm ${onDark ? 'text-white/80' : 'text-ink-500'}`}
             onClick={addPage}
@@ -929,7 +953,7 @@ function PageTabs({
               </button>
             </>
           )}
-        </>
+        </div>
       )}
     </div>
   )
@@ -1848,6 +1872,12 @@ function FilterControlsModal({
     )
   }
 
+  /** Rename one control's label without disturbing which variable it filters. */
+  const relabel = (control: FilterControl, label: string) => {
+    const key = controlKey(control)
+    setChosen(chosen.map((c) => (controlKey(c) === key ? { ...c, label } : c)))
+  }
+
   /**
    * Chosen filters that this page can no longer offer a checkbox for.
    *
@@ -1918,35 +1948,14 @@ function FilterControlsModal({
                 ) : (
                   <div className="mt-1 grid gap-1 sm:grid-cols-2">
                     {options.map((variable) => (
-                      <label
+                      <FilterChoice
                         key={variable.name}
-                        className="flex items-center gap-2 text-sm text-ink-700"
-                      >
-                        <input
-                          type="checkbox"
-                          checked={chosen.some(
-                            (c) =>
-                              controlKey(c) ===
-                              controlKey({
-                                dataset_id: dataset.id,
-                                variable: variable.name,
-                              }),
-                          )}
-                          onChange={() =>
-                            toggle({
-                              variable: variable.name,
-                              dataset_id: dataset.id,
-                              label: variable.label || variable.name,
-                            })
-                          }
-                        />
-                        <span className="truncate">
-                          {variable.label
-                            ? `${variable.name} - ${variable.label}`
-                            : variable.name}
-                          <span className="text-ink-400"> ({variable.n_unique})</span>
-                        </span>
-                      </label>
+                        variable={variable}
+                        datasetId={dataset.id}
+                        chosen={chosen}
+                        onToggle={toggle}
+                        onRelabel={relabel}
+                      />
                     ))}
                   </div>
                 )}
@@ -1991,6 +2000,59 @@ function FilterControlsModal({
   )
 }
 
+
+/**
+ * One variable offered as a filter, with the name its control will carry.
+ *
+ * The bar used to print the raw column name, so a dashboard built for a
+ * minister said "hh_prov_cd" above the dropdown. The label defaults to the
+ * variable's own label where the data has one and to its name otherwise, and
+ * can be typed over: what a filter is called on a dashboard is a presentation
+ * decision, not a property of the column.
+ */
+function FilterChoice({
+  variable,
+  datasetId,
+  chosen,
+  onToggle,
+  onRelabel,
+}: {
+  variable: { name: string; label?: string; n_unique: number }
+  datasetId: string
+  chosen: FilterControl[]
+  onToggle: (control: FilterControl) => void
+  onRelabel: (control: FilterControl, label: string) => void
+}) {
+  const control: FilterControl = {
+    variable: variable.name,
+    dataset_id: datasetId,
+    label: variable.label || variable.name,
+  }
+  const key = controlKey(control)
+  const picked = chosen.find((c) => controlKey(c) === key)
+
+  return (
+    <div className="flex items-center gap-2 text-sm text-ink-700">
+      <label className="flex min-w-0 flex-1 items-center gap-2">
+        <input type="checkbox" checked={Boolean(picked)} onChange={() => onToggle(control)} />
+        <span className="truncate">
+          {variable.label ? `${variable.name} - ${variable.label}` : variable.name}
+          <span className="text-ink-400"> ({variable.n_unique})</span>
+        </span>
+      </label>
+      {picked && (
+        <input
+          className="input h-7 w-36 shrink-0 py-0 text-xs"
+          aria-label={`Label for the ${variable.name} filter`}
+          title="What this filter is called on the dashboard"
+          value={picked.label ?? ''}
+          placeholder={variable.name}
+          onChange={(event) => onRelabel(control, event.target.value)}
+        />
+      )}
+    </div>
+  )
+}
 
 /**
  * Everything about a widget that is already on the board.
@@ -2066,6 +2128,12 @@ function EditWidgetModal({
 
   const save = useMutation({
     mutationFn: () =>
+      // One widget, through the endpoint that changes one widget - references
+      // included. This used to need a second call through the whole-dashboard
+      // PATCH, which takes the complete widget list and deletes whatever is
+      // missing from it: sending the single widget being edited wiped every
+      // other widget on every page, which is what "changing a graph made all
+      // my widgets disappear" was.
       api.patch(`/dashboards/${dashboardId}/widgets/${widget.id}`, {
         title,
         page,
@@ -2075,6 +2143,9 @@ function EditWidgetModal({
         },
         // Sent whole, so a resize here lands the same way a drag does.
         layout: { ...(widget.layout ?? {}), w: width, h: height },
+        ...(kind === 'chart' ? { chart_id: chartId || null } : {}),
+        ...(kind === 'indicator' ? { indicator_id: indicatorId || null } : {}),
+        ...(kind === 'quality' || kind === 'map' ? { dataset_id: datasetId || null } : {}),
       }),
     onSuccess: () => {
       toast.push('Widget updated', 'success')
@@ -2085,37 +2156,9 @@ function EditWidgetModal({
     onError: (error: Error) => toast.push(error.message, 'error'),
   })
 
-  // The pieces a widget references live on the widget row rather than in its
-  // config, so they are saved separately - the same PATCH the board uses.
-  const saveReferences = useMutation({
-    mutationFn: () =>
-      api.patch(`/dashboards/${dashboardId}`, {
-        widgets: [
-          {
-            id: widget.id,
-            title,
-            widget_type: widget.widget_type,
-            chart_id: kind === 'chart' ? chartId || null : widget.chart_id,
-            indicator_id: kind === 'indicator' ? indicatorId || null : widget.indicator_id,
-            dataset_id:
-              kind === 'quality' || kind === 'map' ? datasetId || null : widget.dataset_id,
-            config,
-            layout: { ...(widget.layout ?? {}), w: width, h: height },
-            position: widget.position,
-            page,
-          },
-        ],
-      }),
-  })
-
   const numericVariables = (mapDataset.data?.variables ?? []).filter(
     (v) => v.var_type === 'numeric',
   )
-
-  const referencesChanged =
-    (kind === 'chart' && chartId !== (widget.chart_id ?? '')) ||
-    (kind === 'indicator' && indicatorId !== (widget.indicator_id ?? '')) ||
-    ((kind === 'quality' || kind === 'map') && datasetId !== (widget.dataset_id ?? ''))
 
   return (
     <Modal
@@ -2130,13 +2173,7 @@ function EditWidgetModal({
           </button>
           <button
             className="btn-primary"
-            onClick={async () => {
-              // The whole-dashboard PATCH would drop the other pages' widgets
-              // if it were the only call, so it runs only when something it
-              // alone can change actually changed.
-              if (referencesChanged) await saveReferences.mutateAsync()
-              save.mutate()
-            }}
+            onClick={() => save.mutate()}
             disabled={save.isPending}
           >
             Save changes

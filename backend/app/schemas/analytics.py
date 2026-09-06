@@ -86,12 +86,24 @@ class WidgetOut(BaseModel):
 
 
 class WidgetPatch(BaseModel):
-    """Changes to one widget, for edits that do not rewrite the whole board."""
+    """Changes to one widget, for edits that do not rewrite the whole board.
+
+    The references belong here as much as the title does. Without them,
+    changing the chart a widget shows had to go through the whole-dashboard
+    PATCH, whose contract is "here is the complete widget list" - and the
+    editor sent a list of one, which deleted every other widget on every page.
+
+    Each is optional and distinguished by exclude_unset, so a field left out is
+    untouched while one sent as null is genuinely cleared.
+    """
 
     title: str | None = None
     page: int | None = None
     layout: dict[str, Any] | None = None
     config: dict[str, Any] | None = None
+    chart_id: str | None = None
+    indicator_id: str | None = None
+    dataset_id: str | None = None
 
 
 class DashboardCreate(BaseModel):
