@@ -541,11 +541,21 @@ It stacks with the filter controls below: a click narrows whatever they have
 already narrowed. Widgets whose dataset has no such variable say so rather than
 quietly ignoring it, exactly as with the controls.
 
+The board does not blank while it refilters. The numbers already on screen stay
+up, dimmed slightly, until the new ones arrive - so a click is acknowledged
+without the page being torn down and rebuilt. A dashboard left up on a wall is
+not dimmed by its own timed refresh, only by a selection somebody made.
+
 ### Filters
 
 **Filters** on a dashboard adds controls its readers can use: pick a variable
 and every viewer gets a dropdown of its labels, which narrows every widget
 underneath.
+
+**Name them.** Beside each ticked variable is a box for the label the filter
+carries on the dashboard. It starts from the variable's own label, or its
+column name where the data has none, and can be typed over - a board built for
+a minister should say "Province", not `hh_prov_cd`.
 
 Filters belong to **the page they are on**, so a "Fieldwork" page can filter by
 interviewer while a "Coverage" page filters by district. A control only applies
