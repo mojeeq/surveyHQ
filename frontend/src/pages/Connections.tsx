@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { api, downloadFile } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
@@ -570,6 +570,43 @@ function ImportModal({ connection, onClose }: { connection: Connection; onClose:
     queryFn: () => api.get<Questionnaire[]>(`/connections/${connection.id}/questionnaires`),
   })
 
+  /**
+   * One row per questionnaire, with its versions under it.
+   *
+   * The server lists every version as its own entry, so a questionnaire
+   * revised twice appeared three times in a flat list with nothing saying they
+   * belonged together - and picking them one at a time under "Replace their
+   * data" left only the last version's rows.
+   */
+  const grouped = useMemo(() => {
+    const byQuestionnaire = new Map<
+      string,
+      { id: string; title: string; variable: string; versions: Questionnaire[] }
+    >()
+    for (const questionnaire of questionnaires.data ?? []) {
+      const existing = byQuestionnaire.get(questionnaire.id)
+      if (existing) existing.versions.push(questionnaire)
+      else
+        byQuestionnaire.set(questionnaire.id, {
+          id: questionnaire.id,
+          title: questionnaire.title,
+          variable: questionnaire.variable,
+          versions: [questionnaire],
+        })
+    }
+    const groups = [...byQuestionnaire.values()]
+    for (const group of groups) group.versions.sort((a, b) => a.version - b.version)
+    return groups.sort((a, b) => a.title.localeCompare(b.title))
+  }, [questionnaires.data])
+
+  const selectionLabel = useMemo(() => {
+    const questionnaires = new Set(selected.map((identity) => identity.split('$')[0]))
+    const surveys = `${questionnaires.size} questionnaire${questionnaires.size === 1 ? '' : 's'}`
+    return selected.length > questionnaires.size
+      ? `${surveys} (${selected.length} versions)`
+      : surveys
+  }, [selected])
+
   const start = useMutation({
     mutationFn: () =>
       api.post(`/connections/${connection.id}/sync`, {
@@ -606,7 +643,10 @@ function ImportModal({ connection, onClose }: { connection: Connection; onClose:
             disabled={!selected.length || start.isPending}
           >
             {start.isPending && <Spinner className="h-4 w-4 text-white" />}
-            Import {selected.length} questionnaire{selected.length === 1 ? '' : 's'}
+            {/* Three versions of one questionnaire is one survey, not three
+                surveys, and saying "3 questionnaires" made it read as though
+                three separate datasets were about to appear. */}
+            Import {selectionLabel}
           </button>
         </>
       }
@@ -649,34 +689,78 @@ function ImportModal({ connection, onClose }: { connection: Connection; onClose:
             the paradata - and re-importing refreshes them in place, so saved
             charts and indicators keep working.
           </p>
-          <div className="max-h-80 space-y-1 overflow-y-auto">
-            {questionnaires.data.map((questionnaire) => (
-              <label
-                key={questionnaire.identity}
-                className="flex cursor-pointer items-center gap-3 rounded-card border border-ink-200 px-3 py-2.5 hover:bg-ink-50"
-              >
-                <input
-                  type="checkbox"
-                  checked={selected.includes(questionnaire.identity)}
-                  onChange={(event) =>
-                    setSelected(
-                      event.target.checked
-                        ? [...selected, questionnaire.identity]
-                        : selected.filter((id) => id !== questionnaire.identity),
-                    )
-                  }
-                />
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium text-ink-800">
-                    {questionnaire.title}
-                  </p>
-                  <p className="text-xs text-ink-500">
-                    Version {questionnaire.version}
-                    {questionnaire.variable && ` · ${questionnaire.variable}`}
-                  </p>
+          <div className="max-h-80 space-y-2 overflow-y-auto">
+            {grouped.map((group) => {
+              const identities = group.versions.map((v) => v.identity)
+              const chosen = identities.filter((id) => selected.includes(id))
+              const all = chosen.length === identities.length
+              return (
+                <div key={group.id} className="rounded-card border border-ink-200">
+                  <label className="flex cursor-pointer items-center gap-3 px-3 py-2.5 hover:bg-ink-50">
+                    <input
+                      type="checkbox"
+                      checked={all && identities.length > 0}
+                      ref={(el) => {
+                        // Part-selected reads as neither on nor off, which is
+                        // what it is: some versions of this questionnaire.
+                        if (el) el.indeterminate = chosen.length > 0 && !all
+                      }}
+                      onChange={(event) =>
+                        setSelected(
+                          event.target.checked
+                            ? [...new Set([...selected, ...identities])]
+                            : selected.filter((id) => !identities.includes(id)),
+                        )
+                      }
+                    />
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-ink-800">{group.title}</p>
+                      <p className="text-xs text-ink-500">
+                        {group.versions.length === 1
+                          ? `Version ${group.versions[0].version}`
+                          : `${group.versions.length} versions · v${group.versions[0].version}–v${
+                              group.versions[group.versions.length - 1].version
+                            }`}
+                        {group.variable && ` · ${group.variable}`}
+                      </p>
+                    </div>
+                  </label>
+
+                  {group.versions.length > 1 && (
+                    <div className="border-t border-ink-100 px-3 py-2">
+                      <p className="mb-1.5 text-xs text-ink-500">
+                        A questionnaire revised during fieldwork has its interviews spread
+                        across its versions. Tick them all and they are imported oldest
+                        first into <strong>one</strong> dataset, with a{' '}
+                        <code>questionnaire_version</code> column saying which version each
+                        row came from.
+                      </p>
+                      <div className="flex flex-wrap gap-x-4 gap-y-1">
+                        {group.versions.map((version) => (
+                          <label
+                            key={version.identity}
+                            className="flex cursor-pointer items-center gap-1.5 text-xs text-ink-700"
+                          >
+                            <input
+                              type="checkbox"
+                              checked={selected.includes(version.identity)}
+                              onChange={(event) =>
+                                setSelected(
+                                  event.target.checked
+                                    ? [...selected, version.identity]
+                                    : selected.filter((id) => id !== version.identity),
+                                )
+                              }
+                            />
+                            v{version.version}
+                          </label>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                 </div>
-              </label>
-            ))}
+              )
+            })}
           </div>
         </>
       )}

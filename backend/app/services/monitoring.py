@@ -196,6 +196,80 @@ def progress_percent(indicator: Indicator, value: float | None) -> float | None:
     return round(value / indicator.target_value * 100, 2)
 
 
+def target_for(indicator: Indicator, category: str) -> float | None:
+    """The target one category of a breakdown is judged against.
+
+    A survey's quota is rarely a single number: it is so many interviews in
+    each region, so many of each sex. Judging every group against the headline
+    target reported groups as on track when they were not, because the headline
+    is the sum of quotas that are not equal to each other. A category with no
+    target of its own falls back to the headline, which is right for an
+    indicator broken down for interest rather than against a quota.
+    """
+    targets = indicator.breakdown_targets or {}
+    raw = targets.get(category)
+    if raw is None:
+        return indicator.target_value
+    try:
+        return float(raw)
+    except (TypeError, ValueError):
+        # Stored JSON, so it can hold whatever got past the schema. A junk
+        # target is not worth failing the whole tile for.
+        return indicator.target_value
+
+
+def _status_against(
+    indicator: Indicator, value: float | None, target: float | None
+) -> str:
+    """Status for one category, with the thresholds scaled to its own target.
+
+    The thresholds are set against the headline. A region carrying half the
+    quota should trip its warning at half the count, or every small region
+    would sit permanently in the red - so they move with the target.
+    """
+    if value is None:
+        return IndicatorStatus.unknown
+    headline = indicator.target_value
+    if not headline or not target or headline == target:
+        return indicator_status(indicator, value)
+
+    scale = target / headline
+    scaled = Indicator(
+        warning_threshold=(
+            None
+            if indicator.warning_threshold is None
+            else indicator.warning_threshold * scale
+        ),
+        critical_threshold=(
+            None
+            if indicator.critical_threshold is None
+            else indicator.critical_threshold * scale
+        ),
+        direction=indicator.direction,
+    )
+    return indicator_status(scaled, value)
+
+
+def breakdown_progress(
+    indicator: Indicator, breakdown: dict[str, float]
+) -> dict[str, dict[str, Any]]:
+    """Each category's value against its own target.
+
+    Returned beside the raw breakdown rather than instead of it, so a caller
+    that only wants the numbers is unaffected.
+    """
+    report: dict[str, dict[str, Any]] = {}
+    for category, value in breakdown.items():
+        target = target_for(indicator, category)
+        report[category] = {
+            "value": value,
+            "target": target,
+            "percent": round(value / target * 100, 2) if target else None,
+            "status": _status_against(indicator, value, target),
+        }
+    return report
+
+
 def refresh_indicator(db: Session, indicator: Indicator, store_snapshot: bool = True) -> dict:
     outcome = evaluate_indicator(db, indicator)
     indicator.last_value = outcome["value"]

@@ -12,17 +12,9 @@ import { api } from '@/lib/api'
 import { useToast } from '@/hooks/useToast'
 import type { Appearance, Widget } from '@/lib/types'
 import { Field, Modal } from '@/components/ui'
+import ColorPicker from '@/components/ColorPicker'
 
 /** Ready-made grounds, so a usable background does not need a colour picker. */
-export const BACKGROUNDS: { label: string; value: string }[] = [
-  { label: 'None', value: '' },
-  { label: 'Paper', value: '#f8fafc' },
-  { label: 'Sand', value: '#f5f0e6' },
-  { label: 'Mist', value: '#e8eef5' },
-  { label: 'Slate', value: '#334155' },
-  { label: 'Midnight', value: '#0f172a' },
-]
-
 /** Title faces, as stacks rather than downloads.
  *
  *  Every one of these is already on the machine, so a dashboard on a field
@@ -528,34 +520,24 @@ export default function AppearanceModal({
       </Field>
 
       <Field label="Background colour">
-        <div className="flex flex-wrap items-center gap-2">
-          {BACKGROUNDS.map((option) => (
-            <button
-              key={option.label}
-              type="button"
-              title={option.label}
-              aria-label={option.label}
-              aria-pressed={color === option.value}
-              onClick={() => setDraft({ ...draft, background_color: option.value })}
-              className={`h-8 w-8 rounded-full border-2 transition ${
-                color === option.value ? 'border-brand-600 ring-2 ring-brand-200' : 'border-ink-200'
-              }`}
-              style={{
-                backgroundColor: option.value || '#ffffff',
-                backgroundImage: option.value
-                  ? undefined
-                  : 'linear-gradient(45deg,transparent 45%,#ef4444 45%,#ef4444 55%,transparent 55%)',
-              }}
-            />
-          ))}
-          <input
-            type="color"
-            className="h-8 w-12 cursor-pointer rounded border border-ink-200 bg-white"
-            title="Any other colour"
-            value={color || '#ffffff'}
-            onChange={(event) => setDraft({ ...draft, background_color: event.target.value })}
-          />
-        </div>
+        <ColorPicker
+          value={color}
+          onChange={(next) => setDraft({ ...draft, background_color: next })}
+          allowNone
+          noneLabel="No background colour"
+        />
+      </Field>
+
+      <Field
+        label="Filter bar colour"
+        hint="The strip of filters above the widgets. White by default, which can float oddly over a coloured background."
+      >
+        <ColorPicker
+          value={draft.filter_background ?? ''}
+          onChange={(next) => setDraft({ ...draft, filter_background: next })}
+          allowNone
+          noneLabel="White"
+        />
       </Field>
 
       <Field

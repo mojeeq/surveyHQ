@@ -165,3 +165,31 @@ class ChartRenderRequest(BaseModel):
     """Runs a chart's stored query, optionally with extra dashboard filters."""
 
     filters: dict[str, Any] | None = None
+
+
+class HtmlSnippetIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = ""
+    html: str = ""
+    """Which project this belongs to. Empty is the shared library, which is
+    what makes a snippet reusable across projects."""
+    project_id: str | None = None
+
+
+class HtmlSnippetUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = None
+    html: str | None = None
+    project_id: str | None = None
+
+
+class HtmlSnippetOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    description: str = ""
+    html: str = ""
+    project_id: str | None = None
+    created_at: dt.datetime
+    updated_at: dt.datetime

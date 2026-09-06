@@ -80,6 +80,16 @@ class Indicator(UUIDMixin, TimestampMixin, Base):
     )
     # Optional variable used to break the indicator down (region, team, ...)
     breakdown_variable: Mapped[str] = mapped_column(String(300), default="")
+    # A target per category of that breakdown: {"Male": 1200, "Female": 1300}.
+    # A survey's quota is rarely one number - it is so many interviews in each
+    # region, so many of each sex - and judging every group against the single
+    # headline target called a group on track when it was not, because the
+    # headline is the sum of quotas that are not equal. Categories with no
+    # entry here fall back to the headline target, which is what an indicator
+    # broken down purely for interest should do.
+    breakdown_targets: Mapped[dict] = mapped_column(
+        JSON, default=dict, server_default=text("'{}'")
+    )
     # What the value is a percentage of, if it is one. Empty means it is a
     # plain number. "all_rows" divides by every row in the dataset before the
     # indicator's own filters, which is how "% of interviews completed" is

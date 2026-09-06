@@ -107,6 +107,7 @@ def create_indicator(
         critical_threshold=payload.critical_threshold,
         direction=payload.direction,
         breakdown_variable=payload.breakdown_variable,
+        breakdown_targets=payload.breakdown_targets,
         percent_of=payload.percent_of,
         display_order=payload.display_order,
     )

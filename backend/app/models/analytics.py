@@ -87,6 +87,32 @@ class Chart(UUIDMixin, TimestampMixin, Base):
     )
 
 
+class HtmlSnippet(UUIDMixin, TimestampMixin, Base):
+    """A saved HTML embed, so one can be reused instead of pasted again.
+
+    An embed is usually a map, a video, or a bureau's own banner, and the same
+    one belongs on several dashboards - often across several surveys. Pasting
+    the markup into each widget meant the copies drifted: a corrected link was
+    fixed on one dashboard and left wrong on four.
+
+    A snippet in the shared area (project_id null) is available to every
+    project, which is the point of a library; one given a project stays with
+    it, for an embed that is nobody else's business.
+    """
+
+    __tablename__ = "html_snippets"
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="")
+    html: Mapped[str] = mapped_column(Text, default="")
+    project_id: Mapped[str | None] = mapped_column(
+        ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    created_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+
 class Dashboard(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "dashboards"
 

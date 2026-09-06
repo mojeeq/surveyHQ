@@ -8,7 +8,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
 from slugify import slugify
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from app.api.deps import (
     CurrentUser,
@@ -22,6 +22,7 @@ from app.models import (
     Chart,
     Dashboard,
     Dataset,
+    HtmlSnippet,
     Indicator,
     QualityResult,
     QualityRule,
@@ -38,6 +39,9 @@ from app.schemas.analytics import (
     DashboardOut,
     DashboardUpdate,
     HostnameIn,
+    HtmlSnippetIn,
+    HtmlSnippetOut,
+    HtmlSnippetUpdate,
     PageMove,
     WidgetIn,
     WidgetPatch,
@@ -68,6 +72,7 @@ from app.services.geo import points as geo_points
 from app.services.hostnames import HostnameError
 from app.services.hostnames import normalise as normalise_hostname
 from app.services.monitoring import (
+    breakdown_progress,
     evaluate_indicator,
     indicator_status,
     progress_percent,
@@ -358,6 +363,111 @@ def _spec_from_chart(chart: Chart, extra: FilterGroup | None) -> QuerySpec:
         combined = FilterGroup(op="and", conditions=[], groups=[spec.filters, extra])
         spec = spec.model_copy(update={"filters": combined})
     return spec
+
+
+# --- the HTML embed library ------------------------------------------------
+#
+# An embed is usually a map, a video or a bureau's own banner, and the same one
+# belongs on several dashboards, often across surveys. Pasting the markup into
+# each widget let the copies drift, so a corrected link was fixed in one place
+# and left wrong in four.
+
+
+def _get_snippet(snippet_id: str, db: DbSession, user: User) -> HtmlSnippet:
+    snippet = db.get(HtmlSnippet, snippet_id)
+    if snippet is None or not can_view(db, user, snippet.project_id):
+        raise HTTPException(status_code=404, detail="Snippet not found")
+    return snippet
+
+
+@router.get("/html-snippets", response_model=list[HtmlSnippetOut])
+def list_snippets(
+    db: DbSession, user: CurrentUser, project_id: str = ""
+) -> list[HtmlSnippet]:
+    """The library: this project's snippets plus every shared one.
+
+    Unlike the widget pickers, a project filter here does not hide the shared
+    area. Reusing one embed across projects is the whole feature, so narrowing
+    to a project must still offer the snippets that belong to everybody.
+    """
+    statement = restrict(
+        select(HtmlSnippet).order_by(HtmlSnippet.name),
+        scope_for(db, user).filter(HtmlSnippet.project_id),
+    )
+    if project_id and project_id != "none":
+        statement = statement.where(
+            or_(
+                HtmlSnippet.project_id == project_id,
+                HtmlSnippet.project_id.is_(None),
+            )
+        )
+    elif project_id == "none":
+        statement = statement.where(HtmlSnippet.project_id.is_(None))
+    return list(db.scalars(statement).all())
+
+
+@router.post("/html-snippets", response_model=HtmlSnippetOut, status_code=201)
+def create_snippet(
+    payload: HtmlSnippetIn, db: DbSession, user: RequireAnalyst
+) -> HtmlSnippet:
+    if payload.project_id and not can_edit(db, user, payload.project_id, Role.analyst):
+        raise HTTPException(status_code=404, detail="Project not found")
+    snippet = HtmlSnippet(
+        name=payload.name,
+        description=payload.description,
+        html=payload.html,
+        project_id=payload.project_id or None,
+        created_by=user.id,
+    )
+    db.add(snippet)
+    record(db, user=user, action="create_html_snippet", entity_type="html_snippet")
+    db.commit()
+    db.refresh(snippet)
+    return snippet
+
+
+@router.patch("/html-snippets/{snippet_id}", response_model=HtmlSnippetOut)
+def update_snippet(
+    snippet_id: str, payload: HtmlSnippetUpdate, db: DbSession, user: RequireAnalyst
+) -> HtmlSnippet:
+    snippet = _get_snippet(snippet_id, db, user)
+    if snippet.project_id and not can_edit(db, user, snippet.project_id, Role.analyst):
+        raise HTTPException(status_code=404, detail="Snippet not found")
+    data = payload.model_dump(exclude_unset=True)
+    if data.get("project_id") and not can_edit(db, user, data["project_id"], Role.analyst):
+        raise HTTPException(status_code=404, detail="Project not found")
+    for field, value in data.items():
+        setattr(snippet, field, value or None if field == "project_id" else value)
+    record(
+        db,
+        user=user,
+        action="update_html_snippet",
+        entity_type="html_snippet",
+        entity_id=snippet_id,
+    )
+    db.commit()
+    db.refresh(snippet)
+    return snippet
+
+
+@router.delete("/html-snippets/{snippet_id}", response_model=Message)
+def delete_snippet(snippet_id: str, db: DbSession, user: RequireAnalyst) -> Message:
+    snippet = _get_snippet(snippet_id, db, user)
+    if snippet.project_id and not can_edit(db, user, snippet.project_id, Role.analyst):
+        raise HTTPException(status_code=404, detail="Snippet not found")
+    name = snippet.name
+    db.delete(snippet)
+    record(
+        db,
+        user=user,
+        action="delete_html_snippet",
+        entity_type="html_snippet",
+        entity_id=snippet_id,
+    )
+    db.commit()
+    # Widgets keep the markup they were given, so deleting a snippet takes it
+    # out of the library without blanking the dashboards already using it.
+    return Message(detail=f"'{name}' removed from the library")
 
 
 # --- dashboards ------------------------------------------------------------
@@ -1001,6 +1111,10 @@ def _render_widget(
             "progress_percent": progress_percent(indicator, value),
             "status": indicator_status(indicator, value),
             "breakdown": breakdown,
+            # Each category against its own quota, so a tile broken down by
+            # region can say which regions are behind rather than only what
+            # the totals are.
+            "breakdown_progress": breakdown_progress(indicator, breakdown),
             "breakdown_variable": indicator.breakdown_variable if wants_breakdown else "",
             "computed_at": computed_at.isoformat() if computed_at else None,
         }

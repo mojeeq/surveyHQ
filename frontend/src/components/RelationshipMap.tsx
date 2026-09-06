@@ -5,14 +5,21 @@ import { Badge } from './ui'
 /**
  * The datasets in a project and the links between them.
  *
- * Laid out rather than dragged: a survey export has a shape - one interview
- * table with rosters hanging off it - and computing that shape from the
- * cardinalities puts every dataset where it belongs without anyone arranging
- * boxes. Tables that nothing links to sit apart, which is the useful signal
- * that a merge is not yet possible.
+ * Laid out automatically to begin with: a survey export has a shape - one
+ * interview table with rosters hanging off it - and computing that shape from
+ * the cardinalities puts every dataset somewhere sensible without anyone
+ * arranging boxes. Tables that nothing links to sit apart, which is the useful
+ * signal that a merge is not yet possible.
+ *
+ * But an automatic layout only knows the cardinalities, not which links you are
+ * trying to read, and with a dozen tables the lines cross each other. So a box
+ * can be dragged, and where it is put is remembered. The arrangement is a way
+ * of looking at the project rather than part of it, so it lives in this
+ * browser rather than on the server: it is per person, and "Tidy up" puts
+ * everything back.
  *
  * Links are drawn as SVG between the measured card positions, so the lines stay
- * attached when the container is resized or the list changes.
+ * attached when the container is resized, the list changes, or a box is moved.
  */
 
 const CARDINALITY_LABEL: Record<Cardinality, string> = {
@@ -29,20 +36,121 @@ interface Point {
   h: number
 }
 
+interface Offset {
+  x: number
+  y: number
+}
+
+/** The room the diagram gets. Tall enough to arrange a survey's tables in. */
+const CANVAS_HEIGHT = 360
+
 export default function RelationshipMap({
   datasets,
   relationships,
   selectedId,
+  storageKey,
   onSelect,
 }: {
   datasets: Dataset[]
   relationships: Relationship[]
   selectedId: string | null
+  /** Where this project's arrangement is remembered, per browser. */
+  storageKey?: string
   onSelect: (relationship: Relationship | null) => void
 }) {
   const container = useRef<HTMLDivElement>(null)
   const cards = useRef(new Map<string, HTMLDivElement>())
   const [boxes, setBoxes] = useState<Record<string, Point>>({})
+
+  const memory = storageKey ? `susodash.relationship-layout.${storageKey}` : ''
+  const [offsets, setOffsets] = useState<Record<string, Offset>>(() => {
+    if (!memory) return {}
+    try {
+      return JSON.parse(localStorage.getItem(memory) || '{}')
+    } catch {
+      // A browser with site data blocked, or something else's key. Neither is
+      // a reason to fail to draw the diagram.
+      return {}
+    }
+  })
+
+  const remember = (next: Record<string, Offset>) => {
+    setOffsets(next)
+    if (!memory) return
+    try {
+      localStorage.setItem(memory, JSON.stringify(next))
+    } catch {
+      // Private windows and blocked site data both throw. The arrangement
+      // still works for this visit; it just will not be here next time.
+    }
+  }
+
+  const drag = useRef<{
+    id: string
+    pointerX: number
+    pointerY: number
+    from: Offset
+  } | null>(null)
+
+  const startDrag = (id: string) => (event: React.PointerEvent<HTMLDivElement>) => {
+    event.preventDefault()
+    event.currentTarget.setPointerCapture(event.pointerId)
+    drag.current = {
+      id,
+      pointerX: event.clientX,
+      pointerY: event.clientY,
+      from: offsets[id] ?? { x: 0, y: 0 },
+    }
+  }
+
+  const onDrag = (event: React.PointerEvent<HTMLDivElement>) => {
+    const active = drag.current
+    if (!active) return
+    setOffsets((current) => {
+      const wanted = {
+        x: active.from.x + event.clientX - active.pointerX,
+        y: active.from.y + event.clientY - active.pointerY,
+      }
+      // Keep the box on the canvas. Dragged freely it went straight out of the
+      // diagram and sat on top of the relationship list underneath, which is
+      // not an arrangement anybody wants and cannot be undone by dragging it
+      // back once it is behind something else.
+      const measured = boxes[active.id]
+      const canvas = container.current
+      if (!measured || !canvas) return { ...current, [active.id]: wanted }
+      const here = current[active.id] ?? { x: 0, y: 0 }
+      const baseX = measured.x - here.x
+      const baseY = measured.y - here.y
+      const limit = canvas.getBoundingClientRect()
+      const clamp = (value: number, low: number, high: number) =>
+        Math.min(Math.max(value, low), high)
+      return {
+        ...current,
+        [active.id]: {
+          x: clamp(wanted.x, -baseX, limit.width - measured.w - baseX),
+          y: clamp(wanted.y, -baseY, CANVAS_HEIGHT - measured.h - baseY),
+        },
+      }
+    })
+  }
+
+  const endDrag = () => {
+    if (!drag.current) return
+    drag.current = null
+    // Written once the box is let go rather than on every pixel of the drag.
+    setOffsets((current) => {
+      if (memory) {
+        try {
+          localStorage.setItem(memory, JSON.stringify(current))
+        } catch {
+          /* see remember() */
+        }
+      }
+      return current
+    })
+  }
+
+  const moved = Object.values(offsets).some((o) => o.x !== 0 || o.y !== 0)
 
   // Datasets on the "one" side of a link are parents; everything else hangs
   // off them. This is what gives the diagram its shape.
@@ -94,7 +202,9 @@ export default function RelationshipMap({
       observer.disconnect()
       window.removeEventListener('resize', measure)
     }
-  }, [datasets, relationships])
+    // offsets is in the dependency list so a dragged box takes its lines with
+    // it; without that the card moved and the curve stayed behind.
+  }, [datasets, relationships, offsets])
 
   const card = (dataset: Dataset, tone: string) => (
     <div
@@ -103,7 +213,18 @@ export default function RelationshipMap({
         if (element) cards.current.set(dataset.id, element)
         else cards.current.delete(dataset.id)
       }}
-      className={`rounded-card border px-3 py-2 shadow-sm ${tone}`}
+      className={`touch-none cursor-grab select-none rounded-card border px-3 py-2 shadow-sm active:cursor-grabbing ${tone}`}
+      style={
+        offsets[dataset.id]
+          ? {
+              transform: `translate(${offsets[dataset.id].x}px, ${offsets[dataset.id].y}px)`,
+            }
+          : undefined
+      }
+      onPointerDown={startDrag(dataset.id)}
+      onPointerMove={onDrag}
+      onPointerUp={endDrag}
+      onPointerCancel={endDrag}
     >
       <p className="text-sm font-medium text-ink-900">{dataset.name}</p>
       <p className="text-[11px] text-ink-500">
@@ -113,7 +234,14 @@ export default function RelationshipMap({
   )
 
   return (
-    <div ref={container} className="relative overflow-x-auto">
+    <div>
+      {/* The canvas is its own box so a dragged card is clipped to the diagram
+          rather than escaping over the list of relationships underneath. */}
+      <div
+        ref={container}
+        className="relative overflow-hidden"
+        style={{ minHeight: CANVAS_HEIGHT }}
+      >
       <svg className="pointer-events-none absolute inset-0 h-full w-full" aria-hidden>
         {relationships.map((link) => {
           const from = boxes[link.left_dataset_id]
@@ -150,7 +278,10 @@ export default function RelationshipMap({
         })}
       </svg>
 
-      <div className="relative flex min-w-max flex-col items-center gap-10 py-4">
+      <div
+        className="relative flex min-w-max flex-col items-center gap-10 py-4"
+        style={{ minHeight: CANVAS_HEIGHT }}
+      >
         <div className="flex flex-wrap justify-center gap-4">
           {parents.map((d) => card(d, 'border-brand-300 bg-brand-50'))}
         </div>
@@ -165,6 +296,15 @@ export default function RelationshipMap({
           </div>
         )}
       </div>
+      </div>
+
+      {moved && (
+        <div className="mt-1 text-center">
+          <button className="btn-ghost btn-sm text-ink-500" onClick={() => remember({})}>
+            Tidy up
+          </button>
+        </div>
+      )}
 
       {loose.length > 0 && (
         <p className="mt-1 text-center text-xs text-ink-400">

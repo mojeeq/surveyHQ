@@ -376,6 +376,14 @@ function IndicatorModal({
   const [direction, setDirection] = useState<Direction>(
     indicator?.direction ?? 'higher_is_better',
   )
+  // Kept as typed text rather than numbers so a half-entered "12" is not
+  // rounded away under the cursor, and an emptied box means "no quota here"
+  // rather than zero.
+  const [categoryTargets, setCategoryTargets] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      Object.entries(indicator?.breakdown_targets ?? {}).map(([k, v]) => [k, String(v)]),
+    ),
+  )
 
   const datasets = useQuery({
     queryKey: ['datasets', 'ready'],
@@ -385,6 +393,18 @@ function IndicatorModal({
     queryKey: ['dataset', datasetId],
     queryFn: () => api.get<Dataset>(`/datasets/${datasetId}`),
     enabled: Boolean(datasetId),
+  })
+
+  // The categories a per-category target can be set for. Read from the data
+  // rather than typed, so a quota cannot be attached to a spelling that does
+  // not occur - "Northern" against a column that says "North".
+  const categories = useQuery({
+    queryKey: ['values', datasetId, breakdown],
+    queryFn: () =>
+      api.get<{ value: string; label: string; count: number }[]>(
+        `/datasets/${datasetId}/variables/${encodeURIComponent(breakdown)}/values?limit=100`,
+      ),
+    enabled: Boolean(datasetId && breakdown),
   })
 
   const variables = dataset.data?.variables ?? []
@@ -422,6 +442,16 @@ function IndicatorModal({
         // typed by hand that the tile would then print twice.
         value_format: isPercent && canBePercent ? 'percent' : 'number',
         target_value: target ? Number(target) : null,
+        // Only the categories actually given a quota. An empty box means the
+        // category falls back to the headline target, which is not the same
+        // as a quota of zero.
+        breakdown_targets: breakdown
+          ? Object.fromEntries(
+              Object.entries(categoryTargets)
+                .filter(([, value]) => value.trim() !== '' && !Number.isNaN(Number(value)))
+                .map(([category, value]) => [category, Number(value)]),
+            )
+          : {},
         warning_threshold: warning ? Number(warning) : null,
         critical_threshold: critical ? Number(critical) : null,
         direction,
@@ -588,7 +618,37 @@ function IndicatorModal({
             onChange={(event) => setTarget(event.target.value)}
           />
         </Field>
-        <Field label="Direction">
+        {breakdown && (categories.data?.length ?? 0) > 0 && (
+        <Field
+          label="Target for each group"
+          hint="Optional. A group with no target of its own is judged against the overall target, and its warning and critical thresholds scale with whatever target applies to it."
+        >
+          <div className="grid gap-x-4 gap-y-1.5 sm:grid-cols-2">
+            {(categories.data ?? []).map((option) => {
+              const key = String(option.value)
+              return (
+                <label key={key} className="flex items-center gap-2 text-sm text-ink-700">
+                  <span className="min-w-0 flex-1 truncate" title={option.label || key}>
+                    {option.label || key}
+                  </span>
+                  <input
+                    className="input h-8 w-28 py-0 text-sm"
+                    type="number"
+                    placeholder={target || 'overall'}
+                    aria-label={`Target for ${option.label || key}`}
+                    value={categoryTargets[key] ?? ''}
+                    onChange={(event) =>
+                      setCategoryTargets({ ...categoryTargets, [key]: event.target.value })
+                    }
+                  />
+                </label>
+              )
+            })}
+          </div>
+        </Field>
+      )}
+
+      <Field label="Direction">
           <select
             className="input"
             value={direction}

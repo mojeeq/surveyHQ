@@ -12,6 +12,14 @@ import { EmptyState } from './ui'
  * on white, and the accessibility rule is that such a chart must ship visible
  * labels or a table view. This is that table view.
  */
+/** The dimension value at one row of a result, for a mark that only knows its index. */
+function categoryAt(result: QueryResult, index: number): string {
+  const at = result.columns.findIndex((column) => column.type === 'dimension')
+  if (at < 0) return ''
+  const value = result.rows[index]?.[at]
+  return value === null || value === undefined ? '' : String(value)
+}
+
 export default function ChartCard({
   result,
   chartType,
@@ -128,11 +136,25 @@ export default function ChartCard({
         onEvents={
           onSelect
             ? {
-                // The category axis label, which is the dimension value the
-                // bar or slice stands for. A pie hands it over as `name`; a
-                // bar chart gives the axis value there too.
-                click: (params: { name?: string; value?: unknown }) => {
-                  const category = params?.name ?? String(params?.value ?? '')
+                // The category the mark stands for. Most types hand it over
+                // as `name` - a pie slice, a bar, a point on a line. Two do
+                // not: a scatter point is [x, y] and a heatmap cell is
+                // [x, y, value], both with an empty name, so the category has
+                // to be looked up by the index the click carries. Without that
+                // those two silently did nothing.
+                click: (params: {
+                  name?: string
+                  value?: unknown
+                  dataIndex?: number
+                }) => {
+                  const byIndex =
+                    typeof params?.dataIndex === 'number'
+                      ? categoryAt(result, params.dataIndex)
+                      : ''
+                  const category =
+                    params?.name ||
+                    byIndex ||
+                    (Array.isArray(params?.value) ? '' : String(params?.value ?? ''))
                   if (category) onSelect(category)
                 },
               }

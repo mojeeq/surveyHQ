@@ -21,7 +21,10 @@ import type {
 } from '@/lib/types'
 import AssignProject from '@/components/AssignProject'
 import ChartCard from '@/components/ChartCard'
+import ColorPicker from '@/components/ColorPicker'
+import HtmlLibrary from '@/components/HtmlLibrary'
 import DashboardFilters, {
+  controlKey,
   controlsForPage,
   filterableVariables,
   toFilterGroup,
@@ -80,33 +83,61 @@ function clickedVariable(payload: { grouped_on?: string[] } | undefined): string
   return payload?.grouped_on?.[0] ?? ''
 }
 
-/** A few grounds that sit under a chart without fighting it. */
-const WIDGET_COLOURS: { label: string; value: string }[] = [
-  { label: 'Paper', value: '#f7f8f9' },
-  { label: 'Mist', value: '#e8eef5' },
-  { label: 'Sand', value: '#f5f0e6' },
-  { label: 'Sage', value: '#e9f1ea' },
-  { label: 'Slate', value: '#334155' },
+/** Stacks rather than single faces, so a missing font still lands somewhere sane. */
+const WIDGET_FONTS: { label: string; value: string }[] = [
+  { label: 'Default (Inter)', value: '' },
+  { label: 'System', value: 'system-ui, -apple-system, "Segoe UI", sans-serif' },
+  { label: 'Serif', value: 'Georgia, "Times New Roman", serif' },
+  { label: 'Slab', value: '"Roboto Slab", Rockwell, Georgia, serif' },
+  { label: 'Mono', value: 'ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace' },
+  { label: 'Condensed', value: '"Arial Narrow", "Roboto Condensed", sans-serif' },
 ]
 
 const appearanceOf = (dashboard: Dashboard | undefined): Appearance =>
   (dashboard?.appearance ?? {}) as Appearance
 
-/** The card colour for one widget, at the dashboard's transparency.
+/** The styling one widget carries of its own, over the dashboard's. */
+export interface WidgetStyle {
+  background?: string
+  /** 0-1. Falls back to the dashboard's when this widget sets none. */
+  opacity?: number
+  font_family?: string
+  font_color?: string
+  /** The colour this widget's chart leads with. */
+  series_color?: string
+}
+
+export const styleOf = (widget: Widget): WidgetStyle =>
+  (widget.config ?? {}) as WidgetStyle
+
+/** The card colour for one widget, at its own transparency or the dashboard's.
  *
- *  A widget colour and the dashboard's see-through setting are two different
- *  wishes, and doing one should not cancel the other - so the colour is the
- *  one chosen and the alpha is the dashboard's either way.
+ *  A widget colour and the see-through setting are two different wishes, and
+ *  doing one should not cancel the other - so the colour is the one chosen and
+ *  the alpha is whichever applies. Transparency used to be the dashboard's
+ *  alone, which made one widget impossible to lift off a busy background
+ *  without lifting all of them.
  */
-function cardStyle(widget: Widget, opacity: number): CSSProperties | undefined {
-  const chosen = (widget.config as { background?: string } | undefined)?.background
+function cardStyle(widget: Widget, dashboardOpacity: number): CSSProperties | undefined {
+  const style = styleOf(widget)
+  const own = style.opacity
+  const opacity = own === undefined || own === null ? dashboardOpacity : own
+  const text: CSSProperties = {
+    ...(style.font_family ? { fontFamily: style.font_family } : {}),
+    ...(style.font_color ? { color: style.font_color } : {}),
+  }
+  const chosen = style.background
   if (!chosen) {
-    return opacity < 1 ? { backgroundColor: `rgba(255,255,255,${opacity})` } : undefined
+    return opacity < 1
+      ? { backgroundColor: `rgba(255,255,255,${opacity})`, ...text }
+      : Object.keys(text).length
+        ? text
+        : undefined
   }
   const hex = chosen.replace('#', '')
-  if (hex.length !== 6) return { backgroundColor: chosen }
+  if (hex.length !== 6) return { backgroundColor: chosen, ...text }
   const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16))
-  return { backgroundColor: `rgba(${r},${g},${b},${opacity})` }
+  return { backgroundColor: `rgba(${r},${g},${b},${opacity})`, ...text }
 }
 
 export default function DashboardView({ publicToken }: { publicToken?: string }) {
@@ -422,6 +453,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
       )}
 
       <DashboardFilters
+        background={appearance.filter_background}
         controls={pageControls}
         value={filterValues}
         onChange={setFilterValues}
@@ -537,6 +569,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
           projectId={dashboard.data!.project_id}
           widget={editingWidget}
           pageNames={pageNames}
+          dashboardOpacity={widgetOpacity}
           onClose={() => setEditingWidget(null)}
         />
       )}
@@ -590,9 +623,16 @@ function WidgetFrame({
   /** A mark was clicked: filter the rest of the page by what it stands for. */
   onSelect?: (variable: string, value: string) => void
 }) {
+  const style = styleOf(widget)
   return (
-    <div className="flex h-full flex-col">
-      <header className="widget-handle group flex shrink-0 items-center justify-between gap-2 border-b border-ink-200 px-4 py-2.5">
+    // The hover group is the whole widget, not just its title bar. It used to
+    // be the bar alone, which meant the edit and remove controls stayed
+    // invisible until the pointer found a strip about forty pixels tall: you
+    // moved towards the widget, saw no button, clicked, and hit the chart -
+    // which cross-filters the page. It read as "editing takes a few clicks".
+    // Approaching the widget at all is enough intent to show its controls.
+    <div className="group flex h-full flex-col">
+      <header className="widget-handle flex shrink-0 items-center justify-between gap-2 border-b border-ink-200 px-4 py-2.5">
         <h3 className={`truncate text-sm font-semibold text-ink-800 ${editing ? 'cursor-move' : ''}`}>
           {widget.title || payload?.name || 'Widget'}
         </h3>
@@ -665,11 +705,18 @@ function WidgetFrame({
             {payload.error}
           </p>
         ) : payload.type === 'indicator' ? (
-          <IndicatorWidget payload={payload} theme={theme} />
+          <IndicatorWidget payload={payload} theme={theme} onSelect={onSelect} />
         ) : payload.type === 'quality' ? (
           <QualityWidget payload={payload} />
         ) : payload.type === 'crosstab' ? (
-          <CrosstabTable result={payload.result} compact fill />
+          <CrosstabTable
+            result={payload.result}
+            compact
+            fill
+            // A cross-tab carries both its variables in the result, so it can
+            // say which one a heading belongs to without the server naming it.
+            onSelect={onSelect}
+          />
         ) : payload.type === 'freshness' ? (
           <FreshnessWidget payload={payload} />
         ) : payload.type === 'map' ? (
@@ -693,7 +740,14 @@ function WidgetFrame({
             fill
             showToggle={false}
             theme={theme}
-            display={payload.display}
+            display={{
+              ...payload.display,
+              // The widget's own styling wins over what the chart was saved
+              // with: it is set here, on this dashboard, for this tile.
+              ...(style.series_color ? { seriesColor: style.series_color } : {}),
+              ...(style.font_family ? { fontFamily: style.font_family } : {}),
+              ...(style.font_color ? { fontColor: style.font_color } : {}),
+            }}
             onSelect={
               // Only where a click means something: a chart grouped on a
               // variable. A KPI or a table of measures has no category behind
@@ -1057,7 +1111,16 @@ function QualityWidget({ payload }: { payload: any }) {
   )
 }
 
-function IndicatorWidget({ payload, theme }: { payload: any; theme: string }) {
+function IndicatorWidget({
+  payload,
+  theme,
+  onSelect,
+}: {
+  payload: any
+  theme: string
+  /** Filter the page by a category of this indicator's breakdown. */
+  onSelect?: (variable: string, value: string) => void
+}) {
   const color = STATUS_COLORS[payload.status as keyof typeof STATUS_COLORS] ?? STATUS_COLORS.unknown
   const breakdown: Record<string, number> = payload.breakdown ?? {}
   const groups = Object.entries(breakdown)
@@ -1121,6 +1184,19 @@ function IndicatorWidget({ payload, theme }: { payload: any; theme: string }) {
               sql: '',
               duration_ms: 0,
             }}
+            display={{
+              // Each bar against its own quota, where one is set, so a region
+              // that is behind reads as behind rather than merely smaller.
+              showValues: true,
+            }}
+            // An indicator's breakdown is a chart of a variable like any other,
+            // so clicking a bar filters the page by it. It used to be the one
+            // chart on a dashboard that did nothing when clicked.
+            onSelect={
+              onSelect && payload.breakdown_variable
+                ? (category) => onSelect(payload.breakdown_variable, category)
+                : undefined
+            }
           />
         </div>
       )}
@@ -1537,6 +1613,7 @@ function AddWidgetModal({
           label="HTML"
           hint="Rendered in a sandboxed frame, so it cannot reach the rest of the page."
         >
+          <HtmlLibrary html={html} projectId={projectId} onLoad={setHtml} />
           <textarea
             className="input font-mono text-xs"
             rows={8}
@@ -1662,13 +1739,35 @@ function FilterControlsModal({
   })
 
   const toggle = (control: FilterControl) => {
-    const has = chosen.some((c) => c.variable === control.variable)
+    const key = controlKey(control)
+    const has = chosen.some((c) => controlKey(c) === key)
     setChosen(
-      has
-        ? chosen.filter((c) => c.variable !== control.variable)
-        : [...chosen, control],
+      has ? chosen.filter((c) => controlKey(c) !== key) : [...chosen, control],
     )
   }
+
+  /**
+   * Chosen filters that this page can no longer offer a checkbox for.
+   *
+   * The candidates come from the datasets the page's widgets use, so a filter
+   * outlives its candidacy: move the widget that brought its dataset here to
+   * another page, delete it, or re-import so the variable has too many values
+   * to be filterable, and the control is still stored and still drawn on the
+   * bar - but there was no checkbox left to untick, and saving wrote it
+   * straight back. It could not be removed at all. Listing it here is what
+   * makes every stored filter reachable.
+   */
+  const offered = useMemo(() => {
+    const keys = new Set<string>()
+    for (const dataset of details.data ?? []) {
+      for (const variable of filterableVariables(dataset)) {
+        keys.add(controlKey({ dataset_id: dataset.id, variable: variable.name }))
+      }
+    }
+    return keys
+  }, [details.data])
+
+  const stranded = chosen.filter((control) => !offered.has(controlKey(control)))
 
   return (
     <Modal
@@ -1723,7 +1822,14 @@ function FilterControlsModal({
                       >
                         <input
                           type="checkbox"
-                          checked={chosen.some((c) => c.variable === variable.name)}
+                          checked={chosen.some(
+                            (c) =>
+                              controlKey(c) ===
+                              controlKey({
+                                dataset_id: dataset.id,
+                                variable: variable.name,
+                              }),
+                          )}
                           onChange={() =>
                             toggle({
                               variable: variable.name,
@@ -1747,6 +1853,38 @@ function FilterControlsModal({
           })}
         </div>
       )}
+
+      {stranded.length > 0 && (
+        <div className="mt-4 rounded-card border border-amber-200 bg-amber-50 p-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">
+            Still on this page, but nothing here uses them
+          </p>
+          <p className="mt-1 text-sm text-amber-800">
+            These filters are still drawn on the bar, but the data they came
+            from has left this page — the widget that brought it was moved or
+            removed, or the variable now has too many values to filter by.
+          </p>
+          <ul className="mt-2 space-y-1">
+            {stranded.map((control) => (
+              <li
+                key={controlKey(control)}
+                className="flex items-center justify-between gap-3 text-sm text-ink-700"
+              >
+                <span className="truncate">
+                  {control.label || control.variable}
+                  <span className="text-ink-400"> ({control.variable})</span>
+                </span>
+                <button
+                  className="btn-ghost btn-sm text-red-600"
+                  onClick={() => toggle(control)}
+                >
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </Modal>
   )
 }
@@ -1768,6 +1906,7 @@ function EditWidgetModal({
   projectId,
   widget,
   pageNames,
+  dashboardOpacity,
   onClose,
 }: {
   dashboardId: string
@@ -1775,6 +1914,8 @@ function EditWidgetModal({
   projectId: string | null
   widget: Widget
   pageNames: string[]
+  /** What this widget's transparency falls back to when it sets none. */
+  dashboardOpacity: number
   onClose: () => void
 }) {
   const toast = useToast()
@@ -1948,34 +2089,77 @@ function EditWidgetModal({
         label="Background"
         hint="This widget's own colour. The dashboard's transparency still applies to it."
       >
-        <div className="flex items-center gap-2">
+        <ColorPicker
+          value={config.background ?? ''}
+          onChange={(next) => set({ background: next || undefined })}
+          allowNone
+          noneLabel="Use the dashboard's colour"
+        />
+      </Field>
+
+      <Field
+        label="Transparency"
+        hint="How much of the dashboard's background shows through this widget. Empty follows the dashboard."
+      >
+        <div className="flex items-center gap-3">
           <input
-            type="color"
-            className="h-9 w-12 cursor-pointer rounded-control border border-ink-200"
-            value={config.background || '#ffffff'}
-            onChange={(event) => set({ background: event.target.value })}
+            type="range"
+            min={30}
+            max={100}
+            step={5}
+            className="w-48"
+            aria-label="Widget transparency"
+            value={Math.round((config.opacity ?? dashboardOpacity) * 100)}
+            onChange={(event) => set({ opacity: Number(event.target.value) / 100 })}
           />
-          {WIDGET_COLOURS.map((colour) => (
-            <button
-              key={colour.value}
-              className={`h-7 w-7 rounded-control border ${
-                config.background === colour.value ? 'border-brand-500' : 'border-ink-200'
-              }`}
-              style={{ backgroundColor: colour.value }}
-              title={colour.label}
-              onClick={() => set({ background: colour.value })}
-            />
-          ))}
-          {config.background && (
-            <button
-              className="btn-ghost btn-sm"
-              onClick={() => set({ background: undefined })}
-            >
-              Default
+          <span className="w-12 text-sm text-ink-600">
+            {Math.round((config.opacity ?? dashboardOpacity) * 100)}%
+          </span>
+          {config.opacity !== undefined && (
+            <button className="btn-ghost btn-sm" onClick={() => set({ opacity: undefined })}>
+              Follow dashboard
             </button>
           )}
         </div>
       </Field>
+
+      <Field label="Font">
+        <select
+          className="input"
+          aria-label="Widget font"
+          value={config.font_family ?? ''}
+          onChange={(event) => set({ font_family: event.target.value || undefined })}
+        >
+          {WIDGET_FONTS.map((font) => (
+            <option key={font.label} value={font.value}>
+              {font.label}
+            </option>
+          ))}
+        </select>
+      </Field>
+
+      <Field label="Text colour">
+        <ColorPicker
+          value={config.font_color ?? ''}
+          onChange={(next) => set({ font_color: next || undefined })}
+          allowNone
+          noneLabel="Default text colour"
+        />
+      </Field>
+
+      {kind === 'chart' && (
+        <Field
+          label="Chart colour"
+          hint="The colour this chart leads with. A chart with several series keeps distinct hues behind it, so they stay tellable apart."
+        >
+          <ColorPicker
+            value={config.series_color ?? ''}
+            onChange={(next) => set({ series_color: next || undefined })}
+            allowNone
+            noneLabel="Use the dashboard's theme"
+          />
+        </Field>
+      )}
 
       {kind === 'chart' && (
         <Field label="Chart">
@@ -2121,6 +2305,11 @@ function EditWidgetModal({
 
       {kind === 'html' && (
         <Field label="HTML" hint="Rendered in a sandboxed frame.">
+          <HtmlLibrary
+            html={config.html ?? ''}
+            projectId={projectId}
+            onLoad={(next) => set({ html: next })}
+          />
           <textarea
             className="input font-mono text-xs"
             rows={8}
