@@ -6,7 +6,7 @@ import datetime as dt
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 
 from app.api.deps import (
     CurrentUser,
@@ -21,6 +21,7 @@ from app.models import (
     AlertRule,
     AlertStatus,
     Dataset,
+    Direction,
     Indicator,
     IndicatorSnapshot,
     QualityResult,
@@ -612,9 +613,13 @@ def monitoring_summary(
     """
     scoped = project_id is not None
     target = "" if project_id == "none" else (project_id or "")
+    recent_cutoff = utcnow() - dt.timedelta(days=7)
+
     rules = alert_rule_clause(db, user)
     alert_statement = restrict(
-        select(Alert).where(Alert.status == AlertStatus.open).limit(500),
+        select(Alert.id.label("id"), Alert.severity.label("severity")).where(
+            Alert.status == AlertStatus.open
+        ),
         None if rules is None else Alert.rule_id.in_(select(AlertRule.id).where(rules)),
     )
     if project_id is not None:
@@ -635,28 +640,121 @@ def monitoring_summary(
                 )
             )
         )
-    open_alerts = db.scalars(alert_statement).all()
+    alerts = alert_statement.subquery()
+    open_alerts, critical_alerts = db.execute(
+        select(
+            func.count(alerts.c.id),
+            func.coalesce(
+                func.sum(
+                    case((alerts.c.severity == Severity.critical, 1), else_=0)
+                ),
+                0,
+            ),
+        )
+    ).one()
+
+    status = case(
+        (Indicator.last_value.is_(None), "unknown"),
+        (
+            Indicator.warning_threshold.is_(None) & Indicator.critical_threshold.is_(None),
+            "ok",
+        ),
+        (
+            (Indicator.direction == Direction.lower_is_better)
+            & Indicator.critical_threshold.is_not(None)
+            & (Indicator.last_value >= Indicator.critical_threshold),
+            "critical",
+        ),
+        (
+            (Indicator.direction == Direction.lower_is_better)
+            & Indicator.warning_threshold.is_not(None)
+            & (Indicator.last_value >= Indicator.warning_threshold),
+            "warning",
+        ),
+        (
+            (Indicator.direction == Direction.higher_is_better)
+            & Indicator.critical_threshold.is_not(None)
+            & (Indicator.last_value <= Indicator.critical_threshold),
+            "critical",
+        ),
+        (
+            (Indicator.direction == Direction.higher_is_better)
+            & Indicator.warning_threshold.is_not(None)
+            & (Indicator.last_value <= Indicator.warning_threshold),
+            "warning",
+        ),
+        else_="ok",
+    )
     indicator_statement = restrict(
-        select(Indicator).where(Indicator.is_active.is_(True)),
+        select(Indicator.id.label("id"), status.label("status")).where(
+            Indicator.is_active.is_(True)
+        ),
         dataset_clause(db, user, Indicator.dataset_id),
     )
-    dataset_statement = restrict(
-        select(Dataset), scope_for(db, user).filter(Dataset.project_id)
-    )
-    quality = dataset_clause(db, user, QualityRule.dataset_id)
     if scoped:
         indicator_statement = indicator_statement.where(
             in_project_clause(Indicator.dataset_id, target)
         )
-        dataset_statement = dataset_statement.where(
-            Dataset.project_id == (target or None)
+    indicators = indicator_statement.subquery()
+    (
+        indicator_count,
+        indicators_ok,
+        indicators_warning,
+        indicators_critical,
+    ) = db.execute(
+        select(
+            func.count(indicators.c.id),
+            func.coalesce(
+                func.sum(case((indicators.c.status == "ok", 1), else_=0)),
+                0,
+            ),
+            func.coalesce(
+                func.sum(case((indicators.c.status == "warning", 1), else_=0)),
+                0,
+            ),
+            func.coalesce(
+                func.sum(case((indicators.c.status == "critical", 1), else_=0)),
+                0,
+            ),
         )
+    ).one()
+
+    dataset_statement = restrict(
+        select(
+            Dataset.id.label("id"),
+            Dataset.row_count.label("row_count"),
+            Dataset.refreshed_at.label("refreshed_at"),
+        ),
+        scope_for(db, user).filter(Dataset.project_id),
+    )
+    if scoped:
+        dataset_statement = dataset_statement.where(Dataset.project_id == (target or None))
+    datasets = dataset_statement.subquery()
+    datasets_count, total_records, recently_refreshed = db.execute(
+        select(
+            func.count(datasets.c.id),
+            func.coalesce(func.sum(datasets.c.row_count), 0),
+            func.coalesce(
+                func.sum(
+                    case(
+                        (
+                            datasets.c.refreshed_at.is_not(None)
+                            & (datasets.c.refreshed_at >= recent_cutoff),
+                            1,
+                        ),
+                        else_=0,
+                    )
+                ),
+                0,
+            ),
+        )
+    ).one()
+
+    quality = dataset_clause(db, user, QualityRule.dataset_id)
+    if scoped:
         in_project = in_project_clause(QualityRule.dataset_id, target)
         quality = in_project if quality is None else (quality & in_project)
-    indicators = db.scalars(indicator_statement).all()
-    datasets = db.scalars(dataset_statement).all()
-
-    failing_checks = db.scalars(
+    failing_checks = (
         restrict(
             select(QualityResult)
             .where(QualityResult.passed.is_(False))
@@ -665,29 +763,21 @@ def monitoring_summary(
             None
             if quality is None
             else QualityResult.rule_id.in_(select(QualityRule.id).where(quality)),
-        )
-    ).all()
+        ).subquery()
+    )
+    failing_quality_checks = (
+        db.scalar(select(func.count(func.distinct(failing_checks.c.rule_id)))) or 0
+    )
 
-    statuses = [indicator_status(i, i.last_value) for i in indicators]
-    recent_cutoff = utcnow() - dt.timedelta(days=7)
     return {
-        "datasets": len(datasets),
-        "total_records": sum(d.row_count for d in datasets),
-        "indicators": len(indicators),
-        "indicators_ok": statuses.count("ok"),
-        "indicators_warning": statuses.count("warning"),
-        "indicators_critical": statuses.count("critical"),
-        "open_alerts": len(open_alerts),
-        "critical_alerts": len(
-            [a for a in open_alerts if a.severity == Severity.critical]
-        ),
-        "failing_quality_checks": len({r.rule_id for r in failing_checks}),
-        "recently_refreshed": len(
-            [
-                d
-                for d in datasets
-                if d.refreshed_at and d.refreshed_at.replace(tzinfo=dt.UTC)
-                >= recent_cutoff
-            ]
-        ),
+        "datasets": int(datasets_count or 0),
+        "total_records": int(total_records or 0),
+        "indicators": int(indicator_count or 0),
+        "indicators_ok": int(indicators_ok or 0),
+        "indicators_warning": int(indicators_warning or 0),
+        "indicators_critical": int(indicators_critical or 0),
+        "open_alerts": int(open_alerts or 0),
+        "critical_alerts": int(critical_alerts or 0),
+        "failing_quality_checks": int(failing_quality_checks),
+        "recently_refreshed": int(recently_refreshed or 0),
     }
