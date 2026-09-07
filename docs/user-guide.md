@@ -473,6 +473,28 @@ answers rather than moments, such as a date of birth. Where a dataset has no
 obvious one, or the wrong one is chosen, name the variable yourself on the
 widget.
 
+### The ground under a map
+
+A map widget draws its pins on one of three grounds, chosen when you add it and
+changeable afterwards from **✎**:
+
+- **Streets** - OpenStreetMap, the default.
+- **Satellite** - aerial imagery, with place names and boundaries drawn over it
+  so a cluster of pins can still be read as a village rather than a shape.
+- **Terrain** - contours and relief, for fieldwork where the question is what
+  the ground is like between two points.
+
+A reader can also switch grounds on the map itself, from the control in its top
+right corner, without editing the widget or being able to. That choice is
+theirs for as long as they have the page open; the one saved on the widget is
+what everybody starts on.
+
+All three fetch their tiles from the internet. A server that cannot reach them
+still draws the pins, on a plain ground, and says so under the map - and a
+deployment with its own tile service can be pointed at it with **Map tiles**,
+which replaces the three and hides the switcher, since a choice between hosts
+this server cannot reach is no choice at all.
+
 ### Reusing an embed
 
 An **Embedded HTML** widget holds a piece of markup - a map, a video, the
@@ -609,10 +631,22 @@ shared dashboard, so the people reading the link get it too.
 
 **✎ on a widget** sets what belongs to that widget rather than the whole
 dashboard: its own background colour, its own transparency, a font, a text
-colour, and - for a chart - the colour it leads with.
+colour, a face for its title, and - for a chart - the colour it leads with.
 
 Each falls back to the dashboard when it is left alone, so a single tile can be
 lifted off a busy background without lifting all of them.
+
+**Title font** and **title size** dress the widget's heading on its own, in the
+same typefaces the dashboard title offers. A tile meant to be read across a
+room can carry a heading twice the size of the ones beside it without every
+other widget growing to match.
+
+**Text colour** is the whole widget's writing, not the heading alone: the
+title, the caption, and the labels on the chart - its axes and their names, its
+legend, and the values printed beside its marks. A value printed *on* a mark
+stays white, because it sits on a filled bar or slice rather than on the page,
+and giving it the colour of the axis is how it disappears into the bar it is
+labelling.
 
 A chart's colour is a *lead* colour, not the only one. A chart with several
 series keeps distinct hues behind the one chosen, because painting every series
@@ -654,6 +688,12 @@ An indicator is one tracked number.
 - a **breakdown variable**, so the indicator can be expanded per region or team,
 - a **target for each group** of that breakdown, once one is chosen,
 - a **percentage**, where the number is a share rather than a count.
+
+The datasets offered are the ones in whatever the project filter above the page
+is set to, because an indicator belongs to whatever project its dataset belongs
+to. Building one from a dataset in another project is how an indicator quietly
+ends up somewhere its team will not find it, so under a project you are offered
+that project's data, and under "All projects" you are offered everything.
 
 **Percentages.** Filters pick the rows the indicator counts; *percent of* says
 what they are a share of. "Of all rows" divides by every row in the dataset

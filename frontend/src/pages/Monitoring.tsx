@@ -16,7 +16,7 @@ import type {
   Page,
 } from '@/lib/types'
 import ChartCard from '@/components/ChartCard'
-import ProjectFilter, { projectParam } from '@/components/ProjectFilter'
+import ProjectFilter, { datasetProjectParam, projectParam } from '@/components/ProjectFilter'
 import FilterBuilder, { emptyFilter } from '@/components/FilterBuilder'
 import {
   Badge,
@@ -149,9 +149,9 @@ export default function Monitoring() {
         </div>
       )}
 
-      {creating && <IndicatorModal onClose={() => setCreating(false)} />}
+      {creating && <IndicatorModal project={project} onClose={() => setCreating(false)} />}
       {editing && (
-        <IndicatorModal indicator={editing} onClose={() => setEditing(null)} />
+        <IndicatorModal indicator={editing} project={project} onClose={() => setEditing(null)} />
       )}
     </>
   )
@@ -337,9 +337,12 @@ function measureKindOf(indicator: Indicator): MeasureKind {
 
 function IndicatorModal({
   indicator,
+  project,
   onClose,
 }: {
   indicator?: Indicator
+  /** The project filter the page is under: null is every project. */
+  project?: string | null
   onClose: () => void
 }) {
   const toast = useToast()
@@ -385,15 +388,32 @@ function IndicatorModal({
     ),
   )
 
+  // Under a project, only that project's data: offering every dataset on the
+  // server made "new indicator" a list to hunt through, and an indicator built
+  // from the wrong one silently belongs to the wrong project, because an
+  // indicator lives wherever its dataset lives.
+  const scope = datasetProjectParam(project ?? null)
   const datasets = useQuery({
-    queryKey: ['datasets', 'ready'],
-    queryFn: () => api.get<Page<Dataset>>('/datasets?limit=200&status=ready'),
+    queryKey: ['datasets', 'ready', scope],
+    queryFn: () => api.get<Page<Dataset>>(`/datasets?limit=200&status=ready${scope}`),
   })
   const dataset = useQuery({
     queryKey: ['dataset', datasetId],
     queryFn: () => api.get<Dataset>(`/datasets/${datasetId}`),
     enabled: Boolean(datasetId),
   })
+
+  // An indicator being edited keeps its own dataset on the list even when that
+  // dataset is not in what came back - a project past the two hundred this
+  // asks for, or one filtered out. Dropping it would leave the box blank over
+  // a value that is still set, which reads as "no dataset" and is a lie about
+  // what saving would do.
+  const datasetChoices = [
+    ...(datasets.data?.items ?? []),
+    ...(dataset.data && !(datasets.data?.items ?? []).some((d) => d.id === dataset.data.id)
+      ? [dataset.data]
+      : []),
+  ]
 
   // The categories a per-category target can be set for. Read from the data
   // rather than typed, so a quota cannot be attached to a spelling that does
@@ -514,7 +534,7 @@ function IndicatorModal({
             }}
           >
             <option value="">Choose a dataset…</option>
-            {datasets.data?.items.map((item) => (
+            {datasetChoices.map((item) => (
               <option key={item.id} value={item.id}>
                 {item.name}
               </option>
