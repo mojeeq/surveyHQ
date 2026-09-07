@@ -546,8 +546,8 @@ shape is right when the map is answering "what happened here", because shapes
 are told apart at a glance and in a photocopy, which two shades of one colour
 are not.
 
-The **⤢** button fills the window with the map. See below: it works on every
-widget, not only maps.
+**Fill the window**, on the widget's menu, fills the screen with the map. See
+below: it works on every widget, not only maps.
 
 ### Checking that a record was collected where it says it was
 
@@ -771,9 +771,27 @@ says so:
 - **A rule under the header**, and the option to **hide the description**, for
   when the title alone is the whole heading.
 
+### A widget's menu
+
+Everything a widget can be asked to do sits behind one button at the top right
+of it, marked with three dots and shown when the pointer is anywhere over the
+widget. On a board being arranged it stays visible.
+
+It holds, depending on what the widget is and who is looking:
+
+- **Copy the table, for Excel** or **Copy as a picture** - see below.
+- **Fill the window** - see below.
+- **Move to (page)**, where the dashboard has more than one, with a tick
+  against the page it is on now.
+- **Edit this widget** and **Remove from dashboard**, for whoever can edit.
+
+These used to stand in a row in the title bar, which on a narrow tile left the
+title a few characters wide before it was cut off. A menu costs one more click
+on things nobody does twice a minute, and gives the title its bar back.
+
 ### Taking a widget with you
 
-Hovering a widget shows a **⧉** button, for readers as well as authors.
+The widget's menu offers to copy it, for readers as well as authors.
 
 On a table it copies the rows to the clipboard as cells: paste into Excel and
 they land in columns, paste into a plain editor and they arrive tab-separated.
@@ -794,12 +812,15 @@ document by a longer road.
 
 ### Filling the screen with one widget
 
-The **⤢** button on any widget blows it up to the size of the window, for
-reading small values on a crowded chart, a table longer than its tile, or one
-red pin on a map. **Escape** or **Close** puts it back.
+**Fill the window** on any widget's menu blows it up to the size of the window,
+for reading small values on a crowded chart, a table longer than its tile, or
+one red pin on a map. **Escape** or **Close** puts it back.
 
 The dashboard behind it keeps running, and the widget is the same one, so a
-filter applied before expanding is still applied inside it.
+filter applied before expanding is still applied inside it - and it is drawn in
+its own colours, on the dashboard's own background, so a widget built to be
+read on a dark board is still read on one. Blowing a widget up makes it bigger
+and changes nothing else.
 
 ### Filtering a table by its columns
 

@@ -669,6 +669,8 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
               <ErrorBoundary what={`"${widget.title || 'this widget'}"`}>
               <WidgetFrame
                 widget={widget}
+                card={cardStyle(widget, widgetOpacity)}
+                ground={canvas}
                 payload={rendered.data?.widgets[widget.id]}
                 loading={rendered.isLoading}
                 editing={editing && !isPublic}
@@ -740,11 +742,152 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
   )
 }
 
+
+/** One line on a widget's menu. */
+type MenuItem = {
+  label: string
+  onClick: () => void
+  /** A tick down the left, for the choice that is already in force. */
+  checked?: boolean
+  danger?: boolean
+}
+
+/**
+ * Everything you can do to a widget, behind one button.
+ *
+ * These used to sit side by side in the title bar - copy, expand, which page,
+ * edit, remove - and on a narrow tile they left the title a few characters
+ * wide. A menu costs one more click on things nobody does twice a minute and
+ * gives the title the bar back.
+ *
+ * The menu is portalled to the body and placed from the button's own position.
+ * A widget sits inside a card that clips what overflows it, and inside a grid
+ * that has been given a transform, so a panel positioned any other way is
+ * either cut off at the card's edge or fixed to the wrong thing entirely.
+ */
+function WidgetMenu({ groups, label, always, onOpen }: {
+  /** Items in bands, drawn with a rule between them. Empty bands are dropped. */
+  groups: MenuItem[][]
+  label: string
+  /** Show the button without hovering, e.g. while the board is being arranged. */
+  always?: boolean
+  /**
+   * Called as the menu opens, to settle anything the items depend on.
+   *
+   * What a widget can be copied as is read off what it actually drew, and a
+   * chart's canvas appears a moment after the data does - so a check made
+   * when the data arrived found nothing, and the copy line was missing from
+   * the menu for the life of the page. Asking at the moment of opening is
+   * both later and cheaper than watching for it.
+   */
+  onOpen?: () => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [at, setAt] = useState<{ top: number; right: number } | null>(null)
+  const button = useRef<HTMLButtonElement>(null)
+  const panel = useRef<HTMLDivElement>(null)
+  const bands = groups.filter((band) => band.length > 0)
+
+  // Anywhere else, and the next key, closes it. Both are what a menu is
+  // expected to do, and neither is worth a click on a "cancel".
+  useEffect(() => {
+    if (!open) return
+    const away = (event: MouseEvent) => {
+      const target = event.target as Node
+      // The menu itself counts as inside. Listening in the capture phase means
+      // this runs before anything the menu could do to stop it, so testing the
+      // button alone closed the menu on the way down and the item under the
+      // pointer was gone before its click arrived: every entry did nothing.
+      if (button.current?.contains(target) || panel.current?.contains(target)) return
+      setOpen(false)
+    }
+    const key = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    // Captured, so a click on the page behind closes the menu instead of
+    // reaching whatever was under the pointer.
+    document.addEventListener('mousedown', away, true)
+    document.addEventListener('keydown', key)
+    window.addEventListener('resize', () => setOpen(false), { once: true })
+    return () => {
+      document.removeEventListener('mousedown', away, true)
+      document.removeEventListener('keydown', key)
+    }
+  }, [open])
+
+  const show = () => {
+    const box = button.current?.getBoundingClientRect()
+    if (box) setAt({ top: box.bottom + 4, right: Math.max(8, window.innerWidth - box.right) })
+    if (!open) onOpen?.()
+    setOpen((was) => !was)
+  }
+
+  if (!bands.length) return null
+
+  return (
+    <>
+      <button
+        ref={button}
+        className={`btn-ghost btn-sm shrink-0 px-1.5 text-ink-500 transition-opacity ${
+          always || open ? 'opacity-100' : 'opacity-0 focus:opacity-100 group-hover:opacity-100'
+        }`}
+        onClick={show}
+        title={`Options for ${label}`}
+        aria-label={`Options for ${label}`}
+        aria-haspopup="menu"
+        aria-expanded={open}
+      >
+        {/* Three dots, drawn rather than typed: the character for them is
+            missing from enough fonts to come out as a box. */}
+        <svg width="16" height="16" viewBox="0 0 16 16" aria-hidden="true" fill="currentColor">
+          <circle cx="3" cy="8" r="1.5" />
+          <circle cx="8" cy="8" r="1.5" />
+          <circle cx="13" cy="8" r="1.5" />
+        </svg>
+      </button>
+      {open &&
+        at &&
+        createPortal(
+          <div
+            ref={panel}
+            className="fixed z-50 min-w-[11rem] overflow-hidden rounded-card border border-ink-200 bg-white py-1 shadow-lg"
+            style={{ top: at.top, right: at.right }}
+            role="menu"
+          >
+            {bands.map((band, index) => (
+              <div key={index} className={index ? 'mt-1 border-t border-ink-100 pt-1' : ''}>
+                {band.map((item) => (
+                  <button
+                    key={item.label}
+                    role="menuitem"
+                    className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm hover:bg-ink-50 ${
+                      item.danger ? 'text-red-600' : 'text-ink-700'
+                    }`}
+                    onClick={() => {
+                      setOpen(false)
+                      item.onClick()
+                    }}
+                  >
+                    <span className="w-3 shrink-0 text-ink-400">{item.checked ? '\u2713' : ''}</span>
+                    {item.label}
+                  </button>
+                ))}
+              </div>
+            ))}
+          </div>,
+          document.body,
+        )}
+    </>
+  )
+}
+
 function WidgetFrame({
   widget,
   payload,
   loading,
   editing,
+  card,
+  ground,
   canEdit,
   theme,
   pageNames,
@@ -759,6 +902,10 @@ function WidgetFrame({
   loading: boolean
   editing: boolean
   canEdit: boolean
+  /** The tile's own colour, so the expanded view is the same widget. */
+  card?: CSSProperties
+  /** What the dashboard lays behind its widgets, under a see-through one. */
+  ground?: CSSProperties
   /** Where this dashboard's own resources live, shared or signed in. */
   basePath: string
   /** The dashboard's categorical ordering, applied to every chart on it. */
@@ -887,81 +1034,51 @@ function WidgetFrame({
         >
           {widget.title || payload?.name || 'Widget'}
         </h3>
-        <div className="flex shrink-0 items-center gap-1">
-        {/* Two controls for whoever is reading, not only for whoever built the
-            board: a shared link is where somebody most often wants the numbers
-            in their own report, and where the map most needs the whole screen. */}
-        {copyable && (
-          <button
-            className="btn-ghost btn-sm shrink-0 text-ink-500 opacity-0 transition-opacity focus:opacity-100 group-hover:opacity-100"
-            onClick={handOver}
-            title={
-              copyable === 'table'
-                ? 'Copy this table, to paste into Excel'
-                : 'Copy this chart as a picture'
-            }
-            aria-label={`Copy ${name}`}
-          >
-            ⧉
-          </button>
-        )}
-        {payload && !payload.error && (
-          <button
-            className="btn-ghost btn-sm shrink-0 text-ink-500 opacity-0 transition-opacity focus:opacity-100 group-hover:opacity-100"
-            onClick={() => setExpanded(true)}
-            title="Fill the window with this widget"
-            aria-label={`Expand ${name}`}
-          >
-            ⤢
-          </button>
-        )}
-        {canEdit && pageNames.length > 1 && (
-          // Which page a widget belongs on is usually decided after it is
-          // built, and rebuilding it somewhere else is not an answer.
-          <select
-            className={`h-7 rounded border border-ink-200 bg-white px-1.5 text-xs text-ink-600 transition-opacity ${
-              editing ? 'opacity-100' : 'opacity-0 focus:opacity-100 group-hover:opacity-100'
-            }`}
-            title="Move this widget to another page"
-            aria-label={`Move ${widget.title || 'widget'} to another page`}
-            value={widget.page ?? 0}
-            onChange={(event) => onMove(Number(event.target.value))}
-          >
-            {pageNames.map((name, index) => (
-              <option key={index} value={index}>
-                {name}
-              </option>
-            ))}
-          </select>
-        )}
-        {canEdit && (
-          <button
-            className={`btn-ghost btn-sm shrink-0 text-ink-500 transition-opacity ${
-              editing ? 'opacity-100' : 'opacity-0 focus:opacity-100 group-hover:opacity-100'
-            }`}
-            onClick={onEdit}
-            title="Edit this widget"
-            aria-label={`Edit ${widget.title || 'widget'}`}
-          >
-            ✎
-          </button>
-        )}
-        {canEdit && (
-          // Removal used to live only inside Arrange mode with nothing saying
-          // so, which read as "widgets cannot be removed". It is now always
-          // reachable: visible on hover, and permanently while arranging.
-          <button
-            className={`btn-ghost btn-sm shrink-0 text-red-600 transition-opacity ${
-              editing ? 'opacity-100' : 'opacity-0 focus:opacity-100 group-hover:opacity-100'
-            }`}
-            onClick={onRemove}
-            title="Remove this widget"
-            aria-label={`Remove ${widget.title || 'widget'}`}
-          >
-            ✕
-          </button>
-        )}
-        </div>
+        {/* Everything this widget can be asked to do, behind one button.
+            The controls used to stand in a row here and left a narrow tile's
+            title a few characters wide. Copy and expand are on it for readers
+            as well as authors: a shared link is where somebody most wants the
+            numbers in their own report, and where a map most needs the screen. */}
+        <WidgetMenu
+          label={name}
+          always={editing}
+          onOpen={() => setCopyable(copyableIn(body.current))}
+          groups={[
+            [
+              ...(copyable
+                ? [
+                    {
+                      label:
+                        copyable === 'table'
+                          ? 'Copy the table, for Excel'
+                          : 'Copy as a picture',
+                      onClick: handOver,
+                    },
+                  ]
+                : []),
+              ...(payload && !payload.error
+                ? [{ label: 'Fill the window', onClick: () => setExpanded(true) }]
+                : []),
+            ],
+            // Which page a widget belongs on is usually decided after it is
+            // built, and rebuilding it somewhere else is not an answer.
+            canEdit && pageNames.length > 1
+              ? pageNames.map((page, index) => ({
+                  label: `Move to ${page}`,
+                  checked: (widget.page ?? 0) === index,
+                  onClick: () => onMove(index),
+                }))
+              : [],
+            canEdit
+              ? [
+                  { label: 'Edit this widget', onClick: onEdit },
+                  // Removal used to live only inside Arrange mode with nothing
+                  // saying so, which read as "widgets cannot be removed".
+                  { label: 'Remove from dashboard', onClick: onRemove, danger: true },
+                ]
+              : [],
+          ]}
+        />
       </header>
       <div
         ref={body}
@@ -994,9 +1111,14 @@ function WidgetFrame({
         !payload.error &&
         createPortal(
         <div
-          className="fixed inset-0 z-50 flex flex-col bg-white p-3"
+          className="fixed inset-0 z-50 flex flex-col p-3"
           role="dialog"
           aria-label={`${name}, full screen`}
+          // The dashboard's own ground, under the widget, exactly as on the
+          // board. A widget with no colour of its own is see-through, and put
+          // on plain white it changed character entirely: a pale chart built
+          // to sit on a dark board arrived as pale on white and unreadable.
+          style={ground ?? { backgroundColor: '#ffffff' }}
           // Escape closes it, which is where the hand goes before it finds a
           // button, and the dialog takes focus so the key reaches it.
           tabIndex={-1}
@@ -1005,18 +1127,31 @@ function WidgetFrame({
             if (event.key === 'Escape') setExpanded(false)
           }}
         >
-          <div className="mb-2 flex shrink-0 items-center justify-between gap-2">
-            <h2 className="truncate text-sm font-semibold text-ink-800">{name}</h2>
-            <button className="btn-secondary btn-sm" onClick={() => setExpanded(false)}>
-              Close
-            </button>
+          {/* The same card, at the size of the window: its colour, its
+              transparency, its font and its text colour. Blowing a widget up
+              should make it bigger and change nothing else. */}
+          <div
+            className="flex min-h-0 flex-1 flex-col rounded-card p-3"
+            style={card}
+          >
+            <div className="mb-2 flex shrink-0 items-center justify-between gap-2">
+              <h2 className="truncate text-sm font-semibold text-ink-800" style={titleStyle(style)}>
+                {name}
+              </h2>
+              <button className="btn-secondary btn-sm" onClick={() => setExpanded(false)}>
+                Close
+              </button>
+            </div>
+            <div className="flex min-h-0 flex-1 flex-col overflow-auto">{content}</div>
+            {style.caption && (
+              <p
+                className="shrink-0 border-t border-ink-100 px-1 pt-2 text-xs text-ink-500"
+                style={style.font_color ? { color: style.font_color, opacity: 0.75 } : undefined}
+              >
+                {style.caption}
+              </p>
+            )}
           </div>
-          <div className="flex min-h-0 flex-1 flex-col overflow-auto">{content}</div>
-          {style.caption && (
-            <p className="shrink-0 border-t border-ink-100 px-1 pt-2 text-xs text-ink-500">
-              {style.caption}
-            </p>
-          )}
         </div>,
         // Onto the body, escaping the grid. Every widget sits inside an element
         // the layout has given a transform, and a transformed ancestor makes
