@@ -118,3 +118,39 @@ def test_an_admin_created_account_must_also_set_its_own(client, auth_headers):
     )
     assert created.status_code == 201, created.text
     assert created.json()["must_change_password"] is True
+
+
+def test_must_change_password_blocks_other_authenticated_endpoints(client, auth_headers):
+    created = client.post(
+        "/api/v1/users",
+        headers=auth_headers,
+        json={
+            "email": "mustchange@example.com",
+            "role": "viewer",
+            "password": "temporary-password-123",
+        },
+    )
+    assert created.status_code == 201, created.text
+
+    token = client.post(
+        "/api/v1/auth/login",
+        json={"email": "mustchange@example.com", "password": "temporary-password-123"},
+    ).json()["access_token"]
+    user_headers = {"Authorization": f"******"}
+
+    blocked = client.get("/api/v1/datasets", headers=user_headers)
+    assert blocked.status_code == 403
+    assert blocked.json()["detail"] == "You must change your password before accessing this endpoint"
+
+    assert client.get("/api/v1/auth/me", headers=user_headers).status_code == 200
+
+    changed = client.post(
+        "/api/v1/auth/change-password",
+        headers=user_headers,
+        json={
+            "current_password": "temporary-password-123",
+            "new_password": "new-personal-password-456",
+        },
+    )
+    assert changed.status_code == 200, changed.text
+    assert client.get("/api/v1/datasets", headers=user_headers).status_code == 200

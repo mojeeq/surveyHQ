@@ -193,6 +193,7 @@ def create_first_admin() -> None:
 
 
 def initialise() -> None:
+    settings.validate_security_settings()
     settings.ensure_directories()
     create_tables()
     ensure_columns()

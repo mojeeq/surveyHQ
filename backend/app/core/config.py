@@ -8,6 +8,11 @@ from pathlib import Path
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+DEFAULT_SECRET_KEYS = {"insecure-development-key-change-me"}
+DEFAULT_FIRST_ADMIN_EMAILS = {"admin@example.com"}
+DEFAULT_FIRST_ADMIN_PASSWORDS = {"changeme", "CHANGE-ME-strong-password"}
+NON_PRODUCTION_ENVIRONMENTS = {"development", "dev", "test", "testing", "local"}
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -129,6 +134,23 @@ class Settings(BaseSettings):
     @property
     def mail_enabled(self) -> bool:
         return bool(self.smtp_host)
+
+    def validate_security_settings(self) -> None:
+        if self.environment.lower() in NON_PRODUCTION_ENVIRONMENTS:
+            return
+        problems: list[str] = []
+        if self.secret_key in DEFAULT_SECRET_KEYS:
+            problems.append("SECRET_KEY is using an insecure default value")
+        if self.first_admin_email.lower() in DEFAULT_FIRST_ADMIN_EMAILS:
+            problems.append("FIRST_ADMIN_EMAIL is using a default placeholder")
+        if self.first_admin_password in DEFAULT_FIRST_ADMIN_PASSWORDS:
+            problems.append("FIRST_ADMIN_PASSWORD is using a default placeholder")
+        if problems:
+            raise ValueError(
+                "Unsafe production configuration: "
+                + "; ".join(problems)
+                + ". Set strong non-default values before starting the application."
+            )
 
 
 @lru_cache

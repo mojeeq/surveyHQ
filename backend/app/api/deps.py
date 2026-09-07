@@ -25,8 +25,23 @@ CREDENTIALS_ERROR = HTTPException(
     headers={"WWW-Authenticate": "Bearer"},
 )
 
+PASSWORD_CHANGE_REQUIRED_ERROR = HTTPException(
+    status_code=status.HTTP_403_FORBIDDEN,
+    detail="You must change your password before accessing this endpoint",
+)
+
+
+def _enforce_password_change_requirement(user: User, request: Request) -> None:
+    if not user.must_change_password:
+        return
+    allowed_paths = {"/auth/change-password", "/auth/me"}
+    if any(request.url.path.endswith(path) for path in allowed_paths):
+        return
+    raise PASSWORD_CHANGE_REQUIRED_ERROR
+
 
 def get_current_user(
+    request: Request,
     db: Annotated[Session, Depends(get_db)],
     credentials: Annotated[HTTPAuthorizationCredentials | None, Depends(bearer_scheme)] = None,
     x_api_key: Annotated[str | None, Header(alias="X-API-Key")] = None,
@@ -45,6 +60,7 @@ def get_current_user(
         user = db.get(User, record.user_id)
         if user is None or not user.is_active:
             raise CREDENTIALS_ERROR
+        _enforce_password_change_requirement(user, request)
         return user
 
     if credentials is None:
@@ -66,6 +82,7 @@ def get_current_user(
     user = db.get(User, user_id)
     if user is None or not user.is_active:
         raise CREDENTIALS_ERROR
+    _enforce_password_change_requirement(user, request)
     return user
 
 
