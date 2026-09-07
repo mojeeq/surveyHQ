@@ -7,6 +7,7 @@ from typing import Annotated, Any
 
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, ConfigDict
 from slugify import slugify
 from sqlalchemy import or_, select
 
@@ -16,7 +17,7 @@ from app.api.deps import (
     RequireAnalyst,
     get_ready_dataset,
 )
-from app.core.security import new_public_token
+from app.core.security import hash_password, new_public_token
 from app.db.base import utcnow
 from app.models import (
     BoundaryLayer,
@@ -28,6 +29,7 @@ from app.models import (
     QualityResult,
     QualityRule,
     Role,
+    ShareLink,
     User,
     Widget,
 )
@@ -92,6 +94,7 @@ from app.services.projects import (
 from app.services.query_engine import (
     DatasetContext,
     QueryError,
+    distinct_values,
     execute_crosstab,
     execute_query,
 )
@@ -772,6 +775,54 @@ def render_dashboard(
     return _render_widgets(db, dashboard, filters, every_widget_but)
 
 
+def filter_values_response(
+    dashboard: Dashboard, variable: str, db: DbSession, limit: int = 200
+) -> list[dict[str, Any]]:
+    """The choices in one of this dashboard's own filter dropdowns.
+
+    Served through the dashboard rather than through the dataset because the
+    dataset endpoint needs an account, and the reader of a shared link has
+    none: the dropdowns on a copied link came up empty for anyone not already
+    signed in to this browser, which is what "sometimes there are no options"
+    was.
+
+    Only a variable the author actually put a control on is answered, and the
+    dataset is taken from that control rather than from the caller. So this
+    lists what the dropdown was built to list and nothing else - the same rule
+    the shared render already applies to filters arriving from outside.
+    """
+    control = next(
+        (
+            item
+            for item in (dashboard.filters or [])
+            if isinstance(item, dict) and item.get("variable") == variable
+        ),
+        None,
+    )
+    if control is None:
+        raise HTTPException(status_code=404, detail="This dashboard has no such filter")
+    dataset = db.get(Dataset, str(control.get("dataset_id") or ""))
+    if dataset is None or not dataset_is_queryable(dataset):
+        raise HTTPException(status_code=404, detail="The filter's dataset is unavailable")
+    try:
+        return distinct_values(DatasetContext.from_model(dataset), variable, limit)
+    except QueryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{dashboard_id}/filter-values/{variable}", response_model=list[dict])
+def read_dashboard_filter_values(
+    dashboard_id: str,
+    variable: str,
+    db: DbSession,
+    user: CurrentUser,
+    limit: int = 200,
+) -> list[dict[str, Any]]:
+    return filter_values_response(
+        _get_dashboard(dashboard_id, db, user), variable, db, min(limit, 1000)
+    )
+
+
 def boundary_response(
     dashboard: Dashboard, layer_id: str, db: DbSession
 ) -> dict[str, Any]:
@@ -800,6 +851,150 @@ def read_dashboard_boundary(
     dashboard_id: str, layer_id: str, db: DbSession, user: CurrentUser
 ) -> dict[str, Any]:
     return boundary_response(_get_dashboard(dashboard_id, db, user), layer_id, db)
+
+
+# --- share links -----------------------------------------------------------
+
+
+class ShareLinkOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    token: str
+    is_active: bool
+    has_password: bool = False
+    view_count: int = 0
+    last_viewed_at: dt.datetime | None = None
+    created_at: dt.datetime
+
+    @classmethod
+    def of(cls, link: ShareLink) -> ShareLinkOut:
+        # The hash never leaves the server; whether there is one does.
+        return cls(
+            id=link.id,
+            name=link.name,
+            token=link.token or "",
+            is_active=bool(link.is_active),
+            has_password=bool(link.password_hash),
+            view_count=link.view_count or 0,
+            last_viewed_at=link.last_viewed_at,
+            created_at=link.created_at,
+        )
+
+
+class ShareLinkIn(BaseModel):
+    name: str = ""
+    password: str = ""
+
+
+class ShareLinkPatch(BaseModel):
+    name: str | None = None
+    is_active: bool | None = None
+    # Distinguished by exclude_unset: absent leaves the password alone, and an
+    # empty string removes it. Without that there is no way to say "take the
+    # password off" that does not also mean "leave it as it is".
+    password: str | None = None
+
+
+@router.get("/{dashboard_id}/share-links", response_model=list[ShareLinkOut])
+def list_share_links(
+    dashboard_id: str, db: DbSession, user: RequireAnalyst
+) -> list[ShareLinkOut]:
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    links = db.scalars(
+        select(ShareLink)
+        .where(ShareLink.dashboard_id == dashboard.id)
+        .order_by(ShareLink.created_at)
+    ).all()
+    return [ShareLinkOut.of(link) for link in links]
+
+
+@router.post("/{dashboard_id}/share-links", response_model=ShareLinkOut, status_code=201)
+def create_share_link(
+    dashboard_id: str, payload: ShareLinkIn, db: DbSession, user: RequireAnalyst
+) -> ShareLinkOut:
+    """Publish another address for this dashboard.
+
+    A board goes to several audiences at once and they do not end together, so
+    each gets its own link to close when it is done with.
+    """
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    link = ShareLink(
+        dashboard_id=dashboard.id,
+        name=payload.name.strip() or "Shared link",
+        token=new_public_token(),
+        is_active=True,
+        password_hash=hash_password(payload.password) if payload.password else "",
+        created_by=user.id,
+    )
+    db.add(link)
+    # The dashboard's own flag is what every public route checks first, so a
+    # board with links on it has to be published.
+    dashboard.is_public = True
+    db.commit()
+    db.refresh(link)
+    record(
+        db,
+        user=user,
+        action="share_link.create",
+        entity_type="dashboard",
+        entity_id=dashboard_id,
+        detail={"name": link.name, "password": bool(link.password_hash)},
+    )
+    return ShareLinkOut.of(link)
+
+
+@router.patch("/{dashboard_id}/share-links/{link_id}", response_model=ShareLinkOut)
+def update_share_link(
+    dashboard_id: str,
+    link_id: str,
+    payload: ShareLinkPatch,
+    db: DbSession,
+    user: RequireAnalyst,
+) -> ShareLinkOut:
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    link = db.get(ShareLink, link_id)
+    if link is None or link.dashboard_id != dashboard.id:
+        raise HTTPException(status_code=404, detail="Share link not found")
+    changes = payload.model_dump(exclude_unset=True)
+    if "name" in changes:
+        link.name = (changes["name"] or "").strip() or "Shared link"
+    if "is_active" in changes:
+        link.is_active = bool(changes["is_active"])
+    if "password" in changes:
+        link.password_hash = (
+            hash_password(changes["password"]) if changes["password"] else ""
+        )
+    db.commit()
+    db.refresh(link)
+    return ShareLinkOut.of(link)
+
+
+@router.delete("/{dashboard_id}/share-links/{link_id}", response_model=Message)
+def delete_share_link(
+    dashboard_id: str, link_id: str, db: DbSession, user: RequireAnalyst
+) -> Message:
+    """Destroy a link. Closing it is usually what is wanted instead.
+
+    A deleted address can never be reopened; a closed one can, which matters
+    when the link is already pasted into somebody's email.
+    """
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    link = db.get(ShareLink, link_id)
+    if link is None or link.dashboard_id != dashboard.id:
+        raise HTTPException(status_code=404, detail="Share link not found")
+    db.delete(link)
+    db.commit()
+    record(
+        db,
+        user=user,
+        action="share_link.delete",
+        entity_type="dashboard",
+        entity_id=dashboard_id,
+        detail={"name": link.name},
+    )
+    return Message(detail="Share link deleted")
 
 
 @router.post("/{dashboard_id}/share", response_model=DashboardOut)

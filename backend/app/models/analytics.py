@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import datetime as dt
 import enum
 
 from sqlalchemy import (
     JSON,
     Boolean,
+    DateTime,
     Enum,
     ForeignKey,
     Integer,
@@ -107,6 +109,42 @@ class HtmlSnippet(UUIDMixin, TimestampMixin, Base):
     html: Mapped[str] = mapped_column(Text, default="")
     project_id: Mapped[str | None] = mapped_column(
         ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    created_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+
+class ShareLink(UUIDMixin, TimestampMixin, Base):
+    """One published address for a dashboard, of possibly several.
+
+    A dashboard is rarely shown to one audience. The same board goes to a
+    minister, to the field supervisors, and to a donor, and those want
+    different lifetimes: the donor's link is closed when the report is filed,
+    the supervisors keep theirs for the season. One link for all of them meant
+    closing any of them closed all of them, so the answer was to make and
+    unmake dashboards instead.
+
+    A password is optional and is held as a hash. It is not a login: everyone
+    who has it is the same anonymous reader, and it exists to keep a forwarded
+    link from being a public one, not to identify anybody.
+    """
+
+    __tablename__ = "share_links"
+
+    dashboard_id: Mapped[str] = mapped_column(
+        ForeignKey("dashboards.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), default="")
+    token: Mapped[str] = mapped_column(String(64), unique=True, index=True)
+    # Closed rather than deleted keeps the row, so reopening restores the same
+    # address: a link already pasted into a ministry email is worth being able
+    # to switch back on.
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    password_hash: Mapped[str] = mapped_column(String(200), default="")
+    view_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_viewed_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     created_by: Mapped[str | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True

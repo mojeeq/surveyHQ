@@ -100,6 +100,62 @@ export const VERDICTS: Record<AreaStatus, { label: string; color: string; radius
 
 export const VERDICT_ORDER: AreaStatus[] = ['mismatch', 'outside', 'unrecorded', 'match']
 
+/**
+ * The shapes a point can be drawn as.
+ *
+ * A circle is right for "how much is here", because a circle's area reads as a
+ * quantity. It is the wrong shape for "what happened here": a square and a
+ * triangle are told apart at a glance and in a photocopy, which a light circle
+ * beside a dark one is not. So the shape is the author's to choose, and the
+ * ones offered are the ones that stay distinct at the size a pin actually is.
+ */
+export const POINT_ICONS = {
+  circle: { label: 'Circle', sides: 0 },
+  square: { label: 'Square', sides: 4 },
+  triangle: { label: 'Triangle', sides: 3 },
+  diamond: { label: 'Diamond', sides: 4, turn: Math.PI / 4 },
+  pentagon: { label: 'Pentagon', sides: 5 },
+} as const
+
+export type PointIcon = keyof typeof POINT_ICONS
+export const POINT_ICON_NAMES = Object.keys(POINT_ICONS) as PointIcon[]
+
+export function pointIconOf(name: string | undefined): PointIcon {
+  return name && name in POINT_ICONS ? (name as PointIcon) : 'circle'
+}
+
+/**
+ * A marker of one of the shapes above, at a radius in pixels.
+ *
+ * Leaflet draws circles natively and nothing else, so anything with corners is
+ * a polygon whose vertices are worked out in screen space through the map's
+ * own projection. That is also why the pins are redrawn on every zoom: a shape
+ * laid out in pixels at one zoom is the wrong size at the next.
+ */
+function marker(
+  map: L.Map,
+  icon: PointIcon,
+  at: [number, number],
+  radius: number,
+  options: L.PathOptions,
+): L.Path {
+  const shape = POINT_ICONS[icon]
+  const sides = 'sides' in shape ? shape.sides : 0
+  if (!sides) return L.circleMarker(at, { ...options, radius })
+
+  const centre = map.latLngToLayerPoint(at)
+  // Point-up rather than flat-topped: a triangle standing on a point is the
+  // one everybody draws, and the same quarter turn keeps a square square.
+  const turn = ('turn' in shape ? shape.turn : 0) - Math.PI / 2
+  const corners = Array.from({ length: sides }, (_, index) => {
+    const angle = turn + (index * 2 * Math.PI) / sides
+    return map.layerPointToLatLng(
+      L.point(centre.x + radius * Math.cos(angle), centre.y + radius * Math.sin(angle)),
+    )
+  })
+  return L.polygon(corners, options)
+}
+
 /** One area from a boundary layer, as it comes back from the server. */
 export interface BoundaryFeature {
   type: 'Feature'
@@ -135,6 +191,7 @@ export default function MapWidget({
   boundary,
   areas,
   areaVariable,
+  icon,
 }: {
   points: MapPoint[]
   detail?: string[]
@@ -149,6 +206,8 @@ export default function MapWidget({
   areas?: { type: string; features: BoundaryFeature[] }
   /** The variable holding the area each record says it was in. */
   areaVariable?: string
+  /** The shape each point is drawn as. */
+  icon?: string
 }) {
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<L.Map | null>(null)
@@ -158,6 +217,11 @@ export default function MapWidget({
   const [tilesFailed, setTilesFailed] = useState(false)
   const custom = tiles?.trim()
   const chosen = basemapOf(basemap)
+  const shape = pointIconOf(icon)
+  // Bumped on zoom to rebuild the pins, for the shapes that need it.
+  const [redraws, setRedraws] = useState(0)
+  // Which redraw last reframed the map, so a rebuild does not move the view.
+  const framed = useRef(-1)
 
   // The biggest pin sets the scale, so one busy cluster does not turn every
   // other point into a dot too small to click.
@@ -236,6 +300,15 @@ export default function MapWidget({
     }
 
     layer.current = L.layerGroup().addTo(instance)
+
+    // A shape with corners is laid out in pixels through the projection, so it
+    // is the wrong size at any other zoom and has to be rebuilt. Registered
+    // here, with the map itself, rather than in an effect of its own: the
+    // first draw happens at the world view and is immediately followed by the
+    // fit to the data, and a listener attached after that first zoom would
+    // miss it and leave every pin sized for a map of the whole planet.
+    instance.on('zoomend', () => setRedraws((count) => count + 1))
+
     return () => {
       instance.remove()
       map.current = null
@@ -317,22 +390,27 @@ export default function MapWidget({
     for (const point of points) {
       const value = Number(point.value) || 0
       const verdict = point.area_status ? VERDICTS[point.area_status] : undefined
-      const marker = L.circleMarker([point.lat, point.lon], {
+      const pin = marker(
+        map.current,
+        shape,
+        [point.lat, point.lon],
         // Two different maps in one component. Asked "where is the work", the
         // pin's area carries the value, because that is the question. Asked
         // "does the recorded area agree with the GPS", size would be a second
         // variable competing with the colour that carries the answer, so every
         // pin is the size its verdict says and only the colour speaks.
-        radius: verdict ? verdict.radius : 5 + 11 * Math.sqrt(Math.abs(value) / largest),
-        color: verdict ? verdict.color : '#1d4ed8',
-        weight: 1,
-        fillColor: verdict ? verdict.color : '#3b82f6',
-        fillOpacity: verdict ? 0.85 : 0.6,
-      })
+        verdict ? verdict.radius : 5 + 11 * Math.sqrt(Math.abs(value) / largest),
+        {
+          color: verdict ? verdict.color : '#1d4ed8',
+          weight: 1,
+          fillColor: verdict ? verdict.color : '#3b82f6',
+          fillOpacity: verdict ? 0.85 : 0.6,
+        },
+      )
       // Built when the popup opens, not when the marker is made: the string is
       // the expensive part, and at fifty thousand points all but one of them
       // is work for a popup nobody opens.
-      marker.bindPopup(() => {
+      pin.bindPopup(() => {
         const details = detail
           .map(
             (name) =>
@@ -365,8 +443,14 @@ export default function MapWidget({
           `</div>`
         )
       })
-      marker.addTo(layer.current)
+      pin.addTo(layer.current)
     }
+
+    // Only when the data changed, never on a redraw. A rebuild triggered by
+    // the reader's own zoom must not then undo that zoom - which would also
+    // fire zoomend again, and again.
+    if (redraws === framed.current) return
+    framed.current = redraws
 
     // Framed on the boundary layer when there is one, on the pins otherwise.
     // A frame is the area the fieldwork covers, and one coordinate recorded in
@@ -379,7 +463,9 @@ export default function MapWidget({
         ? L.latLngBounds([frame[1], frame[0]], [frame[3], frame[2]])
         : L.latLngBounds(points.map((point) => [point.lat, point.lon] as [number, number]))
     map.current.fitBounds(bounds, { padding: [24, 24], maxZoom: 14 })
-  }, [points, detail, largest, measureLabel, areaVariable, boundary?.bbox])
+  }, [points, detail, largest, measureLabel, areaVariable, boundary?.bbox, shape, redraws])
+
+
 
   // Leaflet measures its container once; inside a resizable widget it has to be
   // told when that changed, or half the map stays grey.
