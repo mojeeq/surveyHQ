@@ -38,10 +38,11 @@ import DashboardFilters, {
 } from '@/components/DashboardFilters'
 import CrosstabTable from '@/components/CrosstabTable'
 import ErrorBoundary from '@/components/ErrorBoundary'
-import MapWidget, { DEFAULT_TILES } from '@/components/MapWidget'
+import MapWidget, { BASEMAPS, BASEMAP_NAMES, DEFAULT_TILES } from '@/components/MapWidget'
 import AppearanceModal, {
   canvasStyle,
   isDark,
+  TITLE_FONTS,
   titleFontStack,
   useBackgroundImage,
 } from '@/components/DashboardAppearance'
@@ -57,6 +58,8 @@ import {
 } from '@/components/ui'
 
 const COLUMNS = 12
+/** text-sm, the size a widget title is when none is chosen. */
+const DEFAULT_TITLE_SIZE = 14
 const ROW_HEIGHT = 74
 // Breathing room inside the canvas, so a widget dragged to the far right stops
 // short of the edge instead of butting against it.
@@ -110,8 +113,30 @@ export interface WidgetStyle {
   opacity?: number
   font_family?: string
   font_color?: string
+  /** The widget title's own size in pixels, over the card's. */
+  title_size?: number
+  /** The widget title's own typeface, named from TITLE_FONTS. */
+  title_font?: string
   /** The colour this widget's chart leads with. */
   series_color?: string
+}
+
+/**
+ * The face of one widget's title.
+ *
+ * The colour is set here rather than left to inherit from the card: the
+ * heading carries a text colour of its own, and an inherited one never gets
+ * past it - which is why choosing a text colour used to change the axes and
+ * leave the title alone.
+ */
+function titleStyle(style: WidgetStyle): CSSProperties | undefined {
+  const stack = titleFontStack(style.title_font)
+  const css: CSSProperties = {
+    ...(style.title_size ? { fontSize: `${style.title_size}px`, lineHeight: 1.25 } : {}),
+    ...(stack ? { fontFamily: stack } : {}),
+    ...(style.font_color ? { color: style.font_color } : {}),
+  }
+  return Object.keys(css).length ? css : undefined
 }
 
 export const styleOf = (widget: Widget): WidgetStyle =>
@@ -653,7 +678,10 @@ function WidgetFrame({
     // Approaching the widget at all is enough intent to show its controls.
     <div className="group flex h-full flex-col">
       <header className="widget-handle flex shrink-0 items-center justify-between gap-2 border-b border-ink-200 px-4 py-2.5">
-        <h3 className={`truncate text-sm font-semibold text-ink-800 ${editing ? 'cursor-move' : ''}`}>
+        <h3
+          className={`truncate text-sm font-semibold text-ink-800 ${editing ? 'cursor-move' : ''}`}
+          style={titleStyle(style)}
+        >
           {widget.title || payload?.name || 'Widget'}
         </h3>
         <div className="flex shrink-0 items-center gap-1">
@@ -744,6 +772,7 @@ function WidgetFrame({
             points={payload.points ?? []}
             detail={payload.detail ?? []}
             measure={payload.measure}
+            basemap={widget.config?.basemap as string | undefined}
             tiles={widget.config?.tiles as string | undefined}
             truncated={payload.truncated}
           />
@@ -785,7 +814,13 @@ function WidgetFrame({
           shrink-0 so a long one is never squeezed to nothing by the chart
           above it. */}
       {style.caption && (
-        <p className="shrink-0 border-t border-ink-100 px-4 py-2 text-xs leading-snug text-ink-500">
+        <p
+          className="shrink-0 border-t border-ink-100 px-4 py-2 text-xs leading-snug text-ink-500"
+          // Dimmed rather than a second colour to choose: the caption stays
+          // subordinate to the title, and on a dark card a fixed grey would be
+          // the one line left unreadable.
+          style={style.font_color ? { color: style.font_color, opacity: 0.75 } : undefined}
+        >
           {style.caption}
         </p>
       )}
@@ -1355,6 +1390,7 @@ function AddWidgetModal({
   const [measureVariable, setMeasureVariable] = useState('')
   const [detail, setDetail] = useState<string[]>([])
   const [tiles, setTiles] = useState('')
+  const [basemap, setBasemap] = useState('streets')
   const [html, setHtml] = useState('')
   const [freshnessDatasets, setFreshnessDatasets] = useState<string[]>([])
 
@@ -1416,6 +1452,7 @@ function AddWidgetModal({
                 measure_variable: measureAgg === 'count' ? '' : measureVariable,
                 detail,
                 ...(tiles.trim() ? { tiles: tiles.trim() } : {}),
+                ...(basemap !== 'streets' ? { basemap } : {}),
               }
             : kind === 'freshness'
               ? { dataset_ids: freshnessDatasets, warn_hours: 24, critical_hours: 72 }
@@ -1665,8 +1702,25 @@ function AddWidgetModal({
               </Field>
 
               <Field
+                label="Base map"
+                hint="The ground the pins sit on. A reader can switch it on the map itself."
+              >
+                <select
+                  className="input"
+                  value={basemap}
+                  onChange={(event) => setBasemap(event.target.value)}
+                >
+                  {BASEMAP_NAMES.map((name) => (
+                    <option key={name} value={name}>
+                      {BASEMAPS[name].label}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field
                 label="Map tiles"
-                hint="Leave blank for OpenStreetMap. A server with no internet can point this at its own tile service."
+                hint="Leave blank for the base map above. A server with no internet can point this at its own tile service."
               >
                 <input
                   className="input font-mono text-xs"
@@ -2290,13 +2344,54 @@ function EditWidgetModal({
         </select>
       </Field>
 
-      <Field label="Text colour">
+      <Field
+        label="Text colour"
+        hint="The title, the caption, and the labels on the chart: its axes, its legend and the values beside its marks."
+      >
         <ColorPicker
           value={config.font_color ?? ''}
           onChange={(next) => set({ font_color: next || undefined })}
           allowNone
           noneLabel="Default text colour"
         />
+      </Field>
+
+      <Field label="Title font">
+        <select
+          className="input"
+          aria-label="Widget title font"
+          value={config.title_font ?? ''}
+          onChange={(event) => set({ title_font: event.target.value || undefined })}
+        >
+          {TITLE_FONTS.map((font) => (
+            <option key={font.label} value={font.value}>
+              {font.label}
+            </option>
+          ))}
+        </select>
+      </Field>
+
+      <Field label="Title size" hint="Empty follows the rest of the widget.">
+        <div className="flex items-center gap-3">
+          <input
+            type="range"
+            min={11}
+            max={32}
+            step={1}
+            className="w-48"
+            aria-label="Widget title size"
+            value={config.title_size ?? DEFAULT_TITLE_SIZE}
+            onChange={(event) => set({ title_size: Number(event.target.value) })}
+          />
+          <span className="w-12 text-sm text-ink-600">
+            {config.title_size ?? DEFAULT_TITLE_SIZE}px
+          </span>
+          {config.title_size !== undefined && (
+            <button className="btn-ghost btn-sm" onClick={() => set({ title_size: undefined })}>
+              Default
+            </button>
+          )}
+        </div>
       </Field>
 
       {kind === 'chart' && (
@@ -2433,7 +2528,22 @@ function EditWidgetModal({
               )}
             </div>
           </Field>
-          <Field label="Map tiles" hint="Blank uses OpenStreetMap.">
+          <Field label="Base map" hint="A reader can switch this on the map itself.">
+            <select
+              className="input"
+              value={config.basemap ?? 'streets'}
+              onChange={(event) =>
+                set({ basemap: event.target.value === 'streets' ? undefined : event.target.value })
+              }
+            >
+              {BASEMAP_NAMES.map((name) => (
+                <option key={name} value={name}>
+                  {BASEMAPS[name].label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Map tiles" hint="Blank uses the base map above.">
             <input
               className="input font-mono text-xs"
               value={config.tiles ?? ''}

@@ -206,10 +206,15 @@ export interface BuildOptions {
  *
  * The alternative was threading two more arguments into every axis, legend and
  * tooltip helper in this file. Only text-bearing keys are touched, and marks
- * are left alone: a bar's own colour is data, not text. Labels sitting *on* a
- * mark keep their white too - they are placed against a filled shape, and
- * recolouring them to match the axis is how they become unreadable.
+ * are left alone: a bar's own colour is data, not text.
+ *
+ * The value printed beside a mark is text like any other and takes the colour
+ * too. The one printed *on* a mark does not: it is white because it sits on a
+ * filled shape, and recolouring it to match the axis is how it disappears into
+ * the bar it is labelling.
  */
+const TEXT_KEYS = ['textStyle', 'axisLabel', 'nameTextStyle', 'subtextStyle', 'label']
+
 function applyTextStyle(node: unknown, font?: string, color?: string): void {
   if (!font && !color) return
   if (Array.isArray(node)) {
@@ -218,13 +223,21 @@ function applyTextStyle(node: unknown, font?: string, color?: string): void {
   }
   if (!node || typeof node !== 'object') return
   const record = node as Record<string, unknown>
-  const TEXT_KEYS = ['textStyle', 'axisLabel', 'nameTextStyle', 'subtextStyle']
   for (const key of TEXT_KEYS) {
     const target = record[key]
     if (target && typeof target === 'object' && !Array.isArray(target)) {
       const text = target as Record<string, unknown>
-      if (font) text.fontFamily = font
-      if (color) text.color = color
+      if (key === 'label' && text.position === 'inside') continue
+      // A copy into the option, never a write into the object found there.
+      // Some of them are module constants shared by every chart on the page:
+      // colouring one in place set the colour for all of them and kept it
+      // until the tab was reloaded, so styling one widget quietly restyled
+      // the labels of every other widget on the board.
+      record[key] = {
+        ...text,
+        ...(font ? { fontFamily: font } : {}),
+        ...(color ? { color } : {}),
+      }
     }
   }
   for (const value of Object.values(record)) applyTextStyle(value, font, color)
@@ -465,7 +478,7 @@ function buildOption(
 
   const common: EChartsOption = {
     color: [...palette],
-    textStyle: BASE_TEXT,
+    textStyle: { ...BASE_TEXT },
     animationDuration: 400,
     grid: { left: 8, right: 16, top: legend ? 40 : 16, bottom: 8, containLabel: true },
     legend: legend

@@ -57,3 +57,15 @@ export default function ProjectFilter({
 export function projectParam(value: string | null): string {
   return value === null ? '' : `&project_id=${encodeURIComponent(value)}`
 }
+
+/**
+ * The same filter, for endpoints that list datasets themselves.
+ *
+ * Those spell the shared area "none", because an empty project_id there is an
+ * absent filter rather than a place. The ones that list what hangs off a
+ * dataset read an empty string as the shared area instead, which is why this
+ * cannot be the one function.
+ */
+export function datasetProjectParam(value: string | null): string {
+  return value === null ? '' : `&project_id=${encodeURIComponent(value || 'none')}`
+}
