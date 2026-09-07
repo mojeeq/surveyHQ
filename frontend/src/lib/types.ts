@@ -418,8 +418,12 @@ export interface Appearance {
   widget_opacity?: number
   /** A band behind the page tabs, for when the background swallows them. */
   tab_background?: string
+  /** The page tab text, when the automatic light-or-dark choice is wrong. */
+  tab_color?: string
   /** The filter bar's own colour, for when white floats oddly on a background. */
   filter_background?: string
+  /** The filter labels, for a bar whose colour the default grey disappears into. */
+  filter_color?: string
 
   // --- the dashboard's own header -----------------------------------------
   /** An uploaded logo, served from the dashboard's own endpoint. */

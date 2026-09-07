@@ -12,6 +12,51 @@
  * failure.
  */
 
+/**
+ * Put text on the clipboard, on a plain HTTP deployment as well as on HTTPS.
+ *
+ * `navigator.clipboard` exists only in a secure context - HTTPS, or localhost.
+ * A platform installed on a ministry LAN and reached at http://10.0.0.4 has no
+ * such thing, and every copy button in the interface used to be written as
+ * `navigator.clipboard?.writeText(text).then(...)`. Optional chaining
+ * short-circuits the whole chain, so on those deployments that expression was
+ * `undefined`: nothing was copied, no handler ran, and no error was raised
+ * either. The button did nothing at all, silently, which is the hardest kind
+ * of broken to report.
+ *
+ * The old way still works everywhere: a textarea off screen, selected, and
+ * `execCommand`. It is deprecated and it is what the deprecation replaced it
+ * with cannot do, so it stays as the fallback.
+ */
+export async function copyText(text: string): Promise<boolean> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch {
+      /* denied, or not permitted from this event; try the old way */
+    }
+  }
+  try {
+    const holder = document.createElement('textarea')
+    holder.value = text
+    // Off screen rather than hidden: a display:none element cannot be selected,
+    // and the page must not scroll to it either.
+    holder.setAttribute('readonly', '')
+    holder.style.position = 'fixed'
+    holder.style.top = '-1000px'
+    holder.style.opacity = '0'
+    document.body.appendChild(holder)
+    holder.select()
+    holder.setSelectionRange(0, text.length)
+    const copied = document.execCommand('copy')
+    document.body.removeChild(holder)
+    return copied
+  } catch {
+    return false
+  }
+}
+
 /** The text of one cell, with the whitespace a spreadsheet would choke on removed. */
 function cellText(cell: Element): string {
   return (cell.textContent ?? '').replace(/\s+/g, ' ').trim()
@@ -70,7 +115,9 @@ export async function copyTable(table: HTMLTableElement): Promise<string> {
   }
   // Text only still pastes into a spreadsheet, one value per cell; it just
   // arrives without the headings in bold.
-  await navigator.clipboard?.writeText(text)
+  if (!(await copyText(text))) {
+    throw new Error('This browser would not let the table be copied')
+  }
   return `${rows} row${rows === 1 ? '' : 's'} copied`
 }
 

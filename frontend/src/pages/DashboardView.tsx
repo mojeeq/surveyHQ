@@ -11,7 +11,7 @@ import GridLayout, { type Layout } from 'react-grid-layout'
 import 'react-grid-layout/css/styles.css'
 import 'react-resizable/css/styles.css'
 import { api, ApiError, shareGrants } from '@/lib/api'
-import { copyableIn, copyChart, copyTable } from '@/lib/clipboard'
+import { copyableIn, copyChart, copyTable, copyText } from '@/lib/clipboard'
 import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { CHART_THEMES, STATUS_COLORS } from '@/lib/charts'
@@ -341,8 +341,15 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
       queryClient.invalidateQueries({ queryKey: ['dashboard', id] })
       if (updated.public_token) {
         const url = `${location.origin}/shared/${updated.public_token}`
-        navigator.clipboard?.writeText(url).catch(() => undefined)
-        toast.push('Public link copied to your clipboard', 'success')
+        // Told after the attempt rather than before it: on a plain HTTP
+        // deployment the browser has no clipboard object at all, and saying
+        // "copied" when nothing was is worse than saying nothing.
+        copyText(url).then((copied) =>
+          toast.push(
+            copied ? 'Public link copied to your clipboard' : 'This dashboard is now shared',
+            'success',
+          ),
+        )
       } else {
         toast.push('Public sharing turned off', 'info')
       }
@@ -579,6 +586,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
 
       <DashboardFilters
         basePath={basePath}
+        labelColor={appearance.filter_color}
         background={appearance.filter_background}
         controls={pageControls}
         value={filterValues}
@@ -593,6 +601,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         widgetsOnPage={widgets.length}
         onDark={tabsOnDark}
         band={appearance.tab_background}
+        color={appearance.tab_color}
         onSelect={setActivePage}
         onChange={(next) => savePages.mutate(next)}
         onMove={(from, to) => movePage.mutate({ from, to })}
@@ -789,6 +798,67 @@ function WidgetFrame({
     }
   }
 
+  // The widget itself, so the same thing can be drawn in the tile and, at
+  // the size of the window, in the overlay below. Written once because the
+  // two must not drift: an expanded widget showing something subtly
+  // different from the tile it came from would be worse than no overlay.
+  const content = loading ? (
+      <Loading />
+    ) : !payload ? (
+      <p className="py-6 text-center text-sm text-ink-400">No data</p>
+    ) : payload.error ? (
+      <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+        {payload.error}
+      </p>
+    ) : payload.type === 'indicator' ? (
+      <IndicatorWidget payload={payload} theme={theme} onSelect={onSelect} />
+    ) : payload.type === 'quality' ? (
+      <QualityWidget payload={payload} />
+    ) : payload.type === 'crosstab' ? (
+      <CrosstabTable
+        result={payload.result}
+        compact
+        fill
+        // A cross-tab carries both its variables in the result, so it can
+        // say which one a heading belongs to without the server naming it.
+        onSelect={onSelect}
+      />
+    ) : payload.type === 'freshness' ? (
+      <FreshnessWidget payload={payload} />
+    ) : payload.type === 'map' ? (
+      <BoundedMap payload={payload} widget={widget} basePath={basePath} />
+    ) : payload.type === 'html' ? (
+      <HtmlWidget html={payload.html ?? ''} />
+    ) : payload.type === 'countdown' ? (
+      <CountdownWidget payload={payload} />
+    ) : payload.type === 'text' ? (
+      <p className="whitespace-pre-wrap text-sm text-ink-700">{payload.content}</p>
+    ) : payload.result ? (
+      <ChartCard
+        result={payload.result}
+        chartType={payload.chart_type ?? 'bar'}
+        fill
+        showToggle={false}
+        theme={theme}
+        display={{
+          ...payload.display,
+          // The widget's own styling wins over what the chart was saved
+          // with: it is set here, on this dashboard, for this tile.
+          ...(style.series_color ? { seriesColor: style.series_color } : {}),
+          ...(style.font_family ? { fontFamily: style.font_family } : {}),
+          ...(style.font_color ? { fontColor: style.font_color } : {}),
+        }}
+        onSelect={
+          // Only where a click means something: a chart grouped on a
+          // variable. A KPI or a table of measures has no category behind
+          // the mark, so clicking it would filter by nothing.
+          onSelect && clickedVariable(payload)
+            ? (category) => onSelect(clickedVariable(payload), category)
+            : undefined
+        }
+      />
+  ) : null
+
   return (
     // The hover group is the whole widget, not just its title bar. It used to
     // be the bar alone, which meant the edit and remove controls stayed
@@ -833,11 +903,11 @@ function WidgetFrame({
             ⧉
           </button>
         )}
-        {payload?.type === 'map' && (
+        {payload && !payload.error && (
           <button
             className="btn-ghost btn-sm shrink-0 text-ink-500 opacity-0 transition-opacity focus:opacity-100 group-hover:opacity-100"
             onClick={() => setExpanded(true)}
-            title="Fill the window with this map"
+            title="Fill the window with this widget"
             aria-label={`Expand ${name}`}
           >
             ⤢
@@ -905,79 +975,33 @@ function WidgetFrame({
             {payload.filters_ignored.length > 1 ? 'variables' : 'variable'}.
           </p>
         )}
-        {loading ? (
-          <Loading />
-        ) : !payload ? (
-          <p className="py-6 text-center text-sm text-ink-400">No data</p>
-        ) : payload.error ? (
-          <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            {payload.error}
-          </p>
-        ) : payload.type === 'indicator' ? (
-          <IndicatorWidget payload={payload} theme={theme} onSelect={onSelect} />
-        ) : payload.type === 'quality' ? (
-          <QualityWidget payload={payload} />
-        ) : payload.type === 'crosstab' ? (
-          <CrosstabTable
-            result={payload.result}
-            compact
-            fill
-            // A cross-tab carries both its variables in the result, so it can
-            // say which one a heading belongs to without the server naming it.
-            onSelect={onSelect}
-          />
-        ) : payload.type === 'freshness' ? (
-          <FreshnessWidget payload={payload} />
-        ) : payload.type === 'map' ? (
-          <BoundedMap payload={payload} widget={widget} basePath={basePath} />
-        ) : payload.type === 'html' ? (
-          <HtmlWidget html={payload.html ?? ''} />
-        ) : payload.type === 'countdown' ? (
-          <CountdownWidget payload={payload} />
-        ) : payload.type === 'text' ? (
-          <p className="whitespace-pre-wrap text-sm text-ink-700">{payload.content}</p>
-        ) : payload.result ? (
-          <ChartCard
-            result={payload.result}
-            chartType={payload.chart_type ?? 'bar'}
-            fill
-            showToggle={false}
-            theme={theme}
-            display={{
-              ...payload.display,
-              // The widget's own styling wins over what the chart was saved
-              // with: it is set here, on this dashboard, for this tile.
-              ...(style.series_color ? { seriesColor: style.series_color } : {}),
-              ...(style.font_family ? { fontFamily: style.font_family } : {}),
-              ...(style.font_color ? { fontColor: style.font_color } : {}),
-            }}
-            onSelect={
-              // Only where a click means something: a chart grouped on a
-              // variable. A KPI or a table of measures has no category behind
-              // the mark, so clicking it would filter by nothing.
-              onSelect && clickedVariable(payload)
-                ? (category) => onSelect(clickedVariable(payload), category)
-                : undefined
-            }
-          />
-        ) : null}
+        {content}
       </div>
 
       {/* A figure caption: below the thing it describes, as in a report, and
           out of the way of the data at the top where the eye lands first.
           shrink-0 so a long one is never squeezed to nothing by the chart
           above it. */}
-      {/* The map, filling the window. A monitoring map is read by looking, and
-          a tile the size of a postcard is the one widget on a dashboard that
-          is genuinely too small to do its job. The dashboard behind it keeps
-          running, so closing this puts the reader back where they were. */}
+      {/* Any widget, filling the window. A tile the size of a postcard is no
+          way to read a table of forty rows or find one red pin, and the answer
+          people otherwise reach for is rebuilding the board bigger. The
+          dashboard behind it keeps running, so closing this puts the reader
+          back exactly where they were. */}
       {expanded &&
-        payload?.type === 'map' &&
+        payload &&
+        !payload.error &&
         createPortal(
         <div
           className="fixed inset-0 z-50 flex flex-col bg-white p-3"
           role="dialog"
           aria-label={`${name}, full screen`}
+          // Escape closes it, which is where the hand goes before it finds a
+          // button, and the dialog takes focus so the key reaches it.
+          tabIndex={-1}
+          ref={(node) => node?.focus()}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') setExpanded(false)
+          }}
         >
           <div className="mb-2 flex shrink-0 items-center justify-between gap-2">
             <h2 className="truncate text-sm font-semibold text-ink-800">{name}</h2>
@@ -985,9 +1009,12 @@ function WidgetFrame({
               Close
             </button>
           </div>
-          <div className="min-h-0 flex-1">
-            <BoundedMap payload={payload} widget={widget} basePath={basePath} />
-          </div>
+          <div className="flex min-h-0 flex-1 flex-col overflow-auto">{content}</div>
+          {style.caption && (
+            <p className="shrink-0 border-t border-ink-100 px-1 pt-2 text-xs text-ink-500">
+              {style.caption}
+            </p>
+          )}
         </div>,
         // Onto the body, escaping the grid. Every widget sits inside an element
         // the layout has given a transform, and a transformed ancestor makes
@@ -1034,6 +1061,7 @@ function PageTabs({
   widgetsOnPage,
   onDark,
   band,
+  color,
   onSelect,
   onChange,
   onMove,
@@ -1048,6 +1076,8 @@ function PageTabs({
   onDark: boolean
   /** A colour to lay behind the strip, for a background that swallows it. */
   band?: string
+  /** The tab text, chosen rather than worked out from what is behind it. */
+  color?: string
   onSelect: (index: number) => void
   onChange: (pages: { name: string }[]) => void
   onMove: (from: number, to: number) => void
@@ -1125,6 +1155,18 @@ function PageTabs({
                   ? 'border-transparent text-white/70 hover:text-white'
                   : 'border-transparent text-ink-500 hover:text-ink-800'
             }`}
+            // A chosen colour wins over the light-or-dark guess. The page that
+            // is open keeps its underline in that colour too, so which page you
+            // are on does not stop being visible when the ink changes.
+            style={
+              color
+                ? {
+                    color,
+                    borderBottomColor: active === index ? color : 'transparent',
+                    opacity: active === index ? 1 : 0.75,
+                  }
+                : undefined
+            }
           >
             {page.name}
           </button>
@@ -1134,6 +1176,7 @@ function PageTabs({
         <div className="flex shrink-0 flex-wrap items-center gap-x-1 py-1">
           <button
             className={`btn-ghost btn-sm ${onDark ? 'text-white/80' : 'text-ink-500'}`}
+                style={color ? { color, opacity: 0.8 } : undefined}
             onClick={addPage}
           >
             + Page
@@ -1142,6 +1185,7 @@ function PageTabs({
               which is no way to find a feature. */}
           <button
             className={`btn-ghost btn-sm ${onDark ? 'text-white/80' : 'text-ink-500'}`}
+                style={color ? { color, opacity: 0.8 } : undefined}
             onClick={() => renamePage(active)}
           >
             Rename
@@ -1150,6 +1194,7 @@ function PageTabs({
             <>
               <button
                 className={`btn-ghost btn-sm ${onDark ? 'text-white/80' : 'text-ink-500'}`}
+                style={color ? { color, opacity: 0.8 } : undefined}
                 onClick={() => onMove(active, active - 1)}
                 disabled={active === 0}
                 title="Move this page earlier"
@@ -1158,6 +1203,7 @@ function PageTabs({
               </button>
               <button
                 className={`btn-ghost btn-sm ${onDark ? 'text-white/80' : 'text-ink-500'}`}
+                style={color ? { color, opacity: 0.8 } : undefined}
                 onClick={() => onMove(active, active + 1)}
                 disabled={active === count - 1}
                 title="Move this page later"

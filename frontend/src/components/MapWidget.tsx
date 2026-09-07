@@ -220,8 +220,8 @@ export default function MapWidget({
   const shape = pointIconOf(icon)
   // Bumped on zoom to rebuild the pins, for the shapes that need it.
   const [redraws, setRedraws] = useState(0)
-  // Which redraw last reframed the map, so a rebuild does not move the view.
-  const framed = useRef(-1)
+  // The extent the map was last framed on, so a rebuild does not move the view.
+  const framed = useRef('')
 
   // The biggest pin sets the scale, so one busy cluster does not turn every
   // other point into a dot too small to click.
@@ -446,12 +446,6 @@ export default function MapWidget({
       pin.addTo(layer.current)
     }
 
-    // Only when the data changed, never on a redraw. A rebuild triggered by
-    // the reader's own zoom must not then undo that zoom - which would also
-    // fire zoomend again, and again.
-    if (redraws === framed.current) return
-    framed.current = redraws
-
     // Framed on the boundary layer when there is one, on the pins otherwise.
     // A frame is the area the fieldwork covers, and one coordinate recorded in
     // the wrong hemisphere would otherwise squeeze the whole survey into a
@@ -462,6 +456,22 @@ export default function MapWidget({
       frame && frame.length === 4
         ? L.latLngBounds([frame[1], frame[0]], [frame[3], frame[2]])
         : L.latLngBounds(points.map((point) => [point.lat, point.lon] as [number, number]))
+
+    // Only when the ground to show has actually changed.
+    //
+    // This effect also re-runs to rebuild pins that are laid out in pixels,
+    // which happens on every zoom - so fitting the bounds unconditionally
+    // meant zooming in immediately undid itself, and the map could not be
+    // zoomed at all. Comparing the extent rather than counting the rebuilds
+    // also leaves the reader's view alone through the timed refresh, which
+    // returns the same places and used to snap the map back every minute.
+    const extent = bounds.isValid()
+      ? [bounds.getSouth(), bounds.getWest(), bounds.getNorth(), bounds.getEast()]
+          .map((value) => value.toFixed(5))
+          .join(',')
+      : ''
+    if (!extent || extent === framed.current) return
+    framed.current = extent
     map.current.fitBounds(bounds, { padding: [24, 24], maxZoom: 14 })
   }, [points, detail, largest, measureLabel, areaVariable, boundary?.bbox, shape, redraws])
 
