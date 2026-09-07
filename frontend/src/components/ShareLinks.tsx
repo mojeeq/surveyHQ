@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { copyText } from '@/lib/clipboard'
 import { useToast } from '@/hooks/useToast'
 import { formatNumber, relativeTime } from '@/lib/format'
 import { Badge, Field, Modal } from '@/components/ui'
@@ -257,12 +258,16 @@ function LinkRow({
   )
 }
 
-function copy(token: string, toast: ReturnType<typeof useToast>) {
-  const url = urlFor(token)
-  navigator.clipboard
-    ?.writeText(url)
-    .then(() => toast.push('Link copied to your clipboard', 'success'))
-    // A browser that refuses clipboard access is not a failure worth an error
-    // banner: the address is on screen to be selected.
-    .catch(() => toast.push('Copy the link from the box below', 'info'))
+async function copy(token: string, toast: ReturnType<typeof useToast>) {
+  // Through the helper rather than navigator.clipboard directly: that object
+  // does not exist on a plain HTTP deployment, and the optional chain this
+  // used to be written as short-circuited to nothing there - no copy, and no
+  // message saying so.
+  if (await copyText(urlFor(token))) {
+    toast.push('Link copied to your clipboard', 'success')
+    return
+  }
+  // A browser that refuses every way of copying is not a failure worth an
+  // error banner: the address is on screen to be selected.
+  toast.push('Copy the link from the box below', 'info')
 }

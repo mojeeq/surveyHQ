@@ -28,6 +28,7 @@ export default function DashboardFilters({
   controls,
   value,
   background,
+  labelColor,
   basePath,
   onChange,
 }: {
@@ -35,6 +36,8 @@ export default function DashboardFilters({
   value: Record<string, string>
   /** The bar's own colour, set in Appearance. Empty means plain white. */
   background?: string
+  /** The label text, for a bar the default grey disappears into. */
+  labelColor?: string
   /** This dashboard's own path, signed in or shared. */
   basePath: string
   onChange: (next: Record<string, string>) => void
@@ -55,12 +58,17 @@ export default function DashboardFilters({
           key={controlKey(control)}
           control={control}
           basePath={basePath}
+          labelColor={labelColor}
           value={value[control.variable] ?? ''}
           onChange={(next) => onChange({ ...value, [control.variable]: next })}
         />
       ))}
       {Object.values(value).some(Boolean) && (
-        <button className="btn-ghost btn-sm text-ink-500" onClick={() => onChange({})}>
+        <button
+          className="btn-ghost btn-sm text-ink-500"
+          style={labelColor ? { color: labelColor } : undefined}
+          onClick={() => onChange({})}
+        >
           Clear
         </button>
       )}
@@ -71,11 +79,13 @@ export default function DashboardFilters({
 function FilterControlInput({
   control,
   basePath,
+  labelColor,
   value,
   onChange,
 }: {
   control: FilterControl
   basePath: string
+  labelColor?: string
   value: string
   onChange: (value: string) => void
 }) {
@@ -95,7 +105,14 @@ function FilterControlInput({
   const name = control.label || control.variable
   return (
     <label className="flex items-center gap-1.5 text-xs text-ink-600">
-      <span className="whitespace-nowrap font-medium">{name}</span>
+      <span
+        className="whitespace-nowrap font-medium"
+        // The label only. The dropdown beside it keeps its own ink, because it
+        // is a white control whatever colour the bar behind it is.
+        style={labelColor ? { color: labelColor } : undefined}
+      >
+        {name}
+      </span>
       <select
         className="input h-7 w-40 py-0 text-xs"
         aria-label={name}

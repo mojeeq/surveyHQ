@@ -541,6 +541,30 @@ export default function AppearanceModal({
       </Field>
 
       <Field
+        label="Filter label colour"
+        hint="The names beside the dropdowns. Left alone they are grey, which a dark filter bar swallows."
+      >
+        <ColorPicker
+          value={draft.filter_color ?? ''}
+          onChange={(next) => setDraft({ ...draft, filter_color: next })}
+          allowNone
+          noneLabel="Default grey"
+        />
+      </Field>
+
+      <Field
+        label="Page tab colour"
+        hint="The page names. Left alone the platform picks black or white from what is behind them, which is usually right and occasionally not."
+      >
+        <ColorPicker
+          value={draft.tab_color ?? ''}
+          onChange={(next) => setDraft({ ...draft, tab_color: next })}
+          allowNone
+          noneLabel="Choose it for me"
+        />
+      </Field>
+
+      <Field
         label="Background image"
         hint="PNG, JPEG, GIF or WebP, up to 8 MB. It sits behind the widgets."
       >

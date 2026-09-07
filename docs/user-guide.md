@@ -508,9 +508,8 @@ shape is right when the map is answering "what happened here", because shapes
 are told apart at a glance and in a photocopy, which two shades of one colour
 are not.
 
-The **⤢** button on a map fills the window with it. A monitoring map is read by
-looking, and a tile the size of a postcard is the one widget on a dashboard
-that is genuinely too small to do its job.
+The **⤢** button fills the window with the map. See below: it works on every
+widget, not only maps.
 
 ### Checking that a record was collected where it says it was
 
@@ -726,6 +725,15 @@ refuses to put an image on the clipboard - several do, outside a secure
 connection - the picture is saved as a file instead, which reaches the same
 document by a longer road.
 
+### Filling the screen with one widget
+
+The **⤢** button on any widget blows it up to the size of the window, for
+reading small values on a crowded chart, a table longer than its tile, or one
+red pin on a map. **Escape** or **Close** puts it back.
+
+The dashboard behind it keeps running, and the widget is the same one, so a
+filter applied before expanding is still applied inside it.
+
 ### Filtering a table by its columns
 
 The **⌕** button above a table opens a box under each heading. Typing in one
@@ -799,6 +807,10 @@ The rest of **Appearance** controls how the dashboard is dressed:
   widgets, from solid to barely there.
 - **Behind the page tabs** - the colour of the tab band, so tabs stay visible
   when the dashboard background happens to be the same colour as their text.
+- **Page tab colour** and **filter label colour** - the text itself. Left alone,
+  the platform picks black or white from whatever is behind the tabs, which is
+  right most of the time and occasionally not; the filter labels stay a fixed
+  grey that a dark filter bar swallows. Either can be set outright.
 
 ## Monitoring
 
