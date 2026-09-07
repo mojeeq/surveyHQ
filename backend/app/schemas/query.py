@@ -167,6 +167,23 @@ class QueryResult(BaseModel):
     total_rows_scanned: int | None = None
 
 
+class MultiSelectRequest(BaseModel):
+    """A "tick all that apply" question, named by the columns it was exported as."""
+
+    columns: list[str] = Field(default_factory=list)
+    filters: FilterGroup = Field(default_factory=FilterGroup)
+    # Respondents by default: a multiple-select is read as "what share of the
+    # people asked chose this", and those shares add to more than 100 because
+    # more than one may be chosen. Of all rows is the other honest denominator,
+    # for a file where some rows were never asked the question.
+    percent_of: Literal["respondents", "rows"] = "respondents"
+    sort: Literal["value_desc", "value_asc", "label_asc", "none"] = "value_desc"
+    # Which of the two numbers to return. A bar chart wants one of them - a
+    # count and a percentage on one axis is two scales pretending to be one -
+    # while a table is usually asked for both.
+    show: Literal["count", "percent", "both"] = "both"
+
+
 class CrosstabRequest(BaseModel):
     # One of the two may be left empty, which asks for a one-way table: the
     # frequencies of a single variable, which is what "tabulate this" usually

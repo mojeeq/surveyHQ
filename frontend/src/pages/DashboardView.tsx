@@ -45,6 +45,8 @@ import ErrorBoundary from '@/components/ErrorBoundary'
 import MapWidget, {
   BASEMAPS,
   BASEMAP_NAMES,
+  DEFAULT_POINT_OPACITY,
+  DEFAULT_POINT_SIZE,
   DEFAULT_TILES,
   POINT_ICONS,
   POINT_ICON_NAMES,
@@ -1281,6 +1283,10 @@ function BoundedMap({
       measure={payload.measure}
       basemap={widget.config?.basemap as string | undefined}
       icon={widget.config?.point_icon as string | undefined}
+      pointColor={widget.config?.point_color as string | undefined}
+      pointSize={widget.config?.point_size as number | undefined}
+      pointOpacity={widget.config?.point_opacity as number | undefined}
+      sizeByValue={widget.config?.size_by_value !== false}
       tiles={widget.config?.tiles as string | undefined}
       truncated={payload.truncated}
       boundary={boundary}
@@ -2590,6 +2596,7 @@ function EditWidgetModal({
           value={config.background ?? ''}
           onChange={(next) => set({ background: next || undefined })}
           allowNone
+          label="Widget background"
           noneLabel="Use the dashboard's colour"
         />
       </Field>
@@ -2643,6 +2650,7 @@ function EditWidgetModal({
           value={config.font_color ?? ''}
           onChange={(next) => set({ font_color: next || undefined })}
           allowNone
+          label="Widget text"
           noneLabel="Default text colour"
         />
       </Field>
@@ -2734,6 +2742,7 @@ function EditWidgetModal({
             value={config.series_color ?? ''}
             onChange={(next) => set({ series_color: next || undefined })}
             allowNone
+            label="Chart series"
             noneLabel="Use the dashboard's theme"
           />
         </Field>
@@ -2881,6 +2890,65 @@ function EditWidgetModal({
               ))}
             </select>
           </Field>
+
+          <div className="grid gap-x-4 sm:grid-cols-2">
+            <Field label="Point colour">
+              <ColorPicker
+                value={config.point_color ?? ''}
+                onChange={(next) => set({ point_color: next || undefined })}
+                allowNone
+                label="Map point"
+                noneLabel="Default blue"
+              />
+            </Field>
+            <Field label="Point size" hint="How big a pin is before the value scales it.">
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  min={6}
+                  max={40}
+                  step={1}
+                  className="w-40"
+                  aria-label="Map point size"
+                  value={config.point_size ?? DEFAULT_POINT_SIZE}
+                  onChange={(event) => set({ point_size: Number(event.target.value) })}
+                />
+                <span className="w-10 text-sm text-ink-600">
+                  {config.point_size ?? DEFAULT_POINT_SIZE}
+                </span>
+              </div>
+            </Field>
+          </div>
+
+          <Field
+            label="Point transparency"
+            hint="Low values let a crowd of overlapping pins be read as density rather than one blob."
+          >
+            <div className="flex items-center gap-3">
+              <input
+                type="range"
+                min={10}
+                max={100}
+                step={5}
+                className="w-40"
+                aria-label="Map point transparency"
+                value={Math.round((config.point_opacity ?? DEFAULT_POINT_OPACITY) * 100)}
+                onChange={(event) => set({ point_opacity: Number(event.target.value) / 100 })}
+              />
+              <span className="w-12 text-sm text-ink-600">
+                {Math.round((config.point_opacity ?? DEFAULT_POINT_OPACITY) * 100)}%
+              </span>
+            </div>
+          </Field>
+
+          <label className="mb-4 flex items-center gap-2 text-sm text-ink-700">
+            <input
+              type="checkbox"
+              checked={config.size_by_value !== false}
+              onChange={(event) => set({ size_by_value: event.target.checked })}
+            />
+            Bigger pins where the number is bigger
+          </label>
 
           <Field label="Base map" hint="A reader can switch this on the map itself.">
             <select

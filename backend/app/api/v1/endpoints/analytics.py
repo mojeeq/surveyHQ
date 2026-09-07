@@ -26,9 +26,11 @@ from app.schemas.query import (
     CrosstabResult,
     FilterGroup,
     FrequencyResult,
+    MultiSelectRequest,
     QueryResult,
     SummaryStats,
 )
+from app.services import multiselect
 from app.services.exporters import (
     crosstab_to_csv,
     query_result_to_csv,
@@ -124,6 +126,34 @@ def frequency_filtered(
     _, ctx = _context(dataset_id, db, user)
     try:
         return execute_frequency(ctx, variable, filters, limit, use_labels)
+    except QueryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/datasets/{dataset_id}/multiselect-groups", response_model=list[dict])
+def multiselect_groups(
+    dataset_id: str, db: DbSession, user: CurrentUser
+) -> list[dict[str, Any]]:
+    """The sets of columns in this dataset that look like one multiple-select."""
+    _, ctx = _context(dataset_id, db, user)
+    return multiselect.groups(ctx)
+
+
+@router.post("/datasets/{dataset_id}/multiselect", response_model=QueryResult)
+def multiselect_tabulate(
+    dataset_id: str, payload: MultiSelectRequest, db: DbSession, user: CurrentUser
+) -> QueryResult:
+    """One row per option of a "tick all that apply" question."""
+    _, ctx = _context(dataset_id, db, user)
+    try:
+        return multiselect.tabulate(
+            ctx,
+            payload.columns,
+            payload.filters,
+            percent_of=payload.percent_of,
+            sort=payload.sort,
+            show=payload.show,
+        )
     except QueryError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -221,6 +221,8 @@ export interface QueryResult {
   truncated: boolean
   sql: string
   duration_ms: number
+  /** What the percentages in the result are a percentage of, where there are any. */
+  total_rows_scanned?: number | null
 }
 
 export interface FrequencyRow {
@@ -239,6 +241,26 @@ export interface FrequencyResult {
   total: number
   missing: number
   distinct: number
+}
+
+/** A "tick all that apply" question, named by the columns it was exported as. */
+export interface MultiSelectRequest {
+  columns: string[]
+  filters: FilterGroup
+  /** Respondents is the honest denominator: the shares add to over 100. */
+  percent_of: 'respondents' | 'rows'
+  sort: 'value_desc' | 'value_asc' | 'label_asc' | 'none'
+  /** A chart draws one number; a table is the case that wants both. */
+  show: 'count' | 'percent' | 'both'
+}
+
+/** A set of columns in a dataset that together look like one question. */
+export interface MultiSelectGroup {
+  /** The shared part of the names, e.g. "toilet" from toilet__1, toilet__2. */
+  stem: string
+  columns: string[]
+  /** What the options agree on in their labels, which is the question. */
+  label: string
 }
 
 export interface CrosstabRequest {
@@ -351,6 +373,9 @@ export interface Chart {
   spec: {
     query?: QuerySpec
     crosstab?: CrosstabRequest
+    // As is a multiple-select, which holds the columns the question was
+    // spread across instead of a variable to group by.
+    multiselect?: MultiSelectRequest
     encoding?: Record<string, string>
     options?: Record<string, unknown>
   }

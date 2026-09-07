@@ -117,6 +117,29 @@ export const POINT_ICONS = {
   pentagon: { label: 'Pentagon', sides: 5 },
 } as const
 
+/** What a pin looks like before anybody chooses otherwise. */
+export const DEFAULT_POINT_SIZE = 16
+export const DEFAULT_POINT_FILL = '#3b82f6'
+export const DEFAULT_POINT_OPACITY = 0.6
+
+/**
+ * A darker edge for a filled pin.
+ *
+ * A shape needs an outline or a cluster of them reads as one blob, and the
+ * outline has to come from the fill rather than be chosen separately: a second
+ * colour to pick is a second thing to get wrong, and nobody wants a green pin
+ * with a red edge.
+ */
+function shade(fill: string): string {
+  const hex = fill.replace('#', '')
+  if (hex.length !== 6) return fill
+  const darker = [0, 2, 4]
+    .map((at) => Math.round(parseInt(hex.slice(at, at + 2), 16) * 0.7))
+    .map((channel) => channel.toString(16).padStart(2, '0'))
+    .join('')
+  return `#${darker}`
+}
+
 export type PointIcon = keyof typeof POINT_ICONS
 export const POINT_ICON_NAMES = Object.keys(POINT_ICONS) as PointIcon[]
 
@@ -192,6 +215,10 @@ export default function MapWidget({
   areas,
   areaVariable,
   icon,
+  pointColor,
+  pointSize,
+  pointOpacity,
+  sizeByValue = true,
 }: {
   points: MapPoint[]
   detail?: string[]
@@ -208,6 +235,20 @@ export default function MapWidget({
   areaVariable?: string
   /** The shape each point is drawn as. */
   icon?: string
+  /** The colour of a pin, when its colour is not carrying an answer. */
+  pointColor?: string
+  /** How big a pin is, in pixels. Sizing by value scales around it. */
+  pointSize?: number
+  /** 0 to 1. Low values let a dense cluster be read as density. */
+  pointOpacity?: number
+  /**
+   * Whether a pin's size carries the value.
+   *
+   * On by default, because "how many interviews here" is what a map is usually
+   * asked. Off draws every place the same size, which is what you want when the
+   * question is where the work reached rather than how much of it there was.
+   */
+  sizeByValue?: boolean
 }) {
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<L.Map | null>(null)
@@ -246,6 +287,12 @@ export default function MapWidget({
       preferCanvas: true,
     }).setView([0, 0], 2)
     map.current = instance
+    // This one has never been framed, whatever the last one was showing. The
+    // record of that has to be cleared with the map it belonged to: a fresh
+    // instance opens on the whole planet, and if it still counted as framed
+    // nothing would ever move it to the survey - which is what a torn-down and
+    // rebuilt map did, leaving every pin in one dot in the Pacific.
+    framed.current = ''
     setTilesFailed(false)
 
     // A server with no route to the tile host is a normal deployment, not a
@@ -390,21 +437,28 @@ export default function MapWidget({
     for (const point of points) {
       const value = Number(point.value) || 0
       const verdict = point.area_status ? VERDICTS[point.area_status] : undefined
+      // Two different maps in one component. Asked "where is the work", the
+      // pin's area can carry the value, because that is the question. Asked
+      // "does the recorded area agree with the GPS", size would be a second
+      // variable competing with the colour that carries the answer, so every
+      // pin is the size its verdict says and only the colour speaks.
+      const base = pointSize && pointSize > 0 ? pointSize : DEFAULT_POINT_SIZE
+      const scaled = sizeByValue
+        ? // Area, not radius, carries the value: doubling the radius of a
+          // circle quadruples what the eye reads off it.
+          base * 0.45 + base * Math.sqrt(Math.abs(value) / largest)
+        : base
+      const fill = pointColor || DEFAULT_POINT_FILL
       const pin = marker(
         map.current,
         shape,
         [point.lat, point.lon],
-        // Two different maps in one component. Asked "where is the work", the
-        // pin's area carries the value, because that is the question. Asked
-        // "does the recorded area agree with the GPS", size would be a second
-        // variable competing with the colour that carries the answer, so every
-        // pin is the size its verdict says and only the colour speaks.
-        verdict ? verdict.radius : 5 + 11 * Math.sqrt(Math.abs(value) / largest),
+        verdict ? verdict.radius : scaled,
         {
-          color: verdict ? verdict.color : '#1d4ed8',
+          color: verdict ? verdict.color : shade(fill),
           weight: 1,
-          fillColor: verdict ? verdict.color : '#3b82f6',
-          fillOpacity: verdict ? 0.85 : 0.6,
+          fillColor: verdict ? verdict.color : fill,
+          fillOpacity: verdict ? 0.85 : (pointOpacity ?? DEFAULT_POINT_OPACITY),
         },
       )
       // Built when the popup opens, not when the marker is made: the string is

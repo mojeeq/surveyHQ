@@ -57,7 +57,7 @@ from app.schemas.query import (
     QueryResult,
     QuerySpec,
 )
-from app.services import boundary_store
+from app.services import boundary_store, multiselect
 from app.services.audit import record
 from app.services.boundaries import Areas
 from app.services.dashboard_assets import (
@@ -189,6 +189,8 @@ def render_chart(
     try:
         if _is_crosstab(chart.spec or {}):
             return execute_crosstab(ctx, _crosstab_from_chart(chart, filters))
+        if _is_multiselect(chart.spec or {}):
+            return _multiselect_result(ctx, chart.spec or {}, filters)
         return execute_query(ctx, _spec_from_chart(chart, filters))
     except QueryError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -253,6 +255,36 @@ def _ignored(filters: FilterGroup | None, ctx: DatasetContext) -> list[str]:
 
 def _is_crosstab(spec: dict[str, Any]) -> bool:
     return bool(spec.get("crosstab"))
+
+
+def _is_multiselect(spec: dict[str, Any]) -> bool:
+    return bool((spec.get("multiselect") or {}).get("columns"))
+
+
+def _multiselect_result(ctx: DatasetContext, spec: dict[str, Any], filters: FilterGroup | None):
+    """Run a stored "tick all that apply" chart.
+
+    It comes back as an ordinary result - one row per option - so every chart
+    type, the table view and click-to-filter all work on it without knowing
+    that the question was spread across a dozen columns in the file.
+    """
+    saved = spec.get("multiselect") or {}
+    own = FilterGroup.model_validate(saved.get("filters") or {})
+    # The page's filters on top of the chart's own, the same way every other
+    # widget combines them.
+    combined = (
+        FilterGroup(op="and", conditions=[], groups=[own, filters])
+        if filters and not filters.is_empty()
+        else own
+    )
+    return multiselect.tabulate(
+        ctx,
+        list(saved.get("columns") or []),
+        combined,
+        percent_of=str(saved.get("percent_of") or "respondents"),
+        sort=str(saved.get("sort") or "value_desc"),
+        show=str(saved.get("show") or "both"),
+    )
 
 
 def _spec_variables(raw: dict[str, Any]) -> set[str]:
@@ -1483,6 +1515,21 @@ def _render_widget(
                 "name": chart.name,
                 "filters_ignored": ignored,
                 "result": crosstab.model_dump(mode="json"),
+            }
+        if _is_multiselect(chart.spec or {}):
+            return {
+                "type": "chart",
+                "chart_type": chart.chart_type.value,
+                "name": chart.name,
+                "filters_ignored": ignored,
+                "display": (chart.spec or {}).get("options") or {},
+                # Nothing to click through to: the categories are columns of
+                # the file, not values of one variable, so there is no filter a
+                # click could stand for.
+                "grouped_on": [],
+                "result": _multiselect_result(ctx, chart.spec or {}, filters).model_dump(
+                    mode="json"
+                ),
             }
         result = execute_query(ctx, _spec_from_chart(chart, filters))
         return {

@@ -51,6 +51,7 @@ export default function ColorPicker({
   swatches = PICKER_SWATCHES,
   allowNone = false,
   noneLabel = 'No colour',
+  label = '',
 }: {
   value: string
   onChange: (value: string) => void
@@ -58,6 +59,14 @@ export default function ColorPicker({
   /** Offer a "not set" choice, which falls back to whatever the theme says. */
   allowNone?: boolean
   noneLabel?: string
+  /** What this picker colours, e.g. "Map point".
+   *
+   *  A dialog often carries several of these - the widget's background, its
+   *  text, its map pins - and without it every one of them announces itself as
+   *  "Colour code", so a reader who cannot see the heading above it has no way
+   *  to tell which is which.
+   */
+  label?: string
 }) {
   const [typed, setTyped] = useState(value)
   // Keep the box in step when the colour changes from a swatch or the picker,
@@ -111,7 +120,7 @@ export default function ColorPicker({
           className="input w-28 font-mono text-xs"
           value={typed}
           placeholder="#1f4e79"
-          aria-label="Colour code"
+          aria-label={label ? `${label} colour code` : 'Colour code'}
           spellCheck={false}
           onChange={(event) => commit(event.target.value)}
           onBlur={() => setTyped(value)}
@@ -120,7 +129,7 @@ export default function ColorPicker({
           type="color"
           className="h-8 w-12 cursor-pointer rounded-control border border-ink-200 bg-white"
           title="Pick any colour"
-          aria-label="Pick any colour"
+          aria-label={label ? `Pick any ${label.toLowerCase()} colour` : 'Pick any colour'}
           value={normaliseHex(value) ?? '#ffffff'}
           onChange={(event) => onChange(event.target.value)}
         />
