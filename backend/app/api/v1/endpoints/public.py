@@ -11,6 +11,7 @@ from app.api.deps import DbSession, client_ip
 from app.api.v1.endpoints.dashboards import (
     _render_widgets,
     background_response,
+    boundary_response,
     restrict_to_visible,
     visible_variables,
 )
@@ -106,6 +107,12 @@ def render_shared_dashboard(
 def read_shared_background(token: str, db: DbSession) -> Response:
     """A shared dashboard is shown as its owner dressed it, background and all."""
     return background_response(_get_shared(token, db))
+
+
+@router.get("/dashboards/{token}/boundaries/{layer_id}", response_model=dict)
+def read_shared_boundary(token: str, layer_id: str, db: DbSession) -> dict[str, Any]:
+    """The outlines under a shared map, which are part of what it says."""
+    return boundary_response(_get_shared(token, db), layer_id, db)
 
 
 @router.get("/dashboards/{token}/logo")

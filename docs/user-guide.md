@@ -473,6 +473,71 @@ answers rather than moments, such as a date of birth. Where a dataset has no
 obvious one, or the wrong one is chosen, name the variable yourself on the
 widget.
 
+### Boundaries
+
+**Datasets → Boundaries → Add boundaries** takes the frame fieldwork is
+organised into - enumeration areas, districts, villages - as GeoJSON, a
+GeoPackage (`.gpkg`), or a shapefile zipped together with its `.dbf` and
+`.shx`. Whatever your GIS office exports is read as it is; nothing has to be
+converted first.
+
+A layer left in the shared area is available to every project, which is what a
+national frame usually wants. One given a project stays with it.
+
+Reading a boundary file needs no GIS software on the server and no internet at
+the moment it is read, which is deliberate: this platform is meant to run in a
+statistics office behind a ministry firewall, and a feature that quietly needs
+a download the first time it is used is a feature that fails there.
+
+What a layer is good for is the two things below.
+
+### Drawing boundaries under a map
+
+A map widget's **Boundaries** setting draws a layer's areas beneath its pins,
+in outline rather than filled, so the ground under them is still visible on the
+satellite view. **Write on each area** picks which of the layer's attributes
+names it; hovering an area shows that name.
+
+The map frames itself on the layer rather than on the pins when one is chosen.
+A single coordinate recorded in the wrong hemisphere would otherwise squeeze
+the whole survey into a thumbnail to keep that one mistake on screen.
+
+### Checking that a record was collected where it says it was
+
+This is what the boundaries are really for.
+
+A household listing records the enumeration area the interviewer says they were
+in. The device records where they actually were. Those two disagreeing is one
+of three things, and each is worth knowing during fieldwork rather than after
+it: an EA code typed wrong, an interviewer working the wrong area, or a
+boundary the field reads differently from the office.
+
+Set **Recorded area** to the variable holding the code the interviewer
+recorded, and **Matched against** to the attribute on the boundary layer that
+holds the same code. Every pin is then coloured by its verdict, and the legend
+counts them:
+
+| | |
+|---|---|
+| **Red** | The recorded area does not match the area the GPS falls in |
+| **Amber** | The point is outside every area in the layer |
+| **Purple** | No area was recorded on this record |
+| **Green** | The recorded area agrees with the GPS |
+
+Clicking a pin says which area was recorded, which one it is standing in, and
+whatever detail columns the widget carries - usually enough to name the
+interviewer to ask.
+
+A point outside every area is deliberately not counted as a mismatch. It is
+usually a frame that does not cover an island yet, or a coordinate in the wrong
+hemisphere, and folding it in with the real mismatches would bury them.
+
+Codes are compared by what identifies them rather than by how they were typed.
+`07`, `7` and `007` are one enumeration area: a code crosses from a
+questionnaire to a GIS file as text on one side and a number on the other, and
+treating those as different would report every record in the country as a
+mismatch.
+
 ### The ground under a map
 
 A map widget draws its pins on one of three grounds, chosen when you add it and

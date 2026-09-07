@@ -72,7 +72,48 @@ export interface MapPoint {
   value: number
   /** How many rows are behind the pin, which is not the value when it is a sum. */
   rows: number
+  /** Set when the map is checking a recorded area against where the point is. */
+  area_status?: AreaStatus
+  area_expected?: string | null
+  recorded_area_label?: unknown
   [detail: string]: unknown
+}
+
+export type AreaStatus = 'match' | 'mismatch' | 'outside' | 'unrecorded'
+
+/**
+ * How each verdict is drawn, in the order the legend lists them.
+ *
+ * The mismatch is red and the largest because it is the finding: a record
+ * whose enumeration area disagrees with the ground under it is a code typed
+ * wrong, an interviewer in the wrong area, or a boundary the field reads
+ * differently from the office. Agreement is the quiet majority and is drawn
+ * as such, so a screen of green with four red dots reads correctly at a
+ * glance rather than needing to be counted.
+ */
+export const VERDICTS: Record<AreaStatus, { label: string; color: string; radius: number }> = {
+  mismatch: { label: 'Area does not match the GPS', color: '#d7301f', radius: 7 },
+  outside: { label: 'Outside every area in the layer', color: '#f0a202', radius: 6 },
+  unrecorded: { label: 'No area recorded', color: '#6a51a3', radius: 6 },
+  match: { label: 'Area agrees with the GPS', color: '#2c9e4b', radius: 4 },
+}
+
+export const VERDICT_ORDER: AreaStatus[] = ['mismatch', 'outside', 'unrecorded', 'match']
+
+/** One area from a boundary layer, as it comes back from the server. */
+export interface BoundaryFeature {
+  type: 'Feature'
+  geometry: { type: string; coordinates: unknown }
+  properties: Record<string, unknown>
+}
+
+/** The outlines a map draws under its pins, and what to write on them. */
+export interface BoundaryOverlay {
+  id: string
+  name: string
+  /** Which property of each area is its name on the map. Blank draws none. */
+  label?: string
+  bbox?: number[]
 }
 
 /** Escapes text going into a popup: the values are survey data, not markup. */
@@ -91,6 +132,9 @@ export default function MapWidget({
   basemap,
   tiles,
   truncated = false,
+  boundary,
+  areas,
+  areaVariable,
 }: {
   points: MapPoint[]
   detail?: string[]
@@ -99,10 +143,17 @@ export default function MapWidget({
   basemap?: string
   tiles?: string
   truncated?: boolean
+  /** The outlines to draw under the pins, when the widget names a layer. */
+  boundary?: BoundaryOverlay
+  /** That layer's areas, fetched separately: a national frame is large. */
+  areas?: { type: string; features: BoundaryFeature[] }
+  /** The variable holding the area each record says it was in. */
+  areaVariable?: string
 }) {
   const container = useRef<HTMLDivElement>(null)
   const map = useRef<L.Map | null>(null)
   const layer = useRef<L.LayerGroup | null>(null)
+  const outlines = useRef<L.GeoJSON | null>(null)
   const grounds = useRef<Partial<Record<BasemapName, L.Layer>>>({})
   const [tilesFailed, setTilesFailed] = useState(false)
   const custom = tiles?.trim()
@@ -206,6 +257,58 @@ export default function MapWidget({
     instance.addLayer(next)
   }, [chosen])
 
+  // The outlines, under the pins. Drawn as their own layer rather than with
+  // the points so a filter change redraws the pins without redrawing a
+  // national frame, which is the expensive half by a wide margin.
+  useEffect(() => {
+    const instance = map.current
+    if (!instance) return
+    if (outlines.current) {
+      instance.removeLayer(outlines.current)
+      outlines.current = null
+    }
+    const features = areas?.features ?? []
+    if (!features.length) return
+
+    const drawn = L.geoJSON(
+      { type: 'FeatureCollection', features } as never,
+      {
+        style: {
+          // An outline, not a fill: what is being read is the pins inside it,
+          // and a filled area over satellite imagery hides the ground the
+          // reader came to the satellite view for.
+          color: '#e07b39',
+          weight: 2,
+          fillOpacity: 0.04,
+          fillColor: '#e07b39',
+        },
+        onEachFeature: (feature, drawnLayer) => {
+          const properties = (feature.properties ?? {}) as Record<string, unknown>
+          const name = boundary?.label ? properties[boundary.label] : undefined
+          if (name === undefined || name === null || !String(name).trim()) return
+          // Named on hover, and nothing on click.
+          //
+          // An area covers the whole map, so a polygon that answers clicks
+          // answers every click: the pin under the cursor never gets one, and
+          // the pins are what the map is about. Hovering says where you are;
+          // clicking interrogates the record standing there.
+          drawnLayer.bindTooltip(String(name), {
+            direction: 'center',
+            className: 'boundary-label',
+          })
+        },
+      },
+    )
+    drawn.addTo(instance)
+    // Behind the pins, whatever order the layers were added in.
+    drawn.bringToBack()
+    outlines.current = drawn
+    return () => {
+      instance.removeLayer(drawn)
+      if (outlines.current === drawn) outlines.current = null
+    }
+  }, [areas, boundary?.label])
+
   useEffect(() => {
     if (!map.current || !layer.current) return
     layer.current.clearLayers()
@@ -213,14 +316,18 @@ export default function MapWidget({
 
     for (const point of points) {
       const value = Number(point.value) || 0
+      const verdict = point.area_status ? VERDICTS[point.area_status] : undefined
       const marker = L.circleMarker([point.lat, point.lon], {
-        // Area, not radius, carries the value: doubling the radius of a circle
-        // quadruples what the eye reads off it.
-        radius: 5 + 11 * Math.sqrt(Math.abs(value) / largest),
-        color: '#1d4ed8',
+        // Two different maps in one component. Asked "where is the work", the
+        // pin's area carries the value, because that is the question. Asked
+        // "does the recorded area agree with the GPS", size would be a second
+        // variable competing with the colour that carries the answer, so every
+        // pin is the size its verdict says and only the colour speaks.
+        radius: verdict ? verdict.radius : 5 + 11 * Math.sqrt(Math.abs(value) / largest),
+        color: verdict ? verdict.color : '#1d4ed8',
         weight: 1,
-        fillColor: '#3b82f6',
-        fillOpacity: 0.6,
+        fillColor: verdict ? verdict.color : '#3b82f6',
+        fillOpacity: verdict ? 0.85 : 0.6,
       })
       // Built when the popup opens, not when the marker is made: the string is
       // the expensive part, and at fifty thousand points all but one of them
@@ -242,6 +349,15 @@ export default function MapWidget({
           (point.rows !== value
             ? `<div style="color:#64748b">from ${escape(formatNumber(point.rows))} record(s)</div>`
             : '') +
+          (verdict
+            ? `<div style="margin:4px 0;padding-top:4px;border-top:1px solid #e5e7eb">` +
+              `<div style="color:${verdict.color};font-weight:600">${escape(verdict.label)}</div>` +
+              `<div><span style="color:#64748b">${escape(areaVariable || 'Recorded')}:</span> ` +
+              `${escape(point.recorded_area_label ?? point.recorded_area ?? '-')}</div>` +
+              `<div><span style="color:#64748b">Falls in:</span> ${escape(
+                point.area_expected ?? 'no area in this layer',
+              )}</div></div>`
+            : '') +
           details +
           `<div style="color:#94a3b8;margin-top:4px">${point.lat.toFixed(5)}, ${point.lon.toFixed(
             5,
@@ -252,9 +368,18 @@ export default function MapWidget({
       marker.addTo(layer.current)
     }
 
-    const bounds = L.latLngBounds(points.map((point) => [point.lat, point.lon] as [number, number]))
+    // Framed on the boundary layer when there is one, on the pins otherwise.
+    // A frame is the area the fieldwork covers, and one coordinate recorded in
+    // the wrong hemisphere would otherwise squeeze the whole survey into a
+    // thumbnail to keep that mistake on screen. The legend still counts the
+    // strays, which is how you know to zoom out and look for them.
+    const frame = boundary?.bbox
+    const bounds =
+      frame && frame.length === 4
+        ? L.latLngBounds([frame[1], frame[0]], [frame[3], frame[2]])
+        : L.latLngBounds(points.map((point) => [point.lat, point.lon] as [number, number]))
     map.current.fitBounds(bounds, { padding: [24, 24], maxZoom: 14 })
-  }, [points, detail, largest, measureLabel])
+  }, [points, detail, largest, measureLabel, areaVariable, boundary?.bbox])
 
   // Leaflet measures its container once; inside a resizable widget it has to be
   // told when that changed, or half the map stays grey.
@@ -265,9 +390,32 @@ export default function MapWidget({
     return () => observer.disconnect()
   }, [])
 
+  // Only the verdicts actually present, in severity order. A legend listing
+  // four outcomes when three of them have no pins is four things to read and
+  // one fact.
+  const present = VERDICT_ORDER.filter((status) =>
+    points.some((point) => point.area_status === status),
+  )
+
   return (
     <div className="flex h-full min-h-[200px] flex-col">
       <div ref={container} className="min-h-0 flex-1 rounded" />
+      {present.length > 0 && (
+        <div className="mt-1 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-500">
+          {present.map((status) => (
+            <span key={status} className="flex items-center gap-1">
+              <span
+                className="inline-block h-2 w-2 rounded-full"
+                style={{ backgroundColor: VERDICTS[status].color }}
+              />
+              {VERDICTS[status].label}
+              <span className="text-ink-400">
+                ({formatNumber(points.filter((point) => point.area_status === status).length)})
+              </span>
+            </span>
+          ))}
+        </div>
+      )}
       <p className="mt-1 shrink-0 text-[11px] text-ink-400">
         {points.length ? `${formatNumber(points.length)} location(s)` : 'No located interviews'}
         {truncated && ' - showing the busiest only'}

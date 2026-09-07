@@ -25,6 +25,12 @@ openpyxl==3.1.5
 pyreadstat==1.2.8
 XlsxWriter==3.2.0
 
+# --- Boundary files ----------------------------------------------------------
+# Shapefiles only. Pure Python with no compiled part and no system GIS library,
+# which is what lets a boundary layer be read on a server with no internet and
+# no GDAL. GeoPackages and GeoJSON are read without any of this.
+pyshp==3.1.6
+
 # --- Background jobs ---------------------------------------------------------
 celery==5.4.0
 redis==5.2.1

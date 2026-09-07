@@ -19,6 +19,7 @@ from app.api.deps import (
 from app.core.security import new_public_token
 from app.db.base import utcnow
 from app.models import (
+    BoundaryLayer,
     Chart,
     Dashboard,
     Dataset,
@@ -54,7 +55,9 @@ from app.schemas.query import (
     QueryResult,
     QuerySpec,
 )
+from app.services import boundary_store
 from app.services.audit import record
+from app.services.boundaries import Areas
 from app.services.dashboard_assets import (
     BackgroundError,
     background_file,
@@ -68,6 +71,7 @@ from app.services.freshness import (
     DEFAULT_WARN_HOURS,
 )
 from app.services.freshness import report as freshness_report
+from app.services.geo import check_areas
 from app.services.geo import points as geo_points
 from app.services.hostnames import HostnameError
 from app.services.hostnames import normalise as normalise_hostname
@@ -768,6 +772,36 @@ def render_dashboard(
     return _render_widgets(db, dashboard, filters, every_widget_but)
 
 
+def boundary_response(
+    dashboard: Dashboard, layer_id: str, db: DbSession
+) -> dict[str, Any]:
+    """The areas one of this dashboard's map widgets draws.
+
+    Served through the dashboard rather than from the boundary endpoints so a
+    shared link can draw its own outlines: the reader of a shared board has no
+    account, and the alternative was sending a national frame down with every
+    refresh of the widget data. Only a layer some widget here actually names is
+    returned, so the route cannot be used to read another project's geography.
+    """
+    named = {
+        str((widget.config or {}).get("boundary_id") or "")
+        for widget in dashboard.widgets
+        if widget.widget_type.value == "map"
+    }
+    layer = db.get(BoundaryLayer, layer_id) if layer_id in named else None
+    if layer is None:
+        raise HTTPException(status_code=404, detail="Boundary layer not found")
+    features, _ = boundary_store.load(layer.storage_path)
+    return {"type": "FeatureCollection", "features": features}
+
+
+@router.get("/{dashboard_id}/boundaries/{layer_id}", response_model=dict)
+def read_dashboard_boundary(
+    dashboard_id: str, layer_id: str, db: DbSession, user: CurrentUser
+) -> dict[str, Any]:
+    return boundary_response(_get_dashboard(dashboard_id, db, user), layer_id, db)
+
+
 @router.post("/{dashboard_id}/share", response_model=DashboardOut)
 def share_dashboard(
     dashboard_id: str, db: DbSession, user: RequireAnalyst, enable: bool = True
@@ -1016,6 +1050,27 @@ def _render_widgets(
     return payload
 
 
+def _map_boundary(
+    db: DbSession, config: dict[str, Any]
+) -> tuple[BoundaryLayer, Areas] | None:
+    """The boundary layer a map widget draws, if it names one.
+
+    Not checked against the reader, for the same reason a widget's chart is
+    not: the dashboard is the unit of access here, and what its author put on
+    it is rendered with it. A shared dashboard has no reader to check anyway.
+    Which layers may be chosen is decided where they are offered, in the list
+    endpoint, which is scoped.
+    """
+    layer_id = str(config.get("boundary_id") or "")
+    if not layer_id:
+        return None
+    layer = db.get(BoundaryLayer, layer_id)
+    if layer is None:
+        return None
+    _, areas = boundary_store.load(layer.storage_path)
+    return layer, areas
+
+
 def _render_quality(db: DbSession, widget: Widget) -> dict[str, Any]:
     """The state of a dataset's data quality checks.
 
@@ -1164,6 +1219,12 @@ def _render_widget(
             return {"error": "The map's dataset is unavailable"}
         ctx = DatasetContext.from_model(dataset)
         ignored = _ignored(filters, ctx)
+        # Checking a recorded area against where the point actually is needs
+        # three things together: a layer to check against, which of its
+        # attributes carries the code, and which variable holds what the
+        # interviewer recorded. Any one missing and the map is just a map.
+        boundary = _map_boundary(db, config)
+        area_variable = str(config.get("area_variable") or "") if boundary else ""
         try:
             found = geo_points(
                 ctx,
@@ -1173,10 +1234,29 @@ def _render_widget(
                 measure_agg=config.get("measure_agg", "count"),
                 measure_variable=config.get("measure_variable", ""),
                 filters=_applicable(filters, ctx),
+                area_variable=area_variable,
             )
         except QueryError as exc:
             return {"error": str(exc)}
-        return {"type": "map", "filters_ignored": ignored, **found}
+        payload: dict[str, Any] = {"type": "map", "filters_ignored": ignored, **found}
+        if boundary and area_variable:
+            layer, areas = boundary
+            payload["area_check"] = {
+                "boundary_id": layer.id,
+                "boundary_name": layer.name,
+                "variable": area_variable,
+                "counts": check_areas(
+                    payload["points"], areas, str(config.get("boundary_key") or "")
+                ),
+            }
+        if boundary:
+            payload["boundary"] = {
+                "id": boundary[0].id,
+                "name": boundary[0].name,
+                "label": str(config.get("boundary_label") or ""),
+                "bbox": boundary[0].bbox or [],
+            }
+        return payload
 
     if widget.widget_type.value == "countdown":
         config = widget.config or {}

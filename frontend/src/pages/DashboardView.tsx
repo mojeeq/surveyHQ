@@ -16,6 +16,7 @@ import { CHART_THEMES, STATUS_COLORS } from '@/lib/charts'
 import { formatNumber, formatValue, relativeTime } from '@/lib/format'
 import type {
   Appearance,
+  BoundaryLayer,
   Chart,
   Dashboard,
   Dataset,
@@ -38,7 +39,12 @@ import DashboardFilters, {
 } from '@/components/DashboardFilters'
 import CrosstabTable from '@/components/CrosstabTable'
 import ErrorBoundary from '@/components/ErrorBoundary'
-import MapWidget, { BASEMAPS, BASEMAP_NAMES, DEFAULT_TILES } from '@/components/MapWidget'
+import MapWidget, {
+  BASEMAPS,
+  BASEMAP_NAMES,
+  DEFAULT_TILES,
+  type BoundaryOverlay,
+} from '@/components/MapWidget'
 import AppearanceModal, {
   canvasStyle,
   isDark,
@@ -576,6 +582,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
                 canEdit={!isPublic && can('analyst')}
                 theme={dashboard.data!.theme ?? 'default'}
                 pageNames={pageNames}
+                basePath={basePath}
                 onMove={(toPage) => moveWidget.mutate({ widgetId: widget.id, page: toPage })}
                 onEdit={() => setEditingWidget(widget)}
                 onRemove={() => {
@@ -648,6 +655,7 @@ function WidgetFrame({
   canEdit,
   theme,
   pageNames,
+  basePath,
   onMove,
   onEdit,
   onRemove,
@@ -658,6 +666,8 @@ function WidgetFrame({
   loading: boolean
   editing: boolean
   canEdit: boolean
+  /** Where this dashboard's own resources live, shared or signed in. */
+  basePath: string
   /** The dashboard's categorical ordering, applied to every chart on it. */
   theme: string
   /** Every page on this dashboard, so a widget can be sent to another one. */
@@ -768,14 +778,7 @@ function WidgetFrame({
         ) : payload.type === 'freshness' ? (
           <FreshnessWidget payload={payload} />
         ) : payload.type === 'map' ? (
-          <MapWidget
-            points={payload.points ?? []}
-            detail={payload.detail ?? []}
-            measure={payload.measure}
-            basemap={widget.config?.basemap as string | undefined}
-            tiles={widget.config?.tiles as string | undefined}
-            truncated={payload.truncated}
-          />
+          <BoundedMap payload={payload} widget={widget} basePath={basePath} />
         ) : payload.type === 'html' ? (
           <HtmlWidget html={payload.html ?? ''} />
         ) : payload.type === 'countdown' ? (
@@ -1011,6 +1014,54 @@ function PageTabs({
  * showing it to another safe to do at all. That is also why it is a frame
  * rather than dangerouslySetInnerHTML, which would run it right here.
  */
+/**
+ * A map, with its boundary outlines fetched separately from its pins.
+ *
+ * Two requests rather than one on purpose. The pins change with every filter
+ * and every refresh; the outlines are a national frame that changes when
+ * somebody uploads a new one, which is to say almost never. Sending the frame
+ * down with each refresh of the pins would be megabytes an hour to redraw
+ * something identical.
+ *
+ * It goes through the dashboard's own path so a shared link draws its outlines
+ * too - the reader of a shared board has no account to check.
+ */
+function BoundedMap({
+  payload,
+  widget,
+  basePath,
+}: {
+  payload: any
+  widget: Widget
+  basePath: string
+}) {
+  const boundary = payload.boundary as BoundaryOverlay | undefined
+  const areas = useQuery({
+    queryKey: ['dashboard-boundary', basePath, boundary?.id],
+    queryFn: () => api.get<{ type: string; features: never[] }>(
+      `${basePath}/boundaries/${boundary!.id}`,
+    ),
+    enabled: Boolean(boundary?.id),
+    // The frame does not move. Refetching it on every window focus would be
+    // the one thing on this page reliably wasting the field office's bandwidth.
+    staleTime: 60 * 60 * 1000,
+  })
+
+  return (
+    <MapWidget
+      points={payload.points ?? []}
+      detail={payload.detail ?? []}
+      measure={payload.measure}
+      basemap={widget.config?.basemap as string | undefined}
+      tiles={widget.config?.tiles as string | undefined}
+      truncated={payload.truncated}
+      boundary={boundary}
+      areas={areas.data}
+      areaVariable={payload.area_check?.variable}
+    />
+  )
+}
+
 function HtmlWidget({ html }: { html: string }) {
   if (!html.trim()) {
     return <p className="py-6 text-center text-sm text-ink-400">This embed is empty</p>
@@ -2179,6 +2230,18 @@ function EditWidgetModal({
     queryFn: () => api.get<Dataset>(`/datasets/${datasetId}`),
     enabled: kind === 'map' && Boolean(datasetId),
   })
+  const boundaries = useQuery({
+    queryKey: ['boundaries', projectId],
+    queryFn: () =>
+      api.get<BoundaryLayer[]>(
+        `/boundaries${projectId ? `?project_id=${projectId}` : ''}`,
+      ),
+    enabled: kind === 'map',
+  })
+  // The attributes of whichever layer is chosen, so the two dropdowns below
+  // offer its own column names rather than asking anyone to type them.
+  const boundaryProperties =
+    boundaries.data?.find((item) => item.id === config.boundary_id)?.properties ?? []
 
   const save = useMutation({
     mutationFn: () =>
@@ -2551,6 +2614,98 @@ function EditWidgetModal({
               onChange={(event) => set({ tiles: event.target.value })}
             />
           </Field>
+
+          <Field
+            label="Boundaries"
+            hint="Enumeration areas, districts or villages, drawn under the pins."
+          >
+            <select
+              className="input"
+              aria-label="Boundary layer"
+              value={config.boundary_id ?? ''}
+              onChange={(event) =>
+                // Changing layer drops the two attributes chosen from the old
+                // one: they are its column names, and carrying them over would
+                // silently check against a property the new layer has not got.
+                set({
+                  boundary_id: event.target.value || undefined,
+                  boundary_key: undefined,
+                  boundary_label: undefined,
+                })
+              }
+            >
+              <option value="">None</option>
+              {boundaries.data?.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name} ({item.feature_count} areas)
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          {config.boundary_id && (
+            <>
+              <Field label="Write on each area" hint="Which attribute names it on the map.">
+                <select
+                  className="input"
+                  aria-label="Boundary label attribute"
+                  value={config.boundary_label ?? ''}
+                  onChange={(event) => set({ boundary_label: event.target.value || undefined })}
+                >
+                  <option value="">Nothing</option>
+                  {boundaryProperties.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <div className="grid gap-x-4 sm:grid-cols-2">
+                <Field
+                  label="Recorded area"
+                  hint="The variable holding the area each record says it was in."
+                >
+                  <select
+                    className="input"
+                    aria-label="Recorded area variable"
+                    value={config.area_variable ?? ''}
+                    onChange={(event) => set({ area_variable: event.target.value || undefined })}
+                  >
+                    <option value="">Do not check</option>
+                    {(mapDataset.data?.variables ?? [])
+                      .filter((v) => !v.is_hidden)
+                      .map((v) => (
+                        <option key={v.name} value={v.name}>
+                          {v.name}
+                        </option>
+                      ))}
+                  </select>
+                </Field>
+                <Field label="Matched against" hint="The area code on the boundary layer.">
+                  <select
+                    className="input"
+                    aria-label="Boundary code attribute"
+                    value={config.boundary_key ?? ''}
+                    onChange={(event) => set({ boundary_key: event.target.value || undefined })}
+                  >
+                    <option value="">Choose…</option>
+                    {boundaryProperties.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
+              {config.area_variable && !config.boundary_key && (
+                <p className="mb-4 -mt-2 text-xs text-amber-700">
+                  Choose the boundary attribute the recorded area should match, or every
+                  record will be reported as a mismatch.
+                </p>
+              )}
+            </>
+          )}
         </>
       )}
 
