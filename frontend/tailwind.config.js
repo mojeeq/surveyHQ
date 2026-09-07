@@ -10,6 +10,7 @@
 // carry meaning that page furniture does not.
 export default {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
+  darkMode: 'class',
   theme: {
     extend: {
       colors: {
@@ -46,6 +47,21 @@ export default {
         },
         // Links are a shade of cyan rather than the primary blue.
         link: '#02a4c4',
+        // Dark-mode surfaces. Kept separate from `ink` (which stays the light
+        // palette) so components can pair `bg-ink-100 dark:bg-dark-100` etc.
+        // without the light tokens themselves changing meaning.
+        dark: {
+          50: '#2a2e37', // raised surfaces (cards, dropdowns, modals)
+          100: '#1c1f26', // page background
+          200: '#343945', // borders / dividers
+          300: '#3d4350', // input borders, hover surfaces
+          400: '#5b6270', // muted/placeholder text
+          500: '#7d8494', // secondary text
+          600: '#9aa1b0', // body text
+          700: '#c2c7d1', // headings, emphasised text
+          800: '#e2e5ea',
+          900: '#f4f5f7',
+        },
       },
       fontFamily: {
         sans: [

@@ -551,7 +551,7 @@ export default function MapWidget({
     <div className="flex h-full min-h-[200px] flex-col">
       <div ref={container} className="min-h-0 flex-1 rounded" />
       {present.length > 0 && (
-        <div className="mt-1 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-500">
+        <div className="mt-1 flex shrink-0 flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-ink-500 dark:text-dark-500">
           {present.map((status) => (
             <span key={status} className="flex items-center gap-1">
               <span

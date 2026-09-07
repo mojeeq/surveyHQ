@@ -81,7 +81,7 @@ export default function ChartCard({
             <ViewToggle view={view} onChange={setView} />
           )}
           <button
-            className={`btn-ghost btn-sm ml-auto ${narrowed ? 'text-brand-700' : 'text-ink-500'}`}
+            className={`btn-ghost btn-sm ml-auto ${narrowed ? 'text-brand-700 dark:text-brand-400' : 'text-ink-500 dark:text-dark-500'}`}
             onClick={() => setFiltering(!filtering)}
             title="Narrow this table by its columns"
             aria-label="Filter columns"
@@ -225,7 +225,9 @@ function ViewToggle({
           key={option}
           onClick={() => onChange(option)}
           className={`rounded px-2 py-1 text-xs font-medium capitalize transition-colors ${
-            view === option ? 'bg-ink-800 text-white' : 'text-ink-500 hover:bg-ink-100'
+            view === option
+              ? 'bg-ink-800 text-white dark:bg-dark-300 dark:text-dark-900'
+              : 'text-ink-500 hover:bg-ink-100 dark:text-dark-500 dark:hover:bg-dark-200'
           }`}
         >
           {option}

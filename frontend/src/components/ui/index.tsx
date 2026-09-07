@@ -13,7 +13,7 @@ export function Spinner({ className = 'h-5 w-5' }: { className?: string }) {
 
 export function Loading({ label = 'Loading' }: { label?: string }) {
   return (
-    <div className="flex items-center justify-center gap-3 py-14 text-ink-500">
+    <div className="flex items-center justify-center gap-3 py-14 text-ink-500 dark:text-dark-500">
       <Spinner />
       <span>{label}…</span>
     </div>
@@ -23,7 +23,7 @@ export function Loading({ label = 'Loading' }: { label?: string }) {
 export function ErrorNote({ error, retry }: { error: unknown; retry?: () => void }) {
   const message = error instanceof Error ? error.message : 'Something went wrong'
   return (
-    <div className="rounded-card border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
+    <div className="rounded-card border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800 dark:border-red-900/40 dark:bg-red-950/30 dark:text-red-300">
       <div className="flex items-start gap-2">
         <span aria-hidden>⚠</span>
         <div className="flex-1">
@@ -55,8 +55,8 @@ export function EmptyState({
       <div className="text-4xl" aria-hidden>
         {icon}
       </div>
-      <h3 className="text-base font-semibold text-ink-800">{title}</h3>
-      {description && <p className="max-w-md text-sm text-ink-500">{description}</p>}
+      <h3 className="text-base font-semibold text-ink-800 dark:text-dark-800">{title}</h3>
+      {description && <p className="max-w-md text-sm text-ink-500 dark:text-dark-500">{description}</p>}
       {action}
     </div>
   )
@@ -65,11 +65,11 @@ export function EmptyState({
 // A quiet border of the tone's own colour, which is what stops a square badge
 // reading as a button.
 const BADGE_TONES = {
-  neutral: 'bg-ink-100 text-ink-700 border-ink-200',
-  info: 'bg-brand-50 text-brand-700 border-brand-200',
-  success: 'bg-emerald-50 text-emerald-700 border-emerald-200',
-  warning: 'bg-amber-50 text-amber-800 border-amber-200',
-  danger: 'bg-red-50 text-red-700 border-red-200',
+  neutral: 'bg-ink-100 text-ink-700 border-ink-200 dark:bg-dark-200 dark:text-dark-700 dark:border-dark-300',
+  info: 'bg-brand-50 text-brand-700 border-brand-200 dark:bg-brand-500/10 dark:text-brand-400 dark:border-brand-500/30',
+  success: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/30',
+  warning: 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/30',
+  danger: 'bg-red-50 text-red-700 border-red-200 dark:bg-red-500/10 dark:text-red-400 dark:border-red-500/30',
 } as const
 
 export type BadgeTone = keyof typeof BADGE_TONES
@@ -112,8 +112,8 @@ export function Card({
       {(title || actions) && (
         <header className="card-header">
           <div className="min-w-0">
-            {title && <h2 className="truncate text-sm font-semibold text-ink-800">{title}</h2>}
-            {subtitle && <p className="mt-0.5 truncate text-xs text-ink-500">{subtitle}</p>}
+            {title && <h2 className="truncate text-sm font-semibold text-ink-800 dark:text-dark-800">{title}</h2>}
+            {subtitle && <p className="mt-0.5 truncate text-xs text-ink-500 dark:text-dark-500">{subtitle}</p>}
           </div>
           {actions && <div className="flex shrink-0 items-center gap-2">{actions}</div>}
         </header>
@@ -151,7 +151,7 @@ export function Modal({
 
   if (!open) return null
   return (
-    <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-ink-900/40 p-4 pt-[6vh]">
+    <div className="fixed inset-0 z-50 flex animate-[fade-in_150ms_ease-out] items-start justify-center overflow-y-auto bg-ink-900/40 p-4 pt-[6vh] dark:bg-black/60">
       <div
         className="absolute inset-0"
         onClick={onClose}
@@ -161,17 +161,17 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-label={title}
-        className={`relative w-full ${wide ? 'max-w-4xl' : 'max-w-lg'} rounded-card bg-white shadow-pop`}
+        className={`relative w-full ${wide ? 'max-w-4xl' : 'max-w-lg'} rounded-card bg-white shadow-pop dark:bg-dark-50`}
       >
-        <header className="flex items-center justify-between border-b border-ink-200 px-5 py-4">
-          <h2 className="text-base font-semibold text-ink-900">{title}</h2>
+        <header className="flex items-center justify-between border-b border-ink-200 px-5 py-4 dark:border-dark-200">
+          <h2 className="text-base font-semibold text-ink-900 dark:text-dark-900">{title}</h2>
           <button className="btn-ghost btn-sm" onClick={onClose} aria-label="Close">
             ✕
           </button>
         </header>
         <div className="max-h-[70vh] overflow-y-auto px-5 py-4">{children}</div>
         {footer && (
-          <footer className="flex justify-end gap-2 border-t border-ink-200 px-5 py-3">
+          <footer className="flex justify-end gap-2 border-t border-ink-200 px-5 py-3 dark:border-dark-200">
             {footer}
           </footer>
         )}
@@ -195,7 +195,7 @@ export function Field({
     <div className="mb-4">
       <label className="label">{label}</label>
       {children}
-      {hint && !error && <p className="mt-1 text-xs text-ink-500">{hint}</p>}
+      {hint && !error && <p className="mt-1 text-xs text-ink-500 dark:text-dark-500">{hint}</p>}
       {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
     </div>
   )
@@ -226,7 +226,7 @@ export function PageHeader({
   return (
     <div
       className={`mb-6 flex flex-wrap items-start justify-between gap-3 ${
-        rule ? 'border-b border-ink-200 pb-4' : ''
+        rule ? 'border-b border-ink-200 pb-4 dark:border-dark-200' : ''
       } ${centred ? 'flex-col items-center text-center' : ''}`}
     >
       <div className={centred ? 'flex flex-col items-center gap-2' : 'flex items-center gap-3'}>
@@ -241,16 +241,16 @@ export function PageHeader({
               onClick={onTitleClick}
               title="Change the title's size, font and colour"
             >
-              <h1 className="text-xl font-semibold text-ink-900" style={titleStyle}>
+              <h1 className="text-xl font-semibold text-ink-900 dark:text-dark-900" style={titleStyle}>
                 {title}
               </h1>
             </button>
           ) : (
-            <h1 className="text-xl font-semibold text-ink-900" style={titleStyle}>
+            <h1 className="text-xl font-semibold text-ink-900 dark:text-dark-900" style={titleStyle}>
               {title}
             </h1>
           )}
-          {description && <p className="mt-1 text-sm text-ink-500">{description}</p>}
+          {description && <p className="mt-1 text-sm text-ink-500 dark:text-dark-500">{description}</p>}
         </div>
       </div>
       {actions && <div className="flex items-center gap-2">{actions}</div>}
@@ -270,17 +270,17 @@ export function Stat({
   tone?: BadgeTone
 }) {
   const accents: Record<BadgeTone, string> = {
-    neutral: 'text-ink-900',
-    info: 'text-brand-700',
-    success: 'text-emerald-700',
-    warning: 'text-amber-700',
-    danger: 'text-red-700',
+    neutral: 'text-ink-900 dark:text-dark-900',
+    info: 'text-brand-700 dark:text-brand-400',
+    success: 'text-emerald-700 dark:text-emerald-400',
+    warning: 'text-amber-700 dark:text-amber-400',
+    danger: 'text-red-700 dark:text-red-400',
   }
   return (
     <div className="card px-5 py-4">
-      <p className="text-xs font-semibold uppercase tracking-wide text-ink-500">{label}</p>
+      <p className="text-xs font-semibold uppercase tracking-wide text-ink-500 dark:text-dark-500">{label}</p>
       <p className={`mt-1 text-2xl font-semibold tabular-nums ${accents[tone]}`}>{value}</p>
-      {hint && <p className="mt-1 text-xs text-ink-500">{hint}</p>}
+      {hint && <p className="mt-1 text-xs text-ink-500 dark:text-dark-500">{hint}</p>}
     </div>
   )
 }
@@ -302,7 +302,7 @@ export function Toggle({
         aria-checked={checked}
         onClick={() => onChange(!checked)}
         className={`relative h-5 w-9 rounded-full transition-colors ${
-          checked ? 'bg-brand-600' : 'bg-ink-300'
+          checked ? 'bg-brand-600' : 'bg-ink-300 dark:bg-dark-300'
         }`}
       >
         <span
@@ -311,7 +311,7 @@ export function Toggle({
           }`}
         />
       </button>
-      {label && <span className="text-sm text-ink-700">{label}</span>}
+      {label && <span className="text-sm text-ink-700 dark:text-dark-700">{label}</span>}
     </label>
   )
 }
@@ -326,20 +326,20 @@ export function Tabs<T extends string>({
   onChange: (id: T) => void
 }) {
   return (
-    <div className="flex gap-1 overflow-x-auto border-b border-ink-200">
+    <div className="flex gap-1 overflow-x-auto border-b border-ink-200 dark:border-dark-200">
       {tabs.map((tab) => (
         <button
           key={tab.id}
           onClick={() => onChange(tab.id)}
           className={`whitespace-nowrap border-b-2 px-3.5 py-2.5 text-sm font-medium transition-colors ${
             active === tab.id
-              ? 'border-brand-600 text-brand-700'
-              : 'border-transparent text-ink-500 hover:text-ink-800'
+              ? 'border-brand-600 text-brand-700 dark:text-brand-400'
+              : 'border-transparent text-ink-500 hover:text-ink-800 dark:text-dark-500 dark:hover:text-dark-800'
           }`}
         >
           {tab.label}
           {tab.count !== undefined && (
-            <span className="ml-1.5 rounded-control bg-ink-100 px-1.5 py-0.5 text-xs text-ink-600">
+            <span className="ml-1.5 rounded-control bg-ink-100 px-1.5 py-0.5 text-xs text-ink-600 dark:bg-dark-200 dark:text-dark-600">
               {tab.count}
             </span>
           )}
