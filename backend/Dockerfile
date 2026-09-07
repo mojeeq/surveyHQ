@@ -6,12 +6,18 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
-# curl is used by the container health check; the rest are build dependencies
-# for pyreadstat and psycopg2.
+# curl is used by the container health check; build-essential and libpq-dev are
+# build dependencies for pyreadstat and psycopg2.
+#
+# r-base-core is here so that R_SCRIPTS_ENABLED is one setting rather than a
+# rebuild. Installing it does not switch the feature on: the setting defaults
+# to false, because an R script runs with this container's permissions and that
+# is a decision for whoever deploys the platform, not for its image.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         libpq-dev \
         curl \
+        r-base-core \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

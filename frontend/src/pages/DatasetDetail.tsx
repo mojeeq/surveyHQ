@@ -12,6 +12,7 @@ import AssignProject from '@/components/AssignProject'
 import {
   Badge,
   Card,
+  EmptyState,
   ErrorNote,
   Field,
   Loading,
@@ -831,16 +832,160 @@ const EXAMPLES = [
   'keep if region == "North"',
 ]
 
+/** One entry in what a dataset will replay after a newer export replaces it. */
+interface ScriptStep {
+  kind: 'stata' | 'r'
+  text: string
+}
+
+const R_EXAMPLES = [
+  'data$adult <- ifelse(data$age >= 18, 1, 0)',
+  'data$age_band <- cut(data$age, c(0, 15, 25, 65, Inf), right = FALSE)',
+  'data <- data[!is.na(data$age), ]',
+  'data$income[data$income < 0] <- NA',
+  'data$hh_size <- ave(data$age, data$interview__key, FUN = length)',
+  'names(data)[names(data) == "q1"] <- "age"',
+  'data <- data[order(data$region, -data$age), ]',
+  'cat("rows:", nrow(data), "\\n")',
+]
+
 function CommandPanel({ datasetId }: { datasetId: string }) {
-  const toast = useToast()
-  const queryClient = useQueryClient()
-  const [text, setText] = useState('')
-  const [log, setLog] = useState<{ command: string; message: string; ok: boolean }[]>([])
+  const [language, setLanguage] = useState<'stata' | 'r'>('stata')
+  // Held here rather than in each box so that clicking an example adds a line
+  // to the script, which is what the list is for, and so that switching tabs
+  // to look something up does not throw away what was half written.
+  const [stataText, setStataText] = useState('')
+  const [rText, setRText] = useState('')
+  const add = (line: string) => {
+    const [text, set] = language === 'stata' ? [stataText, setStataText] : [rText, setRText]
+    set(text ? `${text}\n${line}` : line)
+  }
+
+  // Asked once, before the R tab is drawn: a server without R, or with it
+  // switched off, says which - and those are two different jobs for two
+  // different people.
+  const tools = useQuery({
+    queryKey: ['dataset-tools'],
+    queryFn: () => api.get<{ r: { enabled: boolean; reason: string } }>('/datasets/tools'),
+  })
 
   const history = useQuery({
     queryKey: ['commands', datasetId],
-    queryFn: () => api.get<string[]>(`/datasets/${datasetId}/commands`),
+    queryFn: () => api.get<ScriptStep[]>(`/datasets/${datasetId}/commands`),
   })
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-3">
+      <div className="lg:col-span-2">
+        <Tabs
+          tabs={[
+            { id: 'stata', label: 'Stata commands' },
+            { id: 'r', label: 'R script' },
+          ]}
+          active={language}
+          onChange={(id) => setLanguage(id as 'stata' | 'r')}
+        />
+        <div className="mt-4">
+          {language === 'stata' ? (
+            <StataBox datasetId={datasetId} text={stataText} setText={setStataText} />
+          ) : (
+            <RBox datasetId={datasetId} text={rText} setText={setRText} tool={tools.data?.r} />
+          )}
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <ScriptHistory datasetId={datasetId} steps={history.data ?? []} />
+        <Card title={language === 'stata' ? 'Commands it understands' : 'A few lines of R'}>
+          <ul className="space-y-1 font-mono text-xs text-ink-600">
+            {(language === 'stata' ? EXAMPLES : R_EXAMPLES).map((example) => (
+              <li key={example}>
+                <button
+                  className="text-left hover:text-brand-700 hover:underline"
+                  title="Add this line to the script"
+                  onClick={() => add(example)}
+                >
+                  {example}
+                </button>
+              </li>
+            ))}
+          </ul>
+          {language === 'r' && (
+            <p className="mt-2 text-xs text-ink-500">
+              The dataset is a data frame called <code>data</code>, and whatever{' '}
+              <code>data</code> holds when the script ends is what the dataset becomes.
+            </p>
+          )}
+        </Card>
+      </div>
+    </div>
+  )
+}
+
+/** What a dataset will replay, both languages, in the order they were run. */
+function ScriptHistory({ datasetId, steps }: { datasetId: string; steps: ScriptStep[] }) {
+  const toast = useToast()
+  const queryClient = useQueryClient()
+
+  const forget = useMutation({
+    mutationFn: () => api.delete(`/datasets/${datasetId}/commands`),
+    onSuccess: () => {
+      toast.push('Command history cleared', 'info')
+      queryClient.invalidateQueries({ queryKey: ['commands', datasetId] })
+    },
+  })
+
+  return (
+    <Card
+      title="Kept for the next import"
+      subtitle={`${steps.length} step(s) will be re-run, in this order`}
+      actions={
+        steps.length > 0 && (
+          <button
+            className="btn-ghost btn-sm text-red-600"
+            onClick={() => {
+              if (confirm('Stop re-running these? What they already did stays done.'))
+                forget.mutate()
+            }}
+          >
+            Clear
+          </button>
+        )
+      }
+    >
+      {!steps.length ? (
+        <p className="text-sm text-ink-400">Nothing recorded yet.</p>
+      ) : (
+        <ol className="space-y-1 font-mono text-xs text-ink-600">
+          {steps.map((step, index) => (
+            <li key={index} className="flex items-start gap-1.5" title={step.text}>
+              <span className="shrink-0 text-ink-400">{index + 1}.</span>
+              {step.kind === 'r' && (
+                <span className="shrink-0 rounded bg-ink-100 px-1 text-[10px] uppercase text-ink-500">
+                  R
+                </span>
+              )}
+              {/* An R script is a page; its first line is what identifies it. */}
+              <span className="truncate">{step.text.split('\n')[0]}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </Card>
+  )
+}
+
+function StataBox({
+  datasetId,
+  text,
+  setText,
+}: {
+  datasetId: string
+  text: string
+  setText: (value: string) => void
+}) {
+  const queryClient = useQueryClient()
+  const [log, setLog] = useState<{ command: string; message: string; ok: boolean }[]>([])
 
   const run = useMutation({
     mutationFn: (command: string) =>
@@ -870,14 +1015,6 @@ function CommandPanel({ datasetId }: { datasetId: string }) {
       setLog((entries) => [{ command, message: error.message, ok: false }, ...entries]),
   })
 
-  const forget = useMutation({
-    mutationFn: () => api.delete(`/datasets/${datasetId}/commands`),
-    onSuccess: () => {
-      toast.push('Command history cleared', 'info')
-      queryClient.invalidateQueries({ queryKey: ['commands', datasetId] })
-    },
-  })
-
   const submit = () => {
     const script = text.trim()
     if (script) run.mutate(script)
@@ -892,110 +1029,163 @@ function CommandPanel({ datasetId }: { datasetId: string }) {
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-3">
-      <div className="lg:col-span-2">
-        <Card title="Command">
-          <textarea
-            className="input min-h-[220px] font-mono text-sm"
-            value={text}
-            onChange={(event) => setText(event.target.value)}
-            onKeyDown={onKeyDown}
-            placeholder={'* One command per line, as in a do-file\ngen adult = age >= 18\nreplace adult = 0 if age == .'}
-            spellCheck={false}
-            rows={10}
-            autoFocus
-          />
-          <div className="mt-2 flex flex-wrap items-center gap-3">
-            <button className="btn-primary" onClick={submit} disabled={run.isPending || !text.trim()}>
-              {run.isPending && <Spinner className="h-4 w-4 text-white" />}
-              Run script
-            </button>
-            <span className="text-xs text-ink-400">Ctrl/⌘ + Enter</span>
-            {text.trim() && (
-              <button className="btn-ghost btn-sm text-ink-500" onClick={() => setText('')}>
-                Clear
-              </button>
-            )}
-          </div>
-          <p className="mt-2 text-xs text-ink-500">
-            Lines run top to bottom and stop at the first error; what ran before it stays
-            applied, as a do-file does. <code>*</code> and <code>//</code> are comments, and{' '}
-            <code>///</code> continues a line. Changes the data in place - every command is kept
-            and re-run after a newer export replaces this dataset.
-          </p>
+    <Card title="Command">
+      <textarea
+        className="input min-h-[220px] font-mono text-sm"
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        onKeyDown={onKeyDown}
+        placeholder={'* One command per line, as in a do-file\ngen adult = age >= 18\nreplace adult = 0 if age == .'}
+        spellCheck={false}
+        rows={10}
+        autoFocus
+      />
+      <div className="mt-2 flex flex-wrap items-center gap-3">
+        <button className="btn-primary" onClick={submit} disabled={run.isPending || !text.trim()}>
+          {run.isPending && <Spinner className="h-4 w-4 text-white" />}
+          Run script
+        </button>
+        <span className="text-xs text-ink-400">Ctrl/⌘ + Enter</span>
+        {text.trim() && (
+          <button className="btn-ghost btn-sm text-ink-500" onClick={() => setText('')}>
+            Clear
+          </button>
+        )}
+      </div>
+      <p className="mt-2 text-xs text-ink-500">
+        Lines run top to bottom and stop at the first error; what ran before it stays
+        applied, as a do-file does. <code>*</code> and <code>//</code> are comments, and{' '}
+        <code>///</code> continues a line. Changes the data in place - every command is kept
+        and re-run after a newer export replaces this dataset.
+      </p>
 
-          {log.length > 0 && (
-            <div className="mt-4 max-h-80 overflow-auto rounded border border-ink-200 bg-ink-50 p-3 font-mono text-xs">
-              {log.map((entry, index) => (
-                <div key={index} className="mb-2">
-                  {entry.command && <div className="text-ink-700">. {entry.command}</div>}
-                  <div className={entry.ok ? 'text-green-700' : 'text-red-700'}>
-                    {entry.message}
-                  </div>
-                </div>
-              ))}
+      {log.length > 0 && (
+        <div className="mt-4 max-h-80 overflow-auto rounded border border-ink-200 bg-ink-50 p-3 font-mono text-xs">
+          {log.map((entry, index) => (
+            <div key={index} className="mb-2">
+              {entry.command && <div className="text-ink-700">. {entry.command}</div>}
+              <div className={entry.ok ? 'text-green-700' : 'text-red-700'}>{entry.message}</div>
             </div>
-          )}
-        </Card>
-      </div>
+          ))}
+        </div>
+      )}
+    </Card>
+  )
+}
 
-      <div className="space-y-4">
-        <Card
-          title="Kept for the next import"
-          subtitle={`${history.data?.length ?? 0} command(s) will be re-run`}
-          actions={
-            (history.data?.length ?? 0) > 0 && (
-              <>
-                <button
-                  className="btn-ghost btn-sm text-ink-500"
-                  title="Put these back in the box to edit or re-run"
-                  onClick={() => setText((history.data ?? []).join('\n'))}
-                >
-                  Edit
-                </button>
-                <button
-                  className="btn-ghost btn-sm text-red-600"
-                  onClick={() => {
-                    if (confirm('Stop re-running these? What they already did stays done.'))
-                      forget.mutate()
-                  }}
-                >
-                  Clear
-                </button>
-              </>
-            )
-          }
-        >
-          {!history.data?.length ? (
-            <p className="text-sm text-ink-400">Nothing recorded yet.</p>
-          ) : (
-            <ol className="space-y-1 font-mono text-xs text-ink-600">
-              {history.data.map((command, index) => (
-                <li key={index} className="truncate" title={command}>
-                  {index + 1}. {command}
-                </li>
-              ))}
-            </ol>
-          )}
-        </Card>
+/**
+ * An R script over the dataset.
+ *
+ * The Stata box covers generating a variable and labelling it. Everything past
+ * that - recoding a battery of questions, deriving a poverty line, reshaping a
+ * roster - is a few lines of R and no lines of anything this platform could
+ * reasonably invent, so the dataset is handed to R as a data frame.
+ */
+function RBox({
+  datasetId,
+  text,
+  setText,
+  tool,
+}: {
+  datasetId: string
+  text: string
+  setText: (value: string) => void
+  tool?: { enabled: boolean; reason: string }
+}) {
+  const queryClient = useQueryClient()
+  const [log, setLog] = useState<{ message: string; output: string; ok: boolean }[]>([])
 
-        <Card title="Commands it understands">
-          <ul className="space-y-1 font-mono text-xs text-ink-600">
-            {EXAMPLES.map((example) => (
-              <li key={example}>
-                <button
-                  className="text-left hover:text-brand-700 hover:underline"
-                  title="Add this line to the script"
-                  onClick={() => setText((current) => (current ? `${current}\n${example}` : example))}
-                >
-                  {example}
-                </button>
-              </li>
-            ))}
-          </ul>
-        </Card>
+  const run = useMutation({
+    mutationFn: (script: string) =>
+      api.post<{
+        message: string
+        output: string
+        rows: number
+        columns: number
+      }>(`/datasets/${datasetId}/rscript`, { script }),
+    onSuccess: (result) => {
+      setLog((previous) => [
+        { message: result.message, output: result.output, ok: true },
+        ...previous,
+      ])
+      queryClient.invalidateQueries({ queryKey: ['dataset', datasetId] })
+      queryClient.invalidateQueries({ queryKey: ['commands', datasetId] })
+      queryClient.invalidateQueries({ queryKey: ['preview', datasetId] })
+    },
+    onError: (error: Error) =>
+      setLog((entries) => [{ message: error.message, output: '', ok: false }, ...entries]),
+  })
+
+  const submit = () => {
+    const script = text.trim()
+    if (script) run.mutate(script)
+  }
+
+  const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault()
+      submit()
+    }
+  }
+
+  if (tool && !tool.enabled) {
+    return (
+      <Card title="R script">
+        <EmptyState
+          icon="R"
+          title="R is not available on this server"
+          description={tool.reason}
+        />
+      </Card>
+    )
+  }
+
+  return (
+    <Card title="R script">
+      <textarea
+        className="input min-h-[260px] font-mono text-sm"
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        onKeyDown={onKeyDown}
+        placeholder={'# The dataset is a data frame called `data`\ndata$adult <- ifelse(data$age >= 18, 1, 0)\ndata <- data[!is.na(data$age), ]'}
+        spellCheck={false}
+        rows={12}
+        autoFocus
+      />
+      <div className="mt-2 flex flex-wrap items-center gap-3">
+        <button className="btn-primary" onClick={submit} disabled={run.isPending || !text.trim()}>
+          {run.isPending && <Spinner className="h-4 w-4 text-white" />}
+          Run R
+        </button>
+        <span className="text-xs text-ink-400">Ctrl/⌘ + Enter</span>
+        {text.trim() && (
+          <button className="btn-ghost btn-sm text-ink-500" onClick={() => setText('')}>
+            Clear
+          </button>
+        )}
       </div>
-    </div>
+      <p className="mt-2 text-xs text-ink-500">
+        The dataset arrives as a data frame called <code>data</code>, and whatever{' '}
+        <code>data</code> holds when the script ends becomes the dataset - rows, columns and
+        all. The script is kept and re-run after a newer export replaces this dataset, in its
+        turn among the Stata commands. A script that fails changes nothing.
+      </p>
+
+      {log.length > 0 && (
+        <div className="mt-4 max-h-96 overflow-auto rounded border border-ink-200 bg-ink-50 p-3 font-mono text-xs">
+          {log.map((entry, index) => (
+            <div key={index} className="mb-3">
+              <div className={entry.ok ? 'text-green-700' : 'text-red-700'}>
+                {entry.message}
+              </div>
+              {entry.output && (
+                <pre className="mt-1 whitespace-pre-wrap text-ink-600">{entry.output}</pre>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
   )
 }
 

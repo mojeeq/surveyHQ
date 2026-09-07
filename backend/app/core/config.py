@@ -76,6 +76,19 @@ class Settings(BaseSettings):
     smtp_tls: bool = True
     smtp_from: str = "susoDash <no-reply@example.com>"
 
+    # R scripts over a dataset.
+    #
+    # Off unless somebody turns it on, and deliberately so: an R script is a
+    # program, not an expression, and it runs with the permissions of the
+    # process serving this platform. The timeout and the memory cap stop a
+    # runaway script; nothing here stops a hostile one, and pretending
+    # otherwise would be worse than saying so. Turn it on where the people who
+    # can reach the command box are the people you would trust with a shell.
+    r_scripts_enabled: bool = False
+    r_binary: str = "Rscript"
+    r_timeout_seconds: int = 60
+    r_memory_mb: int = 2048
+
     # Scheduler
     sync_tick_minutes: int = 5
     monitor_tick_minutes: int = 15

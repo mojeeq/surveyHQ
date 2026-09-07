@@ -73,6 +73,8 @@ import {
 const COLUMNS = 12
 /** text-sm, the size a widget title is when none is chosen. */
 const DEFAULT_TITLE_SIZE = 14
+/** What a chart's text measures before anybody changes it; see BASE_TEXT. */
+const DEFAULT_CHART_TEXT = 12
 const ROW_HEIGHT = 74
 // Breathing room inside the canvas, so a widget dragged to the far right stops
 // short of the edge instead of butting against it.
@@ -136,6 +138,17 @@ export interface WidgetStyle {
   shadow?: 'none' | 'soft' | 'strong'
   /** The colour this widget's chart leads with. */
   series_color?: string
+  /**
+   * Print the value on each mark of this widget's chart.
+   *
+   * Set here as well as on the saved chart, because whether the numbers belong
+   * on the bars is a question about the tile they are read in, not about the
+   * query: the same chart wants them on a quarter-width tile on a wall and off
+   * on a crowded page.
+   */
+  show_values?: boolean
+  /** How big the text on this widget's chart is, in pixels. */
+  chart_font_size?: number
 }
 
 /**
@@ -996,6 +1009,10 @@ function WidgetFrame({
           ...(style.series_color ? { seriesColor: style.series_color } : {}),
           ...(style.font_family ? { fontFamily: style.font_family } : {}),
           ...(style.font_color ? { fontColor: style.font_color } : {}),
+          ...(style.chart_font_size ? { fontSize: style.chart_font_size } : {}),
+          // Undefined leaves whatever the chart was saved with; false is a
+          // decision to turn the numbers off, and has to survive the spread.
+          ...(style.show_values === undefined ? {} : { showValues: style.show_values }),
         }}
         onSelect={
           // Only where a click means something: a chart grouped on a
@@ -2881,6 +2898,49 @@ function EditWidgetModal({
             noneLabel="Use the dashboard's theme"
           />
         </Field>
+      )}
+
+      {kind === 'chart' && (
+        <>
+          <label className="mb-3 flex items-center gap-2 text-sm text-ink-700">
+            <input
+              type="checkbox"
+              checked={config.show_values ?? false}
+              onChange={(event) => set({ show_values: event.target.checked })}
+            />
+            Print the value on each bar, slice or point
+            <span className="text-ink-400">(up to 24 marks)</span>
+          </label>
+
+          <Field
+            label="Chart text size"
+            hint="The axes, the legend and the printed values together. Bigger for a board read across a room, smaller for a crowded tile."
+          >
+            <div className="flex items-center gap-3">
+              <input
+                type="range"
+                min={8}
+                max={28}
+                step={1}
+                className="w-40"
+                aria-label="Chart text size"
+                value={config.chart_font_size ?? DEFAULT_CHART_TEXT}
+                onChange={(event) => set({ chart_font_size: Number(event.target.value) })}
+              />
+              <span className="w-12 text-sm text-ink-600">
+                {config.chart_font_size ?? DEFAULT_CHART_TEXT}px
+              </span>
+              {config.chart_font_size !== undefined && (
+                <button
+                  className="btn-ghost btn-sm"
+                  onClick={() => set({ chart_font_size: undefined })}
+                >
+                  Default
+                </button>
+              )}
+            </div>
+          </Field>
+        </>
       )}
 
       {kind === 'chart' && (

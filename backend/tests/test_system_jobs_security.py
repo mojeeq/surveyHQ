@@ -5,12 +5,11 @@ from __future__ import annotations
 from sqlalchemy import select
 
 from app.models import Job, JobStatus, JobType, User
+from tests.conftest import sign_in
 
 
 def _headers_for(client, email: str, password: str) -> dict[str, str]:
-    response = client.post("/api/v1/auth/login", json={"email": email, "password": password})
-    assert response.status_code == 200, response.text
-    return {"Authorization": f"******'access_token']}"}
+    return sign_in(client, email, password)
 
 
 def test_non_admin_only_sees_own_jobs(client, auth_headers, db_session):

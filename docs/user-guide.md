@@ -322,6 +322,57 @@ every chart built on it. The history is listed under the box: **Edit** puts a
 command back in the box, and **Clear** stops the replay without undoing what the
 commands already did.
 
+### Running R over a dataset
+
+The Stata box covers generating a variable and labelling it. Everything past
+that - recoding a battery of questions, deriving a poverty line, reshaping a
+roster - is a few lines of R and no lines of anything this platform could
+reasonably invent. So the **R script** tab hands the dataset to R.
+
+The contract is one sentence: **the dataset is a data frame called `data`, and
+whatever `data` holds when the script ends is what the dataset becomes** - its
+rows, its columns and their types.
+
+```r
+data$adult <- ifelse(data$age >= 18, 1, 0)
+data$age_band <- cut(data$age, c(0, 15, 25, 65, Inf), right = FALSE)
+data <- data[!is.na(data$age), ]
+```
+
+Base R is enough; nothing needs installing. Packages an administrator has
+installed on the server are available too - base R is the floor, not a ceiling.
+Anything the script prints comes back under the box, so `cat()` and `print()`
+are how it is debugged.
+
+A script that fails changes nothing: the frame is read, the script runs, and
+only a script that finished writes anything back. The error R gave is shown as
+R gave it.
+
+Like a Stata command, the script is **recorded and replayed** after a newer
+export replaces the dataset, and in its turn among the Stata commands beside
+it - so a script reading a variable that `gen` created still runs after it. The
+list on the right shows both, in the order they will be re-run, with the R ones
+marked.
+
+The round trip goes through CSV, which is what base R reads and writes with no
+packages at all. Types are therefore re-read on the way back in, exactly as
+they would be from an uploaded CSV, and a variable's label survives as long as
+its column does.
+
+**What this is and is not.** Running R here is running a program on the server.
+It can read what the server can read and reach what the server can reach. The
+timeout and the memory limit stop a script that runs away; nothing stops one
+written to do harm, and there is no list of forbidden functions, because a list
+like that over a language with `eval(parse(text=))` would only be a promise
+nobody can keep.
+
+So it is **off until an administrator turns it on**, with `R_SCRIPTS_ENABLED=true`,
+and only a manager or an administrator can reach it. Turn it on where the
+people who can open the command box are people you would trust with a shell on
+that server. `R_TIMEOUT_SECONDS` (60 by default) and `R_MEMORY_MB` (2048) bound
+one run; every script that runs is written to the audit log with the account
+that ran it.
+
 ## Explore
 
 **Explore** is where analysis happens. Two modes.
@@ -770,6 +821,23 @@ says so:
 - **Title colour and alignment** - your colour, left or centred.
 - **A rule under the header**, and the option to **hide the description**, for
   when the title alone is the whole heading.
+
+### How a widget's chart is drawn
+
+**Edit this widget** carries two controls over the chart itself, beside its
+colour:
+
+- **Print the value on each bar, slice or point.** The same question the chart
+  was built with, asked again where it is read: the same chart wants its
+  numbers on when it is a quarter-tile on a wall and off on a crowded page.
+  Leave it as the chart was saved, or decide either way here. Past two dozen
+  marks the numbers are dropped whatever is asked, because a digit on every one
+  of forty bars is a wall rather than a label.
+- **Chart text size**, from 8 to 28 pixels. The axes, the legend and those
+  printed values together, rather than a control for each: what makes anybody
+  reach for it is a board read across a room or a widget shrunk to a corner,
+  and in both cases it is all of the text that is the wrong size. **Default**
+  puts it back to 12.
 
 ### A widget's menu
 
