@@ -464,7 +464,7 @@ def run_upload_import(self: Any, job_id: str) -> dict[str, Any]:
             raise IngestError("The uploaded file is no longer on the server.")
         with session_scope() as db:
             if archive:
-                from app.services import stata
+                from app.services import scripts
 
                 outcome = ArchiveImport()
                 mode = str(params.get("mode") or "replace")
@@ -482,7 +482,7 @@ def run_upload_import(self: Any, job_id: str) -> dict[str, Any]:
                         # The first lands under the mode asked for; the rest are
                         # appended onto what it produced.
                         mode=mode if index == 0 else "append",
-                        after_replace=stata.replay,
+                        after_replace=scripts.replay,
                         stamp=(version_column, labels[index]) if version_column else None,
                     )
                     outcome = merge_imports(outcome, step)

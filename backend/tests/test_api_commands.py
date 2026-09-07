@@ -175,7 +175,10 @@ def test_a_generated_variable_survives_the_next_export(client, auth_headers):
     command(client, auth_headers, dataset_id, 'label variable decade "Decade of life"')
     assert client.get(
         f"/api/v1/datasets/{dataset_id}/commands", headers=auth_headers
-    ).json() == ["gen decade = int(age / 10)", 'label variable decade "Decade of life"']
+    ).json() == [
+        {"kind": "stata", "text": "gen decade = int(age / 10)"},
+        {"kind": "stata", "text": 'label variable decade "Decade of life"'},
+    ]
 
     later = client.post(
         "/api/v1/datasets/upload",
@@ -323,4 +326,4 @@ def test_a_long_line_can_be_continued(client, auth_headers, workbench):
 def test_only_the_lines_that_ran_are_kept_for_replay(client, auth_headers, workbench):
     command(client, auth_headers, workbench, "gen a = 1\ngen b = nope\ngen c = 3")
     kept = client.get(f"/api/v1/datasets/{workbench}/commands", headers=auth_headers).json()
-    assert kept == ["gen a = 1"]
+    assert kept == [{"kind": "stata", "text": "gen a = 1"}]

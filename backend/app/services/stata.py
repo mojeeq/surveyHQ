@@ -11,6 +11,10 @@ replaces it: a variable somebody generated is not in the file, so without that
 it would vanish on exactly the upload this platform exists to make routine, and
 take every chart built on it. And nothing is passed through to the database as
 text - see stata_expr - so what runs is only ever what was recognised.
+
+The record itself is read and replayed by services/scripts.py, which holds the
+one ordered list these commands share with the R scripts run over the same
+dataset: which came first is what makes replaying them mean anything.
 """
 
 from __future__ import annotations
@@ -176,41 +180,6 @@ def _lines(text: str) -> list[str]:
     if buffer:
         joined.append(buffer)
     return joined
-
-
-def history(dataset: Dataset) -> list[str]:
-    return list((dataset.meta or {}).get("commands") or [])
-
-
-def forget(dataset: Dataset) -> None:
-    meta = dict(dataset.meta or {})
-    meta["commands"] = []
-    dataset.meta = meta
-
-
-def replay(db: Session, dataset: Dataset) -> list[str]:
-    """Re-run the recorded commands, for after a newer export replaced the data.
-
-    A generated variable is not in the file, so a replacement would drop it and
-    everything built on it. Failures are reported rather than raised: a command
-    that no longer applies - it named a variable this export does not have -
-    must not stop the import that has already happened.
-    """
-    commands = history(dataset)
-    if not commands:
-        return []
-    problems: list[str] = []
-    for command in commands:
-        try:
-            run(db, dataset, command, record_it=False)
-        except (CommandError, ExpressionError) as exc:
-            problems.append(f"'{command}' could not be re-applied: {exc}")
-        except Exception as exc:  # noqa: BLE001 - a replay must never be able to
-            # fail the import that has already happened; the data is in, and a
-            # command that broke on it is a note beside it rather than a 500.
-            logger.exception("Replaying '%s' failed", command)
-            problems.append(f"'{command}' could not be re-applied: {exc}")
-    return problems
 
 
 # --- commands ---------------------------------------------------------------

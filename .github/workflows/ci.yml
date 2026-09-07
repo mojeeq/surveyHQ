@@ -56,6 +56,20 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
+      # The command box can hand a dataset to R, and those tests skip
+      # themselves where R is missing - which on a runner without it means a
+      # feature with eleven tests silently has none. Installed on one leg of
+      # the matrix, since nothing about it depends on the database.
+      - name: Install R
+        if: matrix.database == 'sqlite'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends r-base-core
+
+      # Proves it before the suite runs, so the R tests cannot pass by being
+      # skipped.
+      - name: Check R is there
+        if: matrix.database == 'sqlite'
+        run: Rscript --version
+
       - name: Lint
         run: ruff check app tests
 
@@ -132,17 +146,35 @@ jobs:
           exit 1
 
       # Proves more than a health probe: the schema was created, the bootstrap
-      # administrator exists, and nginx proxies POSTs to the API.
-      - name: The bootstrap administrator can sign in
+      # administrator exists, nginx proxies POSTs to the API, and the first
+      # sign-in leads somewhere.
+      #
+      # The password is changed before anything else is asked for, because a
+      # bootstrap administrator must set their own before any other route will
+      # answer them - which is the point of that rule, and which is what a real
+      # first sign-in does. Reading a dataset list on the token straight from
+      # the first login used to work and now returns 403, so this walks the
+      # same path a person does.
+      - name: The bootstrap administrator can sign in and set their password
         run: |
-          token=$(curl -fsS -X POST http://localhost:8080/api/v1/auth/login \
+          login() {
+            curl -fsS -X POST http://localhost:8080/api/v1/auth/login \
+              -H 'Content-Type: application/json' \
+              -d "{\"email\":\"ci@example.org\",\"password\":\"$1\"}" \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])'
+          }
+          first=$(login 'ci-password-12345')
+          test -n "$first"
+          curl -fsS -X POST http://localhost:8080/api/v1/auth/change-password \
             -H 'Content-Type: application/json' \
-            -d '{"email":"ci@example.org","password":"ci-password-12345"}' \
-            | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+            -H "Authorization: Bearer $first" \
+            -d '{"current_password":"ci-password-12345","new_password":"ci-password-67890"}' \
+            > /dev/null
+          token=$(login 'ci-password-67890')
           test -n "$token"
           curl -fsS http://localhost:8080/api/v1/datasets \
             -H "Authorization: Bearer $token" > /dev/null
-          echo "signed in and read an authenticated endpoint"
+          echo "signed in, set a password, and read an authenticated endpoint"
 
       - name: The single page app is served
         run: curl -fsS http://localhost:8080/ | grep -q '<div id="root">'

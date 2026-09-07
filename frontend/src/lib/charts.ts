@@ -199,6 +199,15 @@ export interface BuildOptions {
   fontFamily?: string
   /** Colour for this widget's chart text: axes, their names, and the legend. */
   fontColor?: string
+  /**
+   * How big the chart's text is, in pixels. Blank leaves it at 12.
+   *
+   * One size for the axes, the legend and the numbers printed on the marks,
+   * rather than a control for each: what makes somebody reach for this is a
+   * board on a wall across the room, or a widget shrunk to a quarter tile,
+   * and in both cases it is all of the text that is the wrong size.
+   */
+  fontSize?: number
 }
 
 /**
@@ -221,10 +230,10 @@ export interface BuildOptions {
  */
 const TEXT_KEYS = ['textStyle', 'axisLabel', 'nameTextStyle', 'subtextStyle', 'label']
 
-function applyTextStyle(node: unknown, font?: string, color?: string): void {
-  if (!font && !color) return
+function applyTextStyle(node: unknown, font?: string, color?: string, size?: number): void {
+  if (!font && !color && !size) return
   if (Array.isArray(node)) {
-    for (const item of node) applyTextStyle(item, font, color)
+    for (const item of node) applyTextStyle(item, font, color, size)
     return
   }
   if (!node || typeof node !== 'object') return
@@ -233,7 +242,10 @@ function applyTextStyle(node: unknown, font?: string, color?: string): void {
     const target = record[key]
     if (target && typeof target === 'object' && !Array.isArray(target)) {
       const text = target as Record<string, unknown>
-      if (key === 'label' && text.position === 'inside') continue
+      // A label sitting on a filled mark keeps its white, but not its size:
+      // the reason it is excluded is that recolouring it makes it vanish into
+      // the bar, and being the same size as the rest is exactly what it wants.
+      const insideMark = key === 'label' && text.position === 'inside'
       // A copy into the option, never a write into the object found there.
       // Some of them are module constants shared by every chart on the page:
       // colouring one in place set the colour for all of them and kept it
@@ -242,12 +254,13 @@ function applyTextStyle(node: unknown, font?: string, color?: string): void {
       record[key] = {
         ...text,
         ...(font ? { fontFamily: font } : {}),
-        ...(color ? { color } : {}),
+        ...(color && !insideMark ? { color } : {}),
+        ...(size ? { fontSize: size } : {}),
       }
     }
   }
   for (const [key, value] of Object.entries(record)) {
-    applyTextStyle(value, font, key === 'tooltip' ? undefined : color)
+    applyTextStyle(value, font, key === 'tooltip' ? undefined : color, size)
   }
 }
 
@@ -457,7 +470,7 @@ export function buildChartOption(
   options: BuildOptions = {},
 ): EChartsOption {
   const option = buildOption(result, chartType, options)
-  applyTextStyle(option, options.fontFamily, options.fontColor)
+  applyTextStyle(option, options.fontFamily, options.fontColor, options.fontSize)
   return option
 }
 

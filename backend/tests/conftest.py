@@ -48,24 +48,32 @@ def client():
         yield test_client
 
 
-@pytest.fixture(scope="session")
-def auth_headers(client) -> dict[str, str]:
-    response = client.post(
-        "/api/v1/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}
-    )
+def sign_in(client, email: str, password: str) -> dict[str, str]:
+    """Headers for a user, past the change-password wall.
+
+    A user an administrator creates must set their own password before any
+    other route will answer them - which is the point of that rule, and the
+    reason a token straight from the first sign-in reaches nothing but
+    /auth/me. Setting the password to itself clears the flag and leaves the
+    credentials the test was written with still true.
+    """
+    response = client.post("/api/v1/auth/login", json={"email": email, "password": password})
     assert response.status_code == 200, response.text
-    auth_value = " ".join(("Bearer", response.json()["access_token"]))
+    first = " ".join(("Bearer", response.json()["access_token"]))
     changed = client.post(
         "/api/v1/auth/change-password",
-        headers={"Authorization": auth_value},
-        json={"current_password": ADMIN_PASSWORD, "new_password": ADMIN_PASSWORD},
+        headers={"Authorization": first},
+        json={"current_password": password, "new_password": password},
     )
     assert changed.status_code == 200, changed.text
-    response = client.post(
-        "/api/v1/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}
-    )
+    response = client.post("/api/v1/auth/login", json={"email": email, "password": password})
     assert response.status_code == 200, response.text
     return {"Authorization": " ".join(("Bearer", response.json()["access_token"]))}
+
+
+@pytest.fixture(scope="session")
+def auth_headers(client) -> dict[str, str]:
+    return sign_in(client, ADMIN_EMAIL, ADMIN_PASSWORD)
 
 
 @pytest.fixture(scope="session")

@@ -9,13 +9,11 @@ from __future__ import annotations
 
 import pytest
 
-from tests.conftest import ADMIN_EMAIL, ADMIN_PASSWORD  # noqa: F401
+from tests.conftest import ADMIN_EMAIL, ADMIN_PASSWORD, sign_in  # noqa: F401
 
 
 def _headers(client, email: str, password: str) -> dict[str, str]:
-    response = client.post("/api/v1/auth/login", json={"email": email, "password": password})
-    assert response.status_code == 200, response.text
-    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+    return sign_in(client, email, password)
 
 
 @pytest.fixture

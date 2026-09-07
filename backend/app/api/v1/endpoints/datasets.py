@@ -50,12 +50,13 @@ from app.schemas.dataset import (
     DatasetOut,
     DatasetPreview,
     DatasetUpdate,
+    RScriptRequest,
     VariableOut,
     VariableUpdate,
 )
 from app.schemas.monitoring import JobOut
 from app.schemas.query import FilterGroup
-from app.services import stata
+from app.services import rscript, scripts, stata
 from app.services.audit import record
 from app.services.datasets import (
     ArchiveImport,
@@ -405,7 +406,7 @@ async def upload_dataset(
                     # Variables somebody generated are not in the export, so a
                     # replacement drops them and everything built on them. The
                     # recorded commands are run again on the new data.
-                    after_replace=stata.replay,
+                    after_replace=scripts.replay,
                     stamp=(stamp_column, stamps[index]) if stamp_column else None,
                 )
                 outcome = merge_imports(outcome, step)
@@ -463,6 +464,18 @@ async def upload_dataset(
     db.commit()
     db.refresh(dataset)
     return DatasetDetail.model_validate(dataset)
+
+
+@router.get("/tools", response_model=dict)
+def available_tools(user: CurrentUser) -> dict[str, Any]:
+    """Which languages the command box can offer here.
+
+    Asked before the box is drawn, so a server without R does not offer a tab
+    that can only fail. The reason travels with the answer: "install R" and
+    "switch it on" are different jobs for different people.
+    """
+    reason = rscript.unavailable_reason()
+    return {"r": {"enabled": not reason, "reason": reason}}
 
 
 @router.get("/{dataset_id}", response_model=DatasetDetail)
@@ -877,10 +890,65 @@ def run_command(
     }
 
 
-@router.get("/{dataset_id}/commands", response_model=list[str])
-def list_commands(dataset_id: str, db: DbSession, user: CurrentUser) -> list[str]:
-    """What has been run against this dataset, in the order it will be replayed."""
-    return stata.history(get_dataset(dataset_id, db, user))
+@router.post("/{dataset_id}/rscript", response_model=dict)
+def run_r_script(
+    dataset_id: str, payload: RScriptRequest, db: DbSession, user: RequireManager
+) -> dict[str, Any]:
+    """Run an R script over the dataset, and keep the data frame it leaves.
+
+    Recorded and replayed like a Stata command, and in the same order as them:
+    a recode written in R is no more present in the next export than a
+    generated variable is.
+
+    An R script is a program running with this server's permissions, which is
+    why it is a manager's route and why the whole feature is off until an
+    administrator turns it on.
+    """
+    dataset = get_ready_dataset(dataset_id, db, user)
+    if dataset.project_id and not can_edit(db, user, dataset.project_id, Role.manager):
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    try:
+        result = rscript.run_script(db, dataset, payload.script)
+    except rscript.RError as exc:
+        # Nothing was written: the script is read, run and only then saved, so
+        # a failure leaves the dataset as it was.
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    rebuilt = rebuild_dependents(db, [dataset.id])
+    record(
+        db,
+        user=user,
+        action="run_rscript",
+        entity_type="dataset",
+        entity_id=dataset.id,
+        # The script itself, not a summary: this is the audit trail for
+        # arbitrary code that changed a dataset.
+        detail={"script": payload.script[:10000]},
+    )
+    db.commit()
+    db.refresh(dataset)
+    return {
+        "message": result.message,
+        "output": result.output,
+        "rows": dataset.row_count,
+        "columns": dataset.column_count,
+        "variables_added": result.variables_added,
+        "variables_removed": result.variables_removed,
+        "rebuilt": len(rebuilt),
+    }
+
+
+@router.get("/{dataset_id}/commands", response_model=list[dict])
+def list_commands(dataset_id: str, db: DbSession, user: CurrentUser) -> list[dict[str, str]]:
+    """What has been run against this dataset, in the order it will be replayed.
+
+    Stata commands and R scripts in one list, each saying which it is: the
+    order between them is what makes the replay mean anything, so they cannot
+    be reported as two.
+    """
+    return scripts.entries(get_dataset(dataset_id, db, user))
 
 
 @router.delete("/{dataset_id}/commands", response_model=Message)
@@ -889,7 +957,7 @@ def clear_commands(dataset_id: str, db: DbSession, user: RequireManager) -> Mess
     dataset = get_dataset(dataset_id, db, user)
     if dataset.project_id and not can_edit(db, user, dataset.project_id, Role.manager):
         raise HTTPException(status_code=404, detail="Dataset not found")
-    stata.forget(dataset)
+    scripts.forget(dataset)
     db.commit()
     return Message(detail="The command history is cleared. Re-upload to rebuild from source.")
 
