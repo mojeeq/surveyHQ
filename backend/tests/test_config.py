@@ -88,3 +88,24 @@ def test_app_imports_with_a_compose_style_environment():
         from app.main import app
 
         assert app.title
+
+
+def test_non_development_environment_rejects_default_security_values():
+    with env(
+        ENVIRONMENT="production",
+        SECRET_KEY="insecure-development-key-change-me",
+        FIRST_ADMIN_EMAIL="admin@example.com",
+        FIRST_ADMIN_PASSWORD="changeme",
+    ):
+        with pytest.raises(ValueError, match="Unsafe production configuration"):
+            Settings().validate_security_settings()
+
+
+def test_non_development_environment_accepts_non_default_security_values():
+    with env(
+        ENVIRONMENT="production",
+        SECRET_KEY="replace-with-a-long-random-secret-key",
+        FIRST_ADMIN_EMAIL="ops@example.org",
+        FIRST_ADMIN_PASSWORD="S7rong-Unique-Password!",
+    ):
+        Settings().validate_security_settings()

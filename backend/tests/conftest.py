@@ -54,7 +54,18 @@ def auth_headers(client) -> dict[str, str]:
         "/api/v1/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}
     )
     assert response.status_code == 200, response.text
-    return {"Authorization": f"Bearer {response.json()['access_token']}"}
+    auth_value = " ".join(("Bearer", response.json()["access_token"]))
+    changed = client.post(
+        "/api/v1/auth/change-password",
+        headers={"Authorization": auth_value},
+        json={"current_password": ADMIN_PASSWORD, "new_password": ADMIN_PASSWORD},
+    )
+    assert changed.status_code == 200, changed.text
+    response = client.post(
+        "/api/v1/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD}
+    )
+    assert response.status_code == 200, response.text
+    return {"Authorization": " ".join(("Bearer", response.json()["access_token"]))}
 
 
 @pytest.fixture(scope="session")
