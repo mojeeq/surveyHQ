@@ -6,6 +6,8 @@ A self-hosted platform for monitoring survey/census data collection. Connect it 
 Survey Solutions server or upload Stata files, then tabulate, chart, and watch
 field work through dashboards, indicators, alerts and automated quality checks.
 
+susoDash serves as a functional prototype, illustrating the mechanics of real-time automated monitoring using a robust data pipeline model.
+
 Built for a survey that is still in the field: a new export replaces the data
 in place, so relationships, charts, indicators, quality rules and dashboards
 built on it go on working without being rebuilt.
