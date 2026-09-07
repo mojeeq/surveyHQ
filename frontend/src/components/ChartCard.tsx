@@ -1,7 +1,7 @@
 import ReactECharts from 'echarts-for-react'
 import { useEffect, useRef, useState } from 'react'
 import { buildChartOption, type BuildOptions } from '@/lib/charts'
-import { formatCell } from '@/lib/format'
+import { formatCell, formatNumber } from '@/lib/format'
 import type { ChartType, QueryResult } from '@/lib/types'
 import { EmptyState } from './ui'
 
@@ -46,6 +46,10 @@ export default function ChartCard({
   onSelect?: (category: string) => void
 }) {
   const [view, setView] = useState<'chart' | 'table'>('chart')
+  const [filtering, setFiltering] = useState(false)
+  // Kept by column position rather than by name: two measures can carry the
+  // same label, and the position is what the row is indexed by anyway.
+  const [columnFilters, setColumnFilters] = useState<Record<number, string>>({})
   const container = useRef<HTMLDivElement>(null)
   const chart = useRef<ReactECharts>(null)
 
@@ -68,11 +72,24 @@ export default function ChartCard({
   }
 
   if (chartType === 'table' || view === 'table') {
+    const shown = filterRows(result.rows, result.columns, columnFilters)
+    const narrowed = shown.length !== result.rows.length
     return (
       <div className="flex flex-col">
-        {showToggle && chartType !== 'table' && (
-          <ViewToggle view={view} onChange={setView} />
-        )}
+        <div className="flex items-center gap-2">
+          {showToggle && chartType !== 'table' && (
+            <ViewToggle view={view} onChange={setView} />
+          )}
+          <button
+            className={`btn-ghost btn-sm ml-auto ${narrowed ? 'text-brand-700' : 'text-ink-500'}`}
+            onClick={() => setFiltering(!filtering)}
+            title="Narrow this table by its columns"
+            aria-label="Filter columns"
+            aria-pressed={filtering}
+          >
+            ⌕ {narrowed ? `${formatNumber(shown.length)} of ${formatNumber(result.rows.length)}` : 'Filter'}
+          </button>
+        </div>
         <div className="overflow-auto" style={{ maxHeight: height }}>
           <table className="table-base">
             <thead className="sticky top-0">
@@ -81,9 +98,32 @@ export default function ChartCard({
                   <th key={column.name}>{column.label || column.name}</th>
                 ))}
               </tr>
+              {/* A box under each heading, which is where people look for one.
+                  Hidden until asked for: on a widget the size of a postcard a
+                  permanent row of inputs is a quarter of the table gone. */}
+              {filtering && (
+                <tr>
+                  {result.columns.map((column, index) => (
+                    <th key={column.name} className="p-1">
+                      <input
+                        className="input h-6 w-full min-w-16 px-1 py-0 text-xs font-normal"
+                        value={columnFilters[index] ?? ''}
+                        placeholder={column.type === 'measure' ? '> 100' : 'contains…'}
+                        aria-label={`Filter ${column.label || column.name}`}
+                        onChange={(event) =>
+                          setColumnFilters((current) => ({
+                            ...current,
+                            [index]: event.target.value,
+                          }))
+                        }
+                      />
+                    </th>
+                  ))}
+                </tr>
+              )}
             </thead>
             <tbody>
-              {result.rows.map((row, rowIndex) => (
+              {shown.map((row, rowIndex) => (
                 <tr
                   key={rowIndex}
                   className={onSelect ? 'cursor-pointer' : undefined}
@@ -119,6 +159,11 @@ export default function ChartCard({
               ))}
             </tbody>
           </table>
+          {!shown.length && (
+            <p className="px-2 py-6 text-center text-sm text-ink-400">
+              No rows match these column filters.
+            </p>
+          )}
         </div>
       </div>
     )
@@ -187,5 +232,51 @@ function ViewToggle({
         </button>
       ))}
     </div>
+  )
+}
+
+/**
+ * Narrow a table's rows by what was typed under each column.
+ *
+ * Text matches on what the cell reads as, which is what somebody scanning the
+ * table is matching against too: type "North" against a coded column and the
+ * label is what answers, not the code behind it.
+ *
+ * A number column also takes a comparison - "> 100", "<= 0" - because the
+ * question asked of a measure is almost never "which of these contains a 7".
+ */
+function filterRows(
+  rows: unknown[][],
+  columns: { type?: string }[],
+  filters: Record<number, string>,
+): unknown[][] {
+  const active = Object.entries(filters).filter(([, term]) => term.trim())
+  if (!active.length) return rows
+
+  return rows.filter((row) =>
+    active.every(([index, term]) => {
+      const at = Number(index)
+      const value = row[at]
+      const text = term.trim()
+      const comparison = /^(>=|<=|>|<|=)\s*(-?[\d.]+)$/.exec(text)
+      if (comparison && columns[at]?.type === 'measure') {
+        const number = Number(value)
+        if (!Number.isFinite(number)) return false
+        const against = Number(comparison[2])
+        switch (comparison[1]) {
+          case '>':
+            return number > against
+          case '>=':
+            return number >= against
+          case '<':
+            return number < against
+          case '<=':
+            return number <= against
+          default:
+            return number === against
+        }
+      }
+      return formatCell(value).toLowerCase().includes(text.toLowerCase())
+    }),
   )
 }

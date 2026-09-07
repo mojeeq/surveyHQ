@@ -502,6 +502,16 @@ The map frames itself on the layer rather than on the pins when one is chosen.
 A single coordinate recorded in the wrong hemisphere would otherwise squeeze
 the whole survey into a thumbnail to keep that one mistake on screen.
 
+**Point shape** draws the pins as circles, squares, triangles, diamonds or
+pentagons. A circle is right when the size of the pin carries a quantity. A
+shape is right when the map is answering "what happened here", because shapes
+are told apart at a glance and in a photocopy, which two shades of one colour
+are not.
+
+The **⤢** button on a map fills the window with it. A monitoring map is read by
+looking, and a tile the size of a postcard is the one widget on a dashboard
+that is genuinely too small to do its job.
+
 ### Checking that a record was collected where it says it was
 
 This is what the boundaries are really for.
@@ -577,6 +587,26 @@ A widget that changed under its dashboard because somebody edited a shared
 snippet would be a worse surprise than one that is merely out of date - so
 editing a snippet changes the library, and removing one leaves the dashboards
 already built from it alone.
+
+### Share links
+
+**Share** lists every address this dashboard is published at, and adds more.
+
+One board usually goes to several audiences at once - a minister, the field
+supervisors, a donor - and those do not end together. Each gets its own link,
+so closing the donor's access when the report is filed leaves the supervisors
+working. Each link records how often it has been opened, which is how a link
+nobody uses can be recognised and closed.
+
+**Close** a link rather than deleting it. A closed link stops working and can
+be switched back on at the same address, which matters once it is already
+pasted into somebody's email. Deleting is permanent.
+
+A link can carry a **password**. The reader is asked for it once and then reads
+the dashboard normally; it is remembered for that browser tab only, so a shared
+computer in a field office does not leave the next person signed in. This is
+not an account - everyone holding the password is the same anonymous reader -
+and it exists so that a forwarded link is not a public one.
 
 ### Giving a dashboard its own address
 
@@ -682,6 +712,34 @@ says so:
 - **A rule under the header**, and the option to **hide the description**, for
   when the title alone is the whole heading.
 
+### Taking a widget with you
+
+Hovering a widget shows a **⧉** button, for readers as well as authors.
+
+On a table it copies the rows to the clipboard as cells: paste into Excel and
+they land in columns, paste into a plain editor and they arrive tab-separated.
+What is copied is what is on screen, so a table narrowed by its column filters
+copies narrowed.
+
+On a chart it copies a picture, ready to paste into a report. Where a browser
+refuses to put an image on the clipboard - several do, outside a secure
+connection - the picture is saved as a file instead, which reaches the same
+document by a longer road.
+
+### Filtering a table by its columns
+
+The **⌕** button above a table opens a box under each heading. Typing in one
+narrows the rows on screen, and the button then reads how many of how many are
+showing.
+
+Text matches on what the cell reads as, so typing a label matches the label
+rather than the code behind it. A number column also takes a comparison -
+`> 100`, `<= 0` - because the question asked of a measure is rarely which of
+its values contains a 7.
+
+This narrows what is already on screen rather than asking the server a new
+question, so it is instant, and it does not change what anybody else sees.
+
 ### Captions
 
 Every widget takes an optional **caption**, set when you add it or from **✎**
@@ -701,8 +759,10 @@ colour, a face for its title, and - for a chart - the colour it leads with.
 Each falls back to the dashboard when it is left alone, so a single tile can be
 lifted off a busy background without lifting all of them.
 
-**Title font** and **title size** dress the widget's heading on its own, in the
-same typefaces the dashboard title offers. A tile meant to be read across a
+**Title font**, **title size** and **title position** dress the widget's
+heading on its own, in the same typefaces the dashboard title offers. A centred
+title suits a tile that is read on its own; the default left is easier to scan
+down a column of widgets. A tile meant to be read across a
 room can carry a heading twice the size of the ones beside it without every
 other widget growing to match.
 
@@ -720,6 +780,10 @@ colour-blind reader cannot use that either. Colours can be picked from the
 swatches, typed as a code like `#1F4E79`, or chosen with the system picker;
 the swatch row for marks is in an order already checked to stay readable for
 colour-blind readers.
+
+**Shadow** lifts one widget off whatever is behind it - useful on a coloured or
+photographic dashboard background, where a flat card can read as part of the
+picture rather than as something on top of it.
 
 ### Appearance
 

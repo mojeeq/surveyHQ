@@ -7,6 +7,7 @@ from app.models.analytics import (
     Dashboard,
     HtmlSnippet,
     SavedQuery,
+    ShareLink,
     Widget,
     WidgetType,
 )
@@ -71,6 +72,7 @@ __all__ = [
     "VariableType",
     "BoundaryFormat",
     "BoundaryLayer",
+    "ShareLink",
     "Connection",
     "ExportFormat",
     "SyncRun",

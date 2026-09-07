@@ -28,12 +28,15 @@ export default function DashboardFilters({
   controls,
   value,
   background,
+  basePath,
   onChange,
 }: {
   controls: FilterControl[]
   value: Record<string, string>
   /** The bar's own colour, set in Appearance. Empty means plain white. */
   background?: string
+  /** This dashboard's own path, signed in or shared. */
+  basePath: string
   onChange: (next: Record<string, string>) => void
 }) {
   if (!controls.length) return null
@@ -51,6 +54,7 @@ export default function DashboardFilters({
         <FilterControlInput
           key={controlKey(control)}
           control={control}
+          basePath={basePath}
           value={value[control.variable] ?? ''}
           onChange={(next) => onChange({ ...value, [control.variable]: next })}
         />
@@ -66,18 +70,25 @@ export default function DashboardFilters({
 
 function FilterControlInput({
   control,
+  basePath,
   value,
   onChange,
 }: {
   control: FilterControl
+  basePath: string
   value: string
   onChange: (value: string) => void
 }) {
+  // Asked of the dashboard, not of the dataset. The dataset endpoint needs an
+  // account and the reader of a shared link has none, so a copied link came up
+  // with empty dropdowns for anybody who was not already signed in to that
+  // browser - which is why it looked intermittent. The dashboard answers for
+  // its own controls, and only for those.
   const values = useQuery({
-    queryKey: ['values', control.dataset_id, control.variable],
+    queryKey: ['filter-values', basePath, control.variable],
     queryFn: () =>
       api.get<{ value: string; label: string; count: number }[]>(
-        `/datasets/${control.dataset_id}/variables/${encodeURIComponent(control.variable)}/values?limit=200`,
+        `${basePath}/filter-values/${encodeURIComponent(control.variable)}?limit=200`,
       ),
   })
 

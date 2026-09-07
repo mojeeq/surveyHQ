@@ -212,6 +212,12 @@ export interface BuildOptions {
  * too. The one printed *on* a mark does not: it is white because it sits on a
  * filled shape, and recolouring it to match the axis is how it disappears into
  * the bar it is labelling.
+ *
+ * Neither does the tooltip. It is a pale card floating over the chart, not
+ * part of the widget: a colour chosen to read against a dark dashboard is
+ * white on white there, which is why hovering a chart on a black background
+ * showed a tooltip with nothing written in it. The typeface still travels,
+ * since a typeface is never unreadable.
  */
 const TEXT_KEYS = ['textStyle', 'axisLabel', 'nameTextStyle', 'subtextStyle', 'label']
 
@@ -240,7 +246,9 @@ function applyTextStyle(node: unknown, font?: string, color?: string): void {
       }
     }
   }
-  for (const value of Object.values(record)) applyTextStyle(value, font, color)
+  for (const [key, value] of Object.entries(record)) {
+    applyTextStyle(value, font, key === 'tooltip' ? undefined : color)
+  }
 }
 
 /** A fixed value-axis range, when one is asked for. */

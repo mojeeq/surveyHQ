@@ -4,12 +4,14 @@ import {
   useQuery,
   useQueryClient,
 } from '@tanstack/react-query'
-import { type CSSProperties, useEffect, useMemo, useState } from 'react'
+import { type CSSProperties, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
 import { useParams } from 'react-router-dom'
 import GridLayout, { type Layout } from 'react-grid-layout'
 import 'react-grid-layout/css/styles.css'
 import 'react-resizable/css/styles.css'
-import { api } from '@/lib/api'
+import { api, ApiError, shareGrants } from '@/lib/api'
+import { copyableIn, copyChart, copyTable } from '@/lib/clipboard'
 import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { CHART_THEMES, STATUS_COLORS } from '@/lib/charts'
@@ -29,6 +31,7 @@ import AssignProject from '@/components/AssignProject'
 import ChartCard from '@/components/ChartCard'
 import ColorPicker from '@/components/ColorPicker'
 import HtmlLibrary from '@/components/HtmlLibrary'
+import ShareLinks from '@/components/ShareLinks'
 import DashboardFilters, {
   controlKey,
   controlsForPage,
@@ -43,6 +46,8 @@ import MapWidget, {
   BASEMAPS,
   BASEMAP_NAMES,
   DEFAULT_TILES,
+  POINT_ICONS,
+  POINT_ICON_NAMES,
   type BoundaryOverlay,
 } from '@/components/MapWidget'
 import AppearanceModal, {
@@ -123,6 +128,10 @@ export interface WidgetStyle {
   title_size?: number
   /** The widget title's own typeface, named from TITLE_FONTS. */
   title_font?: string
+  /** Where the title sits in its bar. Left unless asked otherwise. */
+  title_align?: 'left' | 'center' | 'right'
+  /** How far the card is lifted off the background: none, soft or strong. */
+  shadow?: 'none' | 'soft' | 'strong'
   /** The colour this widget's chart leads with. */
   series_color?: string
 }
@@ -156,6 +165,20 @@ export const styleOf = (widget: Widget): WidgetStyle =>
  *  alone, which made one widget impossible to lift off a busy background
  *  without lifting all of them.
  */
+/**
+ * How far a widget is lifted off the dashboard behind it.
+ *
+ * Written out rather than left to Tailwind's shadow classes because these have
+ * to go into an inline style beside the card's own colour, and because a
+ * dashboard on a coloured or photographic background needs a shadow with more
+ * weight in it than a shadow designed for white paper.
+ */
+const SHADOWS: Record<string, string> = {
+  none: 'none',
+  soft: '0 1px 2px rgba(15,23,42,.06), 0 4px 12px rgba(15,23,42,.08)',
+  strong: '0 2px 4px rgba(15,23,42,.10), 0 12px 28px rgba(15,23,42,.18)',
+}
+
 function cardStyle(widget: Widget, dashboardOpacity: number): CSSProperties | undefined {
   const style = styleOf(widget)
   const own = style.opacity
@@ -163,6 +186,9 @@ function cardStyle(widget: Widget, dashboardOpacity: number): CSSProperties | un
   const text: CSSProperties = {
     ...(style.font_family ? { fontFamily: style.font_family } : {}),
     ...(style.font_color ? { color: style.font_color } : {}),
+    ...(style.shadow && SHADOWS[style.shadow]
+      ? { boxShadow: SHADOWS[style.shadow] }
+      : {}),
   }
   const chosen = style.background
   if (!chosen) {
@@ -194,6 +220,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
   const [editingStyle, setEditingStyle] = useState(false)
   const [editingWidget, setEditingWidget] = useState<Widget | null>(null)
   const [width, setWidth] = useState(1200)
+  const [sharing, setSharing] = useState(false)
 
   const isPublic = Boolean(publicToken)
   const basePath = isPublic ? `/public/dashboards/${publicToken}` : `/dashboards/${id}`
@@ -202,6 +229,11 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
     queryKey: ['dashboard', id, publicToken],
     queryFn: () => api.get<Dashboard>(basePath),
   })
+
+  // 401 on a public path means the link is password protected and this reader
+  // has not given it yet; any other error is a real one.
+  const locked =
+    isPublic && (dashboard.error as ApiError | null)?.status === 401
 
   const filterControls: FilterControl[] = (dashboard.data?.filters ??
     []) as unknown as FilterControl[]
@@ -229,6 +261,33 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
   // stops being readable against whatever is behind.
   const widgetOpacity = Math.min(1, Math.max(0.3, Number(declaredOpacity ?? 1)))
   const canvasWidth = Math.max(fixedWidth || width, 320)
+
+  // The grid needs a width in pixels, and it has to keep up with the window.
+  //
+  // This used to read clientWidth in a callback ref, which React calls when
+  // the node is attached and never again: the board was laid out for whatever
+  // the window was at load and stayed that way, so widening the browser left a
+  // strip of empty space and narrowing it cut the right-hand widgets off. The
+  // observer goes on the ref rather than in an effect so it is attached and
+  // detached with the node itself, and it catches the window, the sidebar
+  // collapsing and a phone turning sideways alike - all one event to the grid.
+  const watcher = useRef<ResizeObserver | null>(null)
+  const measureGrid = useCallback((node: HTMLDivElement | null) => {
+    watcher.current?.disconnect()
+    watcher.current = null
+    if (!node) return
+    setWidth(node.clientWidth)
+    if (typeof ResizeObserver === 'undefined') return
+    const observer = new ResizeObserver((entries) => {
+      const measured = entries[0]?.contentRect.width
+      // A container measured at nothing is a hidden tab, not a narrow one.
+      // Laying the board out for a zero-width canvas would stack every widget
+      // into a single column before the page has even been looked at.
+      if (measured && measured > 0) setWidth(Math.round(measured))
+    })
+    observer.observe(node)
+    watcher.current = observer
+  }, [])
 
   const rendered = useQuery({
     // The values are part of the key, so changing a filter refetches rather
@@ -374,6 +433,18 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
   )
 
   if (dashboard.isLoading) return <Loading />
+  // A link with a password answers 401 until it is given. That is a door, not
+  // a fault, so it gets a door rather than an error banner.
+  if (locked)
+    return (
+      <SharePasswordPrompt
+        token={publicToken!}
+        onUnlocked={() => {
+          queryClient.invalidateQueries()
+          dashboard.refetch()
+        }}
+      />
+    )
   if (dashboard.error) return <ErrorNote error={dashboard.error} retry={dashboard.refetch} />
 
   const onLayoutChange = (next: Layout[]) => {
@@ -455,9 +526,15 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
                   </button>
                   <button
                     className="btn-secondary"
-                    onClick={() => share.mutate(!dashboard.data!.is_public)}
+                    onClick={() => {
+                      // Publishing and managing the addresses are the same
+                      // button now: a board that is not shared yet becomes
+                      // shared by being given its first link.
+                      if (!dashboard.data!.is_public) share.mutate(true)
+                      setSharing(true)
+                    }}
                   >
-                    {dashboard.data!.is_public ? 'Stop sharing' : 'Share link'}
+                    Share
                   </button>
                 </>
               )}
@@ -468,6 +545,10 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
 
       {dashboard.data!.is_public && !isPublic && (
         <PublicLinkBar dashboard={dashboard.data!} canEdit={can('analyst')} />
+      )}
+
+      {sharing && !isPublic && (
+        <ShareLinks dashboard={dashboard.data!} onClose={() => setSharing(false)} />
       )}
 
       {/* Everything the dashboard is read for sits on the canvas: the filters
@@ -497,6 +578,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
       )}
 
       <DashboardFilters
+        basePath={basePath}
         background={appearance.filter_background}
         controls={pageControls}
         value={filterValues}
@@ -535,7 +617,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         </Card>
       ) : (
         <div
-          ref={(node) => node && setWidth(node.clientWidth)}
+          ref={measureGrid}
           // Dimmed a little while the numbers on screen belong to the previous
           // selection, so a click is acknowledged without the board being torn
           // down. isPlaceholderData rather than isFetching on purpose: the
@@ -679,6 +761,34 @@ function WidgetFrame({
   onSelect?: (variable: string, value: string) => void
 }) {
   const style = styleOf(widget)
+  const body = useRef<HTMLDivElement>(null)
+  const toast = useToast()
+  const [expanded, setExpanded] = useState(false)
+  const name = widget.title || payload?.name || 'Widget'
+
+  // What this widget can be handed over as, judged from what it actually drew
+  // rather than from its type: a chart shown as a table is a table to copy.
+  const [copyable, setCopyable] = useState<'table' | 'chart' | null>(null)
+  useEffect(() => {
+    setCopyable(copyableIn(body.current))
+  }, [payload, expanded])
+
+  const handOver = async () => {
+    const node = body.current
+    if (!node) return
+    try {
+      const table = node.querySelector('table')
+      if (table) {
+        toast.push(await copyTable(table as HTMLTableElement), 'success')
+        return
+      }
+      const canvas = node.querySelector('canvas')
+      if (canvas) toast.push(await copyChart(canvas as HTMLCanvasElement, name), 'success')
+    } catch (error) {
+      toast.push((error as Error).message, 'error')
+    }
+  }
+
   return (
     // The hover group is the whole widget, not just its title bar. It used to
     // be the bar alone, which meant the edit and remove controls stayed
@@ -689,12 +799,50 @@ function WidgetFrame({
     <div className="group flex h-full flex-col">
       <header className="widget-handle flex shrink-0 items-center justify-between gap-2 border-b border-ink-200 px-4 py-2.5">
         <h3
-          className={`truncate text-sm font-semibold text-ink-800 ${editing ? 'cursor-move' : ''}`}
+          className={`min-w-0 truncate text-sm font-semibold text-ink-800 ${
+            editing ? 'cursor-move' : ''
+          } ${
+            // grow so the alignment has room to act in: a title sized to its
+            // own text is already centred inside itself and centring it again
+            // does nothing visible.
+            style.title_align === 'center'
+              ? 'flex-1 text-center'
+              : style.title_align === 'right'
+                ? 'flex-1 text-right'
+                : ''
+          }`}
           style={titleStyle(style)}
         >
           {widget.title || payload?.name || 'Widget'}
         </h3>
         <div className="flex shrink-0 items-center gap-1">
+        {/* Two controls for whoever is reading, not only for whoever built the
+            board: a shared link is where somebody most often wants the numbers
+            in their own report, and where the map most needs the whole screen. */}
+        {copyable && (
+          <button
+            className="btn-ghost btn-sm shrink-0 text-ink-500 opacity-0 transition-opacity focus:opacity-100 group-hover:opacity-100"
+            onClick={handOver}
+            title={
+              copyable === 'table'
+                ? 'Copy this table, to paste into Excel'
+                : 'Copy this chart as a picture'
+            }
+            aria-label={`Copy ${name}`}
+          >
+            ⧉
+          </button>
+        )}
+        {payload?.type === 'map' && (
+          <button
+            className="btn-ghost btn-sm shrink-0 text-ink-500 opacity-0 transition-opacity focus:opacity-100 group-hover:opacity-100"
+            onClick={() => setExpanded(true)}
+            title="Fill the window with this map"
+            aria-label={`Expand ${name}`}
+          >
+            ⤢
+          </button>
+        )}
         {canEdit && pageNames.length > 1 && (
           // Which page a widget belongs on is usually decided after it is
           // built, and rebuilding it somewhere else is not an answer.
@@ -743,7 +891,10 @@ function WidgetFrame({
         )}
         </div>
       </header>
-      <div className="flex min-h-0 flex-1 flex-col overflow-auto px-4 pb-2 pt-4">
+      <div
+        ref={body}
+        className="flex min-h-0 flex-1 flex-col overflow-auto px-4 pb-2 pt-4"
+      >
         {/* A filter the widget's dataset has no column for is dropped rather
             than failing the query - which otherwise looks like a broken
             filter, since the widget goes on showing every row in silence. */}
@@ -816,6 +967,36 @@ function WidgetFrame({
           out of the way of the data at the top where the eye lands first.
           shrink-0 so a long one is never squeezed to nothing by the chart
           above it. */}
+      {/* The map, filling the window. A monitoring map is read by looking, and
+          a tile the size of a postcard is the one widget on a dashboard that
+          is genuinely too small to do its job. The dashboard behind it keeps
+          running, so closing this puts the reader back where they were. */}
+      {expanded &&
+        payload?.type === 'map' &&
+        createPortal(
+        <div
+          className="fixed inset-0 z-50 flex flex-col bg-white p-3"
+          role="dialog"
+          aria-label={`${name}, full screen`}
+        >
+          <div className="mb-2 flex shrink-0 items-center justify-between gap-2">
+            <h2 className="truncate text-sm font-semibold text-ink-800">{name}</h2>
+            <button className="btn-secondary btn-sm" onClick={() => setExpanded(false)}>
+              Close
+            </button>
+          </div>
+          <div className="min-h-0 flex-1">
+            <BoundedMap payload={payload} widget={widget} basePath={basePath} />
+          </div>
+        </div>,
+        // Onto the body, escaping the grid. Every widget sits inside an element
+        // the layout has given a transform, and a transformed ancestor makes
+        // "fixed" mean "fixed to that ancestor" - so the full-screen map opened
+        // at the size of the tile it came from, which is the one size it was
+        // trying not to be.
+        document.body,
+      )}
+
       {style.caption && (
         <p
           className="shrink-0 border-t border-ink-100 px-4 py-2 text-xs leading-snug text-ink-500"
@@ -1053,6 +1234,7 @@ function BoundedMap({
       detail={payload.detail ?? []}
       measure={payload.measure}
       basemap={widget.config?.basemap as string | undefined}
+      icon={widget.config?.point_icon as string | undefined}
       tiles={widget.config?.tiles as string | undefined}
       truncated={payload.truncated}
       boundary={boundary}
@@ -2434,6 +2616,46 @@ function EditWidgetModal({
         </select>
       </Field>
 
+      <Field label="Title position">
+        <select
+          className="input"
+          aria-label="Widget title position"
+          value={config.title_align ?? 'left'}
+          onChange={(event) =>
+            set({
+              title_align:
+                event.target.value === 'left'
+                  ? undefined
+                  : (event.target.value as 'center' | 'right'),
+            })
+          }
+        >
+          <option value="left">Left</option>
+          <option value="center">Centred</option>
+          <option value="right">Right</option>
+        </select>
+      </Field>
+
+      <Field label="Shadow" hint="Lifts this widget off the dashboard behind it.">
+        <select
+          className="input"
+          aria-label="Widget shadow"
+          value={config.shadow ?? 'none'}
+          onChange={(event) =>
+            set({
+              shadow:
+                event.target.value === 'none'
+                  ? undefined
+                  : (event.target.value as 'soft' | 'strong'),
+            })
+          }
+        >
+          <option value="none">None</option>
+          <option value="soft">Soft</option>
+          <option value="strong">Strong</option>
+        </select>
+      </Field>
+
       <Field label="Title size" hint="Empty follows the rest of the widget.">
         <div className="flex items-center gap-3">
           <input
@@ -2591,6 +2813,29 @@ function EditWidgetModal({
               )}
             </div>
           </Field>
+          <Field
+            label="Point shape"
+            hint="A shape is told apart in a photocopy; a shade of a colour is not."
+          >
+            <select
+              className="input"
+              aria-label="Map point shape"
+              value={config.point_icon ?? 'circle'}
+              onChange={(event) =>
+                set({
+                  point_icon:
+                    event.target.value === 'circle' ? undefined : event.target.value,
+                })
+              }
+            >
+              {POINT_ICON_NAMES.map((name) => (
+                <option key={name} value={name}>
+                  {POINT_ICONS[name].label}
+                </option>
+              ))}
+            </select>
+          </Field>
+
           <Field label="Base map" hint="A reader can switch this on the map itself.">
             <select
               className="input"
@@ -2969,6 +3214,70 @@ function PublicLinkBar({
           </p>
         </div>
       )}
+    </div>
+  )
+}
+
+/**
+ * The door in front of a password-protected shared link.
+ *
+ * The password is traded once for a grant that the other routes accept, rather
+ * than sent with every request: the hash behind it is deliberately slow, and a
+ * dashboard on an office wall refreshing every minute would otherwise spend
+ * its life being hashed.
+ */
+function SharePasswordPrompt({
+  token,
+  onUnlocked,
+}: {
+  token: string
+  onUnlocked: () => void
+}) {
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
+  const [busy, setBusy] = useState(false)
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    setBusy(true)
+    setError('')
+    try {
+      const { grant } = await api.post<{ grant: string }>(
+        `/public/dashboards/${token}/unlock`,
+        { password },
+      )
+      shareGrants.set(token, grant)
+      onUnlocked()
+    } catch (caught) {
+      setError((caught as Error).message)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="mx-auto max-w-sm py-16">
+      <Card>
+        <h1 className="text-base font-semibold text-ink-800">This dashboard is protected</h1>
+        <p className="mt-1 text-sm text-ink-600">
+          Enter the password you were given with the link.
+        </p>
+        <form className="mt-4" onSubmit={submit}>
+          <Field label="Password">
+            <input
+              className="input"
+              type="password"
+              autoFocus
+              value={password}
+              onChange={(event) => setPassword(event.target.value)}
+            />
+          </Field>
+          {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
+          <button className="btn-primary w-full" type="submit" disabled={busy || !password}>
+            {busy ? 'Checking…' : 'Open dashboard'}
+          </button>
+        </form>
+      </Card>
     </div>
   )
 }

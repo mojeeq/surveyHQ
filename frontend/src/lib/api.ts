@@ -1,6 +1,38 @@
 // Thin fetch wrapper: attaches the token, unwraps JSON and normalises errors.
 
 const TOKEN_KEY = 'surveyhq.token'
+const GRANT_PREFIX = 'surveyhq.share.'
+
+/**
+ * The proof that a reader knew a shared link's password.
+ *
+ * Kept per link and only for this tab. A grant is not a login - everybody
+ * holding one is the same anonymous reader - so it has no business outliving
+ * the tab it was typed into, and a shared computer in a field office is
+ * exactly where that matters.
+ */
+export const shareGrants = {
+  get: (token: string) => {
+    try {
+      return sessionStorage.getItem(GRANT_PREFIX + token) ?? ''
+    } catch {
+      return ''
+    }
+  },
+  set: (token: string, grant: string) => {
+    try {
+      sessionStorage.setItem(GRANT_PREFIX + token, grant)
+    } catch {
+      /* a browser refusing storage still works, it just asks again */
+    }
+  },
+}
+
+/** The share token in the path of a public request, if this is one. */
+function shareTokenOf(path: string): string {
+  const match = /^\/public\/dashboards\/([^/?]+)/.exec(path)
+  return match ? decodeURIComponent(match[1]) : ''
+}
 
 export class ApiError extends Error {
   status: number
@@ -26,11 +58,17 @@ async function request<T>(path: string, options: Options = {}): Promise<T> {
   const { body, raw, headers, ...rest } = options
   const token = tokenStore.get()
 
+  // A password-protected shared link carries its grant on every request, since
+  // every route behind the password checks it. Attached here rather than at
+  // each call site so nothing can be forgotten and left readable.
+  const grant = shareGrants.get(shareTokenOf(path))
+
   const init: RequestInit = {
     ...rest,
     headers: {
       ...(body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(grant ? { 'X-Share-Grant': grant } : {}),
       ...(headers as Record<string, string>),
     },
   }
@@ -43,6 +81,13 @@ async function request<T>(path: string, options: Options = {}): Promise<T> {
     response = await fetch(`/api/v1${path}`, init)
   } catch {
     throw new ApiError(0, 'Could not reach the server. Check that the platform is running.')
+  }
+
+  // A locked shared link answers 401 until its password is given. That is not
+  // an expired session and must not clear the signed-in user's token or bounce
+  // them to the sign-in page: the page above handles it by asking.
+  if (response.status === 401 && path.startsWith('/public/')) {
+    throw new ApiError(401, await detailOf(response))
   }
 
   if (response.status === 401 && !path.startsWith('/auth/login')) {
@@ -70,6 +115,16 @@ async function request<T>(path: string, options: Options = {}): Promise<T> {
   if (raw) return (await response.blob()) as T
   if (response.status === 204) return undefined as T
   return (await response.json()) as T
+}
+
+async function detailOf(response: Response): Promise<string> {
+  try {
+    const payload = await response.json()
+    if (typeof payload.detail === 'string') return payload.detail
+  } catch {
+    /* fall through to the generic message */
+  }
+  return `Request failed with status ${response.status}`
 }
 
 export const api = {
