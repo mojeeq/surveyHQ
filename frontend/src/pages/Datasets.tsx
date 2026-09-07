@@ -6,6 +6,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { formatBytes, formatNumber, relativeTime } from '@/lib/format'
 import type { ArchiveImport, Dataset, Job, Page, Project } from '@/lib/types'
+import BoundaryLibrary from '@/components/BoundaryLibrary'
 import ProjectPicker from '@/components/ProjectPicker'
 import {
   Badge,
@@ -302,6 +303,12 @@ export default function Datasets() {
           ))}
         </div>
       )}
+
+      {/* Reference geography, under the data it describes. A frame is not a
+          dataset - nothing is tabulated from it - but it is uploaded here for
+          the same reason it is read here: it is what the data is checked
+          against. */}
+      <BoundaryLibrary />
 
       <UploadModal
         open={uploadInto !== null}

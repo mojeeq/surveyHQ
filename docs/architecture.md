@@ -380,6 +380,9 @@ backend/app/
                   stata_expr.py       Stata expressions -> checked SQL
                   freshness.py        how recent a dataset's data is
                   geo.py              GPS points, grouped, for the map
+                  geometry.py         GeoJSON/GeoPackage/shapefile -> features
+                  boundaries.py       which area a point falls in
+                  boundary_store.py   boundary layers on disk, with a cache
                   scheduling.py       when the next import is due
                   dashboard_assets.py background images
                   survey_solutions.py the CAPI server client

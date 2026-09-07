@@ -113,8 +113,17 @@ class Settings(BaseSettings):
     def exports_path(self) -> Path:
         return self.storage_path / "exports"
 
+    @property
+    def boundaries_path(self) -> Path:
+        return self.storage_path / "boundaries"
+
     def ensure_directories(self) -> None:
-        for path in (self.datasets_path, self.uploads_path, self.exports_path):
+        for path in (
+            self.datasets_path,
+            self.uploads_path,
+            self.exports_path,
+            self.boundaries_path,
+        ):
             path.mkdir(parents=True, exist_ok=True)
 
     @property

@@ -23,6 +23,10 @@ from app.models.dataset import (
     Variable,
     VariableType,
 )
+from app.models.geography import (
+    BoundaryFormat,
+    BoundaryLayer,
+)
 from app.models.monitoring import (
     Alert,
     AlertRule,
@@ -65,6 +69,8 @@ __all__ = [
     "DatasetStatus",
     "Variable",
     "VariableType",
+    "BoundaryFormat",
+    "BoundaryLayer",
     "Connection",
     "ExportFormat",
     "SyncRun",

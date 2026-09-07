@@ -102,6 +102,24 @@ export interface Variable {
 
 export type DatasetStatus = 'pending' | 'processing' | 'ready' | 'failed'
 
+/** A frame of areas - enumeration areas, districts, villages - a map draws. */
+export interface BoundaryLayer {
+  id: string
+  name: string
+  description: string
+  project_id: string | null
+  source_format: string
+  source_filename: string
+  feature_count: number
+  file_size: number
+  /** The attribute names its areas carry, for choosing a code and a label. */
+  properties: string[]
+  /** [min_x, min_y, max_x, max_y], for framing a map on it. */
+  bbox: number[]
+  created_at: string
+  updated_at: string
+}
+
 export interface Dataset {
   id: string
   name: string

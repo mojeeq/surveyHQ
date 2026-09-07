@@ -12,6 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.schemas.query import FilterGroup
+from app.services.boundaries import Areas, normalise_code, same_code
 from app.services.query_engine import (
     DatasetContext,
     QueryError,
@@ -49,6 +50,7 @@ def points(
     measure_variable: str = "",
     filters: FilterGroup | None = None,
     limit: int = MAX_POINTS,
+    area_variable: str = "",
 ) -> dict[str, Any]:
     """Grouped coordinates, each with a value and the details to show on click."""
     for name in (latitude, longitude):
@@ -56,6 +58,8 @@ def points(
             raise QueryError(f"'{name}' is not a variable in this dataset")
     if measure_agg not in AGGREGATIONS:
         raise QueryError(f"'{measure_agg}' is not an aggregation this map can show")
+    if area_variable and area_variable not in ctx.variables:
+        raise QueryError(f"'{area_variable}' is not a variable in this dataset")
 
     lat = quote_ident(ctx.require(latitude).name)
     lon = quote_ident(ctx.require(longitude).name)
@@ -79,6 +83,16 @@ def points(
         f", ANY_VALUE({quote_ident(name)}) AS {quote_ident(name)}" for name in details
     )
 
+    # The area a record says it was in is part of what makes a place distinct
+    # when the map is checking that claim. Two households at one coordinate
+    # naming different enumeration areas is itself the finding, and grouping
+    # them into one pin would average the disagreement away.
+    grouping = ["1", "2"]
+    area_select = ""
+    if area_variable:
+        area_select = f", {quote_ident(area_variable)} AS recorded_area"
+        grouping.append("3")
+
     builder = SQLBuilder(ctx)
     where = builder.filter_sql(filters) if filters else ""
     params = list(builder.params)
@@ -95,14 +109,23 @@ def points(
         conditions.append(f"({where})")
 
     sql = (
-        f"SELECT {lat} AS lat, {lon} AS lon, {value} AS value, COUNT(*) AS rows{selected} "
+        f"SELECT {lat} AS lat, {lon} AS lon{area_select}, {value} AS value, "
+        f"COUNT(*) AS rows{selected} "
         f"FROM read_parquet({_quote_path(ctx.parquet_path)}) "
         f"WHERE {' AND '.join(conditions)} "
-        f"GROUP BY 1, 2 ORDER BY 3 DESC LIMIT {int(limit) + 1}"
+        f"GROUP BY {', '.join(grouping)} ORDER BY value DESC LIMIT {int(limit) + 1}"
     )
     columns, rows = run_sql(sql, params)
     found = [dict(zip(columns, row, strict=False)) for row in rows]
     # A popup reading "province: 3" is the code, not the answer.
+    if area_variable:
+        info = ctx.variables.get(area_variable)
+        for point in found:
+            point["recorded_area_label"] = (
+                _label_value(info, point["recorded_area"])
+                if info and info.value_labels
+                else point["recorded_area"]
+            )
     for name in details:
         info = ctx.variables.get(name)
         if not info or not info.value_labels:
@@ -116,3 +139,39 @@ def points(
         "measure": {"agg": measure_agg, "variable": measure_variable},
         "truncated": truncated,
     }
+
+
+def check_areas(
+    found: list[dict[str, Any]],
+    areas: Areas,
+    boundary_key: str,
+) -> dict[str, int]:
+    """Say, for each point, whether it fell in the area its record claims.
+
+    Three answers, not two. "Agrees" and "disagrees" are the interesting ones,
+    but a point outside every boundary in the layer is a third thing entirely -
+    usually a frame that does not cover this island yet, or a coordinate in the
+    wrong hemisphere - and calling it a mismatch would bury the real ones.
+    """
+    counts = {"match": 0, "mismatch": 0, "outside": 0, "unrecorded": 0}
+    for point in found:
+        index = areas.locate(_number(point.get("lon")), _number(point.get("lat")))
+        expected = areas.value(index, boundary_key)
+        point["area_expected"] = expected
+        if index is None:
+            point["area_status"] = "outside"
+        elif normalise_code(point.get("recorded_area")) is None:
+            point["area_status"] = "unrecorded"
+        elif same_code(point.get("recorded_area"), expected):
+            point["area_status"] = "match"
+        else:
+            point["area_status"] = "mismatch"
+        counts[point["area_status"]] += 1
+    return counts
+
+
+def _number(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0

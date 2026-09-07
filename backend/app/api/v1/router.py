@@ -8,6 +8,7 @@ from app.api.v1.endpoints import (
     connections,
     dashboards,
     datasets,
+    geography,
     monitoring,
     projects,
     public,
@@ -26,6 +27,7 @@ api_router.include_router(
 )
 api_router.include_router(connections.router, prefix="/connections", tags=["connections"])
 api_router.include_router(analytics.router, prefix="/analytics", tags=["analytics"])
+api_router.include_router(geography.router, prefix="/boundaries", tags=["boundaries"])
 api_router.include_router(dashboards.router, prefix="/dashboards", tags=["dashboards"])
 api_router.include_router(monitoring.router, prefix="/monitoring", tags=["monitoring"])
 api_router.include_router(system.router, prefix="/system", tags=["system"])

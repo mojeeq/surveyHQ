@@ -15,10 +15,11 @@ Disk depends on your data. A survey with 100,000 interviews and 500 variables
 stores as roughly 100-200 MB of Parquet, because Parquet is columnar and
 compressed. Budget for keeping several rounds.
 
-Three other things share that volume: the uploads as received, the last five
-export archives per connection (tens of megabytes each), and dashboard
-background and logo images (8 MB each at most). The archives prune themselves as new runs
-land; nothing else does.
+Four other things share that volume: the uploads as received, the last five
+export archives per connection (tens of megabytes each), dashboard background
+and logo images (8 MB each at most), and boundary layers, which are stored as
+GeoJSON and are usually a few megabytes for a national enumeration-area frame.
+The archives prune themselves as new runs land; nothing else does.
 
 ## Install
 
