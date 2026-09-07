@@ -28,20 +28,22 @@
  * `execCommand`. It is deprecated and it is what the deprecation replaced it
  * with cannot do, so it stays as the fallback.
  */
-export async function copyText(text: string): Promise<boolean> {
-  if (navigator.clipboard?.writeText) {
-    try {
-      await navigator.clipboard.writeText(text)
-      return true
-    } catch {
-      /* denied, or not permitted from this event; try the old way */
-    }
+function copyNow(text: string, html?: string): boolean {
+  let holder: HTMLTextAreaElement | null = null
+  const dress = (event: ClipboardEvent) => {
+    if (!event.clipboardData) return
+    // Both flavours from the one copy: Excel and Word read the HTML and land
+    // the table in cells, a plain editor takes the tab-separated version.
+    if (html) event.clipboardData.setData('text/html', html)
+    event.clipboardData.setData('text/plain', text)
+    event.preventDefault()
   }
   try {
-    const holder = document.createElement('textarea')
+    // Something has to be selected or execCommand does nothing at all, so the
+    // text goes into a textarea off screen. Off screen rather than hidden: a
+    // display:none element cannot be selected, and the page must not scroll.
+    holder = document.createElement('textarea')
     holder.value = text
-    // Off screen rather than hidden: a display:none element cannot be selected,
-    // and the page must not scroll to it either.
     holder.setAttribute('readonly', '')
     holder.style.position = 'fixed'
     holder.style.top = '-1000px'
@@ -49,12 +51,27 @@ export async function copyText(text: string): Promise<boolean> {
     document.body.appendChild(holder)
     holder.select()
     holder.setSelectionRange(0, text.length)
-    const copied = document.execCommand('copy')
-    document.body.removeChild(holder)
-    return copied
+    document.addEventListener('copy', dress, true)
+    return document.execCommand('copy')
   } catch {
     return false
+  } finally {
+    document.removeEventListener('copy', dress, true)
+    holder?.remove()
   }
+}
+
+export async function copyText(text: string): Promise<boolean> {
+  if (copyNow(text)) return true
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch {
+      /* nothing else to try */
+    }
+  }
+  return false
 }
 
 /** The text of one cell, with the whitespace a spreadsheet would choke on removed. */
@@ -99,6 +116,18 @@ export async function copyTable(table: HTMLTableElement): Promise<string> {
   const text = asTsv(table)
   const html = asHtml(table)
   const rows = table.rows.length
+  const done = `${rows} row${rows === 1 ? '' : 's'} copied - paste into Excel`
+
+  // The synchronous way first, and not as a fallback.
+  //
+  // A browser only allows a copy while the click that asked for it is still
+  // the thing being handled. The asynchronous clipboard API is allowed to take
+  // its time, so trying it first and falling back meant the fallback ran after
+  // several awaits, by which point the permission it needed was gone - and a
+  // refused copy reports nothing, so the button looked simply dead. This path
+  // asks for nothing, needs no secure context, and carries the HTML that makes
+  // a table arrive in cells.
+  if (copyNow(text, html)) return done
 
   if (navigator.clipboard && typeof ClipboardItem !== 'undefined') {
     try {
@@ -108,13 +137,11 @@ export async function copyTable(table: HTMLTableElement): Promise<string> {
           'text/plain': new Blob([text], { type: 'text/plain' }),
         }),
       ])
-      return `${rows} row${rows === 1 ? '' : 's'} copied - paste into Excel`
+      return done
     } catch {
-      /* fall through to the text-only path */
+      /* one last try, plain text only */
     }
   }
-  // Text only still pastes into a spreadsheet, one value per cell; it just
-  // arrives without the headings in bold.
   if (!(await copyText(text))) {
     throw new Error('This browser would not let the table be copied')
   }

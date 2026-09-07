@@ -404,6 +404,44 @@ table. Percentages on a one-way table are shares of the total, since that is
 the only denominator it has, and there is no chi-square: there is no
 independence to test between a variable and nothing.
 
+### Tick all that apply
+
+A multiple-select question does not arrive as one variable. Survey Solutions
+writes one column per option - `toilet__1`, `toilet__2`, `toilet__3` - each
+holding 1 where that option was chosen and 0 where it was not. Tabulating any
+one of them answers "how many households have a flush toilet"; none of them
+answers "what do households use", which is the question that was asked.
+
+This tab puts the set back together. It reads the column names and offers the
+questions it found, so picking **Main source of drinking water** is one choice
+rather than ticking twelve columns. Each option becomes one bar, counted down
+its own column.
+
+The shares add to more than 100, and that is correct: a household that ticked
+three options is counted in three of them. **Percent of** decides the
+denominator - the people who were asked the question, which is the usual
+reading, or every row in the file, for a dataset where most rows were never
+asked it.
+
+**Show** decides which number is drawn. A count and a percentage on one axis
+are two scales pretending to be one, so a chart takes one of them; a table is
+the place for both.
+
+Untick an option to leave it out - the "other" and "don't know" options usually
+belong on the table and not on the chart - and the percentages stay shares of
+the same respondents, so leaving a bar out does not inflate the rest.
+
+**Choose the columns myself** is there for a file that does not follow the
+`name__1` convention: search for the columns that hold the question and tick
+them. Anything holding 1 and 0 works, and so does Yes/No, since a CSV round
+trip turns one into the other often enough.
+
+Saved as a chart it goes on a dashboard like any other, drawn horizontally or
+vertically, and dashboard filters reach it: filtering to one province moves the
+counts and the denominator with them. Clicking a bar does not filter the
+dashboard, because the bars are columns of the file rather than values of one
+variable, so there is no filter a click could stand for.
+
 ## Charts and dashboards
 
 Any Explore result can be saved as a chart. Saved charts live under
@@ -569,6 +607,28 @@ deployment with its own tile service can be pointed at it with **Map tiles**,
 which replaces the three and hides the switcher, since a choice between hosts
 this server cannot reach is no choice at all.
 
+### How the pins are drawn
+
+The pins on a map are set from **✎**, and the defaults are only defaults:
+
+- **Point shape** - a circle, or a shape with corners. A shape survives a
+  photocopy and a colour-blind reader; a shade of a colour does not.
+- **Point colour** - any colour, from the swatches or the picker. Default blue
+  when nothing is chosen.
+- **Point size** - how big a pin is before the value scales it, from 6 to 40.
+- **Point transparency** - how much shows through. A low value is what turns a
+  crowd of overlapping pins into readable density instead of one solid blob,
+  which is why the default is 60% rather than solid.
+- **Bigger pins where the number is bigger** - on by default. Each pin is sized
+  by what it carries, so a village with 40 interviews reads as bigger than one
+  with 3. Turn it off when the question is where the work happened rather than
+  how much of it, and every pin is drawn the same size.
+
+Where a map checks records against a boundary layer, the verdicts - the
+matches, the mismatches, the ones outside every area - draw their own colour
+and their own size instead, because on that map the colour is the finding and a
+pin sized by a second number would compete with it.
+
 ### Reusing an embed
 
 An **Embedded HTML** widget holds a piece of markup - a map, a video, the
@@ -719,6 +779,13 @@ On a table it copies the rows to the clipboard as cells: paste into Excel and
 they land in columns, paste into a plain editor and they arrive tab-separated.
 What is copied is what is on screen, so a table narrowed by its column filters
 copies narrowed.
+
+This works on a plain HTTP deployment as well as over HTTPS. The modern
+clipboard interface exists only on a secure connection, and it is also allowed
+to take its time - by which point the browser has stopped counting your click
+as permission to copy, and it refuses without saying so. The button therefore
+uses the older synchronous copy first, which asks for no permission and needs
+no secure connection, and still carries the HTML that makes Excel fill cells.
 
 On a chart it copies a picture, ready to paste into a report. Where a browser
 refuses to put an image on the clipboard - several do, outside a secure
