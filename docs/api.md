@@ -386,6 +386,9 @@ GET  /system/info
 GET  /health                 no authentication
 ```
 
+`/system/jobs` returns all jobs to administrators, and only the caller's own
+jobs to non-admin users.
+
 ## The query specification
 
 The same object drives ad-hoc queries, saved charts and indicators.

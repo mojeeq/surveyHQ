@@ -233,6 +233,20 @@ def test_download_reports_an_unreachable_host_rather_than_raising_transport_erro
 
 
 @respx.mock
+def test_unsafe_download_link_is_refused_and_the_api_route_is_still_tried():
+    respx.get(f"{BASE}/primary/api/v2/export/6/file").mock(
+        return_value=httpx.Response(200, content=b"zip")
+    )
+    job = ExportJob(
+        6,
+        "Completed",
+        download_url="http://169.254.169.254/latest/meta-data/iam/security-credentials/",
+    )
+    with make_client() as client:
+        assert client.download_export(job) == b"zip"
+
+
+@respx.mock
 def test_an_export_is_kept_as_the_zip_it_arrived_as(tmp_path):
     """The whole archive is what the platform imports, and what it hands back.
 

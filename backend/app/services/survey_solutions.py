@@ -363,6 +363,10 @@ class SurveySolutionsClient:
         ``Accept: application/json`` header to a host that did not ask for them
         is how a download ends up rejected rather than served.
         """
+        try:
+            check_url(url)
+        except UnsafeAddressError as exc:
+            raise SurveySolutionsError(str(exc)) from exc
         if self._same_host(url):
             return self._client.get(url, headers={"Accept": "*/*"})
         with httpx.Client(
@@ -370,6 +374,7 @@ class SurveySolutionsClient:
             timeout=self._client.timeout,
             follow_redirects=True,
             headers={"Accept": "*/*", "User-Agent": "susoDash/1.0"},
+            event_hooks={"request": [_refuse_unsafe_address]},
         ) as anonymous:
             return anonymous.get(url)
 
@@ -393,6 +398,9 @@ class SurveySolutionsClient:
             host = urlparse(url).netloc or "the server"
             try:
                 response = self._fetch_export_file(url)
+            except SurveySolutionsError as exc:
+                failures.append(f"{host} refused ({exc})")
+                continue
             except httpx.TransportError as exc:
                 failures.append(f"{host} could not be reached ({exc})")
                 continue
