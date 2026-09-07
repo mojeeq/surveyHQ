@@ -56,6 +56,20 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
+      # The command box can hand a dataset to R, and those tests skip
+      # themselves where R is missing - which on a runner without it means a
+      # feature with eleven tests silently has none. Installed on one leg of
+      # the matrix, since nothing about it depends on the database.
+      - name: Install R
+        if: matrix.database == 'sqlite'
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends r-base-core
+
+      # Proves it before the suite runs, so the R tests cannot pass by being
+      # skipped.
+      - name: Check R is there
+        if: matrix.database == 'sqlite'
+        run: Rscript --version
+
       - name: Lint
         run: ruff check app tests
 
