@@ -113,7 +113,7 @@ export default function Dashboards() {
                   <div className="flex items-start justify-between gap-2">
                     <Link
                       to={`/dashboards/${dashboard.id}`}
-                      className="text-base font-semibold text-ink-900 hover:text-brand-700"
+                      className="text-base font-semibold text-ink-900 hover:text-brand-700 dark:text-dark-900 dark:hover:text-brand-400"
                     >
                       {dashboard.name}
                     </Link>

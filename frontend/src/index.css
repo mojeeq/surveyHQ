@@ -7,13 +7,14 @@
     -webkit-font-smoothing: antialiased;
   }
   body {
-    @apply bg-ink-100 text-ink-700 font-sans text-[13px] antialiased;
+    @apply bg-ink-100 text-ink-700 font-sans text-[13px] antialiased transition-colors duration-200
+           dark:bg-dark-100 dark:text-dark-600;
   }
   h1,
   h2,
   h3,
   h4 {
-    @apply text-ink-900;
+    @apply text-ink-900 dark:text-dark-900;
   }
   a {
     @apply text-link;
@@ -21,25 +22,31 @@
   * {
     @apply border-ink-200;
   }
+  .dark * {
+    @apply border-dark-200;
+  }
 }
 
 @layer components {
   .card {
-    @apply bg-white rounded-card border border-ink-200 shadow-card;
+    @apply bg-white rounded-card border border-ink-200 shadow-card
+           dark:bg-dark-50 dark:border-dark-200;
   }
   .card-header {
-    @apply px-5 py-4 border-b border-ink-200 flex items-center justify-between gap-3;
+    @apply px-5 py-4 border-b border-ink-200 flex items-center justify-between gap-3 dark:border-dark-200;
   }
   .card-body {
     @apply p-5;
   }
   .label {
-    @apply block text-xs font-medium text-ink-600 mb-1;
+    @apply block text-xs font-medium text-ink-600 mb-1 dark:text-dark-600;
   }
   .input {
     @apply w-full rounded-control border border-ink-200 bg-white px-3 py-1.5 text-[13px] text-ink-700
            placeholder:text-ink-400 focus:border-brand-500 focus:outline-none
-           focus:ring-2 focus:ring-brand-500/20 disabled:bg-ink-50 disabled:text-ink-500;
+           focus:ring-2 focus:ring-brand-500/20 disabled:bg-ink-50 disabled:text-ink-500
+           dark:bg-dark-50 dark:border-dark-300 dark:text-dark-700 dark:placeholder:text-dark-400
+           dark:disabled:bg-dark-100 dark:disabled:text-dark-500;
   }
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-control px-3.5 py-1.5 text-[13px]
@@ -51,13 +58,16 @@
   }
   .btn-secondary {
     @apply btn bg-white text-ink-700 border border-ink-200 hover:border-brand-400
-           hover:text-brand-600 focus:ring-ink-400;
+           hover:text-brand-600 focus:ring-ink-400
+           dark:bg-dark-50 dark:text-dark-700 dark:border-dark-300 dark:hover:border-brand-500
+           dark:hover:text-brand-400 dark:focus:ring-dark-400;
   }
   .btn-danger {
     @apply btn bg-red-600 text-white hover:bg-red-700 focus:ring-red-500;
   }
   .btn-ghost {
-    @apply btn text-ink-600 hover:bg-ink-50 hover:text-brand-600 focus:ring-ink-300;
+    @apply btn text-ink-600 hover:bg-ink-50 hover:text-brand-600 focus:ring-ink-300
+           dark:text-dark-600 dark:hover:bg-dark-200 dark:hover:text-brand-400 dark:focus:ring-dark-400;
   }
   .btn-sm {
     @apply px-2.5 py-1.5 text-xs;
@@ -68,19 +78,31 @@
   /* Redash's table: a barely-there header wash, tight rows, no shouting. */
   .table-base thead th {
     @apply bg-[rgba(102,136,153,0.03)] text-left text-[13px] font-medium
-           text-ink-900 px-2.5 py-[7px] border-b border-ink-200 whitespace-nowrap;
+           text-ink-900 px-2.5 py-[7px] border-b border-ink-200 whitespace-nowrap
+           dark:bg-dark-50 dark:text-dark-900 dark:border-dark-200;
   }
   .table-base tbody td {
-    @apply px-2.5 py-[7px] border-b border-[#f0f0f0] align-top;
+    @apply px-2.5 py-[7px] border-b border-[#f0f0f0] align-top dark:border-dark-200;
   }
   .table-base tbody tr:hover {
-    @apply bg-[rgba(102,136,153,0.05)];
+    @apply bg-[rgba(102,136,153,0.05)] dark:bg-dark-200/40;
   }
   /* Square, like everything else here. A pill reads as decoration; a status
      belongs in the same rectangular vocabulary as the tables and cards it sits
      among. */
   .chip {
     @apply inline-flex items-center gap-1 rounded-control border px-2 py-0.5 text-xs font-medium;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
   }
 }
 
@@ -100,8 +122,9 @@
   height: 10px;
 }
 ::-webkit-scrollbar-thumb {
-  @apply bg-ink-300 rounded-full border-2 border-solid border-transparent bg-clip-padding;
+  @apply bg-ink-300 rounded-full border-2 border-solid border-transparent bg-clip-padding
+         dark:bg-dark-300;
 }
 ::-webkit-scrollbar-thumb:hover {
-  @apply bg-ink-400;
+  @apply bg-ink-400 dark:bg-dark-400;
 }

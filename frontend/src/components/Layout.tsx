@@ -1,10 +1,23 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
+import { useTheme } from '@/hooks/useTheme'
 import type { Notification } from '@/lib/types'
 import { relativeTime } from '@/lib/format'
+
+/** Closes a popover when a click lands outside every ref it's given. */
+function useClickOutside(refs: React.RefObject<HTMLElement>[], onOutside: () => void) {
+  useEffect(() => {
+    const onPointerDown = (event: MouseEvent) => {
+      if (refs.some((ref) => ref.current?.contains(event.target as Node))) return
+      onOutside()
+    }
+    document.addEventListener('mousedown', onPointerDown)
+    return () => document.removeEventListener('mousedown', onPointerDown)
+  }, [refs, onOutside])
+}
 
 const NAV = [
   { to: '/', label: 'Overview', icon: '◈', end: true },
@@ -20,9 +33,13 @@ const NAV = [
 
 export default function Layout() {
   const { user, signOut, can } = useAuth()
+  const { resolvedTheme, toggleTheme } = useTheme()
   const navigate = useNavigate()
   const [menuOpen, setMenuOpen] = useState(false)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const notificationsRef = useRef<HTMLDivElement>(null)
+  const mobileNavRef = useRef<HTMLElement>(null)
+  const mobileToggleRef = useRef<HTMLButtonElement>(null)
 
   const { data: notifications = [] } = useQuery({
     queryKey: ['notifications'],
@@ -30,8 +47,11 @@ export default function Layout() {
     refetchInterval: 60_000,
   })
 
+  useClickOutside([notificationsRef], () => setNotificationsOpen(false))
+  useClickOutside([mobileNavRef, mobileToggleRef], () => setMenuOpen(false))
+
   return (
-    <div className="flex min-h-screen bg-ink-100">
+    <div className="flex min-h-screen bg-ink-100 dark:bg-dark-100">
       {/* The one dark surface in the interface, as it is in Redash: the
           navigation is furniture, and keeping it out of the paper-white
           working area is what makes a dashboard read as the content. */}
@@ -49,7 +69,7 @@ export default function Layout() {
               to={item.to}
               end={item.end}
               className={({ isActive }) =>
-                `flex items-center gap-2.5 rounded-control px-3 py-2 text-[13px] transition-colors ${
+                `flex items-center gap-2.5 rounded-control px-3 py-2 text-[13px] transition-colors duration-150 ${
                   isActive
                     ? 'bg-sidebar-active text-white'
                     : 'text-sidebar-text hover:bg-sidebar-active hover:text-white'
@@ -66,7 +86,7 @@ export default function Layout() {
             <NavLink
               to="/admin"
               className={({ isActive }) =>
-                `flex items-center gap-2.5 rounded-control px-3 py-2 text-[13px] transition-colors ${
+                `flex items-center gap-2.5 rounded-control px-3 py-2 text-[13px] transition-colors duration-150 ${
                   isActive
                     ? 'bg-sidebar-active text-white'
                     : 'text-sidebar-text hover:bg-sidebar-active hover:text-white'
@@ -84,24 +104,42 @@ export default function Layout() {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-ink-200 bg-white/95 px-4 backdrop-blur lg:px-6">
+        <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-ink-200 bg-white/95 px-4 backdrop-blur transition-colors dark:border-dark-200 dark:bg-dark-50/95 lg:px-6">
           <div className="flex items-center gap-2 lg:hidden">
-            <button className="btn-ghost btn-sm" onClick={() => setMenuOpen(!menuOpen)}>
+            <button
+              ref={mobileToggleRef}
+              className="btn-ghost btn-sm"
+              onClick={() => setMenuOpen((open) => !open)}
+              aria-label="Toggle navigation menu"
+              aria-expanded={menuOpen}
+            >
               ☰
             </button>
             <img src="/logo.svg" alt="" className="h-7 w-7" />
             <span className="font-semibold">
-              suso<span className="font-normal text-ink-500">Dash</span>
+              suso<span className="font-normal text-ink-500 dark:text-dark-500">Dash</span>
             </span>
           </div>
           <div className="hidden lg:block" />
 
           <div className="flex items-center gap-2">
-            <div className="relative">
+            <button
+              className="btn-ghost btn-sm"
+              onClick={toggleTheme}
+              aria-label={resolvedTheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+              title={resolvedTheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
+            >
+              <span className="text-base leading-none transition-transform duration-200" aria-hidden>
+                {resolvedTheme === 'dark' ? '☀' : '☾'}
+              </span>
+            </button>
+
+            <div className="relative" ref={notificationsRef}>
               <button
                 className="btn-ghost btn-sm relative"
-                onClick={() => setNotificationsOpen(!notificationsOpen)}
+                onClick={() => setNotificationsOpen((open) => !open)}
                 aria-label="Notifications"
+                aria-expanded={notificationsOpen}
               >
                 🔔
                 {notifications.length > 0 && (
@@ -111,11 +149,11 @@ export default function Layout() {
                 )}
               </button>
               {notificationsOpen && (
-                <div className="absolute right-0 top-10 z-40 w-80 rounded-card border border-ink-200 bg-white shadow-pop">
-                  <div className="flex items-center justify-between border-b border-ink-200 px-4 py-2.5">
-                    <span className="text-sm font-semibold">Notifications</span>
+                <div className="absolute right-0 top-10 z-40 w-80 origin-top-right animate-[fade-in_150ms_ease-out] rounded-card border border-ink-200 bg-white shadow-pop dark:border-dark-200 dark:bg-dark-50">
+                  <div className="flex items-center justify-between border-b border-ink-200 px-4 py-2.5 dark:border-dark-200">
+                    <span className="text-sm font-semibold dark:text-dark-900">Notifications</span>
                     <button
-                      className="text-xs text-brand-500 hover:underline"
+                      className="text-xs text-brand-500 hover:underline dark:text-brand-400"
                       onClick={async () => {
                         await api.post('/system/notifications/read-all')
                         setNotificationsOpen(false)
@@ -126,24 +164,24 @@ export default function Layout() {
                   </div>
                   <div className="max-h-80 overflow-y-auto">
                     {notifications.length === 0 ? (
-                      <p className="px-4 py-6 text-center text-sm text-ink-500">
+                      <p className="px-4 py-6 text-center text-sm text-ink-500 dark:text-dark-500">
                         Nothing new right now.
                       </p>
                     ) : (
                       notifications.map((notification) => (
                         <button
                           key={notification.id}
-                          className="block w-full border-b border-ink-100 px-4 py-3 text-left hover:bg-ink-50"
+                          className="block w-full border-b border-ink-100 px-4 py-3 text-left transition-colors hover:bg-ink-50 dark:border-dark-200 dark:hover:bg-dark-200/60"
                           onClick={() => {
                             setNotificationsOpen(false)
                             if (notification.link) navigate(notification.link)
                           }}
                         >
-                          <p className="text-sm font-medium text-ink-800">{notification.title}</p>
-                          <p className="mt-0.5 line-clamp-2 text-xs text-ink-500">
+                          <p className="text-sm font-medium text-ink-800 dark:text-dark-800">{notification.title}</p>
+                          <p className="mt-0.5 line-clamp-2 text-xs text-ink-500 dark:text-dark-500">
                             {notification.body}
                           </p>
-                          <p className="mt-1 text-[11px] text-ink-400">
+                          <p className="mt-1 text-[11px] text-ink-400 dark:text-dark-400">
                             {relativeTime(notification.created_at)}
                           </p>
                         </button>
@@ -154,12 +192,12 @@ export default function Layout() {
               )}
             </div>
 
-            <div className="flex items-center gap-2 border-l border-ink-200 pl-3">
+            <div className="flex items-center gap-2 border-l border-ink-200 pl-3 dark:border-dark-200">
               <div className="hidden text-right sm:block">
-                <p className="text-sm font-medium leading-tight text-ink-800">
+                <p className="text-sm font-medium leading-tight text-ink-800 dark:text-dark-800">
                   {user?.full_name || user?.email}
                 </p>
-                <p className="text-[11px] capitalize leading-tight text-ink-500">{user?.role}</p>
+                <p className="text-[11px] capitalize leading-tight text-ink-500 dark:text-dark-500">{user?.role}</p>
               </div>
               <button className="btn-secondary btn-sm" onClick={signOut}>
                 Sign out
@@ -168,8 +206,13 @@ export default function Layout() {
           </div>
         </header>
 
-        {menuOpen && (
-          <nav className="border-b border-ink-200 bg-white p-3 lg:hidden">
+        <nav
+          ref={mobileNavRef}
+          className={`overflow-hidden border-b border-ink-200 bg-white transition-[max-height,opacity] duration-200 ease-out dark:border-dark-200 dark:bg-dark-50 lg:hidden ${
+            menuOpen ? 'max-h-96 opacity-100' : 'pointer-events-none max-h-0 opacity-0'
+          }`}
+        >
+          <div className="p-3">
             {NAV.map((item) => (
               <NavLink
                 key={item.to}
@@ -177,18 +220,20 @@ export default function Layout() {
                 end={item.end}
                 onClick={() => setMenuOpen(false)}
                 className={({ isActive }) =>
-                  `block rounded-card px-3 py-2 text-sm ${
-                    isActive ? 'bg-brand-50 text-brand-700' : 'text-ink-700'
+                  `block rounded-card px-3 py-2 text-sm transition-colors ${
+                    isActive
+                      ? 'bg-brand-50 text-brand-700 dark:bg-brand-500/10 dark:text-brand-400'
+                      : 'text-ink-700 dark:text-dark-700'
                   }`
                 }
               >
                 {item.label}
               </NavLink>
             ))}
-          </nav>
-        )}
+          </div>
+        </nav>
 
-        <main className="mx-auto w-full max-w-[1500px] flex-1 p-4 lg:p-6">
+        <main className="mx-auto w-full max-w-[1500px] flex-1 animate-[fade-in_200ms_ease-out] p-4 lg:p-6">
           <Outlet />
         </main>
       </div>

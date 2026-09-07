@@ -17,7 +17,7 @@ export default function DataTable({
 }) {
   if (!rows.length) return <EmptyState icon="◌" title={emptyLabel} />
   return (
-    <div className="overflow-auto rounded-card border border-ink-200" style={{ maxHeight }}>
+    <div className="overflow-auto rounded-card border border-ink-200 dark:border-dark-200" style={{ maxHeight }}>
       <table className="table-base">
         <thead className="sticky top-0 z-10">
           <tr>
@@ -32,7 +32,7 @@ export default function DataTable({
         <tbody>
           {rows.map((row, rowIndex) => (
             <tr key={rowIndex}>
-              <td className="text-right text-xs text-ink-400 tabular-nums">{rowIndex + 1}</td>
+              <td className="text-right text-xs text-ink-400 tabular-nums dark:text-dark-400">{rowIndex + 1}</td>
               {row.map((value, cellIndex) => (
                 <td
                   key={cellIndex}
