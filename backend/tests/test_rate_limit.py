@@ -59,6 +59,25 @@ def test_spreading_guesses_over_accounts_is_cut_off_too(client, limiting):
     assert seen[-1] == 429
 
 
+def test_spoofed_forwarded_prefix_does_not_bypass_per_ip_limit(client, limiting):
+    """The limiter must key on the trusted end of the forwarded chain."""
+    seen = []
+    for index in range(LOGIN_ATTEMPTS_PER_IP + 1):
+        headers = {
+            "X-Forwarded-For": f"198.51.100.{index}, 203.0.113.10",
+        }
+        seen.append(
+            client.post(
+                "/api/v1/auth/login",
+                json={"email": f"person{index}@example.com", "password": "wrong-password"},
+                headers=headers,
+            ).status_code
+        )
+
+    assert seen[:LOGIN_ATTEMPTS_PER_IP] == [401] * LOGIN_ATTEMPTS_PER_IP
+    assert seen[-1] == 429
+
+
 def test_a_correct_password_still_works_below_the_limit(client, limiting):
     from tests.conftest import ADMIN_EMAIL, ADMIN_PASSWORD
 

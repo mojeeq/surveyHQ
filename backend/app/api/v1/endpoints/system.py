@@ -10,7 +10,7 @@ from sqlalchemy import func, select
 from app.api.deps import CurrentUser, DbSession, RequireAdmin
 from app.core.config import settings
 from app.db.base import utcnow
-from app.models import AuditLog, Job, Notification
+from app.models import AuditLog, Job, Notification, Role
 from app.schemas.common import Message, Page
 from app.schemas.monitoring import JobOut, NotificationOut
 from app.services.hostnames import base_domain as dashboard_domain
@@ -20,18 +20,22 @@ router = APIRouter()
 
 @router.get("/jobs", response_model=list[JobOut])
 def list_jobs(
-    db: DbSession, _: CurrentUser, limit: int = Query(default=50, le=200), status: str = ""
+    db: DbSession, user: CurrentUser, limit: int = Query(default=50, le=200), status: str = ""
 ) -> list[Job]:
     statement = select(Job).order_by(Job.created_at.desc()).limit(limit)
+    if not user.has_role(Role.admin):
+        statement = statement.where(Job.created_by == user.id)
     if status:
         statement = statement.where(Job.status == status)
     return list(db.scalars(statement).all())
 
 
 @router.get("/jobs/{job_id}", response_model=JobOut)
-def read_job(job_id: str, db: DbSession, _: CurrentUser) -> Job:
+def read_job(job_id: str, db: DbSession, user: CurrentUser) -> Job:
     job = db.get(Job, job_id)
-    if job is None:
+    if job is None or (
+        not user.has_role(Role.admin) and (job.created_by is None or job.created_by != user.id)
+    ):
         raise HTTPException(status_code=404, detail="Job not found")
     return job
 
