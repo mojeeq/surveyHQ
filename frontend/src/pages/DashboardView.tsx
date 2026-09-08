@@ -1732,10 +1732,20 @@ function IndicatorWidget({
           </p>
         </>
       )}
-      {payload.computed_at && (
+      {payload.filtered ? (
+        /* Computed against the page's filter just now, so there is no "last
+           run" to date it by. Saying which it is matters: a tile that reports
+           the whole survey while the page is narrowed to one province is
+           answering a question nobody asked. */
         <p className="mt-2 text-[11px] text-ink-400">
-          Updated {relativeTime(payload.computed_at)}
+          Counted for the filters on this page
         </p>
+      ) : (
+        payload.computed_at && (
+          <p className="mt-2 text-[11px] text-ink-400">
+            Updated {relativeTime(payload.computed_at)}
+          </p>
+        )
       )}
 
       {/* The headline is an average of something. Which regions or teams are

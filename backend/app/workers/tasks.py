@@ -262,8 +262,28 @@ def plan_version_imports(
     questionnaire, and the same questionnaire under two versions is two
     identities. An identity the catalogue does not know sorts first and is
     otherwise treated normally, so an unknown version cannot silently drop out.
+
+    A bare ``guid``, with no ``$version`` on it, means every version of that
+    questionnaire - which is what a saved selection has to be able to say. A
+    list of exact identities is right for one import and wrong for a repeating
+    one: a questionnaire revised again next month publishes a version the
+    stored list has never heard of, and a scheduled import would go on pulling
+    v1 to v3 while the fieldwork moved on to v4, with nothing saying so.
     """
-    ordered = sorted(identities, key=lambda i: (i.split("$")[0], versions.get(i, 0)))
+    wanted: list[str] = []
+    for choice in identities:
+        if "$" in choice:
+            wanted.append(choice)
+            continue
+        every = [i for i in versions if i.split("$")[0] == choice]
+        # A questionnaire the catalogue no longer lists keeps its own entry, so
+        # the run fails against it and says so rather than quietly importing
+        # nothing at all.
+        wanted.extend(every or [choice])
+
+    ordered = sorted(
+        dict.fromkeys(wanted), key=lambda i: (i.split("$")[0], versions.get(i, 0))
+    )
     seen: set[str] = set()
     plan: list[tuple[str, str]] = []
     for identity in ordered:

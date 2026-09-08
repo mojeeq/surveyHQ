@@ -89,9 +89,20 @@ Fieldwork happens somewhere, and 06:00 means six in the morning there - in
 Vanuatu that is five the previous afternoon in UTC, so getting the zone wrong is
 a day's error, not an hour's.
 
-A connection with no default questionnaires selected is skipped. Exports are
-expensive for the Survey Solutions server, so avoid very short intervals on a
-busy production server.
+Which questionnaires a scheduled import pulls is set on the connection itself,
+under **Edit -> Questionnaires to import automatically**. A connection with none
+chosen is skipped, so the dialog warns while the list is empty and automatic
+imports are switched on. Exports are expensive for the Survey Solutions server,
+so avoid very short intervals on a busy production server.
+
+A questionnaire is stored as the questionnaire, not as a list of its versions,
+which is what keeps a repeating import from going stale: a form revised again
+next month publishes a version a pinned list has never heard of, and the import
+would go on pulling the versions it was set up with while the fieldwork moved on
+without it. Every version is exported, oldest first, into one dataset stamped
+with `questionnaire_version`. Pin particular versions instead - "Only the
+versions ticked below" - when you deliberately want one form and not its
+successors.
 
 ## Roster and multi-level data
 

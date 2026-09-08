@@ -1443,16 +1443,42 @@ def _render_widget(
         computed_at = indicator.last_computed_at
         breakdown: dict[str, float] = {}
         wants_breakdown = bool((widget.config or {}).get("show_breakdown"))
-        if wants_breakdown and indicator.breakdown_variable:
+
+        # A filter on the page is a question about the rows it leaves, and the
+        # stored value answers a different one - it was computed over the whole
+        # dataset by the last scheduled run. So a filter this indicator's
+        # dataset can honour sends the tile back to the data; without one it
+        # goes on reporting the stored value, which is what keeps opening a
+        # dashboard from setting a query going for every tile on it.
+        narrowed: FilterGroup | None = None
+        ignored: list[str] = []
+        dataset = db.get(Dataset, indicator.dataset_id)
+        if (
+            filters is not None
+            and not filters.is_empty()
+            and dataset is not None
+            and dataset_is_queryable(dataset)
+        ):
+            try:
+                ctx = DatasetContext.from_model(dataset)
+            except QueryError:
+                ctx = None
+            if ctx is not None:
+                narrowed = _applicable(filters, ctx)
+                ignored = _ignored(filters, ctx)
+
+        if narrowed is not None or (wants_breakdown and indicator.breakdown_variable):
             # Evaluated rather than read off the stored value, because a
             # breakdown that was computed at a different moment from the
             # headline above it would not add up to it - and the two sitting in
             # one tile invite exactly that comparison.
-            outcome = evaluate_indicator(db, indicator)
+            outcome = evaluate_indicator(db, indicator, narrowed)
             if outcome.get("error"):
                 return {"error": outcome["error"]}
             value = outcome["value"]
-            breakdown = outcome["breakdown"]
+            # A filtered tile is recomputed whether or not it shows a
+            # breakdown, and the one it did not ask for is not passed on.
+            breakdown = outcome["breakdown"] if wants_breakdown else {}
             computed_at = utcnow()
 
         return {
@@ -1477,6 +1503,12 @@ def _render_widget(
             # it is not something anyone is trying to fill.
             "direction": indicator.direction.value,
             "computed_at": computed_at.isoformat() if computed_at else None,
+            # Set when this value was computed for the filter on this page
+            # rather than read off the last scheduled run, so the tile can say
+            # so instead of presenting a whole-dataset number as the answer to
+            # a narrowed question.
+            "filtered": narrowed is not None,
+            "filters_ignored": ignored,
         }
 
     if widget.widget_type.value == "freshness":

@@ -46,8 +46,32 @@ class IndicatorStatus(str):
     unknown = "unknown"
 
 
-def evaluate_indicator(db: Session, indicator: Indicator) -> dict[str, Any]:
-    """Compute an indicator's current value plus its optional breakdown."""
+def and_also(left: FilterGroup | None, right: FilterGroup | None) -> FilterGroup:
+    """Both filters, or whichever of them says anything.
+
+    Nesting rather than concatenating the conditions: either side may be an
+    "or", and flattening one of those into a list of "and" conditions would
+    quietly widen or narrow it into a different question.
+    """
+    parts = [g for g in (left, right) if g is not None and not g.is_empty()]
+    if not parts:
+        return FilterGroup()
+    if len(parts) == 1:
+        return parts[0]
+    return FilterGroup(op="and", conditions=[], groups=parts)
+
+
+def evaluate_indicator(
+    db: Session, indicator: Indicator, filters: FilterGroup | None = None
+) -> dict[str, Any]:
+    """Compute an indicator's current value plus its optional breakdown.
+
+    An extra filter narrows the rows the indicator is computed over, which is
+    what a dashboard's filter controls pass in: "interviews completed" becomes
+    "interviews completed in Shefa" without the indicator itself being
+    redefined. It is applied to the denominator as well, so a percentage stays
+    a share of the rows being looked at rather than of the whole file.
+    """
     dataset = db.get(Dataset, indicator.dataset_id)
     if dataset is None or not dataset_is_queryable(dataset):
         return {"value": None, "error": "Dataset is not available", "breakdown": {}}
@@ -57,6 +81,9 @@ def evaluate_indicator(db: Session, indicator: Indicator) -> dict[str, Any]:
         spec = QuerySpec.model_validate(indicator.spec or {})
     except Exception as exc:  # noqa: BLE001 - stored spec may predate a schema change
         return {"value": None, "error": f"Invalid indicator definition: {exc}", "breakdown": {}}
+
+    if filters is not None and not filters.is_empty():
+        spec = spec.model_copy(update={"filters": and_also(spec.filters, filters)})
 
     # The headline value ignores any dimensions in the stored spec
     headline_spec = spec.model_copy(update={"dimensions": [], "limit": 1})
@@ -88,19 +115,25 @@ def evaluate_indicator(db: Session, indicator: Indicator) -> dict[str, Any]:
 
     if indicator.percent_of:
         try:
-            value, breakdown = _as_percentages(ctx, indicator, spec, value, breakdown)
+            value, breakdown = _as_percentages(ctx, indicator, spec, value, breakdown, filters)
         except QueryError as exc:
             return {"value": None, "error": str(exc), "breakdown": {}}
 
     return {"value": value, "breakdown": breakdown, "error": None}
 
 
-def _denominator_spec(indicator: Indicator, spec: QuerySpec) -> QuerySpec:
+def _denominator_spec(
+    indicator: Indicator, spec: QuerySpec, filters: FilterGroup | None = None
+) -> QuerySpec:
     """The query the indicator's own count is a share of.
 
     Its filters are dropped, which is the whole point: the indicator's filters
     are what select the rows being counted - completed interviews, households
     with electricity - and the share is of the rows those were chosen from.
+
+    A filter arriving from a dashboard is not dropped: it says which rows the
+    reader is looking at, not which of them count as a success, so it belongs
+    on both halves of the fraction.
     """
     keep = FilterGroup()
     if indicator.percent_of == "answered":
@@ -113,7 +146,7 @@ def _denominator_spec(indicator: Indicator, spec: QuerySpec) -> QuerySpec:
     return QuerySpec(
         dimensions=[],
         measures=[Measure(agg=Aggregation.count, alias="value")],
-        filters=keep,
+        filters=and_also(keep, filters),
         limit=1,
     )
 
@@ -124,6 +157,7 @@ def _as_percentages(
     spec: QuerySpec,
     value: float | None,
     breakdown: dict[str, float],
+    filters: FilterGroup | None = None,
 ) -> tuple[float | None, dict[str, float]]:
     """Turn a count and its breakdown into percentages of their own totals.
 
@@ -132,7 +166,7 @@ def _as_percentages(
     completed ones. The second reading is what a share-of-total chart already
     says, and it answers a different question from the one a target is set on.
     """
-    denominator = _denominator_spec(indicator, spec)
+    denominator = _denominator_spec(indicator, spec, filters)
     total_result = execute_query(ctx, denominator)
     total = 0.0
     if total_result.rows and total_result.rows[0] and total_result.rows[0][0] is not None:
