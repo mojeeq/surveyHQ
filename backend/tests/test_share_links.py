@@ -12,6 +12,8 @@ is there so a forwarded link is not a public one.
 
 from __future__ import annotations
 
+import datetime as dt
+
 import pytest
 
 PASSWORD = "vanuatu-lfs-2026"
@@ -239,3 +241,131 @@ def test_links_belong_to_their_own_dashboard(client, auth_headers, board, datase
         ).status_code
         == 404
     )
+
+
+# --- an end date -----------------------------------------------------------
+#
+# A link outlives the reason it was made. The donor's copy was for the report
+# that has since been filed and the workshop's was for the workshop; both stay
+# open until somebody remembers to close them, and nobody does.
+
+
+def _at(days: int) -> str:
+    return (dt.datetime.now(dt.UTC) + dt.timedelta(days=days)).isoformat()
+
+
+def test_a_link_can_be_made_with_an_end_date(client, auth_headers, board):
+    response = client.post(
+        f"/api/v1/dashboards/{board}/share-links",
+        headers=auth_headers,
+        json={"name": "Donor", "expires_at": _at(7)},
+    )
+    assert response.status_code == 201, response.text
+    link = response.json()
+    assert link["expires_at"]
+    assert link["expired"] is False
+    # A week out is a week out: it opens today.
+    assert opens(client, link["token"]) == 200
+
+
+def test_a_link_whose_date_has_passed_does_not_open(client, auth_headers, board):
+    """Checked when the reader arrives, not swept up by a nightly job.
+
+    A link that ran out overnight has to be shut to the first person who opens
+    it in the morning, which a sweep cannot promise.
+    """
+    link = client.post(
+        f"/api/v1/dashboards/{board}/share-links",
+        headers=auth_headers,
+        json={"name": "Workshop", "expires_at": _at(-1)},
+    ).json()
+    assert opens(client, link["token"]) == 404
+    # Its data is shut too, not only the page around it.
+    data = client.post(
+        f"/api/v1/public/dashboards/{link['token']}/data",
+        json={"op": "and", "conditions": [], "groups": []},
+    )
+    assert data.status_code == 404
+
+
+def test_an_expired_link_is_shown_as_expired_to_its_author(client, auth_headers, board):
+    """Shut to a reader, and still here to be extended by whoever made it."""
+    link = client.post(
+        f"/api/v1/dashboards/{board}/share-links",
+        headers=auth_headers,
+        json={"name": "Workshop", "expires_at": _at(-1)},
+    ).json()
+    listed = client.get(f"/api/v1/dashboards/{board}/share-links", headers=auth_headers).json()
+    mine = next(row for row in listed if row["id"] == link["id"])
+    assert mine["expired"] is True
+    # Not closed: nobody closed it, and saying so would misreport what happened.
+    assert mine["is_active"] is True
+
+
+def test_an_end_date_can_be_moved_and_taken_off(client, auth_headers, board):
+    link = make_link(client, auth_headers, board, "Donor")
+    assert link["expires_at"] is None
+
+    expired = client.patch(
+        f"/api/v1/dashboards/{board}/share-links/{link['id']}",
+        headers=auth_headers,
+        json={"expires_at": _at(-1)},
+    ).json()
+    assert expired["expired"] is True
+    assert opens(client, link["token"]) == 404
+
+    # Extended: the same address opens again, which is the point of keeping
+    # the row rather than deleting it.
+    extended = client.patch(
+        f"/api/v1/dashboards/{board}/share-links/{link['id']}",
+        headers=auth_headers,
+        json={"expires_at": _at(30)},
+    ).json()
+    assert extended["expired"] is False
+    assert opens(client, link["token"]) == 200
+
+    # And an explicit null takes the end off altogether.
+    forever = client.patch(
+        f"/api/v1/dashboards/{board}/share-links/{link['id']}",
+        headers=auth_headers,
+        json={"expires_at": None},
+    ).json()
+    assert forever["expires_at"] is None
+    assert forever["expired"] is False
+    assert opens(client, link["token"]) == 200
+
+
+def test_renaming_a_link_leaves_its_end_date_alone(client, auth_headers, board):
+    """The same exclude_unset rule the password relies on."""
+    link = client.post(
+        f"/api/v1/dashboards/{board}/share-links",
+        headers=auth_headers,
+        json={"name": "Donor", "expires_at": _at(7)},
+    ).json()
+    renamed = client.patch(
+        f"/api/v1/dashboards/{board}/share-links/{link['id']}",
+        headers=auth_headers,
+        json={"name": "Donor (2026)"},
+    ).json()
+    assert renamed["expires_at"] == link["expires_at"]
+
+
+def test_an_expired_link_cannot_be_unlocked_with_its_password(client, auth_headers, board):
+    """The password route is a way in, so it has to shut with the rest."""
+    link = client.post(
+        f"/api/v1/dashboards/{board}/share-links",
+        headers=auth_headers,
+        json={"name": "Donor", "password": PASSWORD, "expires_at": _at(-1)},
+    ).json()
+    response = client.post(
+        f"/api/v1/public/dashboards/{link['token']}/unlock", json={"password": PASSWORD}
+    )
+    assert response.status_code == 404
+
+
+def test_a_link_with_no_date_never_expires(client, auth_headers, board):
+    """Every link that already exists, which must go on working."""
+    link = make_link(client, auth_headers, board, "Field supervisors")
+    assert link["expires_at"] is None
+    assert link["expired"] is False
+    assert opens(client, link["token"]) == 200

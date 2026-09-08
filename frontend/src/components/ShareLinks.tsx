@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { api } from '@/lib/api'
+import { api, downloadFile } from '@/lib/api'
 import { copyText } from '@/lib/clipboard'
 import { useToast } from '@/hooks/useToast'
 import { formatNumber, relativeTime } from '@/lib/format'
-import { Badge, Field, Modal } from '@/components/ui'
+import { Badge, Field, Modal, Spinner } from '@/components/ui'
 import type { Dashboard } from '@/lib/types'
 
 export interface ShareLink {
@@ -13,12 +13,40 @@ export interface ShareLink {
   token: string
   is_active: boolean
   has_password: boolean
+  /** When it stops opening. Null is a link with no end. */
+  expires_at: string | null
+  /** Worked out by the server, whose clock is the one that decides. */
+  expired: boolean
   view_count: number
   last_viewed_at: string | null
   created_at: string
 }
 
 const urlFor = (token: string) => `${location.origin}/shared/${token}`
+
+/** The yyyy-mm-dd a date input wants, read in the reader's own zone. */
+function dateInputValue(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const at = new Date(iso)
+  if (Number.isNaN(at.getTime())) return ''
+  const pad = (part: number) => String(part).padStart(2, '0')
+  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())}`
+}
+
+/**
+ * The last moment of the chosen day, where the person choosing it is.
+ *
+ * "Expires on the 3rd" means it works on the 3rd and is shut on the 4th, which
+ * is how anyone reads a date on a pass. Taking the date at midnight would kill
+ * it a day early, and doing the arithmetic in UTC would kill it early in Port
+ * Vila and late in Suva.
+ */
+function endOfDay(value: string): string | null {
+  if (!value) return null
+  const [year, month, day] = value.split('-').map(Number)
+  if (!year || !month || !day) return null
+  return new Date(year, month - 1, day, 23, 59, 59, 999).toISOString()
+}
 
 /**
  * Every address this dashboard is published at.
@@ -41,6 +69,7 @@ export default function ShareLinks({
   const queryClient = useQueryClient()
   const [name, setName] = useState('')
   const [password, setPassword] = useState('')
+  const [expires, setExpires] = useState('')
 
   const links = useQuery({
     queryKey: ['share-links', dashboard.id],
@@ -57,10 +86,12 @@ export default function ShareLinks({
       api.post<ShareLink>(`/dashboards/${dashboard.id}/share-links`, {
         name: name.trim(),
         password: password.trim(),
+        expires_at: endOfDay(expires),
       }),
     onSuccess: (link) => {
       setName('')
       setPassword('')
+      setExpires('')
       refresh()
       copy(link.token, toast)
     },
@@ -68,7 +99,13 @@ export default function ShareLinks({
   })
 
   const change = useMutation({
-    mutationFn: ({ id, ...body }: { id: string } & Partial<ShareLink> & { password?: string }) =>
+    mutationFn: ({
+      id,
+      ...body
+    }: { id: string } & Partial<Omit<ShareLink, 'expires_at'>> & {
+      password?: string
+      expires_at?: string | null
+    }) =>
       api.patch(`/dashboards/${dashboard.id}/share-links/${id}`, body),
     onSuccess: refresh,
     onError: (error: Error) => toast.push(error.message, 'error'),
@@ -100,6 +137,8 @@ export default function ShareLinks({
         the others carry on working.
       </p>
 
+      <DownloadCopy dashboard={dashboard} />
+
       {dashboard.is_public && dashboard.public_token && (
         <LinkRow
           title="Original link"
@@ -120,6 +159,8 @@ export default function ShareLinks({
           title={link.name}
           token={link.token}
           active={link.is_active}
+          expired={link.expired}
+          expiresAt={link.expires_at}
           hasPassword={link.has_password}
           note={
             link.view_count
@@ -130,6 +171,7 @@ export default function ShareLinks({
           }
           onCopy={() => copy(link.token, toast)}
           onToggle={() => change.mutate({ id: link.id, is_active: !link.is_active })}
+          onExpiry={(expires_at) => change.mutate({ id: link.id, expires_at })}
           onPassword={() => {
             if (link.has_password) {
               if (confirm(`Remove the password from "${link.name}"? Anyone with the link will then be able to open it.`))
@@ -174,6 +216,17 @@ export default function ShareLinks({
               onChange={(event) => setPassword(event.target.value)}
             />
           </Field>
+          <Field
+            label="Stops working after"
+            hint="Optional. It works all of that day and is closed the next morning."
+          >
+            <input
+              className="input"
+              type="date"
+              value={expires}
+              onChange={(event) => setExpires(event.target.value)}
+            />
+          </Field>
         </div>
         <button
           className="btn-primary btn-sm"
@@ -187,10 +240,63 @@ export default function ShareLinks({
   )
 }
 
+/**
+ * The dashboard as a file, for putting somewhere this platform is not.
+ *
+ * A link needs susoDash running and reachable. A ministry's own web host, a
+ * report's appendix, a laptop taken to a meeting on an island with no
+ * connection - those need the board itself, and a picture of it loses the one
+ * thing that makes it a dashboard, which is that the reader can narrow it.
+ */
+function DownloadCopy({ dashboard }: { dashboard: Dashboard }) {
+  const toast = useToast()
+  const [busy, setBusy] = useState(false)
+  return (
+    <div className="mb-4 rounded-card border border-ink-200 bg-ink-50 px-3 py-2.5">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="min-w-0 flex-1">
+          <p className="text-sm font-medium text-ink-800">Download as a web page</p>
+          <p className="text-xs text-ink-500">
+            One HTML file you can put on any web host or send to somebody. Its filter
+            dropdowns still work: the numbers behind every widget travel with it. Charts
+            and maps are drawn by libraries fetched from the internet, and a widget that
+            cannot be worked out again offline - a data quality panel, a median - says on
+            its face that it is showing the day it was exported.
+          </p>
+        </div>
+        <button
+          className="btn-secondary btn-sm shrink-0"
+          disabled={busy}
+          onClick={async () => {
+            setBusy(true)
+            try {
+              await downloadFile(
+                `/dashboards/${dashboard.id}/export.html`,
+                undefined,
+                `${dashboard.slug || 'dashboard'}.html`,
+                'GET',
+              )
+            } catch (error) {
+              toast.push((error as Error).message, 'error')
+            } finally {
+              setBusy(false)
+            }
+          }}
+        >
+          {busy && <Spinner className="h-4 w-4" />}
+          {busy ? 'Building the file' : 'Download'}
+        </button>
+      </div>
+    </div>
+  )
+}
+
 function LinkRow({
   title,
   token,
   active,
+  expired = false,
+  expiresAt,
   hasPassword = false,
   note,
   onCopy,
@@ -198,10 +304,14 @@ function LinkRow({
   onPassword,
   onRename,
   onDelete,
+  onExpiry,
 }: {
   title: string
   token: string
   active: boolean
+  /** Its date has passed. Shut to readers, but not closed by anybody. */
+  expired?: boolean
+  expiresAt?: string | null
   hasPassword?: boolean
   note?: string
   onCopy: () => void
@@ -209,18 +319,24 @@ function LinkRow({
   onPassword?: () => void
   onRename?: () => void
   onDelete?: () => void
+  /** Give the link an end, or take it off again with null. */
+  onExpiry?: (expiresAt: string | null) => void
 }) {
+  // Closed by hand and run out are two different things to the person looking
+  // at this list and one thing to a reader: either way the address is shut.
+  const open = active && !expired
   return (
     <div
       className={`mb-2 rounded-card border px-3 py-2.5 ${
-        active ? 'border-ink-200' : 'border-ink-200 bg-ink-50'
+        open ? 'border-ink-200' : 'border-ink-200 bg-ink-50'
       }`}
     >
       <div className="flex flex-wrap items-center gap-2">
-        <span className={`text-sm font-medium ${active ? 'text-ink-800' : 'text-ink-500'}`}>
+        <span className={`text-sm font-medium ${open ? 'text-ink-800' : 'text-ink-500'}`}>
           {title}
         </span>
         {hasPassword && <Badge tone="info">Password</Badge>}
+        {expired && <Badge tone="warning">Expired</Badge>}
         {!active && <Badge tone="neutral">Closed</Badge>}
         <div className="ml-auto flex flex-wrap items-center gap-1">
           <button className="btn-ghost btn-sm" onClick={onCopy}>
@@ -249,10 +365,31 @@ function LinkRow({
         </div>
       </div>
       <code
-        className={`mt-1 block break-all text-xs ${active ? 'text-ink-600' : 'text-ink-400 line-through'}`}
+        className={`mt-1 block break-all text-xs ${open ? 'text-ink-600' : 'text-ink-400 line-through'}`}
       >
         {urlFor(token)}
       </code>
+      {onExpiry && (
+        // In the row rather than behind a dialog: an end date is the thing
+        // most often got wrong when the link is made and wanted a week later,
+        // and a date field is quicker to read than a sentence about one.
+        <label className="mt-1.5 flex flex-wrap items-center gap-2 text-xs text-ink-500">
+          Stops working after
+          <input
+            type="date"
+            className="input h-7 w-40 py-0 text-xs"
+            value={dateInputValue(expiresAt)}
+            onChange={(event) => onExpiry(endOfDay(event.target.value))}
+          />
+          {expiresAt ? (
+            <button className="text-brand-600 hover:underline" onClick={() => onExpiry(null)}>
+              No end date
+            </button>
+          ) : (
+            <span className="text-ink-400">no end date</span>
+          )}
+        </label>
+      )}
       {note && <p className="mt-1 text-xs text-ink-500">{note}</p>}
     </div>
   )

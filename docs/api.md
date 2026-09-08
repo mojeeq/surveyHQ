@@ -283,7 +283,19 @@ POST   /dashboards/{id}/data              render every widget; the body may carr
                                           ?every_widget_but=<widget id> renders
                                           that one unfiltered, which is what
                                           click-to-filter needs
+GET    /dashboards/{id}/export.html       the whole dashboard as one HTML file,
+                                          with the data behind each widget so
+                                          its filter dropdowns still work away
+                                          from this server
 POST   /dashboards/{id}/share?enable=true public link           [analyst]
+GET/POST/PATCH/DELETE /dashboards/{id}/share-links[/{link}]
+                                          the addresses a dashboard is published
+                                          at. A link takes a name, an optional
+                                          password and an optional expires_at;
+                                          PATCH tells "leave it alone" from
+                                          "take it off" by whether the field is
+                                          sent, so an explicit null clears one
+                                                                [analyst]
 PUT    /dashboards/{id}/hostname          give a shared dashboard its own
                                           address, or "" to remove it
                                                                 [analyst]
