@@ -57,7 +57,7 @@ from app.schemas.query import (
     QueryResult,
     QuerySpec,
 )
-from app.services import boundary_store, multiselect
+from app.services import boundary_store, multiselect, quality
 from app.services.audit import record
 from app.services.boundaries import Areas
 from app.services.dashboard_assets import (
@@ -98,6 +98,7 @@ from app.services.query_engine import (
     execute_crosstab,
     execute_query,
 )
+from app.services.stata_expr import ExpressionError
 
 router = APIRouter()
 
@@ -1298,13 +1299,22 @@ def _map_boundary(
     return layer, areas
 
 
-def _render_quality(db: DbSession, widget: Widget) -> dict[str, Any]:
+def _render_quality(
+    db: DbSession, widget: Widget, filters: FilterGroup | None = None
+) -> dict[str, Any]:
     """The state of a dataset's data quality checks.
 
-    Reports what the last run found rather than running the checks now: a
-    dashboard opening should not set eight full-table scans going, and the
-    results are already stored by the run that produced them. The age of the
-    oldest one is reported so a stale panel cannot pass for a fresh one.
+    Unfiltered, this reports what the last run found rather than running the
+    checks now: a dashboard opening should not set eight full-table scans
+    going, and the results are already stored by the run that produced them.
+    The age of the oldest one is reported so a stale panel cannot pass for a
+    fresh one.
+
+    Filtered, there is nothing stored to report - no run ever counted only the
+    rows the reader is looking at - so the checks are run against them. A panel
+    that went on saying "3% missing" while the rest of the page was narrowed to
+    one province was answering a question nobody had asked, and there is no way
+    to answer the right one from numbers computed over everything.
     """
     dataset_id = widget.dataset_id or (widget.config or {}).get("dataset_id")
     if not dataset_id:
@@ -1320,27 +1330,26 @@ def _render_quality(db: DbSession, widget: Widget) -> dict[str, Any]:
             )
         )
     )
+
+    narrowed: FilterGroup | None = None
+    ignored: list[str] = []
+    ctx: DatasetContext | None = None
+    if filters is not None and not filters.is_empty() and dataset_is_queryable(dataset):
+        try:
+            ctx = DatasetContext.from_model(dataset)
+        except QueryError:
+            ctx = None
+        if ctx is not None:
+            narrowed = _applicable(filters, ctx)
+            ignored = _ignored(filters, ctx)
+
     checks: list[dict[str, Any]] = []
     for rule in rules:
-        latest = db.scalar(
-            select(QualityResult)
-            .where(QualityResult.rule_id == rule.id)
-            .order_by(QualityResult.run_at.desc())
-            .limit(1)
-        )
-        checks.append(
-            {
-                "id": rule.id,
-                "name": rule.name,
-                "severity": rule.severity.value,
-                "passed": latest.passed if latest else None,
-                "failed_rows": latest.failed_rows if latest else 0,
-                "total_rows": latest.total_rows if latest else 0,
-                "failure_rate": latest.failure_rate if latest else 0.0,
-                "message": latest.message if latest else "Not run yet",
-                "run_at": latest.run_at.isoformat() if latest else None,
-            }
-        )
+        if narrowed is not None and ctx is not None:
+            check = _recheck(ctx, rule, narrowed)
+        else:
+            check = _stored_check(db, rule)
+        checks.append(check)
 
     checks.sort(key=lambda c: (c["passed"] is not False, -c["failure_rate"]))
     runs = [c["run_at"] for c in checks if c["run_at"]]
@@ -1353,6 +1362,69 @@ def _render_quality(db: DbSession, widget: Widget) -> dict[str, Any]:
         "passing": sum(1 for c in checks if c["passed"] is True),
         "never_run": sum(1 for c in checks if c["passed"] is None),
         "oldest_run_at": min(runs) if runs else None,
+        # Set when these numbers were counted for this reader's filter rather
+        # than read off the last run, so the panel can say so instead of
+        # showing a timestamp that belongs to a different question.
+        "filtered": narrowed is not None,
+        "filters_ignored": ignored,
+    }
+
+
+def _stored_check(db: DbSession, rule: QualityRule) -> dict[str, Any]:
+    """What the last run of this rule found."""
+    latest = db.scalar(
+        select(QualityResult)
+        .where(QualityResult.rule_id == rule.id)
+        .order_by(QualityResult.run_at.desc())
+        .limit(1)
+    )
+    return {
+        "id": rule.id,
+        "name": rule.name,
+        "severity": rule.severity.value,
+        "passed": latest.passed if latest else None,
+        "failed_rows": latest.failed_rows if latest else 0,
+        "total_rows": latest.total_rows if latest else 0,
+        "failure_rate": latest.failure_rate if latest else 0.0,
+        "message": latest.message if latest else "Not run yet",
+        "run_at": latest.run_at.isoformat() if latest else None,
+    }
+
+
+def _recheck(ctx: DatasetContext, rule: QualityRule, filters: FilterGroup) -> dict[str, Any]:
+    """Run one rule over the rows the page's filter leaves, without storing it.
+
+    Nothing is written: this is one reader's view of the data, and a stored
+    result is the dataset's. The rule's own filters are kept and the page's are
+    added to them, so a check restricted to completed interviews stays
+    restricted to completed interviews in Shefa.
+    """
+    own = quality.rule_filters(rule)
+    combined = (
+        FilterGroup(op="and", conditions=[], groups=[own, filters])
+        if own is not None and not own.is_empty()
+        else filters
+    )
+    base = {"id": rule.id, "name": rule.name, "severity": rule.severity.value}
+    try:
+        with quality.scoped(ctx, combined):
+            outcome = quality.run_check(ctx, rule)
+    except (QueryError, ExpressionError) as exc:
+        return {**base, "passed": None, "failed_rows": 0, "total_rows": 0,
+                "failure_rate": 0.0, "message": str(exc), "run_at": None}
+    return {
+        **base,
+        # The threshold is what turns a count into a verdict, and it is the
+        # rule's, not the check's - so this asks the same function the stored
+        # run asks rather than reimplementing the comparison here.
+        "passed": quality.verdict(outcome, rule),
+        "failed_rows": outcome.failed_rows,
+        "total_rows": outcome.total_rows,
+        "failure_rate": outcome.failure_rate,
+        "message": outcome.message,
+        # No timestamp: it was counted for this request, and a time here would
+        # read as "last run at", which it is not.
+        "run_at": None,
     }
 
 
@@ -1495,7 +1567,7 @@ def _render_widget(
         }
 
     if widget.widget_type.value == "quality":
-        return _render_quality(db, widget)
+        return _render_quality(db, widget, filters)
 
     if widget.chart_id:
         chart = db.get(Chart, widget.chart_id)

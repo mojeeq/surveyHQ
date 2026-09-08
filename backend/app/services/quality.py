@@ -92,7 +92,7 @@ def _count_where(ctx: DatasetContext, where: str, params: list[Any] | None = Non
     return int(rows[0][0]) if rows else 0
 
 
-def _rule_filters(rule: QualityRule) -> FilterGroup | None:
+def rule_filters(rule: QualityRule) -> FilterGroup | None:
     """A rule's stored filters, ignoring anything that will not parse.
 
     A filter referring to a variable a later round dropped should make the check
@@ -372,6 +372,18 @@ def _check_constant(ctx: DatasetContext, config: dict, total: int) -> CheckOutco
     )
 
 
+def verdict(outcome: CheckOutcome, rule: QualityRule) -> bool:
+    """Whether an outcome counts as passing this rule.
+
+    The check handlers count rows; the threshold is what turns a count into a
+    verdict, and it belongs to the rule rather than to the check. Kept here
+    because there are now two callers - the stored run and a dashboard panel
+    re-counting for a filter - and a panel that applied the threshold
+    differently would disagree with the Data quality page about the same rule.
+    """
+    return outcome.passed and outcome.failure_rate <= (rule.threshold or 0.0)
+
+
 def execute_rule(db: Session, rule: QualityRule) -> QualityResult:
     dataset = db.get(Dataset, rule.dataset_id)
     now = utcnow()
@@ -388,9 +400,9 @@ def execute_rule(db: Session, rule: QualityRule) -> QualityResult:
 
     ctx = DatasetContext.from_model(dataset)
     try:
-        with scoped(ctx, _rule_filters(rule)):
+        with scoped(ctx, rule_filters(rule)):
             outcome = run_check(ctx, rule)
-        passed = outcome.passed and outcome.failure_rate <= (rule.threshold or 0.0)
+        passed = verdict(outcome, rule)
         result = QualityResult(
             rule_id=rule.id,
             run_at=now,

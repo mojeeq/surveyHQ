@@ -10,6 +10,7 @@ import ChartCard from '@/components/ChartCard'
 import CrosstabTable from '@/components/CrosstabTable'
 import ErrorBoundary from '@/components/ErrorBoundary'
 import ProjectPicker from '@/components/ProjectPicker'
+import ProjectFilter, { datasetProjectParam } from '@/components/ProjectFilter'
 import {
   Badge,
   Card,
@@ -30,14 +31,22 @@ export default function Dashboards() {
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState('')
   const [projectId, setProjectId] = useState('')
+  /** Which project this page is narrowed to. Null is all of them. */
+  const [project, setProject] = useState<string | null>(null)
+
+  // Both lists take the same filter. A dashboard carries a project of its own;
+  // a chart takes one from its dataset, which the server resolves - so the two
+  // agree about which project something is in without the page having to hold
+  // a dataset-to-project map of its own.
+  const scope = datasetProjectParam(project).slice(1)
 
   const dashboards = useQuery({
-    queryKey: ['dashboards'],
-    queryFn: () => api.get<Dashboard[]>('/dashboards'),
+    queryKey: ['dashboards', project],
+    queryFn: () => api.get<Dashboard[]>(`/dashboards${scope ? `?${scope}` : ''}`),
   })
   const charts = useQuery({
-    queryKey: ['charts'],
-    queryFn: () => api.get<Chart[]>('/dashboards/charts'),
+    queryKey: ['charts', project],
+    queryFn: () => api.get<Chart[]>(`/dashboards/charts${scope ? `?${scope}` : ''}`),
   })
 
   const create = useMutation({
@@ -68,11 +77,14 @@ export default function Dashboards() {
         title="Dashboards"
         description="Assemble saved charts and indicators into a monitoring view."
         actions={
-          can('analyst') && (
-            <button className="btn-primary" onClick={() => setCreating(true)}>
-              New dashboard
-            </button>
-          )
+          <div className="flex flex-wrap items-center gap-2">
+            <ProjectFilter value={project} onChange={setProject} />
+            {can('analyst') && (
+              <button className="btn-primary" onClick={() => setCreating(true)}>
+                New dashboard
+              </button>
+            )}
+          </div>
         }
       />
 
@@ -95,8 +107,12 @@ export default function Dashboards() {
             <Card>
               <EmptyState
                 icon="▦"
-                title="No dashboards yet"
-                description="Create a dashboard, then add charts you saved from Explore or indicators from Monitoring."
+                title={project === null ? 'No dashboards yet' : 'No dashboards in this project'}
+                description={
+                  project === null
+                    ? 'Create a dashboard, then add charts you saved from Explore or indicators from Monitoring.'
+                    : 'Nothing here yet. Choose another project, or create one in this one.'
+                }
                 action={
                   can('analyst') && (
                     <button className="btn-primary btn-sm" onClick={() => setCreating(true)}>
@@ -161,8 +177,12 @@ export default function Dashboards() {
             <Card>
               <EmptyState
                 icon="◱"
-                title="No saved charts"
-                description="Build a query in Explore and use 'Save as chart' to reuse it on dashboards."
+                title={project === null ? 'No saved charts' : 'No saved charts in this project'}
+                description={
+                  project === null
+                    ? "Build a query in Explore and use 'Save as chart' to reuse it on dashboards."
+                    : 'A chart belongs to the project its dataset is in. Choose another project, or save one from Explore.'
+                }
                 action={
                   <Link to="/explore" className="btn-primary btn-sm">
                     Go to Explore

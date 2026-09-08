@@ -42,14 +42,24 @@ from app.services.ingest import (
 logger = get_logger(__name__)
 
 
-def unique_slug(db: Session, name: str) -> str:
+def unique_slug(db: Session, name: str, exclude_id: str | None = None) -> str:
+    """A filename-safe stem for this name that no other dataset is using.
+
+    `exclude_id` leaves one dataset out of the check, which is what a rename
+    needs: without it, changing "Water survey" to "Water Survey" would find the
+    dataset's own slug already taken and hand back "water-survey-2".
+    """
     base = slugify(name)[:180] or "dataset"
     candidate = base
     suffix = 2
-    while db.scalar(select(Dataset).where(Dataset.slug == candidate)):
+    while True:
+        taken = select(Dataset).where(Dataset.slug == candidate)
+        if exclude_id:
+            taken = taken.where(Dataset.id != exclude_id)
+        if not db.scalar(taken):
+            return candidate
         candidate = f"{base}-{suffix}"
         suffix += 1
-    return candidate
 
 
 def dataset_directory(dataset_id: str) -> Path:
