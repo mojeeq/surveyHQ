@@ -1,14 +1,42 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="susoDash">
   <title>susoDash</title>
+  <!--
+    The mark is what it always was - one record, then a distribution, which is
+    what this platform does to an export - given the Aero treatment the rest of
+    the interface now wears: a glossy tile lit from above, a hard highlight
+    ending halfway down, a light bevel inside a dark edge, and a blue halo
+    under it.
+  -->
   <defs>
     <linearGradient id="susoTile" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#42a5f5"/>
-      <stop offset="1" stop-color="#1565c0"/>
+      <stop offset="0" stop-color="#7ac6fb"/>
+      <stop offset="0.5" stop-color="#2f9ded"/>
+      <stop offset="0.5" stop-color="#1a7fd4"/>
+      <stop offset="1" stop-color="#0f5ea8"/>
     </linearGradient>
+    <linearGradient id="susoGloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.55"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.08"/>
+    </linearGradient>
+    <linearGradient id="susoMark" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dceaf7"/>
+    </linearGradient>
+    <radialGradient id="susoHalo" cx="0.5" cy="0.66" r="0.52">
+      <stop offset="0" stop-color="#4db8ff" stop-opacity="0.6"/>
+      <stop offset="1" stop-color="#4db8ff" stop-opacity="0"/>
+    </radialGradient>
   </defs>
-  <rect width="64" height="64" rx="14" fill="url(#susoTile)"/>
-  <!-- One record, then a distribution: what the platform does to an export. -->
-  <g fill="#fff">
+
+  <rect x="0" y="4" width="64" height="60" rx="18" fill="url(#susoHalo)"/>
+  <rect x="3" y="3" width="58" height="58" rx="14" fill="url(#susoTile)"/>
+  <rect x="4.6" y="4.6" width="54.8" height="54.8" rx="12.6" fill="none" stroke="#ffffff" stroke-opacity="0.38"/>
+  <rect x="3" y="3" width="58" height="58" rx="14" fill="none" stroke="#0a4a86" stroke-opacity="0.9"/>
+  <!-- The gloss stops on a curve halfway down: a fade to nothing reads as a
+       blur, and the hard edge is the whole of the effect. -->
+  <path d="M4.6 17A12.4 12.4 0 0 1 17 4.6h30A12.4 12.4 0 0 1 59.4 17v10.5C51.2 31.6 42 33.7 32 33.7S12.8 31.6 4.6 27.5Z" fill="url(#susoGloss)"/>
+
+  <g fill="url(#susoMark)">
     <circle cx="18" cy="44" r="4"/>
     <rect x="28" y="28" width="8" height="22" rx="4"/>
     <rect x="42" y="18" width="8" height="32" rx="4"/>
