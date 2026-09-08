@@ -164,13 +164,30 @@ function titleStyle(style: WidgetStyle): CSSProperties | undefined {
   const css: CSSProperties = {
     ...(style.title_size ? { fontSize: `${style.title_size}px`, lineHeight: 1.25 } : {}),
     ...(stack ? { fontFamily: stack } : {}),
-    ...(style.font_color ? { color: style.font_color } : {}),
+    ...(widgetInk(style) ? { color: widgetInk(style) } : {}),
   }
   return Object.keys(css).length ? css : undefined
 }
 
 export const styleOf = (widget: Widget): WidgetStyle =>
   (widget.config ?? {}) as WidgetStyle
+
+/** Text light enough to read on a widget dark enough to need it. */
+const ON_DARK = '#e8ecf2'
+
+/**
+ * The colour this widget's text should be, or nothing to leave it alone.
+ *
+ * A colour somebody chose always wins. Where they chose none but gave the
+ * widget a dark background, the answer is not "the default": the default is
+ * near-black, and a black widget with near-black labels is a black rectangle.
+ * Choosing a background should not oblige anybody to go and choose a text
+ * colour to go with it.
+ */
+function widgetInk(style: WidgetStyle): string | undefined {
+  if (style.font_color) return style.font_color
+  return isDark(style.background) ? ON_DARK : undefined
+}
 
 /** The card colour for one widget, at its own transparency or the dashboard's.
  *
@@ -200,7 +217,7 @@ function cardStyle(widget: Widget, dashboardOpacity: number): CSSProperties | un
   const opacity = own === undefined || own === null ? dashboardOpacity : own
   const text: CSSProperties = {
     ...(style.font_family ? { fontFamily: style.font_family } : {}),
-    ...(style.font_color ? { color: style.font_color } : {}),
+    ...(widgetInk(style) ? { color: widgetInk(style) } : {}),
     ...(style.shadow && SHADOWS[style.shadow]
       ? { boxShadow: SHADOWS[style.shadow] }
       : {}),
@@ -1008,7 +1025,7 @@ function WidgetFrame({
           // with: it is set here, on this dashboard, for this tile.
           ...(style.series_color ? { seriesColor: style.series_color } : {}),
           ...(style.font_family ? { fontFamily: style.font_family } : {}),
-          ...(style.font_color ? { fontColor: style.font_color } : {}),
+          ...(widgetInk(style) ? { fontColor: widgetInk(style) } : {}),
           ...(style.chart_font_size ? { fontSize: style.chart_font_size } : {}),
           // Undefined leaves whatever the chart was saved with; false is a
           // decision to turn the numbers off, and has to survive the spread.
@@ -1148,7 +1165,7 @@ function WidgetFrame({
               transparency, its font and its text colour. Blowing a widget up
               should make it bigger and change nothing else. */}
           <div
-            className="flex min-h-0 flex-1 flex-col rounded-card p-3"
+            className="aero-surface flex min-h-0 flex-1 flex-col rounded-card p-3"
             style={card}
           >
             <div className="mb-2 flex shrink-0 items-center justify-between gap-2">
@@ -1163,7 +1180,7 @@ function WidgetFrame({
             {style.caption && (
               <p
                 className="shrink-0 border-t border-ink-100 px-1 pt-2 text-xs text-ink-500"
-                style={style.font_color ? { color: style.font_color, opacity: 0.75 } : undefined}
+                style={widgetInk(style) ? { color: widgetInk(style), opacity: 0.75 } : undefined}
               >
                 {style.caption}
               </p>
@@ -1184,7 +1201,7 @@ function WidgetFrame({
           // Dimmed rather than a second colour to choose: the caption stays
           // subordinate to the title, and on a dark card a fixed grey would be
           // the one line left unreadable.
-          style={style.font_color ? { color: style.font_color, opacity: 0.75 } : undefined}
+          style={widgetInk(style) ? { color: widgetInk(style), opacity: 0.75 } : undefined}
         >
           {style.caption}
         </p>

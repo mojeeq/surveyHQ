@@ -822,6 +822,18 @@ says so:
 - **A rule under the header**, and the option to **hide the description**, for
   when the title alone is the whole heading.
 
+### Giving a widget its own colour
+
+A widget's **background** is any colour, and the gloss follows it: light over
+the top half, shadow over the bottom, meeting on a hard line. Black comes out
+as glossy black, and so does everything else - the finish is a tint over the
+colour rather than a coat of paint on top of it.
+
+Set a dark background and the widget's text follows without being asked: the
+title, the caption, and the chart's own axes and legend all turn light, because
+a black widget with near-black labels is a black rectangle. Choosing a **text
+colour** yourself always wins over that.
+
 ### How a widget's chart is drawn
 
 **Edit this widget** carries two controls over the chart itself, beside its
