@@ -10,7 +10,7 @@ import ChartCard from '@/components/ChartCard'
 import CrosstabTable from '@/components/CrosstabTable'
 import ErrorBoundary from '@/components/ErrorBoundary'
 import ProjectPicker from '@/components/ProjectPicker'
-import ProjectFilter, { datasetProjectParam } from '@/components/ProjectFilter'
+import ProjectFilter from '@/components/ProjectFilter'
 import {
   Badge,
   Card,
@@ -38,15 +38,22 @@ export default function Dashboards() {
   // a chart takes one from its dataset, which the server resolves - so the two
   // agree about which project something is in without the page having to hold
   // a dataset-to-project map of its own.
-  const scope = datasetProjectParam(project).slice(1)
+  //
+  // Built with URLSearchParams rather than by trimming the leading "&" off a
+  // helper written for appending: that read correctly only as long as the
+  // helper kept returning a string that starts with one, which is a contract
+  // nothing states and nothing checks. "none" is the shared area, which these
+  // endpoints spell that way because an absent project_id means "no filter".
+  const scope = new URLSearchParams(project === null ? {} : { project_id: project || 'none' })
+  const query = scope.toString() ? `?${scope}` : ''
 
   const dashboards = useQuery({
     queryKey: ['dashboards', project],
-    queryFn: () => api.get<Dashboard[]>(`/dashboards${scope ? `?${scope}` : ''}`),
+    queryFn: () => api.get<Dashboard[]>(`/dashboards${query}`),
   })
   const charts = useQuery({
     queryKey: ['charts', project],
-    queryFn: () => api.get<Chart[]>(`/dashboards/charts${scope ? `?${scope}` : ''}`),
+    queryFn: () => api.get<Chart[]>(`/dashboards/charts${query}`),
   })
 
   const create = useMutation({

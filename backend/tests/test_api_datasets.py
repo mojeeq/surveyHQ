@@ -48,12 +48,16 @@ def test_renaming_to_the_same_name_in_another_case_keeps_the_slug(
     dataset_id = (
         created.json()["datasets"][0] if "datasets" in created.json() else created.json()
     )["id"]
-    client.patch(
-        f"/api/v1/datasets/{dataset_id}", headers=auth_headers, json={"name": "Water survey"}
-    )
-    client.patch(
-        f"/api/v1/datasets/{dataset_id}", headers=auth_headers, json={"name": "Water Survey"}
-    )
-    assert client.get(f"/api/v1/datasets/{dataset_id}", headers=auth_headers).json()[
-        "slug"
-    ] == "water-survey"
+    # Both renames are checked, and the second one especially: the slug this
+    # asserts on is what the first rename already produced, so a second rename
+    # that failed would leave the assertion passing and the case it was written
+    # for untested.
+    for name in ("Water survey", "Water Survey"):
+        renamed = client.patch(
+            f"/api/v1/datasets/{dataset_id}", headers=auth_headers, json={"name": name}
+        )
+        assert renamed.status_code == 200, renamed.text
+
+    dataset = client.get(f"/api/v1/datasets/{dataset_id}", headers=auth_headers).json()
+    assert dataset["name"] == "Water Survey"
+    assert dataset["slug"] == "water-survey"
