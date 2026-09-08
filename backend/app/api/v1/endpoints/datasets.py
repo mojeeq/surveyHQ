@@ -66,6 +66,7 @@ from app.services.datasets import (
     load_archive_as_datasets,
     load_file_into_dataset,
     merge_imports,
+    unique_slug,
 )
 from app.services.derived import propagate_labels, rebuild_dependents
 from app.services.download import FORMATS as DOWNLOAD_FORMATS
@@ -488,8 +489,14 @@ def update_dataset(
     dataset_id: str, payload: DatasetUpdate, db: DbSession, user: RequireManager
 ) -> Dataset:
     dataset = get_dataset(dataset_id, db, user)
-    if payload.name is not None:
+    if payload.name is not None and payload.name != dataset.name:
         dataset.name = payload.name
+        # The slug follows the name. It is the stem every download is named
+        # after and nothing else - no route resolves a dataset by it - so
+        # leaving it at whatever the dataset was first called meant a renamed
+        # dataset kept arriving in Excel under the old name, however many times
+        # it had been renamed since.
+        dataset.slug = unique_slug(db, payload.name, exclude_id=dataset.id)
     if payload.description is not None:
         dataset.description = payload.description
     if payload.tags is not None:

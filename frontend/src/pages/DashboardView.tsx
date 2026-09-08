@@ -1616,6 +1616,12 @@ function QualityWidget({ payload }: { payload: any }) {
             >
               <p className="text-sm font-medium text-red-900">{check.name}</p>
               <p className="text-xs text-red-800">{check.message}</p>
+              {payload.filtered && check.total_rows > 0 && (
+                <p className="mt-0.5 text-[11px] text-red-700">
+                  {formatNumber(check.failed_rows)} of {formatNumber(check.total_rows)} rows
+                  in view
+                </p>
+              )}
             </li>
           ))}
           {!failing.length && (
@@ -1626,11 +1632,20 @@ function QualityWidget({ payload }: { payload: any }) {
         </ul>
       )}
 
-      {stale && (
+      {payload.filtered ? (
         <p className="mt-2 text-[11px] text-ink-400">
-          {/* Results are shown as last run, not recomputed on open, so say when. */}
-          Oldest result {relativeTime(stale)}
+          {/* Counted against the page's filter just now, so there is no "last
+              run" to date it by - and saying which it is matters, because the
+              two answer different questions about the same rule. */}
+          Counted for the filters on this page
         </p>
+      ) : (
+        stale && (
+          <p className="mt-2 text-[11px] text-ink-400">
+            {/* Results are shown as last run, not recomputed on open, so say when. */}
+            Oldest result {relativeTime(stale)}
+          </p>
+        )
       )}
     </div>
   )

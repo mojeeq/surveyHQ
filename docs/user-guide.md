@@ -250,6 +250,10 @@ ends up holding `R_demographics` and `roster_pp`; those are the names the export
 chose, and this is where they become the names your team uses. Nothing breaks:
 charts, indicators and merges point at the dataset, not at its name.
 
+Downloads follow the new name too, however many times it has been renamed. The
+file arrives as `the-new-name.csv`, not as whatever the dataset was called on
+the day it was uploaded.
+
 ### Taking a dataset out
 
 **Stata**, **CSV** and **Excel** on a dataset download the whole table. All
@@ -497,6 +501,12 @@ variable, so there is no filter a click could stand for.
 
 Any Explore result can be saved as a chart. Saved charts live under
 **Dashboards → Saved charts**, each showing live data.
+
+The **project** dropdown at the top narrows both tabs at once. A dashboard
+carries a project of its own; a chart takes one from its dataset, so the two
+agree about where something lives without anybody keeping them in step. Leave
+it on **All projects** to see everything, which is what it does until you
+change it.
 
 **Edit** on a saved chart opens it back in Explore with everything it was built
 from already filled in - the grouping, the measure, the filters, the chart type
@@ -1105,6 +1115,15 @@ Checks run every six hours, and on demand with **Run** or **Run all**. Add a
 **data quality panel** to a dashboard to keep the results where people look;
 it shows the last run rather than re-running eight full scans every time
 somebody opens the page, and says how old the oldest result is.
+
+**A filtered page filters the panel.** Narrow a dashboard to one province and
+the panel counts that province: no stored run ever counted only those rows, so
+it counts them now, and a failing check says how many of how many rows in view
+failed. It then says "Counted for the filters on this page" instead of showing
+a time, because there is no last run to date it by - the numbers were worked
+out for the question you are asking. A check restricted to part of the dataset
+keeps its own restriction and takes the page's on top of it. Remove the filters
+and it goes back to reporting the stored run, which costs nothing.
 
 ## API keys
 
