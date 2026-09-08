@@ -122,6 +122,71 @@ def read_source(path: Path) -> tuple[pd.DataFrame, dict[str, str], dict[str, dic
 # suffix, so ".a" survives without turning a numeric column into text.
 MISSING_TAG_SUFFIX = "__mv"
 
+# The columns a "tick all that apply" question is exported as: the question's
+# name, two underscores, and the code of one option.
+OPTION_COLUMN = re.compile(r"^(?P<stem>.+?)__(?P<option>\d+)$")
+
+
+def name_multiselect_options(
+    columns: list[str],
+    variable_labels: dict[str, str],
+    label_sets: dict[str, dict[str, str]],
+) -> dict[str, str]:
+    """Give a multiple-select's option columns the names its codes already have.
+
+    A "tick all that apply" question exports as one 0/1 column per option -
+    hhld_goods__1, hhld_goods__2 - and in many exports those columns carry no
+    label of their own. The option text is still in the file: it is in the
+    question's own value-label set, where code 8 reads "Bicycle", and the 8 in
+    the column name IS that code. Nothing was reading it, so a chart of the
+    question came out as "Option 1" to "Option 19" and the reader had to go and
+    find the questionnaire.
+
+    Only where the column has no label already: a file that names its options
+    knows better than this does. The set has to actually hold the codes, which
+    is what keeps a set that merely shares a name from being read as one.
+    """
+    by_stem: dict[str, list[tuple[str, str]]] = {}
+    for name in columns:
+        match = OPTION_COLUMN.match(name)
+        if match:
+            by_stem.setdefault(match.group("stem"), []).append(
+                (name, match.group("option"))
+            )
+
+    # Set names are matched without case, and with any trailing digits taken
+    # off: a writer that already has a set called "sex" names the next one
+    # "sex0", and Survey Solutions numbers a repeated question the same way.
+    lookup: dict[str, dict[str, str]] = {}
+    for set_name, mapping in label_sets.items():
+        for key in {set_name.lower(), set_name.lower().rstrip("0123456789")}:
+            lookup.setdefault(key, mapping)
+
+    found: dict[str, str] = {}
+    for stem, options in by_stem.items():
+        if len(options) < 2:
+            continue
+        mapping = lookup.get(stem.lower())
+        if not mapping:
+            continue
+        named = [(name, mapping[code]) for name, code in options if code in mapping]
+        # Half of them, so a set that happens to hold 1 and 2 cannot name two
+        # options of nineteen and leave the rest numbered.
+        if len(named) * 2 < len(options):
+            continue
+        # A label every option column shares word for word is the question, not
+        # the answer: some exports write "What does the household cook with" on
+        # all of them. Left alone, the chart draws every bar under the same
+        # words, which is worse than numbering them.
+        existing = {str(variable_labels.get(name) or "").strip() for name, _ in options}
+        the_question = len(existing) == 1 and bool(existing.pop())
+        for name, text in named:
+            if not the_question and str(variable_labels.get(name) or "").strip():
+                continue
+            if str(text).strip():
+                found[name] = str(text).strip()
+    return found
+
 
 def _split_missing_tags(
     frame: pd.DataFrame, missing_user_values: dict[str, list[str]] | None
@@ -164,11 +229,23 @@ def _read_stata(path: Path) -> tuple[pd.DataFrame, dict[str, str], dict[str, dic
             str(path), apply_value_formats=False, user_missing=True
         )
         frame = _split_missing_tags(frame, getattr(meta, "missing_user_values", None))
-        variable_labels = dict(meta.column_names_to_labels or {})
+        variable_labels = {
+            name: label for name, label in (meta.column_names_to_labels or {}).items() if label
+        }
         value_labels = {
             variable: {str(k): str(v) for k, v in labels.items()}
             for variable, labels in (meta.variable_value_labels or {}).items()
         }
+        # Every label set in the file, named as the file names them, including
+        # the ones no column uses - which is where a multiple-select question
+        # keeps the text of its options.
+        sets = {
+            name: {str(k): str(v) for k, v in labels.items()}
+            for name, labels in (meta.value_labels or {}).items()
+        }
+        variable_labels.update(
+            name_multiselect_options(list(frame.columns), variable_labels, sets)
+        )
         return frame, variable_labels, value_labels
     except Exception as exc:  # noqa: BLE001 - fall back to pandas on any reader issue
         logger.warning("pyreadstat could not read %s (%s); falling back to pandas", path.name, exc)
@@ -176,13 +253,25 @@ def _read_stata(path: Path) -> tuple[pd.DataFrame, dict[str, str], dict[str, dic
     try:
         with pd.io.stata.StataReader(str(path), convert_categoricals=False) as reader:
             frame = reader.read()
-            variable_labels = dict(reader.variable_labels() or {})
+            variable_labels = {
+                name: label for name, label in (reader.variable_labels() or {}).items() if label
+            }
             raw_value_labels = reader.value_labels() or {}
-        # pandas maps label-set names to labels; align them to variables by name
-        value_labels = {
-            variable: {str(k): str(v) for k, v in labels.items()}
-            for variable, labels in raw_value_labels.items()
+        # pandas gives the label SETS, by set name, and not which variable uses
+        # which. A set is very often named after the one variable that uses it,
+        # so that is the alignment made here - and where it is wrong, it is
+        # wrong about a variable no set was named after, which is to say it
+        # names nothing.
+        sets = {
+            name: {str(k): str(v) for k, v in labels.items()}
+            for name, labels in raw_value_labels.items()
         }
+        value_labels = {
+            name: labels for name, labels in sets.items() if name in frame.columns
+        }
+        variable_labels.update(
+            name_multiselect_options(list(frame.columns), variable_labels, sets)
+        )
         return frame, variable_labels, value_labels
     except Exception as exc:  # noqa: BLE001
         raise IngestError(f"Could not read Stata file: {exc}") from exc
@@ -193,9 +282,19 @@ def _read_spss(path: Path) -> tuple[pd.DataFrame, dict[str, str], dict[str, dict
         import pyreadstat
 
         frame, meta = pyreadstat.read_sav(str(path), apply_value_formats=False)
+        variable_labels = {
+            name: label for name, label in (meta.column_names_to_labels or {}).items() if label
+        }
+        sets = {
+            name: {str(k): str(v) for k, v in labels.items()}
+            for name, labels in (meta.value_labels or {}).items()
+        }
+        variable_labels.update(
+            name_multiselect_options(list(frame.columns), variable_labels, sets)
+        )
         return (
             frame,
-            dict(meta.column_names_to_labels or {}),
+            variable_labels,
             {
                 variable: {str(k): str(v) for k, v in labels.items()}
                 for variable, labels in (meta.variable_value_labels or {}).items()

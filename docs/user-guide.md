@@ -308,6 +308,12 @@ is shown: axis labels, legends, cross-tab headers, filter dropdowns. Labels you
 write are kept on the dataset as well as on the variable, so a newer export
 replacing the file does not wipe them.
 
+**What the codes mean** on the same tab shows what each variable's codes stand
+for without opening anything - "1 = Male, 2 = Female", with the rest on the
+cell's tooltip. A categorical column stored as numbers with no names for its
+codes says so in amber, because until they are written every table of it prints
+the codes. A column of 0s and 1s is left alone: that is a tick, not a code.
+
 ### The command box
 
 **Command** runs a Stata-style script against the dataset, one command per
@@ -504,6 +510,34 @@ the same respondents, so leaving a bar out does not inflate the rest.
 `name__1` convention: search for the columns that hold the question and tick
 them. Anything holding 1 and 0 works, and so does Yes/No, since a CSV round
 trip turns one into the other often enough.
+
+#### What the options are called
+
+The bars carry the option's own words wherever the file has them, which is
+usually in one of two places, both read on import:
+
+- **The option column's label.** An export that labels `hhld_goods__8` as
+  "Household goods: Bicycle" gets "Bicycle" - the question's own words are
+  taken off the front, because they are already the chart's title and repeating
+  them on nineteen bars makes the axis unreadable. Where every option column
+  carries the same label word for word, that label is the question and not the
+  answer, so it is passed over rather than printed on every bar.
+- **The question's own codes.** Many exports leave those columns unlabelled and
+  keep the option text in the question's value labels, where code 8 reads
+  "Bicycle" - and the 8 in `hhld_goods__8` is that code. This is read on
+  import and written into the columns as their labels, so the names appear
+  everywhere the columns do, not only on this chart.
+
+A file that carries neither leaves the options numbered: **Option 1** to
+**Option 19**, which sends the reader to the questionnaire to find out what
+option 8 was. The panel says so, and **Name them** puts every option in one
+dialog with a box each. The names are the columns' labels, kept on the dataset,
+so they show in every chart, filter, cross-tab and table, and they survive the
+next export replacing the file.
+
+The **Options to show** list is drawn under the same names, so ticking eight
+boxes out of nineteen is choosing between options rather than between column
+numbers.
 
 Saved as a chart it goes on a dashboard like any other, drawn horizontally or
 vertically, and dashboard filters reach it: filtering to one province moves the
