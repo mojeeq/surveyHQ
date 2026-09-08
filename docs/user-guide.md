@@ -178,10 +178,24 @@ in a do-file that opens one export and appends the others onto it.
 
 **From a Survey Solutions connection it is one tick.** The server lists every
 version as its own entry, so a questionnaire revised twice used to appear three
-times in a flat list with nothing saying they belonged together. Now the import
-dialog groups them: one row per questionnaire, saying "3 versions · v1-v3",
-with a tick-box that takes them all and individual boxes underneath if you want
-only some.
+times in a flat list with nothing saying they belonged together. Now **Import
+data** groups them: one row per questionnaire, saying "3 versions · v1-v3", and
+ticking it takes every version. Under a questionnaire with more than one there
+is a choice:
+
+- **Every version, including any published later** - the default, and the one
+  to leave alone. It is stored as the questionnaire rather than as a list of
+  versions, so an import that runs again after the form is revised picks up the
+  new version by itself.
+- **Only the versions ticked below** - for going back for one particular
+  version, with a box per version.
+
+The same picker is in **Edit → Questionnaires to import automatically**, which
+is what a scheduled import runs on. It had nowhere to be set before, so a
+connection could have automatic imports switched on, and a schedule set, and
+still never import anything: the scheduler skips a connection with no
+questionnaires chosen, and said nothing about it. The dialog now warns while
+that list is empty.
 
 They are imported oldest first into **one** dataset, with each version's rows
 stamped `questionnaire_version`. Only the first version honours your
@@ -798,6 +812,15 @@ Filters belong to **the page they are on**, so a "Fieldwork" page can filter by
 interviewer while a "Coverage" page filters by district. A control only applies
 to widgets whose dataset actually has that variable; widgets that cannot answer
 it say so rather than quietly ignoring it.
+
+Indicator tiles and the data quality panel follow the filter too. Both normally
+show what the last scheduled run worked out, so opening a board does not set a
+query going for every tile on it; under a filter there is nothing stored to
+show - no run ever counted only the rows you are looking at - so they are
+counted afresh and say **Counted for the filters on this page** in place of the
+"Updated" time. A tile that is a percentage narrows both halves of its
+fraction, so filtering to one province gives that province's rate rather than
+its share of the national total.
 
 **Removing one** is the same dialog: untick it and save. If a filter's data has
 since left the page - the widget that brought its dataset was moved or deleted,

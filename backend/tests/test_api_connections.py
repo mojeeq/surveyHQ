@@ -205,3 +205,54 @@ def test_a_zone_that_does_not_exist_is_refused(client, auth_headers):
     )
     assert response.status_code == 422
     assert "not a known time zone" in response.text
+
+
+def test_a_connection_remembers_the_questionnaires_it_imports(client, auth_headers):
+    """The list a scheduled import runs on, which had nowhere to be set.
+
+    The scheduler skips a connection with nothing chosen, so automatic imports
+    could be switched on, given a schedule, and still never import anything.
+    """
+    questionnaire = "11111111-1111-1111-1111-111111111111"
+    connection = _connection(client, auth_headers, questionnaires=[f"{questionnaire}$2"])
+    assert connection["questionnaires"] == [f"{questionnaire}$2"]
+
+    updated = client.patch(
+        f"/api/v1/connections/{connection['id']}",
+        headers=auth_headers,
+        # A bare id, with no version on it: every version of this
+        # questionnaire, including the ones published after today. A pinned
+        # list goes stale the moment the questionnaire is revised again.
+        json={"questionnaires": [questionnaire]},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["questionnaires"] == [questionnaire]
+
+    again = client.get(f"/api/v1/connections/{connection['id']}", headers=auth_headers)
+    assert again.json()["questionnaires"] == [questionnaire]
+
+
+def test_an_import_with_nothing_chosen_falls_back_to_the_connections_list(
+    client, auth_headers, db_session
+):
+    """What the "Import data" button sends when the reader changes nothing."""
+    from app.models import Job
+
+    questionnaire = "22222222-2222-2222-2222-222222222222"
+    connection = _connection(client, auth_headers, questionnaires=[questionnaire])
+    response = client.post(
+        f"/api/v1/connections/{connection['id']}/sync", headers=auth_headers, json={}
+    )
+    assert response.status_code == 202, response.text
+    job = db_session.get(Job, response.json()["id"])
+    assert job.params["questionnaires"] == [questionnaire]
+
+
+def test_an_import_with_no_questionnaires_anywhere_is_refused(client, auth_headers):
+    """Rather than queueing a job that downloads nothing and reports success."""
+    connection = _connection(client, auth_headers)
+    response = client.post(
+        f"/api/v1/connections/{connection['id']}/sync", headers=auth_headers, json={}
+    )
+    assert response.status_code == 400
+    assert "questionnaire" in response.json()["detail"]

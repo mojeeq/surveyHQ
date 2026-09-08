@@ -82,3 +82,33 @@ def test_a_version_the_catalogue_does_not_know_is_still_imported():
 
 def test_nothing_selected_is_an_empty_plan():
     assert plan_version_imports([], VERSIONS, "replace") == []
+
+
+def test_a_bare_questionnaire_id_means_every_version_of_it():
+    """What a saved selection has to be able to say.
+
+    A list of exact identities is right for one import and wrong for a
+    repeating one. Storing "the labour force survey" rather than "v1, v2, v3 of
+    the labour force survey" is what lets a scheduled import pick up v4 when
+    the questionnaire is revised again, instead of going on pulling the three
+    versions it was set up with while the fieldwork moves on without it.
+    """
+    plan = plan_version_imports([LFS], VERSIONS, "replace")
+    assert [identity for identity, _ in plan] == [f"{LFS}$1", f"{LFS}$2", f"{LFS}$3"]
+    # And it is still one dataset: the first version settles what happens to
+    # what is stored, the rest are added to it.
+    assert [mode for _, mode in plan] == ["replace", "append", "append"]
+    # The other questionnaire was not asked for.
+    assert not any(identity.startswith(AG) for identity, _ in plan)
+
+
+def test_a_bare_id_and_an_exact_version_do_not_import_it_twice():
+    """Selecting both is contradictory, and importing v1 twice would double it."""
+    plan = plan_version_imports([LFS, f"{LFS}$1"], VERSIONS, "replace")
+    assert [identity for identity, _ in plan] == [f"{LFS}$1", f"{LFS}$2", f"{LFS}$3"]
+
+
+def test_a_questionnaire_the_server_no_longer_lists_is_reported_not_dropped():
+    """A run that imports nothing must say so rather than report success."""
+    gone = "33333333-3333-3333-3333-333333333333"
+    assert plan_version_imports([gone], VERSIONS, "replace") == [(gone, "replace")]
