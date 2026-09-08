@@ -67,6 +67,33 @@ def test_the_password_never_comes_back_out(client, auth_headers):
     assert connection["has_password"] is True
 
 
+def test_a_connection_url_must_use_https(client, auth_headers):
+    response = client.post(
+        "/api/v1/connections",
+        headers=auth_headers,
+        json={
+            "name": "Insecure server",
+            "base_url": "http://survey.example.org",
+            "workspace": "primary",
+            "username": "api_user",
+            "password": "secret",
+        },
+    )
+    assert response.status_code == 422
+    assert "must start with https://" in response.text
+
+
+def test_a_connection_cannot_be_updated_to_plain_http(client, auth_headers):
+    connection = _connection(client, auth_headers)
+    response = client.patch(
+        f"/api/v1/connections/{connection['id']}",
+        headers=auth_headers,
+        json={"base_url": "http://survey.example.org"},
+    )
+    assert response.status_code == 422
+    assert "must start with https://" in response.text
+
+
 def test_an_exported_archive_can_be_downloaded_again(client, auth_headers, tmp_path, db_session):
     """The zip is the only record of what the server actually sent."""
     from app.db.base import utcnow

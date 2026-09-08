@@ -47,8 +47,8 @@ class ConnectionBase(BaseModel):
     @classmethod
     def _validate_url(cls, value: str) -> str:
         value = value.strip().rstrip("/")
-        if not value.startswith(("http://", "https://")):
-            raise ValueError("The server URL must start with http:// or https://")
+        if not value.startswith("https://"):
+            raise ValueError("The server URL must start with https://")
         # Reject a URL that already includes an API path; we build those ourselves
         HttpUrl(value)
         return value
@@ -78,6 +78,7 @@ class ConnectionUpdate(BaseModel):
 
     _check_times = field_validator("sync_times")(ConnectionBase._validate_times.__func__)
     _check_zone = field_validator("sync_timezone")(ConnectionBase._validate_timezone.__func__)
+    _check_url = field_validator("base_url")(ConnectionBase._validate_url.__func__)
 
 
 class ConnectionOut(BaseModel):

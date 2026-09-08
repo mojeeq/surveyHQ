@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import smtplib
+import ssl
 from email.message import EmailMessage
 
 from app.core.config import settings
@@ -36,7 +37,7 @@ def send_email(recipients: list[str], subject: str, body: str, html: str | None 
     try:
         with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as server:
             if settings.smtp_tls:
-                server.starttls()
+                server.starttls(context=ssl.create_default_context())
             if settings.smtp_user:
                 server.login(settings.smtp_user, settings.smtp_password)
             server.send_message(message)

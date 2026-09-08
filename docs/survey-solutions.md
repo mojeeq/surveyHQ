@@ -7,7 +7,8 @@ summaries and run data exports.
 ## What you need
 
 - The **server URL** - the site root, e.g. `https://demo.mysurvey.solutions`.
-  Not a path inside it: no `/primary`, no `/api`.
+  Not a path inside it: no `/primary`, no `/api`. Use `https://` only; plain
+  `http://` URLs are refused.
 - The **workspace** name. Most servers have one, called `primary`.
 - An **API user** with access to that workspace.
 
