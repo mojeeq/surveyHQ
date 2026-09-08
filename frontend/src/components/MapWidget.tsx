@@ -254,6 +254,13 @@ export default function MapWidget({
   const map = useRef<L.Map | null>(null)
   const layer = useRef<L.LayerGroup | null>(null)
   const outlines = useRef<L.GeoJSON | null>(null)
+  // The box in the corner that switches grounds and, when the widget has
+  // one, shows or hides the boundary layer. Held here because the two are
+  // added by different effects: the grounds when the map is built, the
+  // outlines when their areas arrive.
+  const switcher = useRef<L.Control.Layers | null>(null)
+  /** Set when the switcher exists only to carry the boundary tick-box. */
+  const switcherIsOurs = useRef(false)
   const grounds = useRef<Partial<Record<BasemapName, L.Layer>>>({})
   const [tilesFailed, setTilesFailed] = useState(false)
   const custom = tiles?.trim()
@@ -335,7 +342,7 @@ export default function MapWidget({
       // The switcher belongs on the map rather than in the widget's settings:
       // "show me that on the satellite" is something a reader does while
       // looking, and only the person who built the board can open the settings.
-      L.control
+      switcher.current = L.control
         .layers(
           Object.fromEntries(
             BASEMAP_NAMES.map((name) => [BASEMAPS[name].label, grounds.current[name]!]),
@@ -344,6 +351,7 @@ export default function MapWidget({
           { position: 'topright' },
         )
         .addTo(instance)
+      switcherIsOurs.current = false
     }
 
     layer.current = L.layerGroup().addTo(instance)
@@ -360,6 +368,8 @@ export default function MapWidget({
       instance.remove()
       map.current = null
       grounds.current = {}
+      switcher.current = null
+      switcherIsOurs.current = false
     }
     // Built once per tile source. Switching between the named grounds is the
     // effect below, which does not tear the map down and lose the reader's
@@ -423,11 +433,53 @@ export default function MapWidget({
     // Behind the pins, whatever order the layers were added in.
     drawn.bringToBack()
     outlines.current = drawn
+
+    // A tick-box for the outlines, beside the choice of ground.
+    //
+    // Boundaries are drawn to be read against, and there are maps where they
+    // are the thing in the way: a cluster of households inside one enumeration
+    // area is a handful of pins under a heavy orange line, and the question
+    // "which of these is on the wrong side of it" is asked by taking the line
+    // off and putting it back. That is a reader's gesture, not a setting, so
+    // it belongs on the map rather than in a dialog only the board's author
+    // can open.
+    if (!switcher.current) {
+      // A custom tile URL means no choice of ground and so no switcher; one
+      // is made here, holding nothing but this tick-box.
+      switcher.current = L.control
+        .layers({}, {}, { position: 'topright' })
+        .addTo(instance)
+      switcherIsOurs.current = true
+    }
+    switcher.current.addOverlay(drawn, boundary?.name || 'Boundaries')
+    const ours = switcherIsOurs.current
+
+    // Ticked back on, the outlines have to sink again. Every vector here
+    // shares one canvas and is painted in the order it was added, so a layer
+    // put back last is painted last: the frame came back over the pins rather
+    // than under them, and a boundary drawn on top of the records inside it is
+    // exactly what bringToBack is here to prevent.
+    const sink = (event: { layer: L.Layer }) => {
+      if (event.layer === drawn) drawn.bringToBack()
+    }
+    instance.on('overlayadd', sink)
+
     return () => {
+      instance.off('overlayadd', sink)
       instance.removeLayer(drawn)
       if (outlines.current === drawn) outlines.current = null
+      // Only while the map is still standing: its own teardown takes the
+      // control with it and clears the ref.
+      if (switcher.current) {
+        switcher.current.removeLayer(drawn)
+        if (ours) {
+          switcher.current.remove()
+          switcher.current = null
+          switcherIsOurs.current = false
+        }
+      }
     }
-  }, [areas, boundary?.label])
+  }, [areas, boundary?.label, boundary?.name])
 
   useEffect(() => {
     if (!map.current || !layer.current) return

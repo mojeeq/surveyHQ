@@ -202,6 +202,33 @@ export default function ChartCard({
                     (Array.isArray(params?.value) ? '' : String(params?.value ?? ''))
                   if (category) onSelect(category)
                 },
+                // On a pie the legend is where the category names are: the
+                // slices themselves carry only a value and a percentage, so
+                // the name is what the reader points at. ECharts reads a
+                // click there as "hide this slice", so the one gesture that
+                // names a category did nothing but make it disappear.
+                //
+                // Only for a pie. Every other chart's legend names its
+                // series - measures, or the columns of a pivot - and
+                // filtering the page by one of those would be filtering by
+                // something that is not a category at all.
+                ...(chartType === 'pie' || chartType === 'donut'
+                  ? {
+                      legendselectchanged: (
+                        params: { name?: string },
+                        instance: { dispatchAction: (action: object) => void },
+                      ) => {
+                        if (!params?.name) return
+                        // Put the slice straight back: the click meant
+                        // "show me this one", not "take it off the chart".
+                        instance?.dispatchAction({
+                          type: 'legendSelect',
+                          name: params.name,
+                        })
+                        onSelect(params.name)
+                      },
+                    }
+                  : {}),
               }
             : undefined
         }

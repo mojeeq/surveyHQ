@@ -28,6 +28,7 @@ from app.db.base import utcnow
 from app.models import Dashboard, ShareLink
 from app.schemas.analytics import DashboardDetail
 from app.schemas.query import FilterGroup
+from app.services.sharing import link_is_open
 
 # The only unauthenticated routes in the platform, and the expensive one among
 # them scans a Parquet file per widget. A dashboard opening costs a handful of
@@ -101,7 +102,11 @@ def _get_shared(token: str, db: DbSession, request: Request | None = None) -> Da
     """
     link = _link_for(token, db)
     if link is not None:
-        if not link.is_active:
+        # Closed by hand and run out are one answer to the reader. Which of
+        # the two it was is the author's business, and telling a stranger
+        # "this expired on the 3rd" says more about the organisation's work
+        # than the address itself does.
+        if not link_is_open(link):
             raise HTTPException(
                 status_code=404, detail="This shared dashboard is not available"
             )
@@ -149,7 +154,7 @@ def unlock_shared_dashboard(token: str, payload: Unlock, db: DbSession) -> dict[
     dashboard instead of on every refresh of it.
     """
     link = _link_for(token, db)
-    if link is None or not link.is_active:
+    if link is None or not link_is_open(link):
         raise HTTPException(status_code=404, detail="This shared dashboard is not available")
     if not link.password_hash:
         # Nothing to unlock, and saying so beats handing back a grant that

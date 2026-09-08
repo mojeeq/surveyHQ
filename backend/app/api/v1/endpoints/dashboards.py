@@ -57,7 +57,7 @@ from app.schemas.query import (
     QueryResult,
     QuerySpec,
 )
-from app.services import boundary_store, multiselect, quality
+from app.services import boundary_store, multiselect, quality, static_export
 from app.services.audit import record
 from app.services.boundaries import Areas
 from app.services.dashboard_assets import (
@@ -98,6 +98,7 @@ from app.services.query_engine import (
     execute_crosstab,
     execute_query,
 )
+from app.services.sharing import as_utc, link_expired
 from app.services.stata_expr import ExpressionError
 
 router = APIRouter()
@@ -897,6 +898,11 @@ class ShareLinkOut(BaseModel):
     token: str
     is_active: bool
     has_password: bool = False
+    expires_at: dt.datetime | None = None
+    # Worked out here rather than in the browser, which has its own clock and
+    # its own idea of the time zone. A link half an hour past its date has to
+    # read as shut in the list that manages it, because it is shut to readers.
+    expired: bool = False
     view_count: int = 0
     last_viewed_at: dt.datetime | None = None
     created_at: dt.datetime
@@ -910,6 +916,8 @@ class ShareLinkOut(BaseModel):
             token=link.token or "",
             is_active=bool(link.is_active),
             has_password=bool(link.password_hash),
+            expires_at=link.expires_at,
+            expired=link_expired(link),
             view_count=link.view_count or 0,
             last_viewed_at=link.last_viewed_at,
             created_at=link.created_at,
@@ -919,15 +927,51 @@ class ShareLinkOut(BaseModel):
 class ShareLinkIn(BaseModel):
     name: str = ""
     password: str = ""
+    expires_at: dt.datetime | None = None
 
 
 class ShareLinkPatch(BaseModel):
     name: str | None = None
     is_active: bool | None = None
+    # Like the password below, told apart by exclude_unset: absent leaves the
+    # date alone and an explicit null takes it off, so a link can be given an
+    # end and then have it removed again.
+    expires_at: dt.datetime | None = None
     # Distinguished by exclude_unset: absent leaves the password alone, and an
     # empty string removes it. Without that there is no way to say "take the
     # password off" that does not also mean "leave it as it is".
     password: str | None = None
+
+
+@router.get("/{dashboard_id}/export.html")
+def export_dashboard_html(dashboard_id: str, db: DbSession, user: CurrentUser) -> Response:
+    """The dashboard as one HTML file, filters and all.
+
+    A board is often wanted somewhere this platform is not: on a ministry's own
+    web host, beside a report, on a laptop taken to a meeting. A picture of it
+    loses the one thing that makes it a dashboard, which is that the reader can
+    narrow it and watch the numbers move, so the file carries the data behind
+    every widget at the grain its filters need rather than a rendering of it.
+    """
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    payload = static_export.build_payload(
+        db, dashboard, render=lambda widget: _render_widget(db, widget, None)
+    )
+    record(
+        db,
+        user=user,
+        action="dashboard.export_html",
+        entity_type="dashboard",
+        entity_id=dashboard_id,
+        detail={"widgets": len(payload["widgets"])},
+    )
+    db.commit()
+    name = slugify(dashboard.name) or "dashboard"
+    return Response(
+        content=static_export.render_html(payload),
+        media_type="text/html; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{name}.html"'},
+    )
 
 
 @router.get("/{dashboard_id}/share-links", response_model=list[ShareLinkOut])
@@ -958,6 +1002,7 @@ def create_share_link(
         name=payload.name.strip() or "Shared link",
         token=new_public_token(),
         is_active=True,
+        expires_at=as_utc(payload.expires_at),
         password_hash=hash_password(payload.password) if payload.password else "",
         created_by=user.id,
     )
@@ -973,7 +1018,11 @@ def create_share_link(
         action="share_link.create",
         entity_type="dashboard",
         entity_id=dashboard_id,
-        detail={"name": link.name, "password": bool(link.password_hash)},
+        detail={
+            "name": link.name,
+            "password": bool(link.password_hash),
+            "expires_at": link.expires_at.isoformat() if link.expires_at else None,
+        },
     )
     return ShareLinkOut.of(link)
 
@@ -995,6 +1044,8 @@ def update_share_link(
         link.name = (changes["name"] or "").strip() or "Shared link"
     if "is_active" in changes:
         link.is_active = bool(changes["is_active"])
+    if "expires_at" in changes:
+        link.expires_at = as_utc(changes["expires_at"])
     if "password" in changes:
         link.password_hash = (
             hash_password(changes["password"]) if changes["password"] else ""

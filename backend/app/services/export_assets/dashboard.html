@@ -1,0 +1,760 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root {
+    --ink-900: #1c1b19; --ink-700: #44423e; --ink-500: #6f6c66;
+    --ink-400: #8d8a83; --ink-200: #e3e1dc; --ink-100: #efedea; --ink-50: #f7f6f4;
+    --brand: #2f6fd0; --surface: #ffffff; --canvas: #f4f3f1;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--canvas); color: var(--ink-900);
+    font: 14px/1.5 Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  .wrap { max-width: 1500px; margin: 0 auto; padding: 20px 16px 48px; }
+  header.board h1 { margin: 0; font-size: 24px; font-weight: 600; }
+  header.board p { margin: 4px 0 0; color: var(--ink-500); font-size: 13px; }
+  .tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 14px 0 10px; }
+  .tabs button {
+    border: 0; background: none; padding: 8px 14px; border-radius: 6px 6px 0 0;
+    font: inherit; font-size: 13px; color: var(--ink-500); cursor: pointer;
+    border-bottom: 2px solid transparent;
+  }
+  .tabs button[aria-selected="true"] {
+    color: var(--brand); border-bottom-color: var(--brand); font-weight: 600;
+  }
+  .filters {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
+    background: var(--surface); border: 1px solid var(--ink-200);
+    border-radius: 10px; padding: 10px 12px; margin-bottom: 12px;
+  }
+  .filters label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-700); }
+  .filters select {
+    font: inherit; font-size: 12px; padding: 4px 6px; border-radius: 6px;
+    border: 1px solid var(--ink-200); background: #fff; min-width: 150px;
+  }
+  .filters .clear { border: 0; background: none; color: var(--brand); font: inherit; font-size: 12px; cursor: pointer; }
+  .grid { display: grid; grid-template-columns: repeat(12, 1fr); grid-auto-rows: 42px; gap: 14px; }
+  .card {
+    background: var(--surface); border: 1px solid var(--ink-200); border-radius: 10px;
+    display: flex; flex-direction: column; overflow: hidden; min-width: 0;
+  }
+  .card > h2 {
+    margin: 0; padding: 12px 14px 0; font-size: 14px; font-weight: 600;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .card > .body { flex: 1; min-height: 0; padding: 10px 14px 12px; overflow: auto; }
+  .card > .caption { padding: 0 14px 10px; font-size: 11px; color: var(--ink-500); }
+  .frozen { padding: 0 14px 8px; font-size: 11px; color: #8a6d1f; }
+  .chart { width: 100%; height: 100%; min-height: 120px; }
+  table.data { border-collapse: collapse; width: 100%; font-size: 12px; }
+  table.data th, table.data td { border-bottom: 1px solid var(--ink-100); padding: 5px 8px; text-align: left; }
+  table.data th { background: var(--ink-50); font-weight: 600; position: sticky; top: 0; }
+  table.data td.n, table.data th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  table.data tr.total td, table.data td.total { font-weight: 600; background: var(--ink-50); }
+  .kpi { font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  .track { height: 8px; border-radius: 999px; background: var(--ink-100); overflow: hidden; margin-top: 10px; }
+  .track > div { height: 100%; border-radius: 999px; }
+  .muted { color: var(--ink-500); font-size: 11px; margin: 6px 0 0; }
+  .note { color: var(--ink-400); font-size: 11px; }
+  .text { white-space: pre-wrap; font-size: 13px; color: var(--ink-700); }
+  .leafmap { width: 100%; height: 100%; min-height: 180px; border-radius: 6px; }
+  .embed { width: 100%; height: 100%; border: 0; }
+  footer.board { margin-top: 26px; color: var(--ink-400); font-size: 11px; }
+  @media (max-width: 780px) {
+    .grid { display: block; }
+    .card { margin-bottom: 14px; height: 320px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+<script type="application/json" id="board-data">"__PAYLOAD__"</script>
+<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+/*
+ * The exported dashboard, drawn from the cube beside it.
+ *
+ * Every widget carries its numbers grouped by what it groups on and by every
+ * variable this page's filters name. Choosing a filter keeps the rows that
+ * match and adds the measures back up, which is the same number the platform
+ * would have returned: a sum of counts is a count. A mean is carried as its
+ * total and its number of values so it can be divided again rather than
+ * averaged, which would be a different number.
+ */
+(function () {
+  var DATA = JSON.parse(document.getElementById('board-data').textContent)
+  var PALETTE = ['#2f6fd0', '#e07b39', '#2aa876', '#8b5cf6', '#d94f4f', '#0e9aa7',
+                 '#c2872f', '#6b7280', '#b3527d', '#4f7d3a']
+  var STATUS = { ok: '#2aa876', warning: '#c2872f', critical: '#d94f4f', unknown: '#8d8a83' }
+  var app = document.getElementById('app')
+  var page = 0
+  var chosen = {}
+  var drawn = []
+
+  // ---- numbers ------------------------------------------------------------
+  function num(value, decimals) {
+    if (value === null || value === undefined || value === '' || isNaN(value)) return '-'
+    var d = decimals === undefined ? (Number.isInteger(Number(value)) ? 0 : 2) : decimals
+    return Number(value).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })
+  }
+  function formatValue(value, format, unit) {
+    if (value === null || value === undefined || isNaN(value)) return '-'
+    if (format === 'percent') return Number(value).toFixed(1) + '%'
+    if (format === 'currency') return num(value, 0) + (unit ? ' ' + unit : '')
+    if (format === 'decimal') return num(value, 2)
+    return num(value) + (unit ? ' ' + unit : '')
+  }
+  function text(value) {
+    if (value === null || value === undefined) return ''
+    var written = String(value)
+    // A day is stored as a moment at midnight, and an axis of "2026-07-19
+    // 00:00:00" is unreadable at any width a widget has.
+    return written.replace(/^(\d{4}-\d{2}-\d{2})[T ]00:00:00.*$/, '$1')
+  }
+
+  // ---- the cube -----------------------------------------------------------
+  /**
+   * The cube, narrowed to what is chosen and added back up.
+   *
+   * Comes back in the shape a query answers in - named columns and rows - so
+   * nothing that draws below has to know a filter happened at all.
+   */
+  function combine(cube) {
+    var at = {}
+    cube.columns.forEach(function (column, index) { at[column.name] = index })
+    var dims = cube.dimensions.map(function (name) { return at[name] })
+    var tests = cube.filters.map(function (control) {
+      return { index: at[control.column], want: chosen[control.variable] || '' }
+    })
+    var buckets = new Map()
+    var order = []
+    cube.rows.forEach(function (row) {
+      for (var f = 0; f < tests.length; f++) {
+        if (tests[f].want && text(row[tests[f].index]) !== tests[f].want) return
+      }
+      var key = dims.map(function (index) { return text(row[index]) }).join('||')
+      var bucket = buckets.get(key)
+      if (!bucket) {
+        bucket = { key: dims.map(function (index) { return row[index] }), parts: {} }
+        buckets.set(key, bucket)
+        order.push(bucket)
+      }
+      cube.measures.forEach(function (measure) {
+        measure.parts.forEach(function (part) {
+          var value = Number(row[at[part]])
+          if (isNaN(value)) return
+          var held = bucket.parts[part]
+          if (held === undefined) bucket.parts[part] = value
+          else if (measure.how === 'min') bucket.parts[part] = Math.min(held, value)
+          else if (measure.how === 'max') bucket.parts[part] = Math.max(held, value)
+          else bucket.parts[part] = held + value
+        })
+      })
+    })
+    var rows = order.map(function (bucket) {
+      var out = bucket.key.slice()
+      cube.measures.forEach(function (measure) {
+        if (measure.how === 'mean') {
+          var count = bucket.parts[measure.parts[1]]
+          out.push(count ? bucket.parts[measure.parts[0]] / count : null)
+        } else {
+          var held = bucket.parts[measure.parts[0]]
+          out.push(held === undefined ? null : held)
+        }
+      })
+      return out
+    })
+    cube.measures.forEach(function (measure, index) {
+      if (measure.how !== 'share') return
+      var column = cube.dimensions.length + index
+      var total = rows.reduce(function (sum, row) { return sum + (Number(row[column]) || 0) }, 0)
+      rows.forEach(function (row) { row[column] = total ? (row[column] / total) * 100 : 0 })
+    })
+    rows = order.length ? sorted(rows, cube) : rows
+    rows = topN(rows, cube)
+    var columns = cube.dimensions.map(function (name) {
+      var found = cube.columns.filter(function (column) { return column.name === name })[0]
+      return { name: name, label: (found && found.label) || name, type: 'dimension' }
+    }).concat(cube.measures.map(function (measure) {
+      return { name: measure.name, label: measure.label || measure.name, type: 'measure' }
+    }))
+    return { columns: columns, rows: rows }
+  }
+
+  function typeOf(cube, name) {
+    var found = cube.columns.filter(function (column) { return column.name === name })[0]
+    return (found && found.data_type) || ''
+  }
+
+  function sorted(rows, cube) {
+    var names = cube.dimensions.concat(cube.measures.map(function (m) { return m.name }))
+    var sort = (cube.sort || [])[0]
+    var index = sort ? names.indexOf(sort.field) : -1
+    var down = sort ? sort.direction !== 'asc' : true
+    if (index < 0) {
+      if (cube.dimensions.length !== 1 || !cube.measures.length) return rows
+      // A date axis is read left to right in time. Everything else with one
+      // grouping is read biggest first, which is how the platform draws a
+      // grouping nothing sorted.
+      if (/date|time/.test(typeOf(cube, cube.dimensions[0]))) { index = 0; down = false }
+      else index = cube.dimensions.length
+    }
+    return rows.slice().sort(function (a, b) {
+      var left = a[index], right = b[index]
+      if (typeof left === 'number' || typeof right === 'number') {
+        return down ? (Number(right) || 0) - (Number(left) || 0) : (Number(left) || 0) - (Number(right) || 0)
+      }
+      return down ? text(right).localeCompare(text(left)) : text(left).localeCompare(text(right))
+    })
+  }
+
+  /* The chart's own top-N, taken after the filter: the ten busiest
+     interviewers in one province are not the national ten. */
+  function topN(rows, cube) {
+    if (!cube.top || cube.dimensions.length !== 1 || rows.length <= cube.top) return rows
+    var head = rows.slice(0, cube.top)
+    var tail = rows.slice(cube.top)
+    var other = ['Other']
+    cube.measures.forEach(function (measure, index) {
+      other.push(measure.how === 'sum' || measure.how === 'share'
+        ? tail.reduce(function (sum, row) { return sum + (Number(row[index + 1]) || 0) }, 0)
+        : null)
+    })
+    return head.concat([other])
+  }
+
+  // ---- drawing ------------------------------------------------------------
+  function el(tag, className, textContent) {
+    var node = document.createElement(tag)
+    if (className) node.className = className
+    if (textContent !== undefined) node.textContent = textContent
+    return node
+  }
+
+  /** Categories and one series per measure, or per value of a second grouping. */
+  function shape(result) {
+    var dims = result.columns.filter(function (c) { return c.type === 'dimension' }).length
+    var measures = result.columns.slice(dims)
+    if (dims >= 2 && measures.length === 1) {
+      var categories = [], series = [], seen = {}, place = {}
+      result.rows.forEach(function (row) {
+        var one = text(row[0]), two = text(row[1])
+        if (place[one] === undefined) { place[one] = categories.length; categories.push(one) }
+        if (seen[two] === undefined) { seen[two] = series.length; series.push({ name: two, data: [] }) }
+      })
+      series.forEach(function (line) { line.data = new Array(categories.length).fill(0) })
+      result.rows.forEach(function (row) {
+        series[seen[text(row[1])]].data[place[text(row[0])]] = Number(row[2]) || 0
+      })
+      return { categories: categories, series: series }
+    }
+    return {
+      categories: result.rows.map(function (row) { return dims ? text(row[0]) : '' }),
+      series: measures.map(function (column, index) {
+        return {
+          name: column.label,
+          data: result.rows.map(function (row) { return Number(row[dims + index]) || 0 }),
+        }
+      }),
+    }
+  }
+
+  function chartOption(kind, result, display) {
+    var built = shape(result)
+    var many = built.series.length > 1
+    var horizontalKind = kind === 'horizontal_bar' || kind === 'horizontal_stacked_bar'
+    var stackedKind = kind === 'stacked_bar' || kind === 'horizontal_stacked_bar'
+    var labels = display && display.showValues
+      ? {
+          show: true,
+          // Outside the mark, as the platform draws them: printed inside, a
+          // number sits on top of the bar it belongs to and is unreadable
+          // against it. A stacked bar has nowhere outside to put them.
+          position: stackedKind ? 'inside' : horizontalKind ? 'right' : 'top',
+          formatter: function (p) { return num(p.value) },
+        }
+      : { show: false }
+    var base = {
+      color: PALETTE,
+      animationDuration: 300,
+      grid: { left: 8, right: 22, top: many ? 34 : 22, bottom: 6, containLabel: true },
+      tooltip: { trigger: kind === 'pie' || kind === 'donut' ? 'item' : 'axis' },
+      legend: many ? { top: 0, left: 0, itemWidth: 10, itemHeight: 10, type: 'scroll' } : { show: false },
+    }
+    if (kind === 'pie' || kind === 'donut') {
+      return Object.assign({}, base, {
+        grid: undefined,
+        legend: { bottom: 0, left: 'center', type: 'scroll', itemWidth: 10, itemHeight: 10 },
+        series: [{
+          type: 'pie',
+          radius: kind === 'donut' ? ['48%', '70%'] : ['0%', '68%'],
+          center: ['50%', '45%'],
+          itemStyle: { borderColor: '#fff', borderWidth: 2 },
+          label: { formatter: '{d}%' },
+          data: built.categories.map(function (name, index) {
+            return { name: name, value: built.series[0] ? built.series[0].data[index] : 0 }
+          }),
+        }],
+      })
+    }
+    if (kind === 'scatter') {
+      var x = built.series[0], y = built.series[1]
+      return Object.assign({}, base, {
+        tooltip: { trigger: 'item' },
+        xAxis: { type: 'value', scale: true, name: x ? x.name : '' },
+        yAxis: { type: 'value', scale: true, name: y ? y.name : '' },
+        series: [{
+          type: 'scatter',
+          symbolSize: 10,
+          data: built.categories.map(function (_, index) {
+            return [x ? x.data[index] : 0, y ? y.data[index] : 0]
+          }),
+        }],
+      })
+    }
+    if (kind === 'funnel') {
+      return Object.assign({}, base, {
+        grid: undefined,
+        tooltip: { trigger: 'item' },
+        series: [{
+          type: 'funnel', left: '8%', right: '8%', label: { position: 'inside' },
+          data: built.categories.map(function (name, index) {
+            return { name: name, value: built.series[0] ? built.series[0].data[index] : 0 }
+          }),
+        }],
+      })
+    }
+    var horizontal = horizontalKind
+    var stacked = stackedKind
+    var category = { type: 'category', data: built.categories, axisLabel: { hideOverlap: true } }
+    var value = { type: 'value' }
+    return Object.assign({}, base, {
+      xAxis: horizontal ? value : category,
+      yAxis: horizontal ? category : value,
+      series: built.series.map(function (line) {
+        return {
+          name: line.name,
+          type: kind === 'line' || kind === 'area' ? 'line' : 'bar',
+          smooth: false,
+          areaStyle: kind === 'area' ? {} : undefined,
+          stack: stacked ? 'total' : undefined,
+          barMaxWidth: 46,
+          label: labels,
+          data: line.data,
+        }
+      }),
+    })
+  }
+
+  function drawChart(body, kind, result, display) {
+    if (!result.rows.length) { body.appendChild(el('p', 'note', 'Nothing matches these filters.')); return }
+    if (kind === 'table' || !window.echarts) { drawTable(body, result); return }
+    if (kind === 'kpi' || kind === 'gauge') {
+      var dims = result.columns.filter(function (c) { return c.type === 'dimension' }).length
+      body.appendChild(el('p', 'kpi', num(result.rows[0][dims])))
+      body.appendChild(el('p', 'muted', result.columns[dims] ? result.columns[dims].label : ''))
+      return
+    }
+    var known = ['bar', 'horizontal_bar', 'stacked_bar', 'horizontal_stacked_bar', 'line',
+                 'area', 'pie', 'donut', 'scatter', 'funnel']
+    if (known.indexOf(kind) < 0) { drawTable(body, result); return }
+    var host = el('div', 'chart')
+    body.appendChild(host)
+    var instance = echarts.init(host)
+    instance.setOption(chartOption(kind, result, display || {}))
+    drawn.push(instance)
+  }
+
+  function drawTable(body, result) {
+    var table = el('table', 'data')
+    var head = document.createElement('tr')
+    result.columns.forEach(function (column) {
+      var cell = el('th', column.type === 'measure' ? 'n' : '', column.label)
+      head.appendChild(cell)
+    })
+    var thead = document.createElement('thead')
+    thead.appendChild(head)
+    table.appendChild(thead)
+    var tbody = document.createElement('tbody')
+    result.rows.forEach(function (row) {
+      var line = document.createElement('tr')
+      row.forEach(function (value, index) {
+        var measure = result.columns[index] && result.columns[index].type === 'measure'
+        line.appendChild(el('td', measure ? 'n' : '', measure ? num(value) : text(value)))
+      })
+      tbody.appendChild(line)
+    })
+    table.appendChild(tbody)
+    body.appendChild(table)
+  }
+
+  /** A cross-tab rebuilt from its cells: the totals and shares are arithmetic. */
+  function drawCrosstab(body, result, spec) {
+    var rows = [], columns = [], cells = {}
+    result.rows.forEach(function (row) {
+      var r = text(row[0]) || '(missing)'
+      var c = result.columns.length > 2 ? (text(row[1]) || '(missing)') : spec.measure_label
+      if (rows.indexOf(r) < 0) rows.push(r)
+      if (columns.indexOf(c) < 0) columns.push(c)
+      cells[r + '||' + c] = (cells[r + '||' + c] || 0) + (Number(row[row.length - 1]) || 0)
+    })
+    rows.sort()
+    columns.sort()
+    var rowTotal = {}, columnTotal = {}, grand = 0
+    rows.forEach(function (r) {
+      rowTotal[r] = columns.reduce(function (sum, c) { return sum + (cells[r + '||' + c] || 0) }, 0)
+      grand += rowTotal[r]
+    })
+    columns.forEach(function (c) {
+      columnTotal[c] = rows.reduce(function (sum, r) { return sum + (cells[r + '||' + c] || 0) }, 0)
+    })
+    var show = function (value, r, c) {
+      if (spec.percentages === 'row') return rowTotal[r] ? num((value / rowTotal[r]) * 100, 1) + '%' : '-'
+      if (spec.percentages === 'column') return columnTotal[c] ? num((value / columnTotal[c]) * 100, 1) + '%' : '-'
+      if (spec.percentages === 'total') return grand ? num((value / grand) * 100, 1) + '%' : '-'
+      return num(value)
+    }
+    var table = el('table', 'data')
+    var thead = document.createElement('thead')
+    var head = document.createElement('tr')
+    head.appendChild(el('th', '', spec.row_variable || ''))
+    columns.forEach(function (c) { head.appendChild(el('th', 'n', c)) })
+    if (spec.include_totals) head.appendChild(el('th', 'n', 'Total'))
+    thead.appendChild(head)
+    table.appendChild(thead)
+    var tbody = document.createElement('tbody')
+    rows.forEach(function (r) {
+      var line = document.createElement('tr')
+      line.appendChild(el('td', '', r))
+      columns.forEach(function (c) {
+        line.appendChild(el('td', 'n', show(cells[r + '||' + c] || 0, r, c)))
+      })
+      if (spec.include_totals) line.appendChild(el('td', 'n total', num(rowTotal[r])))
+      tbody.appendChild(line)
+    })
+    if (spec.include_totals) {
+      var last = document.createElement('tr')
+      last.className = 'total'
+      last.appendChild(el('td', '', 'Total'))
+      columns.forEach(function (c) { last.appendChild(el('td', 'n', num(columnTotal[c]))) })
+      last.appendChild(el('td', 'n', num(grand)))
+      tbody.appendChild(last)
+    }
+    table.appendChild(tbody)
+    body.appendChild(table)
+  }
+
+  function indicatorStatus(spec, value) {
+    if (value === null || value === undefined) return 'unknown'
+    if (spec.warning_threshold === null && spec.critical_threshold === null) return 'ok'
+    if (spec.direction === 'lower_is_better') {
+      if (spec.critical_threshold !== null && value >= spec.critical_threshold) return 'critical'
+      if (spec.warning_threshold !== null && value >= spec.warning_threshold) return 'warning'
+      return 'ok'
+    }
+    if (spec.critical_threshold !== null && value <= spec.critical_threshold) return 'critical'
+    if (spec.warning_threshold !== null && value <= spec.warning_threshold) return 'warning'
+    return 'ok'
+  }
+
+  function drawIndicator(body, widget) {
+    var spec = widget.indicator
+    var result = combine(widget.cube)
+    var denominator = widget.denominator ? combine(widget.denominator) : null
+    var dims = result.columns.filter(function (c) { return c.type === 'dimension' }).length
+    var breakdown = []
+    var total = 0
+    result.rows.forEach(function (row) {
+      var value = Number(row[dims]) || 0
+      total += value
+      if (dims) breakdown.push([text(row[0]), value])
+    })
+    var value = total
+    if (spec.percent_of && denominator) {
+      var whole = denominator.rows.reduce(function (sum, row) {
+        return sum + (Number(row[denominator.columns.filter(function (c) { return c.type === 'dimension' }).length]) || 0)
+      }, 0)
+      value = whole ? (total / whole) * 100 : null
+      if (breakdown.length) {
+        var per = {}
+        var dd = denominator.columns.filter(function (c) { return c.type === 'dimension' }).length
+        denominator.rows.forEach(function (row) { per[text(row[0])] = Number(row[dd]) || 0 })
+        breakdown = breakdown
+          .filter(function (pair) { return per[pair[0]] })
+          .map(function (pair) { return [pair[0], (pair[1] / per[pair[0]]) * 100] })
+      }
+    }
+    var status = indicatorStatus(spec, value)
+    body.appendChild(el('p', 'kpi', formatValue(value, spec.value_format, spec.unit)))
+    if (spec.target_value) {
+      var track = el('div', 'track')
+      var bar = el('div')
+      bar.style.width = Math.min(((value || 0) / spec.target_value) * 100, 100) + '%'
+      bar.style.background = STATUS[status]
+      track.appendChild(bar)
+      body.appendChild(track)
+      body.appendChild(el('p', 'muted',
+        num(((value || 0) / spec.target_value) * 100, 0) + '% of ' + num(spec.target_value)))
+    }
+    if (breakdown.length && window.echarts) {
+      var host = el('div', 'chart')
+      body.appendChild(host)
+      var instance = echarts.init(host)
+      instance.setOption({
+        color: PALETTE,
+        grid: { left: 8, right: 30, top: 10, bottom: 6, containLabel: true },
+        tooltip: { trigger: 'axis' },
+        xAxis: { type: 'value' },
+        yAxis: { type: 'category', data: breakdown.map(function (p) { return p[0] }) },
+        series: [{
+          type: 'bar', barMaxWidth: 22,
+          label: { show: true, position: 'right', formatter: function (p) { return num(p.value) } },
+          data: breakdown.map(function (p) { return p[1] }),
+        }],
+      })
+      drawn.push(instance)
+    }
+  }
+
+  function drawMap(body, widget) {
+    if (!window.L) { body.appendChild(el('p', 'note', 'The map needs an internet connection to draw.')); return }
+    var result = combine(widget.cube)
+    var dims = result.columns.filter(function (c) { return c.type === 'dimension' }).length
+    var merged = new Map()
+    result.rows.forEach(function (row) {
+      var lat = Number(row[0]), lon = Number(row[1])
+      if (!isFinite(lat) || !isFinite(lon) || (lat === 0 && lon === 0)) return
+      var key = lat + ',' + lon
+      var point = merged.get(key)
+      if (!point) { point = { lat: lat, lon: lon, value: 0, detail: row.slice(2, dims) }; merged.set(key, point) }
+      point.value += Number(row[dims]) || 0
+    })
+    var points = Array.from(merged.values())
+    var host = el('div', 'leafmap')
+    body.appendChild(host)
+    // Leaflet measures its container, which has no size until the card is in
+    // the document, so the map is built after this frame rather than now.
+    setTimeout(function () {
+      var map = L.map(host, { preferCanvas: true }).setView([0, 0], 2)
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors', maxZoom: 19,
+      }).addTo(map)
+      var largest = points.reduce(function (top, point) { return Math.max(top, point.value) }, 1)
+      var size = Number(widget.map.point_size) || 8
+      points.forEach(function (point) {
+        var radius = widget.map.size_by_value === false
+          ? size
+          : Math.max(4, size * Math.sqrt(point.value / largest))
+        var marker = L.circleMarker([point.lat, point.lon], {
+          radius: radius,
+          color: widget.map.point_color || PALETTE[0],
+          fillColor: widget.map.point_color || PALETTE[0],
+          fillOpacity: widget.map.point_opacity === null || widget.map.point_opacity === undefined
+            ? 0.6 : Number(widget.map.point_opacity),
+          weight: 1,
+        })
+        var lines = [widget.map.measure_label + ': ' + num(point.value)]
+        widget.map.detail.forEach(function (name, index) {
+          lines.push(name + ': ' + text(point.detail[index]))
+        })
+        marker.bindPopup(lines.map(escapeHtml).join('<br>'))
+        marker.addTo(map)
+      })
+      if (points.length) {
+        map.fitBounds(L.latLngBounds(points.map(function (p) { return [p.lat, p.lon] })).pad(0.15))
+      }
+    }, 0)
+  }
+
+  function escapeHtml(value) {
+    return text(value).replace(/[&<>"']/g, function (character) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]
+    })
+  }
+
+  /* A widget the filters cannot move, drawn as it stood when the file was
+     made. Enough of it to be read, not a second copy of the whole platform. */
+  function drawSnapshot(body, widget) {
+    var payload = widget.snapshot || {}
+    if (payload.error) { body.appendChild(el('p', 'note', payload.error)); return }
+    if (widget.type === 'text') { body.appendChild(el('p', 'text', (widget.config || {}).content || '')); return }
+    if (widget.type === 'html') {
+      var frame = el('iframe', 'embed')
+      frame.setAttribute('sandbox', '')
+      frame.srcdoc = payload.html || (widget.config || {}).html || ''
+      body.appendChild(frame)
+      return
+    }
+    if (payload.type === 'quality') {
+      var checks = payload.checks || []
+      var failing = checks.filter(function (check) { return check.passed === false })
+      body.appendChild(el('p', 'muted',
+        (payload.failing || 0) + ' failing, ' + (payload.passing || 0) + ' passing'))
+      var list = el('table', 'data')
+      var tbody = document.createElement('tbody')
+      ;(failing.length ? failing : checks).forEach(function (check) {
+        var line = document.createElement('tr')
+        line.appendChild(el('td', '', check.name))
+        line.appendChild(el('td', 'n', check.passed === false ? 'failing' : check.passed ? 'passing' : 'not run'))
+        tbody.appendChild(line)
+      })
+      list.appendChild(tbody)
+      body.appendChild(list)
+      return
+    }
+    if (payload.type === 'freshness') {
+      var table = el('table', 'data')
+      var body2 = document.createElement('tbody')
+      ;(payload.datasets || []).forEach(function (line) {
+        var row = document.createElement('tr')
+        row.appendChild(el('td', '', line.name || ''))
+        row.appendChild(el('td', 'n', line.age_label || line.status || ''))
+        body2.appendChild(row)
+      })
+      table.appendChild(body2)
+      body.appendChild(table)
+      return
+    }
+    if (payload.result) {
+      drawChart(body, payload.chart_type || 'table', {
+        columns: payload.result.columns,
+        rows: payload.result.rows,
+      }, payload.display)
+      return
+    }
+    if (payload.type === 'indicator') {
+      body.appendChild(el('p', 'kpi', formatValue(payload.value, payload.value_format, payload.unit)))
+      return
+    }
+    body.appendChild(el('p', 'note', 'This widget is not part of the exported copy.'))
+  }
+
+  // ---- the page -----------------------------------------------------------
+  function controlsHere() {
+    return DATA.filters.filter(function (control) { return control.page === page })
+  }
+
+  function render() {
+    drawn.forEach(function (instance) { instance.dispose() })
+    drawn = []
+    app.innerHTML = ''
+
+    var header = el('header', 'board')
+    header.appendChild(el('h1', '', DATA.name))
+    if (DATA.description) header.appendChild(el('p', '', DATA.description))
+    app.appendChild(header)
+
+    if (DATA.pages.length > 1) {
+      var tabs = el('div', 'tabs')
+      DATA.pages.forEach(function (one, index) {
+        var button = el('button', '', one.name)
+        button.setAttribute('aria-selected', index === page ? 'true' : 'false')
+        button.onclick = function () { page = index; render() }
+        tabs.appendChild(button)
+      })
+      app.appendChild(tabs)
+    }
+
+    var controls = controlsHere()
+    if (controls.length) {
+      var bar = el('div', 'filters')
+      controls.forEach(function (control) {
+        var label = el('label')
+        label.appendChild(el('span', '', control.label))
+        var select = document.createElement('select')
+        select.setAttribute('aria-label', control.label)
+        var all = document.createElement('option')
+        all.value = ''
+        all.textContent = 'All'
+        select.appendChild(all)
+        control.values.forEach(function (value) {
+          var option = document.createElement('option')
+          option.value = value
+          option.textContent = value
+          select.appendChild(option)
+        })
+        select.value = chosen[control.variable] || ''
+        select.onchange = function () {
+          chosen[control.variable] = select.value
+          render()
+        }
+        label.appendChild(select)
+        bar.appendChild(label)
+      })
+      var clear = el('button', 'clear', 'Clear')
+      clear.onclick = function () { chosen = {}; render() }
+      bar.appendChild(clear)
+      app.appendChild(bar)
+    }
+
+    var grid = el('div', 'grid')
+    DATA.widgets.filter(function (widget) { return widget.page === page }).forEach(function (widget) {
+      grid.appendChild(card(widget))
+    })
+    app.appendChild(grid)
+
+    // The charts are built while their cards are still being assembled, so at
+    // that moment the containers are not in the document and have no size. A
+    // chart measures its box once, when it starts, and would keep the nothing
+    // it found: the card appears and stays empty. One resize after the page is
+    // in place puts every one of them right.
+    requestAnimationFrame(function () {
+      drawn.forEach(function (instance) { instance.resize() })
+    })
+
+    var footer = el('footer', 'board')
+    footer.textContent = 'Exported from susoDash on ' + new Date(DATA.generated_at).toLocaleString() +
+      '. The numbers are as they stood then.'
+    app.appendChild(footer)
+  }
+
+  function card(widget) {
+    var node = el('article', 'card')
+    var layout = widget.layout || {}
+    if (window.matchMedia('(min-width: 781px)').matches) {
+      node.style.gridColumn = ((Number(layout.x) || 0) + 1) + ' / span ' + Math.max(1, Number(layout.w) || 4)
+      // Rows flow rather than being pinned to the stored y. The dashboard packs
+      // its widgets upwards as they are dragged, so the y a widget was saved
+      // with can sit well below the one above it - which here would be a band
+      // of empty page rather than the tidy grid it is on the platform.
+      node.style.gridRow = 'span ' + Math.max(2, Number(layout.h) || 6)
+    }
+    var style = widget.style || {}
+    if (style.background) node.style.background = style.background
+    if (style.font_color) node.style.color = style.font_color
+    if (style.font_family) node.style.fontFamily = style.font_family
+    if (widget.title) node.appendChild(el('h2', '', widget.title))
+    if (widget.frozen_because) {
+      node.appendChild(el('div', 'frozen',
+        'As it stood when this file was made: ' + widget.frozen_because + '.'))
+    }
+    var body = el('div', 'body')
+    node.appendChild(body)
+    try {
+      if (widget.kind === 'indicator') drawIndicator(body, widget)
+      else if (widget.kind === 'map') drawMap(body, widget)
+      else if (widget.kind === 'crosstab') drawCrosstab(body, combine(widget.cube), widget.crosstab)
+      else if (widget.kind === 'chart') drawChart(body, widget.chart_type, combine(widget.cube), widget.display)
+      else drawSnapshot(body, widget)
+    } catch (error) {
+      body.appendChild(el('p', 'note', 'This widget could not be drawn: ' + error.message))
+    }
+    if (style.caption) node.appendChild(el('div', 'caption', style.caption))
+    return node
+  }
+
+  window.addEventListener('resize', function () {
+    drawn.forEach(function (instance) { instance.resize() })
+  })
+  render()
+})()
+</script>
+</body>
+</html>

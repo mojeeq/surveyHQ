@@ -615,6 +615,16 @@ The map frames itself on the layer rather than on the pins when one is chosen.
 A single coordinate recorded in the wrong hemisphere would otherwise squeeze
 the whole survey into a thumbnail to keep that one mistake on screen.
 
+**Turning the outlines off.** The layers box in the map's top right corner,
+which chooses the ground, also carries a tick-box for the boundary layer by
+name. Untick it and the outlines go; tick it and they come back, under the pins
+where they were. Boundaries are drawn to be read against, and there are maps
+where they are the thing in the way: a cluster of households inside one
+enumeration area is a handful of pins under a heavy line, and "which of these
+is on the wrong side of it" is asked by taking the line off and putting it
+back. It is the reader's choice rather than the author's, so it lives on the
+map and not in a dialog only the board's author can open.
+
 **Point shape** draws the pins as circles, squares, triangles, diamonds or
 pentagons. A circle is right when the size of the pin carries a quantity. A
 shape is right when the map is answering "what happened here", because shapes
@@ -736,11 +746,64 @@ nobody uses can be recognised and closed.
 be switched back on at the same address, which matters once it is already
 pasted into somebody's email. Deleting is permanent.
 
+**Stops working after** gives a link an end date. It works all of that day,
+where you are, and is shut the next morning - so "expires on the 3rd" means
+what a date on a pass means. This is closing a link without having to remember
+to: the donor's copy was for a report that has since been filed and the
+workshop's was for the workshop, and both otherwise stay open until somebody
+thinks of them. An expired link is marked **Expired** in this list and still
+here: type a later date and the same address opens again, or use **No end
+date** to take the end off. To a reader an expired link and a closed one say
+the same thing, which is that the dashboard is not available - not that it
+expired on the 3rd, which tells a stranger more about the work than the address
+itself does.
+
 A link can carry a **password**. The reader is asked for it once and then reads
 the dashboard normally; it is remembered for that browser tab only, so a shared
 computer in a field office does not leave the next person signed in. This is
 not an account - everyone holding the password is the same anonymous reader -
 and it exists so that a forwarded link is not a public one.
+
+### Taking the dashboard away as a file
+
+A link needs susoDash running and reachable. **Share -> Download as a web page**
+gives you the board itself: one HTML file, which you can put on any web host,
+attach to a report, or send to somebody who will open it from their own disk.
+
+**Its filters still work.** That is the point of it. The file carries the
+numbers behind each widget rather than a picture of it, grouped by what the
+widget groups on *and* by every variable the page's filter controls name.
+Choosing "Shefa" keeps the rows where the province is Shefa and adds the
+measures back up, which is exactly the number the platform would have returned:
+a sum of counts is a count. An average is carried as its total and the number
+of values behind it, so it is divided again rather than averaged twice - an
+average of averages is not an average unless every group happens to be the same
+size, and quietly returning one would be worse than not exporting it at all.
+The page tabs work too, and each page keeps its own controls.
+
+What the copy does not do:
+
+- **Clicking a mark does not filter it.** The dropdowns are the filters.
+- **The charts and the map are drawn by libraries fetched from the internet**
+  (ECharts and Leaflet, from public addresses, pinned to a version). A machine
+  with no connection still opens the file and reads every number - each chart
+  falls back to its table - but it will not draw the pictures, and the map will
+  have no ground under its pins.
+- **Some widgets are frozen** and say so on their face, with the reason. A data
+  quality panel and a freshness panel report what their last run found rather
+  than answering a query, so there is nothing for a filter to narrow. A chart
+  resting on a median, a distinct count, a percentile or a standard deviation
+  cannot be worked out again from group totals - a median of medians is not a
+  median. A tick-all-that-apply chart is built from columns rather than groups.
+  A widget with so many combinations of groups and filter values that the file
+  would be enormous is frozen too. All of them are still drawn, as they stood
+  when the file was made.
+- **Boundary outlines are left out of the map.** A national frame is megabytes
+  of coordinates and would dwarf the rest of the file.
+
+The file says at its foot when it was made. Nothing in it goes back to the
+platform, so the numbers are the numbers of that moment: export it again when
+they should be newer.
 
 ### Giving a dashboard its own address
 
@@ -781,6 +844,12 @@ click decides which variable is used: a row heading filters by the row
 variable, a column heading by the column variable. The cells themselves are not
 clickable - a cell is both at once, and filtering by two things from one click
 is not what anyone expects of it.
+
+On a pie or a doughnut, **the legend counts as the chart**. The slices carry
+only a value and a percentage, so the name of a category appears once, in the
+legend, and that is where the hand goes. A click there filters the page like a
+click on the slice does. It used to do the one thing nobody wanted: hide the
+slice.
 
 The chart you clicked is deliberately left alone - it is the thing you are
 clicking, and narrowing it to the one bar you just chose would take away the

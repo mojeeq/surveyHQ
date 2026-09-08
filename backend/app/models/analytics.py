@@ -141,6 +141,13 @@ class ShareLink(UUIDMixin, TimestampMixin, Base):
     # address: a link already pasted into a ministry email is worth being able
     # to switch back on.
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # When the link stops opening, if it was given a date. Held rather than
+    # acted on by a job: a link that expires while nobody is watching must
+    # already be shut when the next reader arrives, and a nightly sweep would
+    # leave it open until the sweep ran.
+    expires_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
     password_hash: Mapped[str] = mapped_column(String(200), default="")
     view_count: Mapped[int] = mapped_column(Integer, default=0)
     last_viewed_at: Mapped[dt.datetime | None] = mapped_column(
