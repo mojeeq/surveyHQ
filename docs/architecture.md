@@ -485,6 +485,37 @@ The chart series palette is deliberately not from there. Page furniture can be
 any colour; a chart's colours carry meaning, and the palette in `lib/charts.ts`
 is validated for colour-vision deficiency separation. See below.
 
+### The gloss
+
+The furniture is finished in the Windows Aero manner, which is four things and
+not a filter over everything:
+
+1. **A hard midline.** Every raised surface is light over its top half and dark
+   over its bottom half, meeting on a line rather than fading. The crease is
+   the effect; a smooth fade reads as a blur. One rule, `.aero-gloss` in
+   `index.css`, holds it.
+2. **A bevel of two hairlines** - white inside the top edge, shadow inside the
+   bottom - which is what makes a control look raised off the page rather than
+   printed on it.
+3. **Raised or sunk, never flat.** Buttons and cards are raised; inputs carry
+   an inset shadow across their top edge, because a field you type into is a
+   hole in the surface. Pressing a button moves its highlight to the bottom,
+   which is the same surface seen from underneath.
+4. **Glass where something passes behind it** - the header over the scrolling
+   page, and the sidebar. Both keep a solid-enough colour underneath, because a
+   browser without `backdrop-filter` would otherwise render the header as a
+   see-through strip with the page running through the text.
+
+The navigation icons are drawn in the same grammar, as small tiles rather than
+bare glyphs: `components/AppIcon.tsx`, in SVG, so they are exact at any size
+and in either theme. They are vectors rather than slices of a reference sheet
+on purpose - a slice arrives with the compression of whatever it was exported
+as, at one size, and can never be sharp on a screen with a different pixel
+ratio.
+
+None of this reaches the charts. A gloss over a bar changes the colour the eye
+reads off it, and those colours are the data.
+
 ## Chart colour
 
 Series colour uses a categorical palette validated for colour-vision deficiency

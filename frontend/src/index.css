@@ -28,9 +28,55 @@
 }
 
 @layer components {
+  /* Dark mode's safety net for text.
+   *
+   * The ink palette is the light one, and an element that says `text-ink-900`
+   * and nothing else keeps #333 when the theme goes dark - which on the
+   * Overview meant the three headline numbers were near-black on near-black,
+   * and readable only by selecting them. There are 251 class attributes in
+   * this codebase naming an ink text colour without a dark twin, so the fix is
+   * one rule per shade rather than 251 edits: under `.dark`, an ink shade
+   * resolves to the same number in the dark palette, which is exactly the
+   * pairing the components that DO carry a dark variant already write by hand.
+   *
+   * These sit in the components layer, so an explicit `dark:text-...` on the
+   * element still wins - it is emitted later, in utilities. This is the
+   * default for whatever was not thought about, not an override of what was.
+   */
+  .dark .text-ink-400 {
+    @apply text-dark-400;
+  }
+  .dark .text-ink-500 {
+    @apply text-dark-500;
+  }
+  .dark .text-ink-600 {
+    @apply text-dark-600;
+  }
+  .dark .text-ink-700 {
+    @apply text-dark-700;
+  }
+  .dark .text-ink-800 {
+    @apply text-dark-800;
+  }
+  .dark .text-ink-900 {
+    @apply text-dark-900;
+  }
+
   .card {
-    @apply bg-white rounded-card border border-ink-200 shadow-card
+    @apply bg-white rounded-card border border-ink-200
            dark:bg-dark-50 dark:border-dark-200;
+    background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.9), rgba(240, 244, 249, 0.55));
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.95),
+      0 1px 3px rgba(15, 23, 42, 0.08),
+      0 6px 16px -10px rgba(15, 23, 42, 0.25);
+  }
+  .dark .card {
+    background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.045), rgba(255, 255, 255, 0));
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.07),
+      0 1px 3px rgba(0, 0, 0, 0.45),
+      0 8px 20px -12px rgba(0, 0, 0, 0.7);
   }
   .card-header {
     @apply px-5 py-4 border-b border-ink-200 flex items-center justify-between gap-3 dark:border-dark-200;
@@ -42,28 +88,88 @@
     @apply block text-xs font-medium text-ink-600 mb-1 dark:text-dark-600;
   }
   .input {
-    @apply w-full rounded-control border border-ink-200 bg-white px-3 py-1.5 text-[13px] text-ink-700
+    @apply w-full rounded-control border border-ink-300 bg-white px-3 py-1.5 text-[13px] text-ink-700
            placeholder:text-ink-400 focus:border-brand-500 focus:outline-none
            focus:ring-2 focus:ring-brand-500/20 disabled:bg-ink-50 disabled:text-ink-500
            dark:bg-dark-50 dark:border-dark-300 dark:text-dark-700 dark:placeholder:text-dark-400
            dark:disabled:bg-dark-100 dark:disabled:text-dark-500;
+    /* Sunk, where a button is raised: a field you type into is a hole in the
+       surface, and the shadow across its top edge is what says so. */
+    box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.09);
+  }
+  .dark .input {
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
   }
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-control px-3.5 py-1.5 text-[13px]
            font-normal transition-colors disabled:opacity-50 disabled:cursor-not-allowed
            focus:outline-none focus:ring-2 focus:ring-offset-1;
   }
+  /* Aero's gloss, in one place.
+     
+     Two stops meeting on a hard line halfway down, a hairline of light along
+     the inside of the top edge, a hairline of shadow along the bottom, and a
+     shadow under the whole thing. The hard line is the part that matters: a
+     smooth fade from light to dark reads as a blur, and it is the crease at
+     the midpoint that makes a surface look like glass over a curve. */
+  .aero-gloss {
+    background-image: linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.28) 0%,
+      rgba(255, 255, 255, 0.1) 49.9%,
+      rgba(0, 0, 0, 0.04) 50%,
+      rgba(0, 0, 0, 0.1) 100%
+    );
+  }
   .btn-primary {
-    @apply btn bg-brand-500 text-white hover:bg-brand-600 focus:ring-brand-500;
+    @apply btn aero-gloss bg-brand-500 text-white focus:ring-brand-500;
+    border: 1px solid theme('colors.brand.800');
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.45),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.15),
+      0 1px 2px rgba(15, 23, 42, 0.2);
+    text-shadow: 0 -1px 0 rgba(0, 0, 0, 0.22);
+  }
+  .btn-primary:hover:not(:disabled) {
+    @apply bg-brand-400;
+  }
+  /* Pressed: the light goes to the bottom, which is the same surface seen from
+     the other side. Nothing else says "held down" as plainly. */
+  .btn-primary:active:not(:disabled) {
+    @apply bg-brand-600;
+    background-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.12), rgba(255, 255, 255, 0.12));
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.25);
   }
   .btn-secondary {
-    @apply btn bg-white text-ink-700 border border-ink-200 hover:border-brand-400
+    @apply btn aero-gloss bg-white text-ink-700 border border-ink-300 hover:border-brand-400
            hover:text-brand-600 focus:ring-ink-400
            dark:bg-dark-50 dark:text-dark-700 dark:border-dark-300 dark:hover:border-brand-500
            dark:hover:text-brand-400 dark:focus:ring-dark-400;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.9),
+      0 1px 2px rgba(15, 23, 42, 0.1);
+  }
+  .dark .btn-secondary {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.08),
+      0 1px 2px rgba(0, 0, 0, 0.4);
+  }
+  .btn-secondary:active:not(:disabled) {
+    box-shadow: inset 0 2px 4px rgba(15, 23, 42, 0.14);
+    background-image: none;
   }
   .btn-danger {
-    @apply btn bg-red-600 text-white hover:bg-red-700 focus:ring-red-500;
+    @apply btn aero-gloss bg-red-600 text-white hover:bg-red-500 focus:ring-red-500;
+    border: 1px solid theme('colors.red.800');
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.35),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.15),
+      0 1px 2px rgba(15, 23, 42, 0.2);
+    text-shadow: 0 -1px 0 rgba(0, 0, 0, 0.22);
+  }
+  .btn-danger:active:not(:disabled) {
+    background-image: none;
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.25);
   }
   .btn-ghost {
     @apply btn text-ink-600 hover:bg-ink-50 hover:text-brand-600 focus:ring-ink-300
@@ -77,9 +183,13 @@
   }
   /* Redash's table: a barely-there header wash, tight rows, no shouting. */
   .table-base thead th {
-    @apply bg-[rgba(102,136,153,0.03)] text-left text-[13px] font-medium
+    @apply text-left text-[13px] font-medium
            text-ink-900 px-2.5 py-[7px] border-b border-ink-200 whitespace-nowrap
-           dark:bg-dark-50 dark:text-dark-900 dark:border-dark-200;
+           dark:text-dark-900 dark:border-dark-200;
+    background-image: linear-gradient(to bottom, #fbfcfd, #eef1f5);
+  }
+  .dark .table-base thead th {
+    background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.01));
   }
   .table-base tbody td {
     @apply px-2.5 py-[7px] border-b border-[#f0f0f0] align-top dark:border-dark-200;
@@ -87,6 +197,57 @@
   .table-base tbody tr:hover {
     @apply bg-[rgba(102,136,153,0.05)] dark:bg-dark-200/40;
   }
+  /* The sidebar as dark glass rather than flat navy: a vertical gradient, a
+     lit right edge where it meets the working area, and a sheen down the top
+     third. It is the surface every one of the navigation tiles sits on, and a
+     flat one under glossy tiles reads as a mistake in one of the two. */
+  .aero-sidebar {
+    background-image:
+      linear-gradient(to bottom, #262c37 0%, #1b1f27 42%, #171a21 100%);
+    box-shadow:
+      inset -1px 0 0 rgba(255, 255, 255, 0.06),
+      2px 0 8px -2px rgba(0, 0, 0, 0.45);
+  }
+  /* The selected row: Aero's own selection, which is a glossy blue capsule with
+     a bright rule down its leading edge rather than simply a darker patch. */
+  .nav-selected {
+    background-image: linear-gradient(
+      to bottom,
+      rgba(90, 175, 255, 0.34) 0%,
+      rgba(46, 128, 214, 0.28) 49.9%,
+      rgba(24, 92, 168, 0.32) 50%,
+      rgba(38, 120, 200, 0.26) 100%
+    );
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.22),
+      inset 2px 0 0 rgba(120, 200, 255, 0.9),
+      0 1px 2px rgba(0, 0, 0, 0.35);
+  }
+  /* Frosted glass over whatever scrolls under it. The fallback matters: without
+     a solid-enough background a browser with no backdrop-filter renders the
+     header as a see-through strip with text from the page behind running
+     through it. */
+  .aero-glass {
+    background-color: rgba(255, 255, 255, 0.96);
+    background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.75), rgba(236, 241, 247, 0.6));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85), 0 1px 2px rgba(15, 23, 42, 0.06);
+  }
+  .dark .aero-glass {
+    background-color: rgba(42, 46, 55, 0.96);
+    background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.01));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 1px 2px rgba(0, 0, 0, 0.4);
+  }
+  @supports (backdrop-filter: blur(10px)) or (-webkit-backdrop-filter: blur(10px)) {
+    .aero-glass {
+      background-color: rgba(255, 255, 255, 0.72);
+      -webkit-backdrop-filter: saturate(180%) blur(12px);
+      backdrop-filter: saturate(180%) blur(12px);
+    }
+    .dark .aero-glass {
+      background-color: rgba(42, 46, 55, 0.72);
+    }
+  }
+
   /* Square, like everything else here. A pill reads as decoration; a status
      belongs in the same rectangular vocabulary as the tables and cards it sits
      among. */

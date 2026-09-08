@@ -6,6 +6,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { useTheme } from '@/hooks/useTheme'
 import type { Notification } from '@/lib/types'
 import { relativeTime } from '@/lib/format'
+import AppIcon, { type AppIconName } from '@/components/AppIcon'
 
 /** Closes a popover when a click lands outside every ref it's given. */
 function useClickOutside(refs: React.RefObject<HTMLElement>[], onOutside: () => void) {
@@ -19,17 +20,27 @@ function useClickOutside(refs: React.RefObject<HTMLElement>[], onOutside: () => 
   }, [refs, onOutside])
 }
 
-const NAV = [
-  { to: '/', label: 'Overview', icon: '◈', end: true },
-  { to: '/projects', label: 'Projects', icon: '◫' },
-  { to: '/datasets', label: 'Datasets', icon: '▤' },
-  { to: '/connections', label: 'Connections', icon: '⇄' },
-  { to: '/explore', label: 'Explore', icon: '◱' },
-  { to: '/dashboards', label: 'Dashboards', icon: '▦' },
-  { to: '/monitoring', label: 'Monitoring', icon: '◎' },
-  { to: '/quality', label: 'Data quality', icon: '✓' },
-  { to: '/alerts', label: 'Alerts', icon: '!' },
+const NAV: { to: string; label: string; icon: AppIconName; end?: boolean }[] = [
+  { to: '/', label: 'Overview', icon: 'overview', end: true },
+  { to: '/projects', label: 'Projects', icon: 'projects' },
+  { to: '/datasets', label: 'Datasets', icon: 'datasets' },
+  { to: '/connections', label: 'Connections', icon: 'connections' },
+  { to: '/explore', label: 'Explore', icon: 'explore' },
+  { to: '/dashboards', label: 'Dashboards', icon: 'dashboards' },
+  { to: '/monitoring', label: 'Monitoring', icon: 'monitoring' },
+  { to: '/quality', label: 'Data quality', icon: 'quality' },
+  { to: '/alerts', label: 'Alerts', icon: 'alerts' },
 ]
+
+/* One row of the sidebar. The selected one is lit from above like everything
+   else here, and carries a bright rule down its left edge - which is how Aero
+   marked a selection, and reads at a glance better than a change of shade. */
+const navRow = (isActive: boolean) =>
+  `group/nav relative flex items-center gap-2.5 rounded-control px-3 py-1.5 text-[13px] transition-colors duration-150 ${
+    isActive
+      ? 'nav-selected text-white'
+      : 'text-sidebar-text hover:bg-white/[0.06] hover:text-white'
+  }`
 
 export default function Layout() {
   const { user, signOut, can } = useAuth()
@@ -55,10 +66,10 @@ export default function Layout() {
       {/* The one dark surface in the interface, as it is in Redash: the
           navigation is furniture, and keeping it out of the paper-white
           working area is what makes a dashboard read as the content. */}
-      <aside className="hidden w-56 shrink-0 flex-col bg-sidebar lg:flex">
-        <div className="flex h-14 items-center gap-2.5 px-5">
-          <img src="/logo.svg" alt="" className="h-8 w-8" />
-          <span className="text-[16px] font-semibold text-white">
+      <aside className="aero-sidebar hidden w-56 shrink-0 flex-col lg:flex">
+        <div className="flex h-14 items-center gap-2.5 border-b border-white/[0.07] px-5">
+          <img src="/logo.svg" alt="" className="h-8 w-8 drop-shadow-[0_1px_3px_rgba(77,184,255,0.55)]" />
+          <span className="text-[16px] font-semibold text-white [text-shadow:0_1px_2px_rgba(0,0,0,0.5)]">
             suso<span className="font-normal text-sidebar-text">Dash</span>
           </span>
         </div>
@@ -68,34 +79,18 @@ export default function Layout() {
               key={item.to}
               to={item.to}
               end={item.end}
-              className={({ isActive }) =>
-                `flex items-center gap-2.5 rounded-control px-3 py-2 text-[13px] transition-colors duration-150 ${
-                  isActive
-                    ? 'bg-sidebar-active text-white'
-                    : 'text-sidebar-text hover:bg-sidebar-active hover:text-white'
-                }`
-              }
+              className={({ isActive }) => navRow(isActive)}
             >
-              <span className="w-5 text-center text-base leading-none" aria-hidden>
-                {item.icon}
-              </span>
+              <AppIcon name={item.icon} size={22} className="shrink-0" />
               {item.label}
             </NavLink>
           ))}
           {can('admin') && (
             <NavLink
               to="/admin"
-              className={({ isActive }) =>
-                `flex items-center gap-2.5 rounded-control px-3 py-2 text-[13px] transition-colors duration-150 ${
-                  isActive
-                    ? 'bg-sidebar-active text-white'
-                    : 'text-sidebar-text hover:bg-sidebar-active hover:text-white'
-                }`
-              }
+              className={({ isActive }) => navRow(isActive)}
             >
-              <span className="w-5 text-center text-base leading-none" aria-hidden>
-                ⚙
-              </span>
+              <AppIcon name="admin" size={22} className="shrink-0" />
               Administration
             </NavLink>
           )}
@@ -104,7 +99,7 @@ export default function Layout() {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-ink-200 bg-white/95 px-4 backdrop-blur transition-colors dark:border-dark-200 dark:bg-dark-50/95 lg:px-6">
+        <header className="aero-glass sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-ink-200 px-4 transition-colors dark:border-dark-200 lg:px-6">
           <div className="flex items-center gap-2 lg:hidden">
             <button
               ref={mobileToggleRef}
@@ -115,7 +110,7 @@ export default function Layout() {
             >
               ☰
             </button>
-            <img src="/logo.svg" alt="" className="h-7 w-7" />
+            <img src="/logo.svg" alt="" className="h-7 w-7 drop-shadow-[0_1px_2px_rgba(77,184,255,0.4)]" />
             <span className="font-semibold">
               suso<span className="font-normal text-ink-500 dark:text-dark-500">Dash</span>
             </span>
@@ -220,13 +215,14 @@ export default function Layout() {
                 end={item.end}
                 onClick={() => setMenuOpen(false)}
                 className={({ isActive }) =>
-                  `block rounded-card px-3 py-2 text-sm transition-colors ${
+                  `flex items-center gap-2.5 rounded-card px-3 py-2 text-sm transition-colors ${
                     isActive
                       ? 'bg-brand-50 text-brand-700 dark:bg-brand-500/10 dark:text-brand-400'
                       : 'text-ink-700 dark:text-dark-700'
                   }`
                 }
               >
+                <AppIcon name={item.icon} size={20} glow={false} className="shrink-0" />
                 {item.label}
               </NavLink>
             ))}
