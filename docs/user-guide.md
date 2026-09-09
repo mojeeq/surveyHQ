@@ -1242,6 +1242,12 @@ Checks run every six hours, and on demand with **Run** or **Run all**. Add a
 it shows the last run rather than re-running eight full scans every time
 somebody opens the page, and says how old the oldest result is.
 
+Each failing check is a pane of coloured glass with a rail of solid colour down
+its left edge and its failure rate on the right, so a column of them is read
+down the rails and the numbers rather than by reading every sentence. It is the
+same material as the buttons and the cards around it, which is the point: a
+finding is part of the interface, not a notice pasted onto it.
+
 **A filtered page filters the panel.** Narrow a dashboard to one province and
 the panel counts that province: no stored run ever counted only those rows, so
 it counts them now, and a failing check says how many of how many rows in view

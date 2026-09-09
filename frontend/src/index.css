@@ -268,9 +268,118 @@
 
   /* Square, like everything else here. A pill reads as decoration; a status
      belongs in the same rectangular vocabulary as the tables and cards it sits
-     among. */
+     among.
+
+     Glossed like the buttons: a chip is a small raised thing on the same
+     surface, and left flat among glass buttons and glass cards it was the one
+     element that looked printed on rather than made of the same material. */
   .chip {
-    @apply inline-flex items-center gap-1 rounded-control border px-2 py-0.5 text-xs font-medium;
+    @apply aero-gloss inline-flex items-center gap-1 rounded-control border px-2 py-0.5
+           text-xs font-medium;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.6),
+      0 1px 1px rgba(15, 23, 42, 0.06);
+  }
+  .dark .chip {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.14),
+      0 1px 1px rgba(0, 0, 0, 0.4);
+  }
+
+  /* A pane of coloured glass, for a finding that has a state: a failing check,
+     a warning, a rule that passed.
+     
+     The flat tinted box these replace is the house style of every generated
+     interface there has ever been - a pale red rectangle with a bold line and
+     a grey line under it - and it says nothing except "something is coloured
+     here". This is made of the same material as the buttons and the cards
+     around it: the crease at the midpoint, the hairline of light along the top
+     edge, the specular sweep across the top left, and a rail of solid colour
+     down the left edge carrying the state. The rail is the part that is read
+     at a glance, and it is a straight edge rather than a dot, because a row of
+     coloured circles is the other thing every generated interface does. */
+  .aero-pane {
+    @apply relative overflow-hidden rounded-card border;
+    /* Its own gloss rather than the buttons'. A button is a small dense thing
+       and takes a strong crease; the same curve across a pane the width of a
+       widget turns the bottom half muddy, which on a pale red reads as dirt
+       rather than as light. Same shape, less of it. */
+    background-image: linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.5) 0%,
+      rgba(255, 255, 255, 0.16) 49.9%,
+      rgba(0, 0, 0, 0.015) 50%,
+      rgba(0, 0, 0, 0.055) 100%
+    );
+  }
+  .dark .aero-pane {
+    background-image: linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.1) 0%,
+      rgba(255, 255, 255, 0.035) 49.9%,
+      rgba(0, 0, 0, 0.05) 50%,
+      rgba(0, 0, 0, 0.14) 100%
+    );
+  }
+  .aero-pane::before {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 62%;
+    pointer-events: none;
+    /* The light source, off the top left corner. Aero's panes are lit like
+       objects rather than filled like shapes, and this is the difference. */
+    background: radial-gradient(
+      130% 100% at 18% -35%,
+      rgba(255, 255, 255, 0.5),
+      rgba(255, 255, 255, 0) 62%
+    );
+  }
+  .dark .aero-pane::before {
+    background: radial-gradient(
+      130% 100% at 18% -35%,
+      rgba(255, 255, 255, 0.16),
+      rgba(255, 255, 255, 0) 62%
+    );
+  }
+  /* Each state: the tint, the border and the rail down the left edge, which is
+     an inset shadow so it needs no element of its own and cannot be knocked
+     out of place by the text beside it. */
+  .aero-pane-danger {
+    @apply border-red-300/70 bg-red-50 dark:border-red-500/40 dark:bg-red-500/10;
+    box-shadow:
+      inset 3px 0 0 theme('colors.red.600'),
+      inset 0 1px 0 rgba(255, 255, 255, 0.7),
+      inset 0 -1px 0 rgba(255, 255, 255, 0.45),
+      0 1px 2px rgba(15, 23, 42, 0.1),
+      0 6px 14px -10px rgba(15, 23, 42, 0.4);
+  }
+  .aero-pane-warn {
+    @apply border-amber-300/70 bg-amber-50 dark:border-amber-500/40 dark:bg-amber-500/10;
+    box-shadow:
+      inset 3px 0 0 theme('colors.amber.500'),
+      inset 0 1px 0 rgba(255, 255, 255, 0.7),
+      inset 0 -1px 0 rgba(255, 255, 255, 0.45),
+      0 1px 2px rgba(15, 23, 42, 0.1),
+      0 6px 14px -10px rgba(15, 23, 42, 0.4);
+  }
+  .aero-pane-ok {
+    @apply border-emerald-300/70 bg-emerald-50 dark:border-emerald-500/40 dark:bg-emerald-500/10;
+    box-shadow:
+      inset 3px 0 0 theme('colors.emerald.600'),
+      inset 0 1px 0 rgba(255, 255, 255, 0.7),
+      inset 0 -1px 0 rgba(255, 255, 255, 0.45),
+      0 1px 2px rgba(15, 23, 42, 0.1),
+      0 6px 14px -10px rgba(15, 23, 42, 0.4);
+  }
+  .dark .aero-pane-danger,
+  .dark .aero-pane-warn,
+  .dark .aero-pane-ok {
+    box-shadow:
+      inset 3px 0 0 currentColor,
+      inset 0 1px 0 rgba(255, 255, 255, 0.14),
+      0 1px 2px rgba(0, 0, 0, 0.4),
+      0 8px 18px -12px rgba(0, 0, 0, 0.75);
   }
 }
 
