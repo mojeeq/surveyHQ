@@ -51,6 +51,8 @@ export default function ChartCard({
   // same label, and the position is what the row is indexed by anyway.
   const [columnFilters, setColumnFilters] = useState<Record<number, string>>({})
   const container = useRef<HTMLDivElement>(null)
+  /** The drawn width, watched so long labels can be capped against it. */
+  const [width, setWidth] = useState(0)
   const chart = useRef<ReactECharts>(null)
 
   // ECharts draws to a canvas sized in pixels at layout time and only listens
@@ -62,8 +64,13 @@ export default function ChartCard({
     if (!element || typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(() => {
       chart.current?.getEchartsInstance().resize()
+      // How wide the chart is, for the one decision that cannot be made
+      // without knowing: how much room a category name may take before it is
+      // eating the plot it is labelling.
+      setWidth(element.clientWidth)
     })
     observer.observe(element)
+    setWidth(element.clientWidth)
     return () => observer.disconnect()
   }, [])
 
@@ -174,7 +181,14 @@ export default function ChartCard({
       {showToggle && <ViewToggle view={view} onChange={setView} />}
       <ReactECharts
         ref={chart}
-        option={buildChartOption(result, chartType, { ...display, theme })}
+        option={buildChartOption(result, chartType, {
+          ...display,
+          theme,
+          // A third of the chart, which leaves two thirds for the bars. Long
+          // check names and long question labels otherwise push the plot into
+          // a sliver at the right, and the bigger the text the worse it is.
+          ...(width ? { maxLabelWidth: Math.round(width / 3) } : {}),
+        })}
         style={fill ? { flex: 1, minHeight: 0, width: '100%' } : { height, width: '100%' }}
         opts={{ renderer: 'canvas' }}
         notMerge

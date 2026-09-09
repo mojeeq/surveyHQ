@@ -134,6 +134,10 @@ function valueAxis(name = '') {
     axisLabel: {
       color: INK.muted,
       ...BASE_TEXT,
+      // Ticks that cannot both be read are not both drawn. At 20px on a narrow
+      // widget the labels of a 0-3 axis land on top of each other, and a smear
+      // of overlapping digits is worse than four ticks instead of seven.
+      hideOverlap: true,
       // Small ranges (coordinates, rates) need decimals, or consecutive ticks
       // round to the same label. Large ones get the compact k/M form.
       formatter: (value: number) =>
@@ -203,6 +207,15 @@ export interface BuildOptions {
    * series, since colour is carrying the series there.
    */
   pointColors?: (string | undefined)[]
+  /**
+   * How much width a category label may take, in pixels, before it is cut
+   * short with an ellipsis. Set from the drawn width of the chart, because it
+   * is the only place that knows it: a horizontal bar chart of long names -
+   * data quality checks, questions - otherwise gives the labels whatever they
+   * ask for and leaves the bars a sliver at the right, and the larger the text
+   * the less is left.
+   */
+  maxLabelWidth?: number
   /** Font for this widget's chart text. */
   fontFamily?: string
   /** Colour for this widget's chart text: axes, their names, and the legend. */
@@ -838,19 +851,38 @@ function buildOption(
         chartType === 'stacked_bar' ||
         chartType === 'horizontal_stacked_bar' ||
         options.stacked
+      const common_ = axisCommon(horizontal ? 0 : categories.length > 8 ? 30 : 0)
       const categoryAxis = {
         type: 'category' as const,
         data: categories,
-        ...axisCommon(horizontal ? 0 : categories.length > 8 ? 30 : 0),
+        ...common_,
+        axisLabel: {
+          ...common_.axisLabel,
+          // Only across: a label above or below a bar is bounded by the bar's
+          // own width already, and truncating there would cut names that fit.
+          ...(horizontal && options.maxLabelWidth
+            ? { width: options.maxLabelWidth, overflow: 'truncate' as const }
+            : {}),
+        },
       }
       return {
         ...common,
         grid: {
           left: 8,
-          right: 24,
-          // Headroom for a number printed above the tallest bar, which is
-          // otherwise drawn outside the plot and clipped.
-          top: legend ? 40 : options.showValues ? 28 : 16,
+          // Room for a number printed off the end of the longest bar, which
+          // grows with the text: at 20px "45.15" needs three times the gutter
+          // a 12px one does, and without it the last digits are cut off by the
+          // edge of the widget.
+          right:
+            options.showValues && horizontal
+              ? Math.max(24, (options.fontSize ?? 12) * 3.5)
+              : 24,
+          // The same headroom above the tallest bar, for the upright form.
+          top: legend
+            ? 40
+            : options.showValues
+              ? Math.max(28, (options.fontSize ?? 12) * 2)
+              : 16,
           bottom: 8,
           containLabel: true,
         },
