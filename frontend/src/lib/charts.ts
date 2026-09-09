@@ -195,6 +195,14 @@ export interface BuildOptions {
    * the value beside it.
    */
   seriesColors?: string[]
+  /**
+   * A colour per bar, by position along the axis, for the one case where the
+   * bars are not a series but a set of states: a data quality chart, where
+   * each bar is a check that is passing or failing and the colour is the
+   * finding rather than decoration. Ignored where there is more than one
+   * series, since colour is carrying the series there.
+   */
+  pointColors?: (string | undefined)[]
   /** Font for this widget's chart text. */
   fontFamily?: string
   /** Colour for this widget's chart text: axes, their names, and the legend. */
@@ -875,7 +883,15 @@ function buildOption(
         series: series.map((entry, index) => ({
           name: entry.name,
           type: 'bar',
-          data: entry.data,
+          data:
+            options.pointColors && series.length === 1
+              ? entry.data.map((value, at) => ({
+                  value,
+                  ...(options.pointColors![at]
+                    ? { itemStyle: { color: options.pointColors![at] } }
+                    : {}),
+                }))
+              : entry.data,
           stack: stacked ? 'total' : undefined,
           barMaxWidth: 42,
           label: markLabel(options, horizontal ? 'right' : 'top', categories.length),

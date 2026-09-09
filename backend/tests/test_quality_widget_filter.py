@@ -154,3 +154,114 @@ def test_a_filter_on_a_variable_the_dataset_lacks_is_reported_not_applied(
     # Nothing could be narrowed, so the stored run is what it reports.
     assert panel["filtered"] is False
     assert panel["checks"][0]["total_rows"] == 8
+
+
+# --- the panel as a chart ---------------------------------------------------
+#
+# A list of findings reads at a desk. A board on a wall is read from across the
+# room, and the question asked of a quality panel over a season - is this
+# getting better - is a question about a line rather than about today.
+
+
+def set_view(client, auth_headers, board: str, view: str) -> None:
+    board_detail = client.get(f"/api/v1/dashboards/{board}", headers=auth_headers).json()
+    widget = next(w for w in board_detail["widgets"] if w["widget_type"] == "quality")
+    response = client.patch(
+        f"/api/v1/dashboards/{board}/widgets/{widget['id']}",
+        headers=auth_headers,
+        json={"config": {**(widget.get("config") or {}), "quality_view": view}},
+    )
+    assert response.status_code == 200, response.text
+
+
+def test_a_listed_panel_carries_no_history(client, auth_headers, graded):
+    """Reading a month of runs for a panel that lists its findings is work
+    done to be thrown away."""
+    panel = render(client, auth_headers, graded["board"])
+    assert panel["history"] is None
+
+
+def test_a_trend_panel_carries_the_runs_behind_it(client, auth_headers, graded):
+    set_view(client, auth_headers, graded["board"], "trend")
+    panel = render(client, auth_headers, graded["board"])
+    history = panel["history"]
+    assert history is not None
+    # One day so far, because the fixture ran its check once.
+    assert len(history["days"]) == 1
+    assert len(history["series"]) == 1
+    line = history["series"][0]
+    assert line["name"] == "Age within range"
+    # Half the rows are out of range, as a percentage rather than a fraction:
+    # a chart axis reading 0.5 for "50% failing" is read as half a row.
+    assert line["values"] == [50.0]
+
+
+def test_the_last_run_of_a_day_is_the_day(client, auth_headers, graded, db_session):
+    """Checks run every few hours, and four points a day on a widget's axis
+    land on top of each other. The day's answer is where it ended."""
+    import datetime as dt
+
+    from sqlalchemy import select
+
+    from app.models import QualityResult, QualityRule
+
+    rule = db_session.scalar(
+        select(QualityRule).where(QualityRule.dataset_id == graded["dataset_id"])
+    )
+    # Two days back, inside the window a trend covers: a run from last spring
+    # is not what "is this getting better" is asking about.
+    day = (dt.datetime.now(dt.UTC) - dt.timedelta(days=2)).replace(
+        hour=0, minute=0, second=0, microsecond=0
+    )
+    for hour, rate in ((6, 0.9), (12, 0.4), (18, 0.1)):
+        db_session.add(
+            QualityResult(
+                rule_id=rule.id,
+                run_at=day.replace(hour=hour),
+                passed=False,
+                failed_rows=int(rate * 8),
+                total_rows=8,
+                failure_rate=rate,
+                message="",
+            )
+        )
+    db_session.commit()
+
+    set_view(client, auth_headers, graded["board"], "trend")
+    history = render(client, auth_headers, graded["board"])["history"]
+    at = history["days"].index(day.date().isoformat())
+    assert history["series"][0]["values"][at] == 10.0
+
+
+def test_a_day_with_no_run_is_a_gap_rather_than_a_line(
+    client, auth_headers, graded, db_session
+):
+    """A rule added last week has nothing to say about the week before, and a
+    line drawn straight across that would be inventing it."""
+    import datetime as dt
+
+    from sqlalchemy import select
+
+    from app.models import QualityResult, QualityRule
+
+    rule = db_session.scalar(
+        select(QualityRule).where(QualityRule.dataset_id == graded["dataset_id"])
+    )
+    db_session.add(
+        QualityResult(
+            rule_id=rule.id,
+            run_at=dt.datetime.now(dt.UTC) - dt.timedelta(days=3),
+            passed=True,
+            failed_rows=0,
+            total_rows=8,
+            failure_rate=0.0,
+            message="",
+        )
+    )
+    db_session.commit()
+
+    set_view(client, auth_headers, graded["board"], "trend")
+    history = render(client, auth_headers, graded["board"])["history"]
+    # Two days with runs, and nothing invented for the ones between.
+    assert len(history["days"]) == 2
+    assert None not in history["series"][0]["values"]

@@ -1248,6 +1248,30 @@ down the rails and the numbers rather than by reading every sentence. It is the
 same material as the buttons and the cards around it, which is the point: a
 finding is part of the interface, not a notice pasted onto it.
 
+**Show it as** turns the panel into a chart. A list of findings reads at a
+desk; a board on a wall is read from across the room, and "is this getting
+better" is a question about a line rather than about today:
+
+- **The findings, listed** - the panes above, and the default.
+- **Share of rows failing** - one bar per check, longest first. The bar is
+  coloured by what the check found rather than by where it sits, so a green bar
+  above a red one is not a mistake: a check allowed 5% and sitting at 3% is
+  passing, while one allowed nothing and sitting at 2.5% is not, and the colour
+  is the only thing that can say so.
+- **How many rows flagged** - the same chart in counts, for when the question
+  is how much work the fixing is rather than how bad the rate is.
+- **Failure rate over time** - a line per check across the last month, drawn
+  from the runs already stored. The last run of each day is the day's point,
+  because the checks run every few hours and four points a day land on top of
+  each other at the width a widget has. A day with no run is a gap rather than
+  a straight line across it: a check added last week has nothing to say about
+  the week before.
+
+The line is drawn from stored runs, which counted the whole dataset, so the
+page's filters do not reach it and the panel says so under the chart. The two
+bar charts are the current state, so they narrow with the page like everything
+else.
+
 **A filtered page filters the panel.** Narrow a dashboard to one province and
 the panel counts that province: no stored run ever counted only those rows, so
 it counts them now, and a failing check says how many of how many rows in view

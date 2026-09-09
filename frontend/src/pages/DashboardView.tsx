@@ -15,6 +15,7 @@ import { copyableIn, copyChart, copyTable, copyText } from '@/lib/clipboard'
 import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { CHART_THEMES, STATUS_COLORS } from '@/lib/charts'
+import type { BuildOptions } from '@/lib/charts'
 import { formatNumber, formatValue, relativeTime } from '@/lib/format'
 import type {
   Appearance,
@@ -25,6 +26,7 @@ import type {
   FilterGroup,
   Indicator,
   Page,
+  QueryResult,
   Widget,
 } from '@/lib/types'
 import AssignProject from '@/components/AssignProject'
@@ -992,7 +994,18 @@ function WidgetFrame({
     ) : payload.type === 'indicator' ? (
       <IndicatorWidget payload={payload} theme={theme} onSelect={onSelect} />
     ) : payload.type === 'quality' ? (
-      <QualityWidget payload={payload} />
+      <QualityWidget
+        payload={payload}
+        view={String((widget.config as any)?.quality_view || 'list')}
+        theme={theme}
+        display={{
+          ...(style.series_color ? { seriesColor: style.series_color } : {}),
+          ...(style.font_family ? { fontFamily: style.font_family } : {}),
+          ...(widgetInk(style) ? { fontColor: widgetInk(style) } : {}),
+          ...(style.chart_font_size ? { fontSize: style.chart_font_size } : {}),
+          ...(style.show_values === undefined ? {} : { showValues: style.show_values }),
+        }}
+      />
     ) : payload.type === 'crosstab' ? (
       <CrosstabTable
         result={payload.result}
@@ -1588,9 +1601,124 @@ function CountdownWidget({ payload }: { payload: any }) {
   )
 }
 
-function QualityWidget({ payload }: { payload: any }) {
+/** What a check's bar is coloured by: its finding, not its position. */
+const CHECK_COLOURS: Record<string, string> = {
+  failing: STATUS_COLORS.critical,
+  passing: STATUS_COLORS.ok,
+  'not run': STATUS_COLORS.unknown,
+}
+
+const checkState = (check: any) =>
+  check.passed === false ? 'failing' : check.passed ? 'passing' : 'not run'
+
+/**
+ * Worst first, which on a horizontal bar means last in the data.
+ *
+ * A category axis is drawn upwards from the origin, so the first row lands at
+ * the bottom of the plot. Sorted the way it reads - biggest number first - the
+ * chart came out with the worst check at the foot of the widget, under
+ * everything that did not matter.
+ */
+function worstFirst(checks: any[], of: (check: any) => number): any[] {
+  return [...checks].sort((a, b) => of(a) - of(b))
+}
+
+/**
+ * The checks as a chart of their failure rates, worst first.
+ *
+ * One bar per check, coloured by what it found rather than by where it sits,
+ * which is the whole reason to draw this rather than read the list: a board on
+ * a wall is read from across the room, and the shape of the red is the message.
+ */
+function rateResult(checks: any[]): QueryResult {
+  const ordered = worstFirst(checks, (check) => check.failure_rate ?? 0)
+  return {
+    columns: [
+      { name: 'check', label: 'Check', type: 'dimension', data_type: 'text' },
+      { name: 'rate', label: '% of rows failing', type: 'measure', data_type: 'number' },
+    ],
+    rows: ordered.map((check) => [check.name, round2((check.failure_rate ?? 0) * 100)]),
+    row_count: ordered.length,
+    truncated: false,
+    sql: '',
+    duration_ms: 0,
+  }
+}
+
+/** How many rows each check flagged, for the panel drawn as counts. */
+function countResult(checks: any[]): QueryResult {
+  const ordered = worstFirst(checks, (check) => check.failed_rows ?? 0)
+  return {
+    columns: [
+      { name: 'check', label: 'Check', type: 'dimension', data_type: 'text' },
+      { name: 'rows', label: 'Rows flagged', type: 'measure', data_type: 'number' },
+    ],
+    rows: ordered.map((check) => [check.name, check.failed_rows ?? 0]),
+    row_count: ordered.length,
+    truncated: false,
+    sql: '',
+    duration_ms: 0,
+  }
+}
+
+/** The stored runs, one line per check: is this getting better or worse. */
+function trendResult(history: any): QueryResult {
+  const series = history?.series ?? []
+  return {
+    columns: [
+      { name: 'day', label: 'Day', type: 'dimension', data_type: 'date' },
+      ...series.map((line: any) => ({
+        name: line.id,
+        label: line.name,
+        type: 'measure' as const,
+        data_type: 'number' as const,
+      })),
+    ],
+    rows: (history?.days ?? []).map((day: string, index: number) => [
+      shortDay(day),
+      ...series.map((line: any) => line.values[index] ?? null),
+    ]),
+    row_count: (history?.days ?? []).length,
+    truncated: false,
+    sql: '',
+    duration_ms: 0,
+  }
+}
+
+const round2 = (value: number) => Math.round(value * 100) / 100
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
+                'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+
+/**
+ * "26 Aug" rather than "2026-08-26".
+ *
+ * A fortnight of full dates does not fit across a widget, and the year is the
+ * same on every one of them. Cut from the string rather than parsed into a
+ * Date: an ISO day parsed as a moment is midnight UTC, which in Port Vila is
+ * the same day and in Lima is the day before.
+ */
+function shortDay(day: string): string {
+  const [year, month, date] = day.split('-').map(Number)
+  if (!year || !month || !date) return day
+  return `${date} ${MONTHS[month - 1] ?? month}`
+}
+
+function QualityWidget({
+  payload,
+  view,
+  theme,
+  display,
+}: {
+  payload: any
+  /** Which of the panel's forms this widget was saved showing. */
+  view: string
+  theme: string
+  display?: BuildOptions
+}) {
   const failing = payload.checks.filter((c: any) => c.passed === false)
   const stale = payload.oldest_run_at
+  const charted = view === 'rate' || view === 'rows' || view === 'trend'
   return (
     <div className="flex h-full flex-col">
       <div className="mb-3 flex flex-wrap items-center gap-2">
@@ -1607,6 +1735,48 @@ function QualityWidget({ payload }: { payload: any }) {
         <p className="text-sm text-ink-500">
           No active checks on {payload.name}.
         </p>
+      ) : charted ? (
+        <div className="min-h-0 flex-1">
+          {view === 'trend' && !payload.history ? (
+            <p className="text-sm text-ink-500">
+              No runs stored yet. The checks run every few hours, and a line
+              needs two days of them.
+            </p>
+          ) : (
+            <ChartCard
+              fill
+              showToggle={false}
+              theme={theme}
+              chartType={view === 'trend' ? 'line' : 'horizontal_bar'}
+              result={
+                view === 'trend'
+                  ? trendResult(payload.history)
+                  : view === 'rows'
+                    ? countResult(payload.checks)
+                    : rateResult(payload.checks)
+              }
+              display={{
+                ...display,
+                showValues: display?.showValues ?? view !== 'trend',
+                sort: 'none',
+                decimals: view === 'rows' ? 0 : 2,
+                // Colour is the finding here. A bar's hue says whether that
+                // check is passing, which is the thing being looked for, so it
+                // is not left to the palette's order.
+                ...(view === 'trend'
+                  ? // No axis title: the legend needs the top of the plot, the
+                    // footnote below says what the numbers are, and the two
+                    // were landing on each other at widget width.
+                    { showLegend: true, smooth: false }
+                  : {
+                      pointColors: worstFirst(payload.checks, (check: any) =>
+                        view === 'rows' ? check.failed_rows ?? 0 : check.failure_rate ?? 0,
+                      ).map((check: any) => CHECK_COLOURS[checkState(check)]),
+                    }),
+              }}
+            />
+          )}
+        </div>
       ) : (
         <ul className="min-h-0 flex-1 space-y-2 overflow-auto">
           {failing.map((check: any) => (
@@ -1649,7 +1819,16 @@ function QualityWidget({ payload }: { payload: any }) {
         </ul>
       )}
 
-      {payload.filtered ? (
+      {view === 'trend' ? (
+        <p className="mt-2 text-[11px] text-ink-400">
+          {/* The line is drawn from what the scheduled runs stored, and those
+              counted the whole dataset. A filter cannot reach backwards into
+              them, and a line that quietly ignored the page's filter while the
+              widgets around it obeyed it would be read as agreeing with them. */}
+          The last run of each day, over the whole dataset
+          {payload.filtered ? '. The filters on this page do not reach it' : ''}
+        </p>
+      ) : payload.filtered ? (
         <p className="mt-2 text-[11px] text-ink-400">
           {/* Counted against the page's filter just now, so there is no "last
               run" to date it by - and saying which it is matters, because the
@@ -1880,6 +2059,8 @@ function AddWidgetModal({
   const [deadlineLabel, setDeadlineLabel] = useState('')
   const [caption, setCaption] = useState('')
   const [showBreakdown, setShowBreakdown] = useState(true)
+  /** Which form a new quality panel opens in. */
+  const [qualityView, setQualityView] = useState('list')
   const [latitude, setLatitude] = useState('')
   const [longitude, setLongitude] = useState('')
   const [measureAgg, setMeasureAgg] = useState('count')
@@ -1954,6 +2135,8 @@ function AddWidgetModal({
               ? { dataset_ids: freshnessDatasets, warn_hours: 24, critical_hours: 72 }
             : kind === 'html'
               ? { html }
+            : kind === 'quality'
+              ? { quality_view: qualityView }
             : kind === 'indicator'
               ? { show_breakdown: showBreakdown }
             : kind === 'text'
@@ -2071,6 +2254,24 @@ function AddWidgetModal({
                 {dataset.name}
               </option>
             ))}
+          </select>
+        </Field>
+      )}
+
+      {kind === 'quality' && (
+        <Field
+          label="Show it as"
+          hint="A panel of findings reads at a desk; a chart reads from across a room, and a line says whether it is getting better."
+        >
+          <select
+            className="input"
+            value={qualityView}
+            onChange={(event) => setQualityView(event.target.value)}
+          >
+            <option value="list">The findings, listed</option>
+            <option value="rate">Bar chart: share of rows failing</option>
+            <option value="rows">Bar chart: how many rows flagged</option>
+            <option value="trend">Line chart: failure rate over time</option>
           </select>
         </Field>
       )}
@@ -3057,6 +3258,24 @@ function EditWidgetModal({
                 {dataset.name}
               </option>
             ))}
+          </select>
+        </Field>
+      )}
+
+      {kind === 'quality' && (
+        <Field
+          label="Show it as"
+          hint="A panel of findings reads at a desk; a chart reads from across a room, and a line says whether it is getting better."
+        >
+          <select
+            className="input"
+            value={String(config.quality_view ?? 'list')}
+            onChange={(event) => set({ quality_view: event.target.value })}
+          >
+            <option value="list">The findings, listed</option>
+            <option value="rate">Bar chart: share of rows failing</option>
+            <option value="rows">Bar chart: how many rows flagged</option>
+            <option value="trend">Line chart: failure rate over time</option>
           </select>
         </Field>
       )}

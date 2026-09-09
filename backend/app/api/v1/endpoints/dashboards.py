@@ -1418,6 +1418,78 @@ def _render_quality(
         # showing a timestamp that belongs to a different question.
         "filtered": narrowed is not None,
         "filters_ignored": ignored,
+        # The runs behind the checks, for a panel drawn as a chart of how the
+        # rates have moved. Only when the widget asks: a panel showing its
+        # findings has no use for them and reading a month of runs for every
+        # quality panel on a board would be work done to be thrown away.
+        "history": (
+            _quality_history(db, rules)
+            if (widget.config or {}).get("quality_view") == "trend"
+            else None
+        ),
+    }
+
+
+def _quality_history(
+    db: DbSession, rules: list[QualityRule], days: int = 30
+) -> dict[str, Any] | None:
+    """Each rule's recent runs, one point per rule per day.
+
+    Checks run every few hours, so a month of them is a hundred points per rule
+    and four of them land on top of each other on any axis a widget has room
+    for. The last run of each day is the one kept: it is the day's answer, and
+    the question a trend is asked is "is this getting better", which is a
+    question about days rather than about mornings and afternoons.
+
+    Gaps are kept as gaps. A rule added last week has nothing to say about the
+    week before, and a line drawn straight across that would be inventing it.
+    """
+    if not rules:
+        return None
+    since = utcnow() - dt.timedelta(days=days)
+    rows = db.execute(
+        select(
+            QualityResult.rule_id,
+            QualityResult.run_at,
+            QualityResult.failure_rate,
+            QualityResult.failed_rows,
+            QualityResult.total_rows,
+        )
+        .where(
+            QualityResult.rule_id.in_([rule.id for rule in rules]),
+            QualityResult.run_at >= since,
+        )
+        # Ascending, so the last write for a day is the day's last run.
+        .order_by(QualityResult.run_at)
+    ).all()
+    if not rows:
+        return None
+
+    latest: dict[tuple[str, str], dict[str, Any]] = {}
+    for rule_id, run_at, rate, failed, total in rows:
+        day = as_utc(run_at).date().isoformat() if run_at else ""
+        if not day:
+            continue
+        latest[(rule_id, day)] = {
+            "rate": round(float(rate or 0.0) * 100, 2),
+            "failed_rows": int(failed or 0),
+            "total_rows": int(total or 0),
+        }
+
+    day_list = sorted({day for _, day in latest})
+    return {
+        "days": day_list,
+        "series": [
+            {
+                "id": rule.id,
+                "name": rule.name,
+                "values": [
+                    (latest.get((rule.id, day)) or {}).get("rate") for day in day_list
+                ],
+            }
+            for rule in rules
+            if any((rule.id, day) in latest for day in day_list)
+        ],
     }
 
 
