@@ -197,6 +197,7 @@ export default function DatasetDetail() {
                   <tr>
                     <th>Name</th>
                     <th>Label</th>
+                    <th>What the codes mean</th>
                     <th>Type</th>
                     <th className="text-right">Missing</th>
                     <th className="text-right">Distinct</th>
@@ -209,6 +210,14 @@ export default function DatasetDetail() {
                     <tr key={variable.id}>
                       <td className="font-mono text-xs text-ink-800">{variable.name}</td>
                       <td className="max-w-xs truncate text-ink-600">{variable.label || '-'}</td>
+                      {/* The codes and what they stand for, without opening
+                          anything: a categorical column is unreadable until
+                          you know whether 1 is male or married, and having to
+                          open a dialog per variable to find out is how a file
+                          gets analysed with the codes still in it. */}
+                      <td className="max-w-[260px] truncate text-xs text-ink-500">
+                        <Codes variable={variable} />
+                      </td>
                       <td>
                         <Badge tone={TYPE_TONE[variable.var_type] ?? 'neutral'}>
                           {variable.var_type}
@@ -284,6 +293,45 @@ export default function DatasetDetail() {
         />
       )}
     </>
+  )
+}
+
+/**
+ * What a variable's codes stand for, in the width of a table cell.
+ *
+ * A categorical column of 1s and 2s says nothing until you know whether 1 is
+ * male or married. The whole set is on the cell's tooltip; the first few are
+ * enough to recognise it in passing, which is what a list of two hundred
+ * variables is read for.
+ */
+function Codes({ variable }: { variable: Variable }) {
+  const pairs = Object.entries(variable.value_labels ?? {})
+  if (!pairs.length) {
+    // Only where the values really are codes. A column holding "Shefa" and
+    // "Tafea" needs no names for them, and saying it lacks some would send
+    // people looking for work that is not there.
+    // A column of 0s and 1s is a tick, not a code: it is one option of a
+    // multiple-select or a yes-or-no, and naming 0 and 1 would add nothing
+    // that the column's own name does not already say.
+    const tick =
+      variable.n_unique <= 2 && variable.min_value === 0 && variable.max_value === 1
+    const coded =
+      variable.var_type === 'categorical' &&
+      !tick &&
+      /int|float|double|number/i.test(variable.storage_type ?? '')
+    return coded ? (
+      <span className="text-amber-700">no names for its codes</span>
+    ) : (
+      <span className="text-ink-400">-</span>
+    )
+  }
+  const shown = pairs.slice(0, 3).map(([code, text]) => `${code} = ${text}`)
+  const rest = pairs.length - shown.length
+  return (
+    <span title={pairs.map(([code, text]) => `${code} = ${text}`).join('\n')}>
+      {shown.join(', ')}
+      {rest > 0 && <span className="text-ink-400"> +{rest} more</span>}
+    </span>
   )
 }
 

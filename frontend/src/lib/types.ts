@@ -261,6 +261,10 @@ export interface MultiSelectGroup {
   columns: string[]
   /** What the options agree on in their labels, which is the question. */
   label: string
+  /** Each option's column and the name its bar will carry. */
+  options: { column: string; label: string }[]
+  /** The file named none of them, so every bar would read "Option 8". */
+  unnamed: boolean
 }
 
 export interface CrosstabRequest {

@@ -1,4 +1,4 @@
-import { useMutation, useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { api, downloadFile } from '@/lib/api'
@@ -1320,6 +1320,8 @@ function MultiSelectBuilder({
   const [result, setResult] = useState<QueryResult | null>(null)
   const [saveOpen, setSaveOpen] = useState(false)
   const [search, setSearch] = useState('')
+  /** Open while the options are being named. */
+  const [naming, setNaming] = useState(false)
   /** Set when a saved chart has just been loaded and wants running. */
   const [pending, setPending] = useState(false)
 
@@ -1450,21 +1452,66 @@ function MultiSelectBuilder({
                     </button>
                   </p>
                   <div className="max-h-56 space-y-1 overflow-y-auto rounded-card border border-ink-200 p-2">
-                    {group.columns.map((name) => (
-                      <label key={name} className="flex items-start gap-2 text-xs text-ink-700">
-                        <input
-                          type="checkbox"
-                          className="mt-0.5"
-                          checked={columns.includes(name)}
-                          onChange={() => toggle(name)}
-                        />
-                        <span>
-                          {allVariables.find((v) => v.name === name)?.label || name}
-                          <span className="ml-1 text-ink-400">{name}</span>
-                        </span>
-                      </label>
-                    ))}
+                    {(group.options ?? group.columns.map((column) => ({ column, label: column }))).map(
+                      (option) => (
+                        <label
+                          key={option.column}
+                          className="flex items-start gap-2 text-xs text-ink-700"
+                        >
+                          <input
+                            type="checkbox"
+                            className="mt-0.5"
+                            checked={columns.includes(option.column)}
+                            onChange={() => toggle(option.column)}
+                          />
+                          <span>
+                            {/* The name the bar will carry, which is what
+                                somebody ticking eight boxes out of nineteen is
+                                choosing between. The column name follows it,
+                                and only where it says something the label does
+                                not - printed twice it read as a bug. */}
+                            {option.label}
+                            {option.label !== option.column && (
+                              <span className="ml-1 text-ink-400">{option.column}</span>
+                            )}
+                          </span>
+                        </label>
+                      ),
+                    )}
                   </div>
+                  {/* Why the bars are numbered, and what to do about it. The
+                      option text is usually in the file and is read from it;
+                      an export that carries none leaves nothing to read, and
+                      the answer is to write the names once, here, where the
+                      question is in front of you. */}
+                  {group.unnamed && (
+                    <p className="mt-1.5 text-xs text-amber-700">
+                      This file gives no names for these options, so they are numbered.
+                      {canSave ? (
+                        <>
+                          {' '}
+                          <button
+                            className="font-medium underline"
+                            onClick={() => setNaming(true)}
+                          >
+                            Name them
+                          </button>{' '}
+                          and the names stay with the dataset - every chart, filter and
+                          table shows them.
+                        </>
+                      ) : (
+                        ' Ask somebody who can edit this dataset to name them.'
+                      )}
+                    </p>
+                  )}
+                  {!group.unnamed && canSave && (
+                    <button
+                      className="btn-ghost btn-sm mt-1 px-0 text-xs"
+                      onClick={() => setNaming(true)}
+                    >
+                      Rename the options
+                    </button>
+                  )}
                 </div>
               )}
 
@@ -1641,7 +1688,119 @@ function MultiSelectBuilder({
         defaultName={group?.label || group?.stem || 'Tick all that apply'}
         editing={editing}
       />
+
+      {naming && group && (
+        <NameOptionsModal
+          datasetId={datasetId}
+          group={group}
+          onClose={() => setNaming(false)}
+        />
+      )}
     </div>
+  )
+}
+
+/**
+ * Naming the options of a multiple-select, all of them at once.
+ *
+ * The option text is usually in the file - in the question's own value labels,
+ * where the number after the underscores is the code - and it is read from
+ * there on import. An export that carries none leaves the bars numbered, and
+ * naming nineteen columns one at a time through the dataset's own label editor
+ * is enough work that nobody does it. This writes the same thing that editor
+ * writes: each column's variable label, which every chart, filter and table
+ * then shows, and which survives the next export replacing the file.
+ */
+function NameOptionsModal({
+  datasetId,
+  group,
+  onClose,
+}: {
+  datasetId: string
+  group: MultiSelectGroup
+  onClose: () => void
+}) {
+  const toast = useToast()
+  const queryClient = useQueryClient()
+  const options = group.options ?? group.columns.map((column) => ({ column, label: column }))
+  // Blank where the name is only a number: that is a placeholder, not a name,
+  // and offering it as the text to edit would have people saving "Option 8".
+  const [names, setNames] = useState<Record<string, string>>(() =>
+    Object.fromEntries(
+      options.map((option) => [
+        option.column,
+        option.label.startsWith('Option ') ? '' : option.label,
+      ]),
+    ),
+  )
+
+  const save = useMutation({
+    mutationFn: async () => {
+      const changed = options.filter(
+        (option) =>
+          (names[option.column] ?? '').trim() !==
+          (option.label.startsWith('Option ') ? '' : option.label),
+      )
+      for (const option of changed) {
+        await api.patch(
+          `/datasets/${datasetId}/variables/${encodeURIComponent(option.column)}`,
+          { label: (names[option.column] ?? '').trim() },
+        )
+      }
+      return changed.length
+    },
+    onSuccess: (changed) => {
+      toast.push(
+        changed ? `Named ${changed} option${changed === 1 ? '' : 's'}` : 'Nothing changed',
+        'success',
+      )
+      queryClient.invalidateQueries({ queryKey: ['multiselect-groups', datasetId] })
+      queryClient.invalidateQueries({ queryKey: ['dataset', datasetId] })
+      queryClient.invalidateQueries({ queryKey: ['variables', datasetId] })
+      onClose()
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`Name the options of ${group.label || group.stem}`}
+      footer={
+        <>
+          <button className="btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn-primary" onClick={() => save.mutate()} disabled={save.isPending}>
+            {save.isPending && <Spinner className="h-4 w-4 text-white" />}
+            Save the names
+          </button>
+        </>
+      }
+    >
+      <p className="mb-3 text-sm text-ink-500">
+        These are the words each option is drawn under, here and everywhere else this
+        dataset is used. Leave one blank to leave it numbered.
+      </p>
+      <div className="max-h-96 space-y-1.5 overflow-y-auto pr-1">
+        {options.map((option) => (
+          <label key={option.column} className="flex items-center gap-2">
+            <code className="w-40 shrink-0 truncate text-xs text-ink-500" title={option.column}>
+              {option.column}
+            </code>
+            <input
+              className="input py-1.5 text-sm"
+              value={names[option.column] ?? ''}
+              placeholder={option.label}
+              onChange={(event) =>
+                setNames({ ...names, [option.column]: event.target.value })
+              }
+            />
+          </label>
+        ))}
+      </div>
+    </Modal>
   )
 }
 

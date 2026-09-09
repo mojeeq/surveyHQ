@@ -51,15 +51,32 @@ def groups(ctx: DatasetContext) -> list[dict[str, Any]]:
         if match:
             found.setdefault(match.group("stem"), []).append(name)
 
-    return [
-        {
-            "stem": stem,
-            "columns": sorted(names, key=_option_number),
-            "label": _stem_label(ctx, stem, names),
-        }
-        for stem, names in sorted(found.items())
-        if len(names) > 1
-    ]
+    listed = []
+    for stem, names in sorted(found.items()):
+        if len(names) < 2:
+            continue
+        columns = sorted(names, key=_option_number)
+        label = _stem_label(ctx, stem, names)
+        # The name each option will be drawn under, worked out here rather than
+        # left to the chart: the person ticking hhld_goods__8 out of nineteen
+        # boxes is choosing an option, and needs to see which one.
+        options = [
+            {"column": name, "label": option_label(ctx, name, label)} for name in columns
+        ]
+        listed.append(
+            {
+                "stem": stem,
+                "columns": columns,
+                "label": label,
+                "options": options,
+                # Set when the file gave no words for any of them, so the page
+                # can say why they are numbered and offer to fix it.
+                "unnamed": all(
+                    option["label"].startswith("Option ") for option in options
+                ),
+            }
+        )
+    return listed
 
 
 def _option_number(name: str) -> int:
@@ -89,8 +106,23 @@ def _stem_label(ctx: DatasetContext, stem: str, names: list[str]) -> str:
     return shared or stem
 
 
+# What a 0/1 column's codes are called when they say nothing about the option:
+# "1 = Yes" names the tick, not the thing ticked.
+TICK_WORDS = {
+    "0", "1", "y", "n", "yes", "no", "true", "false",
+    "selected", "not selected", "unselected", "chosen", "not chosen",
+    "ticked", "not ticked", "checked", "not checked", "marked", "not marked",
+}
+
+
 def option_label(ctx: DatasetContext, column: str, stem_label: str) -> str:
-    """What to write against one option's bar."""
+    """What to write against one option's bar.
+
+    Three places the option's own words can be, in the order they are worth
+    trusting: the column's label, then the name its "chosen" code carries, then
+    nothing - and a numbered bar, which sends the reader to the questionnaire
+    to find out what option 8 was.
+    """
     info = ctx.variables.get(column)
     label = (info.label or "").strip() if info else ""
     if label:
@@ -100,7 +132,22 @@ def option_label(ctx: DatasetContext, column: str, stem_label: str) -> str:
             trimmed = label[len(stem_label) :].strip(" :-/,")
             if trimmed:
                 return trimmed
-        return label
+            # Nothing left once the question is taken off, which means every
+            # option carries the question and none of them carries an answer.
+            # Printing it would draw nineteen bars with the same words on them,
+            # so this goes looking for the option's own name instead.
+        else:
+            return label
+
+    # Some exports label the codes rather than the column: 0 is "Not selected"
+    # and 1 is the option itself. A yes-or-no pair says nothing about which
+    # option this is, so those words are passed over rather than printed on
+    # nineteen bars that would then all read "Yes".
+    for code in ("1", "1.0"):
+        chosen = str(((info.value_labels if info else None) or {}).get(code) or "").strip()
+        if chosen and chosen.lower() not in TICK_WORDS:
+            return chosen
+
     match = OPTION.match(column)
     return f"Option {match.group('option')}" if match else column
 

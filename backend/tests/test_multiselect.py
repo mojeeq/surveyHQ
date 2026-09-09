@@ -242,3 +242,197 @@ def test_a_chart_can_ask_for_one_number_rather_than_both(client, auth_headers, m
     assert {row[0]: row[1] for row in only_shares["rows"]}["Option 3"] == pytest.approx(
         66.7, abs=0.1
     )
+
+
+# --- naming the options ----------------------------------------------------
+#
+# "Option 8" on a bar sends the reader to the questionnaire to find out what
+# option 8 was, which is the opposite of what a chart is for. The words are
+# usually in the file; they were simply not being read.
+
+
+def _dta(frame, path, **kwargs) -> bytes:
+    import pyreadstat
+
+    pyreadstat.write_dta(frame, str(path), **kwargs)
+    return path.read_bytes()
+
+
+def _upload(client, auth_headers, name: str, content: bytes) -> str:
+    response = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": (name, content, "application/octet-stream")},
+    )
+    assert response.status_code in (200, 201), response.text
+    payload = response.json()
+    return (payload["datasets"][0] if "datasets" in payload else payload)["id"]
+
+
+def variables_of(client, auth_headers, dataset_id) -> dict[str, str]:
+    detail = client.get(f"/api/v1/datasets/{dataset_id}", headers=auth_headers).json()
+    return {v["name"]: v["label"] for v in detail["variables"]}
+
+
+def test_the_questions_own_codes_name_its_options(client, auth_headers, tmp_path):
+    """Where the option text actually lives in a Survey Solutions export.
+
+    The columns are hhld_goods__1 to __3 and carry no labels of their own. The
+    file still knows what those codes mean: it has a value-label set named
+    after the question, where 1 is Radio and 3 is Bicycle - and the number in
+    the column name IS that code. Nothing was reading it, so the chart came out
+    numbered.
+    """
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        {
+            "hhld_goods__1": [1, 0, 1],
+            "hhld_goods__2": [0, 1, 1],
+            "hhld_goods__3": [1, 1, 0],
+            # The question's own column, holding the codes, which is what
+            # puts the set into the file under the question's name.
+            "hhld_goods": [1, 2, 3],
+        }
+    )
+    path = tmp_path / "goods.dta"
+    content = _dta(
+        frame,
+        path,
+        variable_value_labels={"hhld_goods": {1: "Radio", 2: "Television", 3: "Bicycle"}},
+    )
+    dataset_id = _upload(client, auth_headers, "hhld_goods.dta", content)
+
+    labels = variables_of(client, auth_headers, dataset_id)
+    assert labels["hhld_goods__1"] == "Radio"
+    assert labels["hhld_goods__2"] == "Television"
+    assert labels["hhld_goods__3"] == "Bicycle"
+
+    # And so the chart is drawn under those names rather than numbers.
+    result = client.post(
+        f"{BASE}/{dataset_id}/multiselect",
+        headers=auth_headers,
+        json={"columns": ["hhld_goods__1", "hhld_goods__2", "hhld_goods__3"]},
+    ).json()
+    assert set(counts(result)) == {"Radio", "Television", "Bicycle"}
+
+
+def test_a_set_that_does_not_hold_the_codes_is_not_used(client, auth_headers, tmp_path):
+    """A name in common is not enough: it has to answer for the options.
+
+    A set holding only 1 and 2 cannot name nineteen options, and naming two of
+    them while the rest stay numbered would read as though the file disagreed
+    with itself.
+    """
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        {
+            "toilet__1": [1, 0],
+            "toilet__2": [0, 1],
+            "toilet__3": [1, 1],
+            "toilet__4": [0, 1],
+            "flag": [1, 2],
+        }
+    )
+    path = tmp_path / "toilet.dta"
+    content = _dta(frame, path, variable_value_labels={"flag": {1: "Yes", 2: "No"}})
+    dataset_id = _upload(client, auth_headers, "toilet.dta", content)
+    labels = variables_of(client, auth_headers, dataset_id)
+    assert not labels["toilet__1"]
+    assert not labels["toilet__3"]
+
+
+def test_a_label_the_file_carries_is_never_overwritten(client, auth_headers, tmp_path):
+    """A file that names its options knows better than this does."""
+    import pandas as pd
+
+    frame = pd.DataFrame({"crop__1": [1, 0], "crop__2": [0, 1], "crop": [1, 2]})
+    path = tmp_path / "crop.dta"
+    content = _dta(
+        frame,
+        path,
+        column_labels={"crop__1": "Kava", "crop__2": "", "crop": ""},
+        variable_value_labels={"crop": {1: "Taro", 2: "Yam"}},
+    )
+    dataset_id = _upload(client, auth_headers, "crop.dta", content)
+    labels = variables_of(client, auth_headers, dataset_id)
+    # Its own label stands; the one with none is filled in from the codes.
+    assert labels["crop__1"] == "Kava"
+    assert labels["crop__2"] == "Yam"
+
+
+def test_a_labelled_yes_no_column_does_not_name_every_bar_yes(
+    client, auth_headers, tmp_path
+):
+    """Some exports label the tick rather than the thing ticked."""
+    import pandas as pd
+
+    frame = pd.DataFrame({"asset__1": [1, 0], "asset__2": [0, 1]})
+    path = tmp_path / "asset.dta"
+    content = _dta(
+        frame,
+        path,
+        variable_value_labels={
+            "asset__1": {0: "Not selected", 1: "Yes"},
+            "asset__2": {0: "Not selected", 1: "Solar panel"},
+        },
+    )
+    dataset_id = _upload(client, auth_headers, "asset.dta", content)
+    result = client.post(
+        f"{BASE}/{dataset_id}/multiselect",
+        headers=auth_headers,
+        json={"columns": ["asset__1", "asset__2"]},
+    ).json()
+    # "Yes" says nothing about which option this is, so that bar stays
+    # numbered; the one that names its option is drawn under that name.
+    assert set(counts(result)) == {"Option 1", "Solar panel"}
+
+
+def test_the_picker_is_told_what_each_option_will_be_called(client, auth_headers, multi):
+    """So the person ticking eight boxes out of nineteen can see which is which."""
+    groups = client.get(
+        f"{BASE}/{multi}/multiselect-groups", headers=auth_headers
+    ).json()
+    water = next(group for group in groups if group["stem"] == "water")
+    assert [option["column"] for option in water["options"]] == water["columns"]
+    # This CSV carries no labels at all, which the page is told so it can say
+    # so and offer to fix it.
+    assert water["unnamed"] is True
+    assert water["options"][0]["label"] == "Option 1"
+
+
+def test_options_labelled_only_with_the_question_are_not_all_drawn_alike(
+    client, auth_headers, tmp_path
+):
+    """Some exports put the question on every option column and nothing else.
+
+    Trimming the question off then leaves nothing, and printing the label as it
+    stands draws every bar under the same words - a chart that says the same
+    thing four times. The option's own codes are asked instead.
+    """
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        {"fuel__1": [1, 0], "fuel__2": [0, 1], "fuel__3": [1, 1], "fuel": [1, 2]}
+    )
+    path = tmp_path / "fuel.dta"
+    question = "What does the household cook with"
+    content = _dta(
+        frame,
+        path,
+        column_labels={
+            "fuel__1": question,
+            "fuel__2": question,
+            "fuel__3": question,
+            "fuel": "",
+        },
+        variable_value_labels={"fuel": {1: "Wood", 2: "Gas", 3: "Electricity"}},
+    )
+    dataset_id = _upload(client, auth_headers, "fuel.dta", content)
+    result = client.post(
+        f"{BASE}/{dataset_id}/multiselect",
+        headers=auth_headers,
+        json={"columns": ["fuel__1", "fuel__2", "fuel__3"]},
+    ).json()
+    assert set(counts(result)) == {"Wood", "Gas", "Electricity"}
