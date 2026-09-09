@@ -209,7 +209,7 @@ function IndicatorCard({
       }
     >
       {value.error && (
-        <p className="mb-3 rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+        <p className="aero-pane aero-pane-warn mb-3 px-3 py-2 pl-4 text-xs text-amber-900 dark:text-amber-200">
           {value.error}
         </p>
       )}

@@ -986,7 +986,7 @@ function WidgetFrame({
     ) : !payload ? (
       <p className="py-6 text-center text-sm text-ink-400">No data</p>
     ) : payload.error ? (
-      <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+      <p className="aero-pane aero-pane-warn px-3 py-2 pl-4 text-xs text-amber-900 dark:text-amber-200">
         {payload.error}
       </p>
     ) : payload.type === 'indicator' ? (
@@ -1610,14 +1610,26 @@ function QualityWidget({ payload }: { payload: any }) {
       ) : (
         <ul className="min-h-0 flex-1 space-y-2 overflow-auto">
           {failing.map((check: any) => (
-            <li
-              key={check.id}
-              className="rounded-card border border-red-200 bg-red-50 px-3 py-2"
-            >
-              <p className="text-sm font-medium text-red-900">{check.name}</p>
-              <p className="text-xs text-red-800">{check.message}</p>
+            <li key={check.id} className="aero-pane aero-pane-danger px-3 py-2 pl-4 text-red-600">
+              <div className="flex items-start justify-between gap-2">
+                <p className="min-w-0 text-sm font-medium text-red-900 dark:text-red-200">
+                  {check.name}
+                </p>
+                {/* The number the check turns on, where the eye lands after
+                    the name. It is what a supervisor acts on, and reading it
+                    out of the middle of a sentence is slower than reading it
+                    off the right-hand edge of every box in the column. */}
+                {check.failure_rate > 0 && (
+                  <span className="chip shrink-0 border-red-300/70 bg-red-100 tabular-nums text-red-800 dark:border-red-500/40 dark:bg-red-500/15 dark:text-red-200">
+                    {(check.failure_rate * 100).toFixed(check.failure_rate < 0.01 ? 2 : 0)}%
+                  </span>
+                )}
+              </div>
+              <p className="mt-0.5 text-xs text-red-800/90 dark:text-red-200/80">
+                {check.message}
+              </p>
               {payload.filtered && check.total_rows > 0 && (
-                <p className="mt-0.5 text-[11px] text-red-700">
+                <p className="mt-0.5 text-[11px] text-red-700/90 dark:text-red-200/70">
                   {formatNumber(check.failed_rows)} of {formatNumber(check.total_rows)} rows
                   in view
                 </p>
@@ -1625,8 +1637,13 @@ function QualityWidget({ payload }: { payload: any }) {
             </li>
           ))}
           {!failing.length && (
-            <li className="text-sm text-ink-500">
-              Every active check on {payload.name} passed.
+            <li className="aero-pane aero-pane-ok px-3 py-2 pl-4 text-emerald-600">
+              <p className="text-sm font-medium text-emerald-900 dark:text-emerald-200">
+                Every active check passed
+              </p>
+              <p className="mt-0.5 text-xs text-emerald-800/90 dark:text-emerald-200/80">
+                {payload.name}
+              </p>
             </li>
           )}
         </ul>
@@ -2499,8 +2516,8 @@ function FilterControlsModal({
       )}
 
       {stranded.length > 0 && (
-        <div className="mt-4 rounded-card border border-amber-200 bg-amber-50 p-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">
+        <div className="aero-pane aero-pane-warn mt-4 p-3 pl-4">
+          <p className="text-xs font-semibold uppercase tracking-wide text-amber-900 dark:text-amber-200">
             Still on this page, but nothing here uses them
           </p>
           <p className="mt-1 text-sm text-amber-800">
