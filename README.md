@@ -51,10 +51,9 @@ Runs on Ubuntu with Docker. One command to install.
   population pyramid, line, area, pie, donut, scatter, heatmap or table, with
   control over ordering, top-N, value labels, 100% stacking, axis title and
   range, and a target line.
-- Derive variables by running R against a whole project: read any of its
-  datasets, write new ones back, and keep a working directory that survives
-  between runs. Saved scripts can re-run automatically after the next export
-  replaces the data.
+- Derive variables with a Stata-style script - `gen`, `replace`, `egen`,
+  `label`, `rename`, `drop`, `keep`, with `if` conditions - recorded and
+  replayed automatically after the next export replaces the data.
 - Export any result to CSV or Excel, or download a whole dataset as Stata (with
   its labels), CSV or Excel - merged datasets included.
 
@@ -284,9 +283,9 @@ More in [docs/architecture.md](docs/architecture.md).
   dataset's registered variables and literals are always bound as parameters, so
   a query specification cannot inject SQL.
 - Public dashboard links are opt-in per dashboard and carry a random token.
-- Running R is off unless an administrator sets `R_SCRIPTS_ENABLED`, and needs
-  the manager role on the project. It is not a sandbox and does not claim to be:
-  a timeout and a memory cap stop a runaway script, not a hostile one.
+- Stata-style commands are parsed into a recognised set of operators and
+  functions before any SQL is built, so what runs is only ever what was
+  understood - never the text as typed.
 - Embedded HTML renders in a sandboxed frame with no access to the page around
   it, and uploaded dashboard backgrounds are identified from their bytes rather
   than their name or content type (SVG is refused: it can carry script).

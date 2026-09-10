@@ -171,34 +171,28 @@ imports without anybody naming anything.
 
 ## Derived variables
 
-`rproject.py` runs R against a project. Every ready dataset in the project is
-written into the project's workspace as a CSV, the script reads the ones it
-wants with `read_dataset()` and writes back the ones it makes with
-`write_dataset()`, and what it wrote is ingested as a dataset of that project -
-replacing one of the same name rather than adding a second.
+`stata.py` implements the idioms - `gen`, `replace`, `egen`, `label`, `rename`,
+`drop`, `keep`, with `if` - as SQL against the dataset's Parquet file.
+`stata_expr.py` stands between the typed expression and that SQL: it tokenises,
+checks every identifier against the dataset's registered variables and every
+operator and function against a fixed list, and emits SQL from what it
+recognised. Nothing is passed through as text, so the command box is not a
+second, softer route into the query engine.
 
-The workspace is a directory per project under `STORAGE_DIR/workspaces`, and it
-is kept between runs. That is what makes a project an environment rather than a
-series of unrelated runs: an object saved with `saveRDS`, a file written to
-disk, and a package installed into the project's own library are all still
-there next time. Input CSVs are rewritten only when the dataset behind them
-changed, so a project with twenty files does not spend a run rebuilding
-nineteen of them.
+Two details that matter more than they look:
 
-Scripts saved against a project carry an order and an `run_on_import` flag; the
-upload path runs the flagged ones, in order, after a new export lands. A
-derived variable is not in the file that arrives, so without that it would
-disappear on exactly the upload the platform exists to make routine. A failure
-there is reported as a warning on the import rather than failing it.
+- Stata's `.` is SQL's `NULL`, and `NULL` comparisons are neither true nor
+  false. `x != .` has to become `x IS NOT NULL`, or a `replace ... if` quietly
+  changes nothing.
+- `egen ... by()` compiles to a window function, and window functions do not
+  preserve file order. Row order is captured with `ROW_NUMBER() OVER ()` in a
+  subquery and restored afterwards, so the rewritten file is still the same file
+  in the same order.
 
-This is not a sandbox, and the module says so at length: an R script is a
-program, and a blocklist over a language with `eval(parse(text=))` would be a
-promise nobody can keep. A wall-clock timeout, an address-space cap and a
-working directory of its own stop a runaway script, not a hostile one. It is
-off unless `R_SCRIPTS_ENABLED` is set, and only a manager of the project can
-reach it. The workspace persisting widens that deliberately: files one script
-leaves are readable by the next script run in the same project, so a project is
-the trust boundary.
+A script runs a line at a time and commits what succeeded, as a do-file does. A
+failing line stops the script and reports itself; the lines above it have
+already run, so the log says what got through rather than pretending nothing
+happened.
 
 ## Dashboards
 
