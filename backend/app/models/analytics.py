@@ -199,9 +199,23 @@ class Dashboard(UUIDMixin, TimestampMixin, Base):
     public_hostname: Mapped[str | None] = mapped_column(
         String(253), unique=True, index=True
     )
+    # The hierarchy the whole board drills through, outermost first, e.g.
+    # [{"variable": "province", "label": "Province"}, {"variable": "district"}].
+    # One list for the dashboard rather than one per chart: drilling is a
+    # question asked of the board ("show me Malampa"), and a page whose charts
+    # each sat at their own level would answer several questions at once.
+    drilldown: Mapped[list] = mapped_column(
+        JSON, default=list, server_default=text("'[]'")
+    )
     refresh_interval_seconds: Mapped[int] = mapped_column(Integer, default=0)
     created_by: Mapped[str | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    views: Mapped[list[DashboardView]] = relationship(
+        back_populates="dashboard",
+        cascade="all, delete-orphan",
+        order_by="DashboardView.name",
     )
 
     widgets: Mapped[list[Widget]] = relationship(
@@ -240,3 +254,43 @@ class Widget(UUIDMixin, TimestampMixin, Base):
     page: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
 
     dashboard: Mapped[Dashboard] = relationship(back_populates="widgets")
+
+
+class DashboardView(UUIDMixin, TimestampMixin, Base):
+    """A named filter selection somebody wants to come back to.
+
+    A monitoring board is read the same few ways over and over - "Malampa, this
+    week", "everything a supervisor rejected" - and setting the filters by hand
+    each morning is where the reading stops happening. A view is that selection
+    under a name, not a copy of the board: the widgets, layout and data are the
+    dashboard's, and only what was chosen lives here.
+    """
+
+    __tablename__ = "dashboard_views"
+
+    dashboard_id: Mapped[str] = mapped_column(
+        ForeignKey("dashboards.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="")
+    # What was selected: {"page": 1, "filters": {"province": "Malampa"},
+    # "drill": [{"variable": "province", "value": "Malampa"}]}. A dict because
+    # a board's controls change, and a view that names a filter the board no
+    # longer offers should be ignored rather than refuse to open.
+    state: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'"))
+    # Opened instead of the empty board. At most one per dashboard, which is
+    # enforced where views are written rather than by a constraint: two rows
+    # both claiming it is a display question, not a corruption.
+    is_default: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
+    # Whether a reader who is not the author sees it, including through a
+    # shared link. A private view is one person's shortcut.
+    is_shared: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true")
+    )
+    created_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    dashboard: Mapped[Dashboard] = relationship(back_populates="views")

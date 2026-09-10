@@ -215,6 +215,10 @@ class CrosstabRequest(BaseModel):
 class CrosstabResult(BaseModel):
     row_variable: str
     column_variable: str
+    # What to call each variable in the corner of the table. The names are what
+    # the columns are called in the file; a reader wants the question.
+    row_variable_label: str = ""
+    column_variable_label: str = ""
     row_labels: list[str]
     column_labels: list[str]
     values: list[list[float | None]]
