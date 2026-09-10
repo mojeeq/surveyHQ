@@ -43,6 +43,18 @@ docker compose exec -T api python -c \
     "import urllib.request; print(urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5).read().decode())" \
     2>&1 || echo "  The api container did not answer its own health check."
 
+line "Is nginx older than the API?"
+# The signature of a stale upstream address. nginx before the resolver fix
+# looked the api container up once, at start-up, and cached the address for
+# good - so an api recreated after nginx started was one nginx could no longer
+# reach, and every request answered 502 until nginx itself was restarted.
+web_started=$(docker compose ps --format '{{.Service}} {{.RunningFor}}' 2>/dev/null | awk '$1=="web"{$1="";print}')
+api_started=$(docker compose ps --format '{{.Service}} {{.RunningFor}}' 2>/dev/null | awk '$1=="api"{$1="";print}')
+echo "  web has been up for:$web_started"
+echo "  api has been up for:$api_started"
+echo "  If web is the older of the two and the API below is healthy, this is it:"
+echo "      docker compose restart web"
+
 line "What nginx sees"
 docker compose exec -T web wget -qO- --timeout=5 http://api:8000/health 2>&1 \
     || echo "  nginx cannot reach api:8000 - which is exactly what a 502 is."
@@ -71,9 +83,12 @@ cat <<'NOTES'
       dataset live in Docker volumes, and pruning volumes while the stack is
       down deletes them. Take a backup first either way: ./scripts/backup.sh
 
-  Everything is up and the health check answers, but the browser still 502s
-      Your browser is talking to a different deployment, or nginx is stale:
+  api is healthy, but nginx cannot reach it and the browser 502s
+      nginx is holding the address of an api container that no longer exists.
           docker compose restart web
+      This is fixed for good in frontend/nginx.conf, which now looks the
+      address up per request instead of once at start-up. Rebuild to take it:
+          docker compose up -d --build web
 
   Nothing above looks wrong
       docker compose logs --no-color --since 30m > /tmp/susodash.log
