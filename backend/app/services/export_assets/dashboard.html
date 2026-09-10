@@ -60,6 +60,16 @@
   .kpi { font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums; }
   .track { height: 8px; border-radius: 999px; background: var(--ink-100); overflow: hidden; margin-top: 10px; }
   .track > div { height: 100%; border-radius: 999px; }
+  /* A widget somebody painted a dark colour. Everything inside reads its ink
+     from these variables, so redefining them here is the whole repair: the
+     table headers, the progress track, the hairlines and the muted lines all
+     follow. Without it a slate tile arrived with near-black labels on it. */
+  .card.on-dark {
+    --ink-900: #f4f5f7; --ink-700: #e2e5ea; --ink-500: #c2c7d1;
+    --ink-400: #c2c7d1; --ink-200: rgba(255,255,255,.18);
+    --ink-100: rgba(255,255,255,.14); --ink-50: rgba(255,255,255,.10);
+    --surface: rgba(255,255,255,.06);
+  }
   .muted { color: var(--ink-500); font-size: 11px; margin: 6px 0 0; }
   .note { color: var(--ink-400); font-size: 11px; }
   .text { white-space: pre-wrap; font-size: 13px; color: var(--ink-700); }
@@ -368,8 +378,57 @@
     var host = el('div', 'chart')
     body.appendChild(host)
     var instance = echarts.init(host)
-    instance.setOption(chartOption(kind, result, display || {}))
+    // Read off the host rather than threaded through: the widget node already
+    // carries the colour, whether it was chosen or decided from the background.
+    var ink = getComputedStyle(host).color
+    instance.setOption(inkOption(chartOption(kind, result, display || {}), ink))
     drawn.push(instance)
+  }
+
+  /* Rec. 709 luma: the eye takes green as much brighter than blue at the same
+     number, so averaging the channels would call #0000ff light. */
+  function isDark(color) {
+    var hex = String(color || '').replace('#', '')
+    if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2]
+    if (hex.length !== 6) return false
+    var r = parseInt(hex.slice(0, 2), 16)
+    var g = parseInt(hex.slice(2, 4), 16)
+    var b = parseInt(hex.slice(4, 6), 16)
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.5
+  }
+
+  /* Chart text takes the widget's ink, the same way the platform's does.
+     ECharts gives an axis label and a legend their own default colour, which
+     wins over anything set at the root, so each one has to be written. A label
+     positioned inside a mark keeps its white: it sits on a filled shape, and
+     recolouring it is how it disappears into the bar it is labelling. */
+  var TEXT_KEYS = ['textStyle', 'axisLabel', 'nameTextStyle', 'label']
+  function isPlainObject(value) {
+    return value && typeof value === 'object' &&
+      Object.prototype.toString.call(value) !== '[object Array]'
+  }
+  function inkOption(node, color) {
+    if (!color) return node
+    if (Object.prototype.toString.call(node) === '[object Array]') {
+      for (var i = 0; i < node.length; i++) inkOption(node[i], color)
+      return node
+    }
+    if (!isPlainObject(node)) return node
+    for (var k = 0; k < TEXT_KEYS.length; k++) {
+      var target = node[TEXT_KEYS[k]]
+      // A label sitting on a filled mark keeps its white.
+      if (isPlainObject(target) && !(TEXT_KEYS[k] === 'label' && target.position === 'inside')) {
+        target.color = color
+      }
+    }
+    // A legend carries its text colour one level down, in its own textStyle.
+    if (isPlainObject(node.legend)) {
+      node.legend.textStyle = Object.assign({}, node.legend.textStyle, { color: color })
+    }
+    for (var name in node) {
+      if (Object.prototype.hasOwnProperty.call(node, name)) inkOption(node[name], color)
+    }
+    return node
   }
 
   function drawTable(body, result) {
@@ -728,6 +787,12 @@
     }
     var style = widget.style || {}
     if (style.background) node.style.background = style.background
+    // Choosing a dark colour should not oblige anybody to go and choose a text
+    // colour to go with it. Same rule and same threshold as the platform.
+    if (isDark(style.background)) {
+      node.className += ' on-dark'
+      if (!style.font_color) node.style.color = '#f4f5f7'
+    }
     if (style.font_color) node.style.color = style.font_color
     if (style.font_family) node.style.fontFamily = style.font_family
     if (widget.title) node.appendChild(el('h2', '', widget.title))

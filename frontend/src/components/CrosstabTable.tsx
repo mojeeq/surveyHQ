@@ -60,7 +60,7 @@ export default function CrosstabTable({
         <table className="table-base">
           <thead className="sticky top-0">
             <tr>
-              <th className="sticky left-0 z-10 bg-ink-100">
+              <th className="sticky left-0 z-10 bg-ink-100 dark:bg-dark-200">
                 {/* A one-way table has only one variable, so the corner names
                     that one rather than reading "region \ " with nothing
                     after the slash. The slash is escaped: in a template
@@ -88,7 +88,7 @@ export default function CrosstabTable({
             {result.row_labels.map((label, rowIndex) => (
               <tr key={label}>
                 <td
-                  className={`sticky left-0 bg-white font-medium ${
+                  className={`sticky left-0 bg-white font-medium dark:bg-dark-50 ${
                     onSelect ? 'cursor-pointer hover:bg-ink-50' : ''
                   }`}
                   onClick={onSelect ? () => onSelect(result.row_variable, label) : undefined}
@@ -109,7 +109,7 @@ export default function CrosstabTable({
             ))}
             {showColumnTotals && (
               <tr className="bg-ink-50 font-semibold">
-                <td className="sticky left-0 bg-ink-50">Total</td>
+                <td className="sticky left-0 bg-ink-50 dark:bg-dark-100">Total</td>
                 {result.column_totals.map((total, index) => (
                   <td key={index} className="text-right tabular-nums">
                     {formatNumber(total)}

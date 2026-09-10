@@ -340,6 +340,23 @@ function widgetInk(style: WidgetStyle): string | undefined {
   return isDark(style.background) ? ON_DARK : undefined
 }
 
+/**
+ * The class that makes a widget's text agree with its own background.
+ *
+ * widgetInk() sets the card's colour, but the text inside carries its own
+ * `text-ink-500` and the like, and those win - so a slate tile ends up with
+ * near-black labels on it. This is what the CSS in index.css hangs off: it
+ * repairs the muted greys, the hairlines and the pale surfaces underneath.
+ *
+ * Only from a background somebody actually chose. A widget that took the
+ * dashboard's own paper is left alone, because that is the case the app's own
+ * light and dark modes already handle.
+ */
+function widgetTone(style: WidgetStyle): string {
+  if (!style.background) return ''
+  return isDark(style.background) ? 'on-dark' : 'on-light'
+}
+
 /** The card colour for one widget, at its own transparency or the dashboard's.
  *
  *  A widget colour and the see-through setting are two different wishes, and
@@ -930,7 +947,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
           {widgets.map((widget) => (
             <div
               key={widget.id}
-              className="card overflow-hidden"
+              className={`card overflow-hidden ${widgetTone(styleOf(widget))}`}
               // A widget's own colour if it has one, the dashboard's paper if
               // not - and either way the dashboard's transparency, so the
               // background shows through both the same amount. The charts
@@ -1280,7 +1297,19 @@ function WidgetFrame({
         {payload.error}
       </p>
     ) : payload.type === 'indicator' ? (
-      <IndicatorWidget payload={payload} theme={theme} onSelect={onSelect} />
+      <IndicatorWidget
+        payload={payload}
+        theme={theme}
+        onSelect={onSelect}
+        // The tile's own styling, the same way every other widget gets it.
+        // Without this the breakdown chart under the number kept the default
+        // near-black axis labels on a tile somebody had painted slate.
+        display={{
+          ...(style.font_family ? { fontFamily: style.font_family } : {}),
+          ...(widgetInk(style) ? { fontColor: widgetInk(style) } : {}),
+          ...(style.chart_font_size ? { fontSize: style.chart_font_size } : {}),
+        }}
+      />
     ) : payload.type === 'quality' ? (
       <QualityWidget
         payload={payload}
@@ -1491,7 +1520,7 @@ function WidgetFrame({
               transparency, its font and its text colour. Blowing a widget up
               should make it bigger and change nothing else. */}
           <div
-            className="aero-surface flex min-h-0 flex-1 flex-col rounded-card p-3"
+            className={`aero-surface flex min-h-0 flex-1 flex-col rounded-card p-3 ${widgetTone(style)}`}
             style={card}
           >
             <div className="mb-2 flex shrink-0 items-center justify-between gap-2">
@@ -2269,10 +2298,13 @@ function Variance({
 function IndicatorWidget({
   payload,
   theme,
+  display,
   onSelect,
 }: {
   payload: any
   theme: string
+  /** The tile's own font, ink and text size, for the chart under the number. */
+  display?: BuildOptions
   /** Filter the page by a category of this indicator's breakdown. */
   onSelect?: (variable: string, value: string) => void
 }) {
@@ -2429,6 +2461,7 @@ function IndicatorWidget({
               duration_ms: 0,
             }}
             display={{
+              ...display,
               // Numbers on the marks only without targets. On the stacked form
               // they would be printed on each segment, including the empty
               // ones, and three labels across a short bar is a smear.
