@@ -336,9 +336,27 @@ class SQLBuilder:
             direction = "DESC" if item.direction == "desc" else "ASC"
             clauses.append(f"{quote_ident(item.field)} {direction} NULLS LAST")
         if not clauses and spec.dimensions and spec.measures:
-            # Sensible default: biggest groups first
-            clauses.append(f"{quote_ident(spec.measures[0].output_name)} DESC NULLS LAST")
+            first = spec.dimensions[0]
+            if self._reads_as_a_scale(first):
+                # A date or a numeric band only means anything in its own order.
+                # Sorting those by size draws a line that says fieldwork is
+                # collapsing when it is really just the busiest days first.
+                clauses.append(f"{quote_ident(first.output_name)} ASC NULLS LAST")
+            else:
+                # Sensible default: biggest groups first
+                clauses.append(f"{quote_ident(spec.measures[0].output_name)} DESC NULLS LAST")
         return " ORDER BY " + ", ".join(clauses) if clauses else ""
+
+    def _reads_as_a_scale(self, dim: Dimension) -> bool:
+        """True when the axis runs along a scale rather than across categories."""
+        if dim.limit:
+            # An explicit "keep the N largest" asks for the ranking, and the
+            # collapse into "Other" reads the rows in that order.
+            return False
+        if dim.grain or dim.bin_width:
+            return True
+        info = self.ctx.variables.get(dim.variable)
+        return bool(info and info.is_datetime)
 
     def build_rows(
         self,

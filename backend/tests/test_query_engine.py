@@ -220,3 +220,60 @@ def test_label_filter_translates_to_stored_code(ctx):
 
 def test_default_measure_is_a_count():
     assert QuerySpec().measures[0].agg == Aggregation.count
+
+
+def test_date_axis_keeps_its_own_order(ctx):
+    """A time series sorted by size draws a fake decline."""
+    spec = QuerySpec(
+        dimensions=[Dimension(variable="visited_at")],
+        measures=[Measure(agg=Aggregation.count, alias="Interviews")],
+    )
+    sql, _ = SQLBuilder(ctx).build_aggregate(spec)
+    assert 'ORDER BY "visited_at" ASC NULLS LAST' in sql
+
+
+def test_date_grain_keeps_its_own_order(ctx):
+    spec = QuerySpec(
+        dimensions=[Dimension(variable="visited_at", grain="month", alias="Month")],
+        measures=[Measure(agg=Aggregation.count, alias="Interviews")],
+    )
+    sql, _ = SQLBuilder(ctx).build_aggregate(spec)
+    assert 'ORDER BY "Month" ASC NULLS LAST' in sql
+
+
+def test_binned_numbers_keep_their_own_order(ctx):
+    spec = QuerySpec(
+        dimensions=[Dimension(variable="age", bin_width=10)],
+        measures=[Measure(agg=Aggregation.count, alias="People")],
+    )
+    sql, _ = SQLBuilder(ctx).build_aggregate(spec)
+    assert 'ORDER BY "age" ASC NULLS LAST' in sql
+
+
+def test_categories_still_come_biggest_first(ctx):
+    spec = QuerySpec(
+        dimensions=[Dimension(variable="region")],
+        measures=[Measure(agg=Aggregation.count, alias="n")],
+    )
+    sql, _ = SQLBuilder(ctx).build_aggregate(spec)
+    assert 'ORDER BY "n" DESC NULLS LAST' in sql
+
+
+def test_top_n_on_a_date_axis_still_ranks_by_size(ctx):
+    """An explicit limit collapses the rest into Other, which needs the ranking."""
+    spec = QuerySpec(
+        dimensions=[Dimension(variable="visited_at", limit=5)],
+        measures=[Measure(agg=Aggregation.count, alias="n")],
+    )
+    sql, _ = SQLBuilder(ctx).build_aggregate(spec)
+    assert 'ORDER BY "n" DESC NULLS LAST' in sql
+
+
+def test_an_explicit_sort_still_wins_on_a_date_axis(ctx):
+    spec = QuerySpec(
+        dimensions=[Dimension(variable="visited_at")],
+        measures=[Measure(agg=Aggregation.count, alias="n")],
+        sort=[SortSpec(field="n", direction="desc")],
+    )
+    sql, _ = SQLBuilder(ctx).build_aggregate(spec)
+    assert 'ORDER BY "n" DESC NULLS LAST' in sql
