@@ -277,6 +277,32 @@ The default is sized for one field team. For a larger operation:
 
 ## Troubleshooting
 
+**Start here**
+
+```bash
+./scripts/diagnose.sh
+```
+
+It reports which containers are up, the disk, the last of the API and database
+logs, and whether nginx can reach the API - then says what each answer means.
+Most of what follows is a shortcut to one part of it.
+
+**"Request failed with status 502" on the sign-in page**
+
+Not a password problem, and not a locked account: 502 means nginx got no answer
+out of the `api` container, so nothing reached the part of the platform that
+checks a password. The API is down, restarting, or still starting.
+
+```bash
+docker compose ps                      # is `api` up, or restarting?
+docker compose logs api --tail=80      # it says why
+df -h .                                # a full disk is the usual cause
+docker compose up -d                   # bring back whatever is missing
+```
+
+The API waits up to a minute for Postgres before giving up, so a 502 for the
+first minute after a restart is normal. One that lasts is not.
+
 **The web page will not load**
 
 ```bash
