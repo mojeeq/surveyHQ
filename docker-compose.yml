@@ -43,6 +43,15 @@ x-backend-env: &backend-env
   SMTP_FROM: ${SMTP_FROM:-susoDash <no-reply@example.com>}
   SYNC_TICK_MINUTES: ${SYNC_TICK_MINUTES:-5}
   MONITOR_TICK_MINUTES: ${MONITOR_TICK_MINUTES:-15}
+  # Running R in a project. Off unless the operator turns it on; the image
+  # already carries r-base-core, so this is one setting rather than a rebuild.
+  # Listed here because the container never reads .env itself - Compose uses
+  # that file for ${...} substitution only, so a setting absent from this block
+  # is a setting the application never sees however carefully it was written.
+  R_SCRIPTS_ENABLED: ${R_SCRIPTS_ENABLED:-false}
+  R_BINARY: ${R_BINARY:-Rscript}
+  R_TIMEOUT_SECONDS: ${R_TIMEOUT_SECONDS:-60}
+  R_MEMORY_MB: ${R_MEMORY_MB:-2048}
 
 services:
   postgres:
