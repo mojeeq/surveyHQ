@@ -7,7 +7,7 @@
 # is worth reading.
 
 set -uo pipefail
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 
 line() { printf '\n== %s ==\n' "$1"; }
 
