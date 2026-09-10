@@ -294,6 +294,7 @@ The dataset page has four tabs, and a fifth for managers:
 - **Field progress** - submissions over time, interviews per interviewer and
   supervisor, status breakdown, coverage by area and a GPS map. Appears
   automatically when the relevant columns are recognised.
+- **Command** - the Stata-style script box, below. Managers only.
 
 ### Naming variables and their codes
 
@@ -313,63 +314,88 @@ cell's tooltip. A categorical column stored as numbers with no names for its
 codes says so in amber, because until they are written every table of it prints
 the codes. A column of 0s and 1s is left alone: that is a tick, not a code.
 
-### Running R in a project
+### The command box
 
-R belongs to the **project**, not to any one dataset. A script that prepares
-survey data usually reads the household file and writes the person file, so
-tying it to one of the two never worked: open the project and use its **R** tab.
+**Command** runs a Stata-style script against the dataset, one command per
+line, in the order written. The useful subset:
 
-A project is an environment rather than a folder. Its working directory is kept
-between runs, so an object saved with `saveRDS`, a lookup table written to disk
-and a package installed into the project's own library are all still there next
-time you run something.
-
-Three things are defined for you:
-
-| | |
+| Command | Example |
 |---|---|
-| `read_dataset("household")` | any dataset in this project, by name or by slug |
-| `write_dataset(df, "Adults")` | creates a dataset here, or replaces one of that name |
-| `datasets` | a data frame of what there is to read |
+| `gen` | `gen adult = age >= 18` |
+| `replace` | `replace adult = 0 if age == .` |
+| `egen` | `egen hh_total = total(income), by(interview__key)` |
+| `egen` (rowwise) | `egen answered = rownonmiss(q1 q2 q3)` |
+| `label variable` | `label variable adult "Adult (18+)"` |
+| `label define` / `label values` | `label define yesno 0 "No" 1 "Yes"` then `label values adult yesno` |
+| `rename` | `rename DEM_SEX sex` |
+| `drop` / `keep` | `drop if interview__status != 100` |
 
-Everything else is base R and whatever packages the administrator installed.
-The round trip goes through CSV, which base R reads and writes with no packages
-at all, so types are re-read on the way back in exactly as they would be from an
-uploaded CSV.
+`egen` supports `total`, `sum`, `mean`, `count`, `min`, `max`, `median`, `sd`,
+`group` and `tag` down a column (with `by()`), and `rowtotal`, `rowmean`,
+`rowmiss`, `rownonmiss`, `rowmax`, `rowmin` across a row. Comments (`*`, `//`)
+and continuations (`///`) work as in a do-file. Ctrl/⌘+Enter runs the script.
 
-Writing the same name twice replaces rather than duplicates, so a script run
-twice does not leave two copies and every chart pointing at that dataset goes on
-working.
+A line that fails stops the script and says which line and why. Everything above
+it has already run, as in a do-file, so it stays - the log tells you what got
+through.
 
-**Saved scripts.** The console is for trying something; **Save as a script**
-keeps it. Saved scripts are listed in the order they run in, because they build
-on each other. Tick **After each import** and a script runs again whenever a new
-export lands in the project - a variable you derived in R is not in the file that
-arrives, so without that it would disappear on exactly the upload this platform
-is built around. A script that fails on an import is reported as a warning on
-that import rather than failing it.
+Commands are **recorded on the dataset and replayed** after a newer export
+replaces it. A variable somebody generated is not in the export file, so without
+that it would vanish on exactly the upload this platform is built around, taking
+every chart built on it. The history is listed under the box: **Edit** puts a
+command back in the box, and **Clear** stops the replay without undoing what the
+commands already did.
+
+### Running R over a dataset
+
+The Stata box covers generating a variable and labelling it. Everything past
+that - recoding a battery of questions, deriving a poverty line, reshaping a
+roster - is a few lines of R and no lines of anything this platform could
+reasonably invent. So the **R script** tab hands the dataset to R.
+
+The contract is one sentence: **the dataset is a data frame called `data`, and
+whatever `data` holds when the script ends is what the dataset becomes** - its
+rows, its columns and their types.
+
+```r
+data$adult <- ifelse(data$age >= 18, 1, 0)
+data$age_band <- cut(data$age, c(0, 15, 25, 65, Inf), right = FALSE)
+data <- data[!is.na(data$age), ]
+```
+
+Base R is enough; nothing needs installing. Packages an administrator has
+installed on the server are available too - base R is the floor, not a ceiling.
+Anything the script prints comes back under the box, so `cat()` and `print()`
+are how it is debugged.
+
+A script that fails changes nothing: the frame is read, the script runs, and
+only a script that finished writes anything back. The error R gave is shown as
+R gave it.
+
+Like a Stata command, the script is **recorded and replayed** after a newer
+export replaces the dataset, and in its turn among the Stata commands beside
+it - so a script reading a variable that `gen` created still runs after it. The
+list on the right shows both, in the order they will be re-run, with the R ones
+marked.
+
+The round trip goes through CSV, which is what base R reads and writes with no
+packages at all. Types are therefore re-read on the way back in, exactly as
+they would be from an uploaded CSV, and a variable's label survives as long as
+its column does.
 
 **What this is and is not.** Running R here is running a program on the server.
 It can read what the server can read and reach what the server can reach. The
 timeout and the memory limit stop a script that runs away; nothing stops one
 written to do harm, and there is no list of forbidden functions, because a list
 like that over a language with `eval(parse(text=))` would only be a promise
-nobody can keep. The workspace being kept widens that on purpose: files one
-script leaves are readable by the next script anyone runs in the same project.
+nobody can keep.
 
-So it is **off until an administrator turns it on**, and only a manager of the
-project can reach it. Turn it on where the people who can run R in a project are
-people you would trust with a shell on that server. Every run is written to the
-audit log with the account that ran it.
-
-**Turning it on.** Set `R_SCRIPTS_ENABLED=true` in `.env` beside your
-`docker-compose.yml`, then `docker compose up -d api worker beat`. R itself is
-already in the image, so there is nothing to install. `R_TIMEOUT_SECONDS` (60 by
-default) and `R_MEMORY_MB` (2048) bound one run. If the R tab says R is switched
-off after a restart, the setting has not reached the container: check it is
-spelled exactly `R_SCRIPTS_ENABLED` in `.env`, since Compose passes it through
-by name.
-
+So it is **off until an administrator turns it on**, with `R_SCRIPTS_ENABLED=true`,
+and only a manager or an administrator can reach it. Turn it on where the
+people who can open the command box are people you would trust with a shell on
+that server. `R_TIMEOUT_SECONDS` (60 by default) and `R_MEMORY_MB` (2048) bound
+one run; every script that runs is written to the audit log with the account
+that ran it.
 
 ## Explore
 
