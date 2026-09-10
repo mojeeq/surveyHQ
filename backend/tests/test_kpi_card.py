@@ -87,7 +87,7 @@ def render(client, auth_headers, board: str, filters: dict | None = None) -> dic
 def seed_history(indicator_id: str, values: list[float]) -> None:
     """Daily snapshots ending yesterday, oldest first."""
     with SessionLocal() as session:
-        start = dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=len(values))
+        start = dt.datetime.now(dt.UTC) - dt.timedelta(days=len(values))
         for offset, value in enumerate(values):
             session.add(
                 IndicatorSnapshot(
