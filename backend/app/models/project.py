@@ -15,7 +15,18 @@ from __future__ import annotations
 import datetime as dt
 import enum
 
-from sqlalchemy import Date, Enum, ForeignKey, String, Text, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDMixin
@@ -75,3 +86,45 @@ class ProjectMember(UUIDMixin, TimestampMixin, Base):
     )
 
     project: Mapped[Project] = relationship(back_populates="members")
+
+
+class ProjectScript(UUIDMixin, TimestampMixin, Base):
+    """An R script kept in a project's workspace.
+
+    A project is an environment, not a folder of files. The scripts that
+    prepare its data belong to it rather than to any one dataset: a recode
+    usually reads the household file and writes the person file, and pinning it
+    to one of the two was always a fiction. Keeping them here also means the
+    order they run in is a property of the project, which is what makes "run
+    everything again on the new export" mean something.
+    """
+
+    __tablename__ = "project_scripts"
+
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="")
+    code: Mapped[str] = mapped_column(Text, default="")
+    # Run after a new export lands in this project. A variable somebody derived
+    # is not in the file that arrives, so without this it disappears on exactly
+    # the upload the platform exists to make routine.
+    run_on_import: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
+    # Where it sits in the order they are run in. Scripts build on each other,
+    # so "all of them again" has to mean something more than "in some order".
+    display_order: Mapped[int] = mapped_column(Integer, default=0)
+
+    last_run_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    last_ok: Mapped[bool] = mapped_column(
+        Boolean, default=True, server_default=text("true")
+    )
+    # What the last run printed, so opening the project shows how it went
+    # without running it again.
+    last_output: Mapped[str] = mapped_column(Text, default="")
+
+    created_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )

@@ -109,7 +109,6 @@ from app.services.query_engine import (
     execute_query,
 )
 from app.services.sharing import as_utc, link_expired
-from app.services.stata_expr import ExpressionError
 
 router = APIRouter()
 
@@ -1899,7 +1898,7 @@ def _recheck(ctx: DatasetContext, rule: QualityRule, filters: FilterGroup) -> di
     try:
         with quality.scoped(ctx, combined):
             outcome = quality.run_check(ctx, rule)
-    except (QueryError, ExpressionError) as exc:
+    except QueryError as exc:
         return {**base, "passed": None, "failed_rows": 0, "total_rows": 0,
                 "failure_rate": 0.0, "message": str(exc), "run_at": None}
     return {
