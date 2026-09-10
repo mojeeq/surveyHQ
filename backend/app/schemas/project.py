@@ -74,6 +74,44 @@ class ProjectMemberIn(BaseModel):
         return value
 
 
+class ProjectScriptIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = ""
+    code: str = ""
+    run_on_import: bool = False
+
+
+class ProjectScriptPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = None
+    code: str | None = None
+    run_on_import: bool | None = None
+    display_order: int | None = None
+
+
+class ProjectScriptOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    project_id: str
+    name: str
+    description: str = ""
+    code: str = ""
+    run_on_import: bool = False
+    display_order: int = 0
+    last_run_at: dt.datetime | None = None
+    last_ok: bool = True
+    last_output: str = ""
+    created_at: dt.datetime
+    updated_at: dt.datetime
+
+
+class RunScriptIn(BaseModel):
+    """Code typed into the console and run without being saved."""
+
+    code: str = Field(min_length=1, max_length=200_000)
+
+
 class AssignProjectIn(BaseModel):
     """Move a dataset or dashboard into a project, or out to the shared area."""
 

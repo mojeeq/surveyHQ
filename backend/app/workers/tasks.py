@@ -31,6 +31,7 @@ from app.models import (
     SyncRun,
     SyncStatus,
 )
+from app.services import rproject
 from app.services.datasets import (
     ArchiveImport,
     load_archive_as_datasets,
@@ -484,8 +485,6 @@ def run_upload_import(self: Any, job_id: str) -> dict[str, Any]:
             raise IngestError("The uploaded file is no longer on the server.")
         with session_scope() as db:
             if archive:
-                from app.services import scripts
-
                 outcome = ArchiveImport()
                 mode = str(params.get("mode") or "replace")
                 for index, (path, one) in enumerate(
@@ -502,13 +501,19 @@ def run_upload_import(self: Any, job_id: str) -> dict[str, Any]:
                         # The first lands under the mode asked for; the rest are
                         # appended onto what it produced.
                         mode=mode if index == 0 else "append",
-                        after_replace=scripts.replay,
                         stamp=(version_column, labels[index]) if version_column else None,
                     )
                     outcome = merge_imports(outcome, step)
                 rebuilt = rebuild_dependents(db, outcome.replaced_ids)
                 db.flush()
                 warnings = list(outcome.warnings)
+                # A variable somebody derived is not in the export that just
+                # landed, so the project's own scripts are run again over it.
+                warnings.extend(
+                    rproject.run_on_import(
+                        db, str(params.get("project_id") or "") or None, created_by
+                    )
+                )
                 if rebuilt:
                     names = [
                         d.name for d in (db.get(Dataset, i) for i in rebuilt) if d

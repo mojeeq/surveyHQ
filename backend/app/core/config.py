@@ -83,7 +83,7 @@ class Settings(BaseSettings):
     # process serving this platform. The timeout and the memory cap stop a
     # runaway script; nothing here stops a hostile one, and pretending
     # otherwise would be worse than saying so. Turn it on where the people who
-    # can reach the command box are the people you would trust with a shell.
+    # can run R in a project are the people you would trust with a shell.
     r_scripts_enabled: bool = False
     r_binary: str = "Rscript"
     r_timeout_seconds: int = 60
@@ -135,12 +135,23 @@ class Settings(BaseSettings):
     def boundaries_path(self) -> Path:
         return self.storage_path / "boundaries"
 
+    @property
+    def workspaces_path(self) -> Path:
+        """Where each project's R workspace lives.
+
+        Kept between runs on purpose: a project is an environment, so an object
+        saved with saveRDS, a lookup table written to disk, or a package
+        installed into the project's own library is still there next time.
+        """
+        return self.storage_path / "workspaces"
+
     def ensure_directories(self) -> None:
         for path in (
             self.datasets_path,
             self.uploads_path,
             self.exports_path,
             self.boundaries_path,
+            self.workspaces_path,
         ):
             path.mkdir(parents=True, exist_ok=True)
 

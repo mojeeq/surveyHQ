@@ -35,21 +35,6 @@ class BulkDeleteRequest(BaseModel):
     project_id: str | None = None
 
 
-class CommandRequest(BaseModel):
-    """A Stata-style script: one command per line, as a do-file is written."""
-
-    command: str = Field(min_length=1, max_length=20000)
-
-
-class RScriptRequest(BaseModel):
-    """An R script, run with the dataset as a data frame called `data`.
-
-    Longer than a Stata script is allowed to be, because it is a program rather
-    than a line: a recode of a fifty-item battery is a page of R and would be
-    turned away at the Stata limit.
-    """
-
-    script: str = Field(min_length=1, max_length=200_000)
 
 
 class VariableUpdate(BaseModel):
