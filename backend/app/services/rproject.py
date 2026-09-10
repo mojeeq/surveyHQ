@@ -31,7 +31,8 @@ WHAT THIS IS NOT
 This is not a sandbox. An R script is a program, and a program can read files
 the server can read, open sockets the server can open, and call system(). There
 is no blocklist of dangerous calls, because a blocklist over a language with
-eval(parse(text=)) would only be a promise nobody can keep. The containment - a wall-clock timeout, an
+eval(parse(text=)) would only be a promise nobody can keep. The containment -
+a wall-clock timeout, an
 address-space cap, a working directory of its own - stops a runaway script, not
 a hostile one. It is off unless an administrator turns it on, and only a
 manager of the project can reach it.
@@ -46,8 +47,8 @@ from __future__ import annotations
 
 import datetime as dt
 import json
-import re
 import os
+import re
 import resource
 import shutil
 import subprocess
@@ -229,7 +230,7 @@ def sync_inputs(db: Session, project_id: str) -> list[Dataset]:
         # value as UTC, which is what the platform stores everywhere.
         changed = as_utc(dataset.updated_at)
         if target.exists() and changed is not None:
-            written = dt.datetime.fromtimestamp(target.stat().st_mtime, dt.timezone.utc)
+            written = dt.datetime.fromtimestamp(target.stat().st_mtime, dt.UTC)
             if written >= changed:
                 continue
         pd.read_parquet(dataset.storage_path).to_csv(target, index=False)
