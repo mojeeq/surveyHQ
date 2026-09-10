@@ -10,6 +10,7 @@ from app.models.analytics import (
     SavedQuery,
     ShareLink,
     Widget,
+    WidgetComment,
     WidgetType,
 )
 from app.models.connection import (
@@ -85,6 +86,7 @@ __all__ = [
     "DashboardView",
     "HtmlSnippet",
     "Widget",
+    "WidgetComment",
     "WidgetType",
     "Indicator",
     "IndicatorSnapshot",

@@ -31,6 +31,7 @@ import type {
   Page,
   QueryResult,
   Widget,
+  WidgetComment,
 } from '@/lib/types'
 import AssignProject from '@/components/AssignProject'
 import ChartCard from '@/components/ChartCard'
@@ -46,6 +47,11 @@ import DashboardFilters, {
   type FilterControl,
 } from '@/components/DashboardFilters'
 import CrosstabTable from '@/components/CrosstabTable'
+import {
+  openThreads,
+  useComments,
+  WidgetComments,
+} from '@/components/WidgetComments'
 import ErrorBoundary from '@/components/ErrorBoundary'
 import MapWidget, {
   BASEMAPS,
@@ -400,8 +406,11 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
   }, [activePage])
   const [editingFilters, setEditingFilters] = useState(false)
   const [editingDrill, setEditingDrill] = useState(false)
-  /** Which saved view is on screen, so the bar can show which one you opened. */
-  const [openedView, setOpenedView] = useState('')
+  /** Which saved view is on screen: the bar shows which one you opened, and a
+   *  comment left while it is open belongs to it. */
+  const [openedView, setOpenedView] = useState({ id: '', name: '' })
+  /** The widget whose comment thread is open. */
+  const [commenting, setCommenting] = useState<Widget | null>(null)
   const [editingStyle, setEditingStyle] = useState(false)
   const [editingWidget, setEditingWidget] = useState<Widget | null>(null)
   const [width, setWidth] = useState(1200)
@@ -517,6 +526,13 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
   const asOfStyle = appearanceOf(dashboard.data).filter_color
     ? { color: appearanceOf(dashboard.data).filter_color, opacity: 0.8 }
     : undefined
+
+  // The board's comments under the reading being looked at, fetched once for
+  // every widget rather than once each. A shared link has no reader to attribute
+  // a comment to, so it neither shows nor collects them.
+  const comments = useComments(id, openedView.id, Boolean(dashboard.data) && !isPublic)
+  const commentsFor = (widgetId: string): WidgetComment[] =>
+    (comments.data ?? []).filter((comment) => comment.widget_id === widgetId)
 
   const saveLayout = useMutation({
     mutationFn: (widgets: Widget[]) =>
@@ -796,10 +812,10 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         isPublic={isPublic}
         canPublish={!isPublic && can('analyst')}
         current={{ page, filters: filterValues, drill: path }}
-        activeId={openedView}
+        activeId={openedView.id}
         labelColor={appearance.filter_color}
         onApply={(view) => {
-          setOpenedView(view.id)
+          setOpenedView({ id: view.id, name: view.name })
           setActivePage(view.state.page ?? 0)
           // After the page, because changing pages clears both of these.
           setTimeout(() => {
@@ -936,6 +952,8 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
                   path,
                   rendered.data?.widgets[widget.id]?.grouped_on,
                 )}
+                openComments={openThreads(commentsFor(widget.id))}
+                onComment={isPublic ? undefined : () => setCommenting(widget)}
                 pageNames={pageNames}
                 basePath={basePath}
                 onMove={(toPage) => moveWidget.mutate({ widgetId: widget.id, page: toPage })}
@@ -979,6 +997,17 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
           projectId={dashboard.data!.project_id}
           page={page}
           onClose={() => setAdding(false)}
+        />
+      )}
+      {commenting && !isPublic && (
+        <WidgetComments
+          dashboardId={id}
+          widgetId={commenting.id}
+          widgetTitle={commenting.title || 'this widget'}
+          viewId={openedView.id}
+          viewName={openedView.name || 'this view'}
+          comments={commentsFor(commenting.id)}
+          onClose={() => setCommenting(null)}
         />
       )}
       {editingDrill && !isPublic && (
@@ -1176,6 +1205,8 @@ function WidgetFrame({
   onRemove,
   onSelect,
   drilledTo,
+  openComments,
+  onComment,
 }: {
   widget: Widget
   payload: any
@@ -1201,6 +1232,11 @@ function WidgetFrame({
    *  one its title names. "Interviews by province" showing districts is not
    *  wrong, but it does need to say so. */
   drilledTo?: string
+  /** Threads on this widget nobody has marked dealt with, for the count. */
+  openComments?: number
+  /** Open the conversation about this widget. Absent on a shared link, which
+   *  has no reader to attribute a comment to. */
+  onComment?: () => void
 }) {
   const style = styleOf(widget)
   const body = useRef<HTMLDivElement>(null)
@@ -1336,6 +1372,18 @@ function WidgetFrame({
             <span className="ml-1.5 font-normal text-ink-500">- by {drilledTo}</span>
           )}
         </h3>
+        {/* How many questions are open on this widget. A count on the header
+            rather than an icon on every tile: a widget nobody has said
+            anything about should look exactly as it did before. */}
+        {onComment && Boolean(openComments) && (
+          <button
+            className="shrink-0 rounded bg-brand-50 px-1.5 py-0.5 text-xs font-medium text-brand-700 hover:bg-brand-100"
+            title={`${openComments} open ${openComments === 1 ? 'comment' : 'comments'}`}
+            onClick={onComment}
+          >
+            {openComments} {openComments === 1 ? 'comment' : 'comments'}
+          </button>
+        )}
         {/* Everything this widget can be asked to do, behind one button.
             The controls used to stand in a row here and left a narrow tile's
             title a few characters wide. Copy and expand are on it for readers
@@ -1360,6 +1408,16 @@ function WidgetFrame({
                 : []),
               ...(payload && !payload.error
                 ? [{ label: 'Fill the window', onClick: () => setExpanded(true) }]
+                : []),
+              ...(onComment
+                ? [
+                    {
+                      label: openComments
+                        ? `Comments (${openComments})`
+                        : 'Comment on this',
+                      onClick: onComment,
+                    },
+                  ]
                 : []),
             ],
             // Which page a widget belongs on is usually decided after it is

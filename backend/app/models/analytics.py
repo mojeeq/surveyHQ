@@ -294,3 +294,50 @@ class DashboardView(UUIDMixin, TimestampMixin, Base):
     )
 
     dashboard: Mapped[Dashboard] = relationship(back_populates="views")
+
+
+class WidgetComment(UUIDMixin, TimestampMixin, Base):
+    """A note somebody left on one widget.
+
+    Monitoring is a conversation - "this district looks wrong", "the wage
+    figure excludes allowances" - and that conversation was happening in email
+    beside the board rather than on it, where the next person to open the board
+    would see it.
+
+    A comment belongs to the reading it was made under as well as to the
+    widget. Saying "this looks wrong" while the board is narrowed to Malampa is
+    a statement about Malampa, and showing it beside Sanma's numbers would
+    misattribute it. So a comment made while a saved view was open is that
+    view's; one made on the board as it opens carries no view and is shown
+    under every view, because a general note is true whatever is selected.
+    """
+
+    __tablename__ = "widget_comments"
+
+    dashboard_id: Mapped[str] = mapped_column(
+        ForeignKey("dashboards.id", ondelete="CASCADE"), index=True
+    )
+    widget_id: Mapped[str] = mapped_column(
+        ForeignKey("widgets.id", ondelete="CASCADE"), index=True
+    )
+    # The saved view this was said under, if any. Null means it was said of the
+    # board itself and is shown everywhere. SET NULL rather than CASCADE:
+    # deleting a view should not silently take a fortnight of discussion with
+    # it - the notes become board-wide, which is the safe direction to fail.
+    view_id: Mapped[str | None] = mapped_column(
+        ForeignKey("dashboard_views.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    # The comment this one answers, for a reply under it. One level only: a
+    # thread on a chart is a question and an answer, not a forum.
+    parent_id: Mapped[str | None] = mapped_column(
+        ForeignKey("widget_comments.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    body: Mapped[str] = mapped_column(Text, default="")
+    # Dealt with, but kept: the record of what was asked and answered is the
+    # point, so a resolved thread is folded away rather than deleted.
+    is_resolved: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
+    created_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )

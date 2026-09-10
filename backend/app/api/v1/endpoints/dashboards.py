@@ -35,6 +35,7 @@ from app.models import (
     ShareLink,
     User,
     Widget,
+    WidgetComment,
 )
 from app.schemas.analytics import (
     ChartCreate,
@@ -52,6 +53,9 @@ from app.schemas.analytics import (
     HtmlSnippetOut,
     HtmlSnippetUpdate,
     PageMove,
+    WidgetCommentIn,
+    WidgetCommentOut,
+    WidgetCommentPatch,
     WidgetIn,
     WidgetPatch,
 )
@@ -1277,6 +1281,14 @@ def delete_view(
     dashboard = _get_dashboard(dashboard_id, db, user)
     view = _get_view(db, dashboard, view_id, user)
     name = view.name
+    # The comments made under it become notes on the board rather than going
+    # with it. A fortnight of discussion should not vanish because somebody
+    # tidied up a shortcut, and the column's ON DELETE SET NULL is not enough
+    # on its own: SQLite only enforces foreign keys when asked to.
+    for comment in db.scalars(
+        select(WidgetComment).where(WidgetComment.view_id == view.id)
+    ).all():
+        comment.view_id = None
     db.delete(view)
     db.commit()
     return Message(detail=f"View '{name}' deleted")
@@ -1293,6 +1305,172 @@ def _get_view(
     if view.created_by != user.id and user.role not in (Role.analyst, Role.admin):
         raise HTTPException(status_code=404, detail="View not found")
     return view
+
+
+# --- comments on widgets ---------------------------------------------------
+#
+# The conversation about a board was happening in email beside it. A comment
+# belongs to the reading it was made under as well as to the widget: said while
+# the board was narrowed to Malampa, it is about Malampa, and showing it beside
+# Sanma's numbers would misattribute it.
+
+
+def _comment_author(user: User | None) -> str:
+    if user is None:
+        return "Someone who has since been removed"
+    return user.full_name or user.email
+
+
+def _with_authors(
+    db: DbSession, comments: list[WidgetComment]
+) -> list[WidgetCommentOut]:
+    """Attach each author's name, looked up once for the whole thread."""
+    ids = {c.created_by for c in comments if c.created_by}
+    people = (
+        {u.id: u for u in db.scalars(select(User).where(User.id.in_(ids))).all()}
+        if ids
+        else {}
+    )
+    return [
+        WidgetCommentOut.model_validate(comment).model_copy(
+            update={
+                "author_name": _comment_author(people.get(comment.created_by or ""))
+            }
+        )
+        for comment in comments
+    ]
+
+
+@router.get("/{dashboard_id}/comments", response_model=list[WidgetCommentOut])
+def list_comments(
+    dashboard_id: str,
+    db: DbSession,
+    user: CurrentUser,
+    view_id: str = "",
+    widget_id: str = "",
+) -> list[WidgetCommentOut]:
+    """What has been said on this board under the reading being looked at.
+
+    With a view open: that view's comments and the board-wide ones. Without
+    one: the board-wide ones only. A general note is true whatever is selected,
+    so it is never hidden; a note made about one province is.
+    """
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    statement = (
+        select(WidgetComment)
+        .where(WidgetComment.dashboard_id == dashboard.id)
+        .order_by(WidgetComment.created_at)
+    )
+    if widget_id:
+        statement = statement.where(WidgetComment.widget_id == widget_id)
+    if view_id:
+        statement = statement.where(
+            or_(WidgetComment.view_id == view_id, WidgetComment.view_id.is_(None))
+        )
+    else:
+        statement = statement.where(WidgetComment.view_id.is_(None))
+    return _with_authors(db, list(db.scalars(statement).all()))
+
+
+@router.post(
+    "/{dashboard_id}/comments", response_model=WidgetCommentOut, status_code=201
+)
+def create_comment(
+    dashboard_id: str, payload: WidgetCommentIn, db: DbSession, user: CurrentUser
+) -> WidgetCommentOut:
+    """Leave a note on a widget.
+
+    Anybody who may read the board may say something about it - that is what
+    makes it a conversation rather than an announcement. What they may not do
+    is say it about a widget or a view that is not this board's.
+    """
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    widget = db.get(Widget, payload.widget_id)
+    if widget is None or widget.dashboard_id != dashboard.id:
+        raise HTTPException(status_code=404, detail="Widget not found")
+
+    view_id = payload.view_id or None
+    if view_id is not None:
+        view = db.get(DashboardView, view_id)
+        if view is None or view.dashboard_id != dashboard.id:
+            raise HTTPException(status_code=404, detail="View not found")
+
+    parent_id = payload.parent_id or None
+    if parent_id is not None:
+        parent = db.get(WidgetComment, parent_id)
+        if parent is None or parent.dashboard_id != dashboard.id:
+            raise HTTPException(status_code=404, detail="Comment not found")
+        # One level of reply. A reply to a reply joins the thread it is
+        # answering rather than starting a column of indents down the tile.
+        parent_id = parent.parent_id or parent.id
+        # And it belongs to the thread's reading, not to whatever the person
+        # answering happens to have selected.
+        view_id = parent.view_id
+
+    comment = WidgetComment(
+        dashboard_id=dashboard.id,
+        widget_id=widget.id,
+        view_id=view_id,
+        parent_id=parent_id,
+        body=payload.body.strip(),
+        created_by=user.id,
+    )
+    db.add(comment)
+    db.commit()
+    db.refresh(comment)
+    return _with_authors(db, [comment])[0]
+
+
+@router.patch(
+    "/{dashboard_id}/comments/{comment_id}", response_model=WidgetCommentOut
+)
+def update_comment(
+    dashboard_id: str,
+    comment_id: str,
+    payload: WidgetCommentPatch,
+    db: DbSession,
+    user: CurrentUser,
+) -> WidgetCommentOut:
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    comment = _get_comment(db, dashboard, comment_id)
+    changes = payload.model_dump(exclude_unset=True)
+    if "body" in changes and changes["body"]:
+        # Only the person who said it may change what it says. Marking a thread
+        # dealt with is a different act, and anyone reading the board may do it.
+        if comment.created_by != user.id:
+            raise HTTPException(
+                status_code=403, detail="Only the author can edit a comment"
+            )
+        comment.body = changes["body"].strip()
+    if "is_resolved" in changes:
+        comment.is_resolved = bool(changes["is_resolved"])
+    db.commit()
+    db.refresh(comment)
+    return _with_authors(db, [comment])[0]
+
+
+@router.delete("/{dashboard_id}/comments/{comment_id}", response_model=Message)
+def delete_comment(
+    dashboard_id: str, comment_id: str, db: DbSession, user: CurrentUser
+) -> Message:
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    comment = _get_comment(db, dashboard, comment_id)
+    # Your own to withdraw, or anybody's if you may edit the board - somebody
+    # has to be able to take down what should not have been posted.
+    if comment.created_by != user.id and user.role not in (Role.analyst, Role.admin):
+        raise HTTPException(status_code=403, detail="Only the author can delete this")
+    db.delete(comment)
+    db.commit()
+    return Message(detail="Comment deleted")
+
+
+def _get_comment(
+    db: DbSession, dashboard: Dashboard, comment_id: str
+) -> WidgetComment:
+    comment = db.get(WidgetComment, comment_id)
+    if comment is None or comment.dashboard_id != dashboard.id:
+        raise HTTPException(status_code=404, detail="Comment not found")
+    return comment
 
 
 @router.post("/{dashboard_id}/pages/move", response_model=DashboardDetail)

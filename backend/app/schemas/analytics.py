@@ -191,6 +191,39 @@ class DashboardViewOut(BaseModel):
     updated_at: dt.datetime
 
 
+class WidgetCommentIn(BaseModel):
+    widget_id: str
+    body: str = Field(min_length=1, max_length=4000)
+    # The saved view this is being said under, if one is open. Empty means it
+    # is said of the board itself and will be shown under every view.
+    view_id: str | None = None
+    # The comment being answered, for a reply. One level only.
+    parent_id: str | None = None
+
+
+class WidgetCommentPatch(BaseModel):
+    body: str | None = Field(default=None, min_length=1, max_length=4000)
+    is_resolved: bool | None = None
+
+
+class WidgetCommentOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    dashboard_id: str
+    widget_id: str
+    view_id: str | None = None
+    parent_id: str | None = None
+    body: str
+    is_resolved: bool = False
+    created_by: str | None = None
+    # Who said it, resolved once here rather than left to the browser to look
+    # up an id per comment. Their name if they gave one, otherwise the address.
+    author_name: str = ""
+    created_at: dt.datetime
+    updated_at: dt.datetime
+
+
 class PageMove(BaseModel):
     """Move the page at one position to another."""
 
