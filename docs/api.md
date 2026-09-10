@@ -70,6 +70,17 @@ PUT    /projects/assign/dataset/{id}      {"project_id": "..."} or null for the
                                           shared area; needs manager rights on
                                           both the source and the target
 PUT    /projects/assign/dashboard/{id}    the same, for a dashboard
+GET    /projects/{id}/tools               whether R can run here, and the
+                                          datasets a script could read
+GET    /projects/{id}/scripts             saved R scripts, in the order they run
+POST   /projects/{id}/scripts             save one                [project manager]
+PATCH  /projects/{id}/scripts/{sid}       rename, edit, reorder, or set whether
+                                          it runs after each import
+DELETE /projects/{id}/scripts/{sid}       delete it; what it wrote stays
+POST   /projects/{id}/scripts/{sid}/run   run a saved script      [project manager]
+POST   /projects/{id}/run                 run code without saving it
+GET    /projects/{id}/workspace           what is in the working directory
+DELETE /projects/{id}/workspace           empty it; the datasets are untouched
 ```
 
 ### Relationships and merges
@@ -126,10 +137,6 @@ GET    /datasets/{id}/preview             raw rows
 GET    /datasets/{id}/download?format=      the whole dataset as a file: dta
                                           (with labels), csv or xlsx [manager]
 GET    /datasets/{id}/variables/{v}/values  distinct values
-POST   /datasets/{id}/command             run a Stata-style script [manager]
-GET    /datasets/{id}/commands            what will be replayed after a replace
-DELETE /datasets/{id}/commands            stop replaying them, without undoing
-                                          what they did            [manager]
 GET    /datasets/{id}/tags                tags in use
 ```
 
@@ -188,11 +195,10 @@ Uploading an archive returns:
 Ids the caller cannot reach are skipped rather than refused - the listing they
 were chosen from is already scoped, so a stray id is a stale page.
 
-`POST /datasets/{id}/command` takes `{"command": "gen adult = age >= 18"}`, one
-command per line. The reply reports each line that ran and what it changed. A
-line that fails stops the script; everything above it has already run and is
-committed, as in a do-file, and the error names the line and the reason.
-Commands are recorded and replayed after a later export replaces the data.
+`POST /projects/{id}/run` takes `{"code": "..."}` and runs it in the project's
+R workspace without saving it. The reply carries what the script printed, the
+datasets it wrote, and what is now in the working directory. A script that
+fails answers 422 with what R said, and nothing is saved back.
 
 ### Analysis
 
