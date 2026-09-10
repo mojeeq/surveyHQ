@@ -280,6 +280,9 @@ export interface CrosstabRequest {
 export interface CrosstabResult {
   row_variable: string
   column_variable: string
+  /** What to call each variable in the corner: the question, not the column. */
+  row_variable_label?: string
+  column_variable_label?: string
   row_labels: string[]
   column_labels: string[]
   values: (number | null)[][]
@@ -485,6 +488,8 @@ export interface Dashboard {
   theme: string
   /** How the board is dressed: background colour, image, fit and fade. */
   appearance: Appearance
+  /** The hierarchy the whole board drills through, outermost first. */
+  drilldown: DrillLevel[]
   is_public: boolean
   public_token: string | null
   /** A hostname this dashboard also answers on, e.g. "labour-force.dash.gov.vu". */
@@ -493,6 +498,39 @@ export interface Dashboard {
   created_at: string
   updated_at: string
   widgets?: Widget[]
+}
+
+/** One step of a board's drill-down hierarchy, e.g. province then district. */
+export interface DrillLevel {
+  variable: string
+  label?: string
+  /** Which dataset the level was chosen from, so its values can be listed. */
+  dataset_id?: string
+}
+
+/** Where the reader has drilled to: the value chosen at each level so far. */
+export interface DrillStep {
+  variable: string
+  value: string
+  label: string
+}
+
+/** A named filter selection saved against a dashboard. */
+export interface DashboardSavedView {
+  id: string
+  dashboard_id: string
+  name: string
+  description: string
+  state: {
+    page?: number
+    filters?: Record<string, string>
+    drill?: DrillStep[]
+  }
+  is_default: boolean
+  is_shared: boolean
+  created_by: string | null
+  created_at: string
+  updated_at: string
 }
 
 export type Direction = 'higher_is_better' | 'lower_is_better' | 'neutral'

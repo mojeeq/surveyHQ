@@ -40,6 +40,12 @@ export default function CrosstabTable({
   // A one-way table needs only one of the two total lines. The row total of a
   // single column is that column, and printing it beside itself is a column of
   // numbers that says nothing twice.
+  // The question, not the column name. A corner reading "employment_status
+  // sex" is the file talking; a reader wants "Employment status \ Sex". An
+  // older saved cross-tab carries no labels, so the name is still the fallback.
+  const rowName = result.row_variable_label || result.row_variable
+  const columnName = result.column_variable_label || result.column_variable
+
   const showRowTotals = result.column_labels.length > 1
   const showColumnTotals = result.row_labels.length > 1
 
@@ -57,10 +63,12 @@ export default function CrosstabTable({
               <th className="sticky left-0 z-10 bg-ink-100">
                 {/* A one-way table has only one variable, so the corner names
                     that one rather than reading "region \ " with nothing
-                    after the slash. */}
-                {result.row_variable && result.column_variable
-                  ? `${result.row_variable} \ ${result.column_variable}`
-                  : result.row_variable || result.column_variable}
+                    after the slash. The slash is escaped: in a template
+                    literal a lone backslash before a space is dropped, so the
+                    two names ran together separated by nothing but a gap. */}
+                {rowName && columnName
+                  ? `${rowName} \\ ${columnName}`
+                  : rowName || columnName}
               </th>
               {result.column_labels.map((label) => (
                 <th

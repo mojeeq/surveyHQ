@@ -740,6 +740,10 @@ def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabR
     return CrosstabResult(
         row_variable=request.row_variable,
         column_variable=request.column_variable,
+        row_variable_label=(row_info.label if row_info else "") or request.row_variable,
+        column_variable_label=(
+            (col_info.label if col_info else "") or request.column_variable
+        ),
         row_labels=[cell_label(row_info, k) for k in row_keys],
         column_labels=[cell_label(col_info, k) for k in col_keys],
         values=values,

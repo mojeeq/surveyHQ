@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from dataclasses import dataclass
 from typing import Annotated, Any
 
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile
@@ -23,9 +24,11 @@ from app.models import (
     BoundaryLayer,
     Chart,
     Dashboard,
+    DashboardView,
     Dataset,
     HtmlSnippet,
     Indicator,
+    IndicatorSnapshot,
     QualityResult,
     QualityRule,
     Role,
@@ -41,6 +44,9 @@ from app.schemas.analytics import (
     DashboardDetail,
     DashboardOut,
     DashboardUpdate,
+    DashboardViewIn,
+    DashboardViewOut,
+    DashboardViewPatch,
     HostnameIn,
     HtmlSnippetIn,
     HtmlSnippetOut,
@@ -406,6 +412,61 @@ def _spec_from_chart(chart: Chart, extra: FilterGroup | None) -> QuerySpec:
     return spec
 
 
+@dataclass(frozen=True)
+class Drill:
+    """How far down a board's hierarchy the reader has clicked.
+
+    `levels` is the dashboard's hierarchy, outermost first. `depth` is how many
+    steps down the reader has taken; the values chosen on the way arrive as
+    ordinary filter conditions, so only the depth has to travel separately.
+    """
+
+    levels: tuple[str, ...] = ()
+    depth: int = 0
+
+    @classmethod
+    def of(cls, dashboard: Dashboard, depth: int) -> Drill:
+        levels = tuple(
+            str(item.get("variable") or "").strip()
+            for item in (dashboard.drilldown or [])
+            if isinstance(item, dict) and str(item.get("variable") or "").strip()
+        )
+        return cls(levels=levels, depth=max(0, min(int(depth or 0), len(levels))))
+
+    def target(self, variable: str) -> str:
+        """The level a chart grouped on `variable` should be drawn at.
+
+        A chart never climbs above the level it was built for: a district chart
+        stays on districts while the board is looking at a province, and only
+        follows once the reader has gone deeper than it. A chart grouped on
+        something outside the hierarchy is left alone.
+        """
+        if not self.levels or self.depth <= 0 or variable not in self.levels:
+            return variable
+        base = self.levels.index(variable)
+        return self.levels[min(max(base, self.depth), len(self.levels) - 1)]
+
+
+def _drilled(spec: QuerySpec, ctx: DatasetContext, drill: Drill | None) -> QuerySpec:
+    """Regroup a chart at the level the board has drilled to."""
+    if drill is None or not spec.dimensions:
+        return spec
+    first = spec.dimensions[0]
+    variable = drill.target(first.variable)
+    # A dataset that does not carry the deeper level cannot answer at it, so
+    # that chart stays where it is rather than erroring out the whole page.
+    if variable == first.variable or variable not in ctx.variables:
+        return spec
+    dimensions = list(spec.dimensions)
+    # The output name is kept, because a saved sort or a top-N refers to it by
+    # name. What is drawn beside the axis is the variable's own label, which
+    # follows the new variable.
+    dimensions[0] = first.model_copy(
+        update={"variable": variable, "alias": first.output_name}
+    )
+    return spec.model_copy(update={"dimensions": dimensions})
+
+
 # --- the HTML embed library ------------------------------------------------
 #
 # An embed is usually a map, a video or a bureau's own banner, and the same one
@@ -549,6 +610,7 @@ def create_dashboard(
         theme=payload.theme,
         pages=payload.pages,
         appearance=payload.appearance,
+        drilldown=payload.drilldown,
     )
     db.add(dashboard)
     record(db, user=user, action="create_dashboard", entity_type="dashboard")
@@ -800,13 +862,17 @@ def render_dashboard(
     db: DbSession,
     user: CurrentUser,
     filters: FilterGroup | None = None,
-    # A query parameter rather than part of the body, so the body stays the
-    # bare filter group everything already sends.
+    # Query parameters rather than part of the body, so the body stays the
+    # bare filter group everything already sends. The values chosen on the way
+    # down a hierarchy arrive as ordinary conditions in that group; only how
+    # deep the reader has gone has to be said separately, because that changes
+    # what the charts group on rather than which rows they count.
     every_widget_but: str = "",
+    drill_level: int = 0,
 ) -> dict[str, Any]:
     """Render every widget in one round trip so the page loads at once."""
     dashboard = _get_dashboard(dashboard_id, db, user)
-    return _render_widgets(db, dashboard, filters, every_widget_but)
+    return _render_widgets(db, dashboard, filters, every_widget_but, drill_level)
 
 
 def filter_values_response(
@@ -1108,6 +1174,127 @@ def share_dashboard(
     return dashboard
 
 
+# --- saved views -----------------------------------------------------------
+#
+# A board is read the same few ways over and over. A view is that reading under
+# a name: the page, the filter selections, and how far down the hierarchy the
+# reader had drilled. Nothing about the board itself is copied, so a view goes
+# on working when a widget is added or a chart is restyled.
+
+
+def _views_for(db: DbSession, dashboard: Dashboard, user: User | None) -> list[DashboardView]:
+    """The views this reader may see: the shared ones and their own."""
+    return [
+        view
+        for view in db.scalars(
+            select(DashboardView)
+            .where(DashboardView.dashboard_id == dashboard.id)
+            .order_by(DashboardView.is_default.desc(), DashboardView.name)
+        ).all()
+        if view.is_shared or (user is not None and view.created_by == user.id)
+    ]
+
+
+def _clear_other_defaults(db: DbSession, dashboard_id: str, keep: str) -> None:
+    for other in db.scalars(
+        select(DashboardView).where(
+            DashboardView.dashboard_id == dashboard_id, DashboardView.id != keep
+        )
+    ).all():
+        other.is_default = False
+
+
+@router.get("/{dashboard_id}/views", response_model=list[DashboardViewOut])
+def list_views(
+    dashboard_id: str, db: DbSession, user: CurrentUser
+) -> list[DashboardView]:
+    return _views_for(db, _get_dashboard(dashboard_id, db, user), user)
+
+
+@router.post("/{dashboard_id}/views", response_model=DashboardViewOut, status_code=201)
+def create_view(
+    dashboard_id: str, payload: DashboardViewIn, db: DbSession, user: CurrentUser
+) -> DashboardView:
+    """Save the current selection under a name.
+
+    Any reader may keep their own, which is the point of a shortcut, but only
+    an analyst may publish one to everybody or make it the board's opening
+    view - those change what other people see.
+    """
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    may_publish = user.role in (Role.analyst, Role.admin)
+    view = DashboardView(
+        dashboard_id=dashboard.id,
+        name=payload.name.strip(),
+        description=payload.description.strip(),
+        state=payload.state,
+        is_default=payload.is_default and may_publish,
+        is_shared=payload.is_shared and may_publish,
+        created_by=user.id,
+    )
+    db.add(view)
+    db.flush()
+    if view.is_default:
+        _clear_other_defaults(db, dashboard.id, view.id)
+    db.commit()
+    db.refresh(view)
+    return view
+
+
+@router.patch("/{dashboard_id}/views/{view_id}", response_model=DashboardViewOut)
+def update_view(
+    dashboard_id: str,
+    view_id: str,
+    payload: DashboardViewPatch,
+    db: DbSession,
+    user: CurrentUser,
+) -> DashboardView:
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    view = _get_view(db, dashboard, view_id, user)
+    changes = payload.model_dump(exclude_unset=True)
+    may_publish = user.role in (Role.analyst, Role.admin)
+    if "name" in changes:
+        view.name = (changes["name"] or "").strip() or view.name
+    if "description" in changes:
+        view.description = (changes["description"] or "").strip()
+    if "state" in changes:
+        view.state = changes["state"] or {}
+    if "is_shared" in changes and may_publish:
+        view.is_shared = bool(changes["is_shared"])
+    if "is_default" in changes and may_publish:
+        view.is_default = bool(changes["is_default"])
+        if view.is_default:
+            _clear_other_defaults(db, dashboard.id, view.id)
+    db.commit()
+    db.refresh(view)
+    return view
+
+
+@router.delete("/{dashboard_id}/views/{view_id}", response_model=Message)
+def delete_view(
+    dashboard_id: str, view_id: str, db: DbSession, user: CurrentUser
+) -> Message:
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    view = _get_view(db, dashboard, view_id, user)
+    name = view.name
+    db.delete(view)
+    db.commit()
+    return Message(detail=f"View '{name}' deleted")
+
+
+def _get_view(
+    db: DbSession, dashboard: Dashboard, view_id: str, user: User
+) -> DashboardView:
+    view = db.get(DashboardView, view_id)
+    if view is None or view.dashboard_id != dashboard.id:
+        raise HTTPException(status_code=404, detail="View not found")
+    # Your own to change, or anybody's if you may edit the board. A reader who
+    # can only see it cannot rename or delete what somebody else published.
+    if view.created_by != user.id and user.role not in (Role.analyst, Role.admin):
+        raise HTTPException(status_code=404, detail="View not found")
+    return view
+
+
 @router.post("/{dashboard_id}/pages/move", response_model=DashboardDetail)
 def move_page(
     dashboard_id: str, payload: PageMove, db: DbSession, user: RequireAnalyst
@@ -1306,6 +1493,7 @@ def _render_widgets(
     dashboard: Dashboard,
     filters: FilterGroup | None,
     except_widget: str = "",
+    drill_level: int = 0,
 ) -> dict[str, Any]:
     """Every widget's data in one round trip, so a page loads at once.
 
@@ -1313,6 +1501,7 @@ def _render_widgets(
     rendered unfiltered, because it is the thing being clicked: narrowing it to
     the one bar just chosen would take away the means of choosing another.
     """
+    drill = Drill.of(dashboard, drill_level)
     payload: dict[str, Any] = {
         "dashboard_id": dashboard.id,
         "name": dashboard.name,
@@ -1321,7 +1510,7 @@ def _render_widgets(
     for widget in dashboard.widgets:
         try:
             payload["widgets"][widget.id] = _render_widget(
-                db, widget, None if widget.id == except_widget else filters
+                db, widget, None if widget.id == except_widget else filters, drill
             )
         except (QueryError, HTTPException) as exc:
             detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
@@ -1551,8 +1740,46 @@ def _recheck(ctx: DatasetContext, rule: QualityRule, filters: FilterGroup) -> di
     }
 
 
+def _variance(target: float | None, value: float | None) -> dict[str, Any]:
+    """The gap between a value and its target, as a number and as a share."""
+    if target is None or value is None:
+        return {"variance": None, "variance_percent": None}
+    gap = float(value) - float(target)
+    return {
+        "variance": gap,
+        # Against a target of zero there is no meaningful percentage, only the
+        # gap itself, so the share is left out rather than divided by nothing.
+        "variance_percent": (gap / abs(float(target)) * 100) if target else None,
+    }
+
+
+# How much history a sparkline draws. Enough to show the shape of a field
+# period without turning a tile-sized line into a smear.
+TREND_POINTS = 30
+
+
+def _indicator_trend(db: DbSession, indicator: Indicator) -> list[dict[str, Any]]:
+    """The recent stored values of an indicator, oldest first."""
+    snapshots = db.scalars(
+        select(IndicatorSnapshot)
+        .where(
+            IndicatorSnapshot.indicator_id == indicator.id,
+            IndicatorSnapshot.value.is_not(None),
+        )
+        .order_by(IndicatorSnapshot.computed_at.desc())
+        .limit(TREND_POINTS)
+    ).all()
+    return [
+        {"at": snapshot.computed_at.isoformat(), "value": snapshot.value}
+        for snapshot in reversed(snapshots)
+    ]
+
+
 def _render_widget(
-    db: DbSession, widget: Widget, filters: FilterGroup | None
+    db: DbSession,
+    widget: Widget,
+    filters: FilterGroup | None,
+    drill: Drill | None = None,
 ) -> dict[str, Any]:
     if widget.widget_type.value == "text":
         return {"type": "text", "content": (widget.config or {}).get("content", "")}
@@ -1608,6 +1835,21 @@ def _render_widget(
             "type": "indicator",
             "name": indicator.name,
             "value": value,
+            # How far off the target this is, and which way. A tile that shows
+            # only the number and the target leaves the subtraction to the
+            # reader, and the answer to "are we behind" is the whole reason the
+            # tile is on the wall.
+            **_variance(indicator.target_value, value),
+            # The last few scheduled runs, for the sparkline under the number.
+            # Only when the widget asks, and never beside a filtered value: the
+            # snapshots were computed over the whole dataset, so a line drawn
+            # from them under a number that is not would be two different
+            # questions in one tile.
+            "trend": (
+                []
+                if narrowed is not None or not (widget.config or {}).get("show_trend")
+                else _indicator_trend(db, indicator)
+            ),
             "unit": indicator.unit,
             "value_format": indicator.value_format,
             "target_value": indicator.target_value,
@@ -1758,7 +2000,8 @@ def _render_widget(
                     mode="json"
                 ),
             }
-        result = execute_query(ctx, _spec_from_chart(chart, filters))
+        spec = _drilled(_spec_from_chart(chart, filters), ctx, drill)
+        result = execute_query(ctx, spec)
         return {
             "type": "chart",
             "chart_type": chart.chart_type.value,
@@ -1772,10 +2015,10 @@ def _render_widget(
             # variable the category belongs to and filter the page by it. Read
             # through the same accessor the query goes through: a saved chart
             # nests its query, an older one does not.
+            # Drilled if the board is deeper than this chart was built for, so
+            # a click on it filters by the level it is actually showing.
             "grouped_on": [
-                dimension.variable
-                for dimension in _spec_from_chart(chart, None).dimensions
-                if dimension.variable
+                dimension.variable for dimension in spec.dimensions if dimension.variable
             ],
             "result": result.model_dump(mode="json"),
         }
@@ -1798,10 +2041,14 @@ def _render_widget(
                 "filters": FilterGroup(op="and", groups=[spec.filters, filters], conditions=[])
             }
         )
+    spec = _drilled(spec, ctx, drill)
     result = execute_query(ctx, spec)
     return {
         "type": widget.widget_type.value,
         "chart_type": config.get("chart_type", "bar"),
         "filters_ignored": ignored,
+        "grouped_on": [
+            dimension.variable for dimension in spec.dimensions if dimension.variable
+        ],
         "result": result.model_dump(mode="json"),
     }

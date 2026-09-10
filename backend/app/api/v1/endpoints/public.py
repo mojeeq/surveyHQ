@@ -25,8 +25,8 @@ from app.core.security import (
     verify_password,
 )
 from app.db.base import utcnow
-from app.models import Dashboard, ShareLink
-from app.schemas.analytics import DashboardDetail
+from app.models import Dashboard, DashboardView, ShareLink
+from app.schemas.analytics import DashboardDetail, DashboardViewOut
 from app.schemas.query import FilterGroup
 from app.services.sharing import link_is_open
 
@@ -194,6 +194,7 @@ def render_shared_dashboard(
     request: Request,
     filters: FilterGroup | None = None,
     every_widget_but: str = "",
+    drill_level: int = 0,
 ) -> dict[str, Any]:
     """A shared dashboard renders like any other, click-to-filter included.
 
@@ -204,7 +205,29 @@ def render_shared_dashboard(
     """
     dashboard = _get_shared(token, db, request)
     filters = restrict_to_visible(filters, visible_variables(db, dashboard))
-    return _render_widgets(db, dashboard, filters, every_widget_but)
+    return _render_widgets(db, dashboard, filters, every_widget_but, drill_level)
+
+
+@router.get("/dashboards/{token}/views", response_model=list[DashboardViewOut])
+def list_shared_views(
+    token: str, db: DbSession, request: Request
+) -> list[DashboardView]:
+    """The views published with the board, so a link opens on the right one.
+
+    Only the shared ones: a private view is one person's shortcut and its
+    author is signed in, which the reader of a link is not.
+    """
+    dashboard = _get_shared(token, db, request)
+    return list(
+        db.scalars(
+            select(DashboardView)
+            .where(
+                DashboardView.dashboard_id == dashboard.id,
+                DashboardView.is_shared.is_(True),
+            )
+            .order_by(DashboardView.is_default.desc(), DashboardView.name)
+        ).all()
+    )
 
 
 @router.get("/dashboards/{token}/background")

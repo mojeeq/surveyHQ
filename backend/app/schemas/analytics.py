@@ -115,6 +115,7 @@ class DashboardCreate(BaseModel):
     pages: list[dict[str, Any]] = Field(default_factory=list)
     theme: str = "default"
     appearance: dict[str, Any] = Field(default_factory=dict)
+    drilldown: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class DashboardUpdate(BaseModel):
@@ -125,6 +126,7 @@ class DashboardUpdate(BaseModel):
     pages: list[dict[str, Any]] | None = None
     theme: str | None = None
     appearance: dict[str, Any] | None = None
+    drilldown: list[dict[str, Any]] | None = None
     is_public: bool | None = None
     widgets: list[WidgetIn] | None = None
 
@@ -141,6 +143,9 @@ class DashboardOut(BaseModel):
     pages: list[dict[str, Any]] = Field(default_factory=list)
     theme: str = "default"
     appearance: dict[str, Any] = Field(default_factory=dict)
+    # The hierarchy the board drills through, outermost first:
+    # [{"variable": "province", "label": "Province"}, ...]
+    drilldown: list[dict[str, Any]] = Field(default_factory=list)
     is_public: bool = False
     public_token: str | None = None
     public_hostname: str | None = None
@@ -151,6 +156,39 @@ class DashboardOut(BaseModel):
 
 class DashboardDetail(DashboardOut):
     widgets: list[WidgetOut] = Field(default_factory=list)
+
+
+class DashboardViewIn(BaseModel):
+    """A named filter selection saved against a dashboard."""
+
+    name: str = Field(min_length=1, max_length=200)
+    description: str = ""
+    state: dict[str, Any] = Field(default_factory=dict)
+    is_default: bool = False
+    is_shared: bool = True
+
+
+class DashboardViewPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = None
+    state: dict[str, Any] | None = None
+    is_default: bool | None = None
+    is_shared: bool | None = None
+
+
+class DashboardViewOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    dashboard_id: str
+    name: str
+    description: str = ""
+    state: dict[str, Any] = Field(default_factory=dict)
+    is_default: bool = False
+    is_shared: bool = True
+    created_by: str | None = None
+    created_at: dt.datetime
+    updated_at: dt.datetime
 
 
 class PageMove(BaseModel):
