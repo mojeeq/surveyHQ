@@ -1272,6 +1272,20 @@ page's filters do not reach it and the panel says so under the chart. The two
 bar charts are the current state, so they narrow with the page like everything
 else.
 
+**Text size** sets how big the panel reads. It moves the findings and scales
+the messages, the counts and the note at the foot from them, so the panel keeps
+its proportions at any size: 15px by default, and up to 28 for a board read
+from across a room. **It sets the charts too** - the axis names, the ticks and
+the printed values - since it is the same question either way: how far away is
+this being read from.
+
+A chart makes room for the bigger text rather than being crowded out by it. A
+category name may take a third of the chart's width before it is cut short with
+an ellipsis, so the bars keep the other two thirds; the gutter for a number
+printed off the end of a bar grows with the text rather than clipping it at the
+edge; and value ticks that would collide are dropped instead of being printed
+over each other. That holds for every chart on a dashboard, not only these.
+
 **A filtered page filters the panel.** Narrow a dashboard to one province and
 the panel counts that province: no stored run ever counted only those rows, so
 it counts them now, and a failing check says how many of how many rows in view

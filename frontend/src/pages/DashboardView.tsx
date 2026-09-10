@@ -77,6 +77,13 @@ const COLUMNS = 12
 const DEFAULT_TITLE_SIZE = 14
 /** What a chart's text measures before anybody changes it; see BASE_TEXT. */
 const DEFAULT_CHART_TEXT = 12
+
+/** The data quality panel's base size. A finding is read, not scanned past. */
+const DEFAULT_PANEL_TEXT = 15
+
+/** What the size slider sits at before anybody moves it. */
+const panelDefault = (kind: string) =>
+  kind === 'quality' ? DEFAULT_PANEL_TEXT : DEFAULT_CHART_TEXT
 const ROW_HEIGHT = 74
 // Breathing room inside the canvas, so a widget dragged to the far right stops
 // short of the edge instead of butting against it.
@@ -1720,7 +1727,14 @@ function QualityWidget({
   const stale = payload.oldest_run_at
   const charted = view === 'rate' || view === 'rows' || view === 'trend'
   return (
-    <div className="flex h-full flex-col">
+    // One size for the whole panel, and every part of it sized in em from
+    // there: a finding is read at a glance from wherever the board is, and
+    // what "big enough" means depends on whether that is a desk or a wall.
+    // The widget's own text size sets it where one was chosen.
+    <div
+      className="flex h-full flex-col [&_.chip]:text-[0.8em]"
+      style={{ fontSize: `${display?.fontSize ?? DEFAULT_PANEL_TEXT}px` }}
+    >
       <div className="mb-3 flex flex-wrap items-center gap-2">
         <Badge tone={payload.failing ? 'danger' : 'success'}>
           {payload.failing ? `${payload.failing} failing` : 'All passing'}
@@ -1732,13 +1746,11 @@ function QualityWidget({
       </div>
 
       {!payload.checks.length ? (
-        <p className="text-sm text-ink-500">
-          No active checks on {payload.name}.
-        </p>
+        <p className="text-ink-500">No active checks on {payload.name}.</p>
       ) : charted ? (
         <div className="min-h-0 flex-1">
           {view === 'trend' && !payload.history ? (
-            <p className="text-sm text-ink-500">
+            <p className="text-ink-500">
               No runs stored yet. The checks run every few hours, and a line
               needs two days of them.
             </p>
@@ -1782,7 +1794,7 @@ function QualityWidget({
           {failing.map((check: any) => (
             <li key={check.id} className="aero-pane aero-pane-danger px-3 py-2 pl-4 text-red-600">
               <div className="flex items-start justify-between gap-2">
-                <p className="min-w-0 text-sm font-medium text-red-900 dark:text-red-200">
+                <p className="min-w-0 font-medium text-red-900 dark:text-red-200">
                   {check.name}
                 </p>
                 {/* The number the check turns on, where the eye lands after
@@ -1795,11 +1807,11 @@ function QualityWidget({
                   </span>
                 )}
               </div>
-              <p className="mt-0.5 text-xs text-red-800/90 dark:text-red-200/80">
+              <p className="mt-0.5 text-[0.87em] text-red-800/90 dark:text-red-200/80">
                 {check.message}
               </p>
               {payload.filtered && check.total_rows > 0 && (
-                <p className="mt-0.5 text-[11px] text-red-700/90 dark:text-red-200/70">
+                <p className="mt-0.5 text-[0.8em] text-red-700/90 dark:text-red-200/70">
                   {formatNumber(check.failed_rows)} of {formatNumber(check.total_rows)} rows
                   in view
                 </p>
@@ -1808,10 +1820,10 @@ function QualityWidget({
           ))}
           {!failing.length && (
             <li className="aero-pane aero-pane-ok px-3 py-2 pl-4 text-emerald-600">
-              <p className="text-sm font-medium text-emerald-900 dark:text-emerald-200">
+              <p className="font-medium text-emerald-900 dark:text-emerald-200">
                 Every active check passed
               </p>
-              <p className="mt-0.5 text-xs text-emerald-800/90 dark:text-emerald-200/80">
+              <p className="mt-0.5 text-[0.87em] text-emerald-800/90 dark:text-emerald-200/80">
                 {payload.name}
               </p>
             </li>
@@ -1820,7 +1832,7 @@ function QualityWidget({
       )}
 
       {view === 'trend' ? (
-        <p className="mt-2 text-[11px] text-ink-400">
+        <p className="mt-2 text-[0.8em] text-ink-400">
           {/* The line is drawn from what the scheduled runs stored, and those
               counted the whole dataset. A filter cannot reach backwards into
               them, and a line that quietly ignored the page's filter while the
@@ -1829,7 +1841,7 @@ function QualityWidget({
           {payload.filtered ? '. The filters on this page do not reach it' : ''}
         </p>
       ) : payload.filtered ? (
-        <p className="mt-2 text-[11px] text-ink-400">
+        <p className="mt-2 text-[0.8em] text-ink-400">
           {/* Counted against the page's filter just now, so there is no "last
               run" to date it by - and saying which it is matters, because the
               two answer different questions about the same rule. */}
@@ -1837,7 +1849,7 @@ function QualityWidget({
         </p>
       ) : (
         stale && (
-          <p className="mt-2 text-[11px] text-ink-400">
+          <p className="mt-2 text-[0.8em] text-ink-400">
             {/* Results are shown as last run, not recomputed on open, so say when. */}
             Oldest result {relativeTime(stale)}
           </p>
@@ -3172,35 +3184,46 @@ function EditWidgetModal({
             <span className="text-ink-400">(up to 24 marks)</span>
           </label>
 
-          <Field
-            label="Chart text size"
-            hint="The axes, the legend and the printed values together. Bigger for a board read across a room, smaller for a crowded tile."
-          >
-            <div className="flex items-center gap-3">
-              <input
-                type="range"
-                min={8}
-                max={28}
-                step={1}
-                className="w-40"
-                aria-label="Chart text size"
-                value={config.chart_font_size ?? DEFAULT_CHART_TEXT}
-                onChange={(event) => set({ chart_font_size: Number(event.target.value) })}
-              />
-              <span className="w-12 text-sm text-ink-600">
-                {config.chart_font_size ?? DEFAULT_CHART_TEXT}px
-              </span>
-              {config.chart_font_size !== undefined && (
-                <button
-                  className="btn-ghost btn-sm"
-                  onClick={() => set({ chart_font_size: undefined })}
-                >
-                  Default
-                </button>
-              )}
-            </div>
-          </Field>
         </>
+      )}
+
+      {/* The same knob for both, because it is the same question: how far away
+          is this being read from. On a chart it sets the axes, the legend and
+          the printed values; on a data quality panel it sets the findings and
+          scales everything else in the panel from them. */}
+      {(kind === 'chart' || kind === 'quality') && (
+        <Field
+          label={kind === 'quality' ? 'Text size' : 'Chart text size'}
+          hint={
+            kind === 'quality'
+              ? 'The findings and the lines under them together. Bigger for a board read across a room, smaller for a crowded tile.'
+              : 'The axes, the legend and the printed values together. Bigger for a board read across a room, smaller for a crowded tile.'
+          }
+        >
+          <div className="flex items-center gap-3">
+            <input
+              type="range"
+              min={8}
+              max={28}
+              step={1}
+              className="w-40"
+              aria-label={kind === 'quality' ? 'Text size' : 'Chart text size'}
+              value={config.chart_font_size ?? panelDefault(kind)}
+              onChange={(event) => set({ chart_font_size: Number(event.target.value) })}
+            />
+            <span className="w-12 text-sm text-ink-600">
+              {config.chart_font_size ?? panelDefault(kind)}px
+            </span>
+            {config.chart_font_size !== undefined && (
+              <button
+                className="btn-ghost btn-sm"
+                onClick={() => set({ chart_font_size: undefined })}
+              >
+                Default
+              </button>
+            )}
+          </div>
+        </Field>
       )}
 
       {kind === 'chart' && (
