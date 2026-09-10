@@ -533,6 +533,24 @@ export interface DashboardSavedView {
   updated_at: string
 }
 
+/** A note somebody left on one widget, under one reading of the board. */
+export interface WidgetComment {
+  id: string
+  dashboard_id: string
+  widget_id: string
+  /** The saved view it was said under. Null means it is about the board and
+   *  is shown under every view. */
+  view_id: string | null
+  /** The comment it answers, for a reply. One level only. */
+  parent_id: string | null
+  body: string
+  is_resolved: boolean
+  created_by: string | null
+  author_name: string
+  created_at: string
+  updated_at: string
+}
+
 export type Direction = 'higher_is_better' | 'lower_is_better' | 'neutral'
 export type Severity = 'info' | 'warning' | 'critical'
 export type IndicatorState = 'ok' | 'warning' | 'critical' | 'unknown'
