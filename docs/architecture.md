@@ -97,10 +97,10 @@ would be lost every morning if they were not put back:
 1. **Labels written by hand.** The variable rows are deleted and rebuilt from
    the file on every import, so hand-written labels are kept on the dataset's
    own metadata as well and reapplied afterwards.
-2. **Generated variables.** Commands are recorded on the dataset and replayed,
-   in order, immediately after the new data lands - before the import checks
-   which variables went missing, so a variable the replay restores is not
-   reported as lost.
+2. **Derived variables.** A project's R scripts marked to run after an import
+   are re-run, in their saved order, immediately after the new data lands -
+   before the import checks which variables went missing, so a variable a
+   script restores is not reported as lost.
 3. **Merged datasets.** `derived.py` walks the dependency graph outward in
    rounds, so a merge of a merge is rebuilt only once the merge underneath it
    has been.
@@ -169,30 +169,42 @@ A connection stamps `questionnaire_version` by itself, from the version the
 export was taken at, so the same combined dataset builds itself from scheduled
 imports without anybody naming anything.
 
-## Derived variables
+## Derived variables: the project R workspace
 
-`stata.py` implements the idioms - `gen`, `replace`, `egen`, `label`, `rename`,
-`drop`, `keep`, with `if` - as SQL against the dataset's Parquet file.
-`stata_expr.py` stands between the typed expression and that SQL: it tokenises,
-checks every identifier against the dataset's registered variables and every
-operator and function against a fixed list, and emits SQL from what it
-recognised. Nothing is passed through as text, so the command box is not a
-second, softer route into the query engine.
+`rproject.py` runs R against a **project**, not a dataset. The scripts that
+prepare a survey read several of its datasets and write several others - a
+recode reads the household file and writes the person file - so pinning a
+script to one dataset was always a fiction, and it meant a two-file job had to
+be written twice or not at all.
 
-Two details that matter more than they look:
+Every queryable dataset in the project is written to a CSV in the workspace
+before the run; the script is given three things and nothing else is invented:
 
-- Stata's `.` is SQL's `NULL`, and `NULL` comparisons are neither true nor
-  false. `x != .` has to become `x IS NOT NULL`, or a `replace ... if` quietly
-  changes nothing.
-- `egen ... by()` compiles to a window function, and window functions do not
-  preserve file order. Row order is captured with `ROW_NUMBER() OVER ()` in a
-  subquery and restored afterwards, so the rewritten file is still the same file
-  in the same order.
+    read_dataset("household")     a data frame, by name or by slug
+    write_dataset(df, "Adults")   create or replace a dataset in this project
+    datasets                      a data frame of what is available
 
-A script runs a line at a time and commits what succeeded, as a do-file does. A
-failing line stops the script and reports itself; the lines above it have
-already run, so the log says what got through rather than pretending nothing
-happened.
+The round trip goes through CSV, which base R reads and writes with no packages
+at all, and what comes back is ingested by the same path an uploaded CSV takes,
+so types are re-read the same way and nothing downstream needs a second case.
+A manifest names what the script wrote, so a run that writes two datasets and
+fails on the third writes neither: only a run that finished is applied.
+
+The working directory **survives between runs**. An object saved with
+`saveRDS`, a lookup table on disk, a package installed into the project's own
+`rlibs`: all still there next time. That is what makes a project an environment
+rather than a series of unrelated runs, and it is the reason a project is the
+trust boundary here - files one script leaves are readable by the next script
+anyone runs in the same project.
+
+This is not a sandbox. An R script is a program: it can read what the server
+can read, open what the server can open, and call `system()`. There is no
+blocklist of dangerous calls, because a blocklist over a language with
+`eval(parse(text=))` would only be a promise nobody can keep. The containment
+is a wall-clock timeout, an address-space cap and a working directory of its
+own, which stops a runaway script rather than a hostile one. So it is off
+unless `R_SCRIPTS_ENABLED` says otherwise, only a manager of the project can
+reach it, and every run is written to the audit log with the code it ran.
 
 ## Dashboards
 
@@ -231,6 +243,27 @@ collapsing it to the one bar just chosen would take away the means of choosing
 another. That is a query parameter rather than part of the body so the body
 stays the bare filter group everything already sends.
 
+**Drill-down** is a hierarchy declared on the dashboard - province, district,
+enumeration area - and a click at one level narrows the page to what was
+clicked *and* regroups every chart at the next level down. The level is a query
+parameter on the render call, so the stored spec is never rewritten: a chart's
+saved grouping is what it goes back to when the drill is let go. A chart
+grouped on something outside the hierarchy keeps its own grouping and only
+narrows, since a chart of submissions per day is still that inside one
+province.
+
+**Saved views** are a named `{page, filters, drill}` state stored against the
+dashboard rather than in the browser, so everyone opening the board - shared
+links included - sees the same readings, and one of them can be the default the
+board opens in.
+
+**Widget comments** hang off a widget and, optionally, off the view they were
+made under: "this looks wrong" means something different under the national
+figures than under one province's. A comment with no view is the board's own
+and shows under every view. Deleting a view clears the `view_id` on its
+comments rather than taking them with it, done explicitly because SQLite does
+not enforce `ON DELETE SET NULL`.
+
 **Appearance** is one JSON column rather than a set of columns: background
 colour, image, fit and fade, canvas width, grid columns, row height, widget
 opacity, tab-strip colour. It is presentation, it changes often, and nothing
@@ -241,6 +274,14 @@ colour and alignment. The faces are named stacks the frontend resolves rather
 than CSS carried in the record, because a dashboard is rendered for people who
 did not write it - and every stack is already on the machine, so a field office
 screen with no internet renders in the face it was designed in.
+
+Two more fields in the same column decide the frame around all of it: a
+**title band** behind the name, which turns the header into a masthead and
+moves the toolbar to a row below it, and a **page ground** behind the whole
+page. Each is one colour or two for a gradient. The ground is written as a CSS
+custom property on the document and read by whichever shell is on screen - the
+app's own or the shared link's - because the element that has to be painted is
+outside the dashboard, and leaving the board removes it.
 
 Background and logo images are stored on disk, one file per dashboard per kind,
 and their type is sniffed from the leading bytes rather than trusted from the
@@ -376,15 +417,23 @@ backend/app/
                   projects.py         who may see and change what
                   archives.py         a zip -> one dataset per file in it
                   derived.py          merges, and rebuilding what depends
-                  stata.py            gen/egen/label/... over a dataset
-                  stata_expr.py       Stata expressions -> checked SQL
+                  rproject.py         a project's R workspace and its scripts
                   freshness.py        how recent a dataset's data is
                   geo.py              GPS points, grouped, for the map
                   geometry.py         GeoJSON/GeoPackage/shapefile -> features
                   boundaries.py       which area a point falls in
                   boundary_store.py   boundary layers on disk, with a cache
                   scheduling.py       when the next import is due
-                  dashboard_assets.py background images
+                  multiselect.py      0/1 columns -> one "tick all" question
+                  relationships.py    detecting and storing the links
+                  sharing.py          share links, passwords, expiry
+                  hostnames.py        a dashboard's own subdomain
+                  static_export.py    a dashboard as one HTML file
+                  dashboard_assets.py background and logo images
+                  exporters.py        a result as CSV, Excel or Stata
+                  net_guard.py        what an outbound request may reach
+                  mailer.py           alert email
+                  audit.py            who did what
                   survey_solutions.py the CAPI server client
                   quality.py          the eight checks
                   monitoring.py       indicators, thresholds, alerts
@@ -392,9 +441,12 @@ backend/app/
   workers/      Celery app and tasks
 
 frontend/src/
-  lib/          API client, types, formatting, ECharts option builder
+  lib/          API client, types, formatting, ECharts option builder,
+                the R tokeniser behind the coloured script boxes
   hooks/        auth and toast context
-  components/   layout, chart card, data table, filter builder, UI primitives
+  components/   layout, chart card, data table, filter builder, the map,
+                dashboard appearance, widget comments, the code editor,
+                UI primitives
   pages/        one per route
 ```
 

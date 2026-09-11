@@ -55,6 +55,46 @@ After editing `.env`:
 docker compose up -d
 ```
 
+### Turning R on
+
+R itself is already in the image, so enabling it is one setting rather than a
+server to build. It is **off by default**, because running an R script is
+running a program with the server's own permissions - read
+[the user guide](user-guide.md#what-this-is-and-is-not) before you turn it on.
+
+`.env` is **not** enough on its own. Compose reads `.env` to substitute
+`${...}` into `docker-compose.yml`, and the API container is handed only the
+variables that file names - so a line in `.env` that nothing substitutes never
+reaches the container. Put the settings in an override file beside the compose
+file instead:
+
+```yaml
+# docker-compose.override.yml
+services:
+  api:
+    environment:
+      R_SCRIPTS_ENABLED: "true"
+      R_TIMEOUT_SECONDS: "60"
+      R_MEMORY_MB: "2048"
+  worker:
+    environment:
+      R_SCRIPTS_ENABLED: "true"
+      R_TIMEOUT_SECONDS: "60"
+      R_MEMORY_MB: "2048"
+```
+
+Compose reads `docker-compose.override.yml` automatically, so nothing else
+changes:
+
+```bash
+docker compose up -d api worker
+docker compose exec api printenv R_SCRIPTS_ENABLED   # should print: true
+```
+
+The worker needs it too, or a script set to re-run after an import will not run
+there. `R_TIMEOUT_SECONDS` and `R_MEMORY_MB` bound one run; both have the
+defaults shown and can be left out.
+
 ## Putting it behind HTTPS
 
 The stack serves plain HTTP on `WEB_PORT`, bound for a reverse proxy in front.
@@ -293,6 +333,25 @@ The API container is down or unhealthy.
 docker compose logs api --tail=50
 curl localhost:8080/health
 ```
+
+**Every request answers 502, including signing in, but `api` is healthy**
+
+nginx resolves the `api` name once, when its configuration is loaded, and holds
+that address for the life of the process. Rebuild or recreate the API container
+and it usually comes back on a different address inside the Docker network -
+which nginx does not know, so it goes on sending requests to an address nothing
+is listening on. `docker compose ps` shows `api` healthy and `web` unhealthy at
+the same time, which is the tell.
+
+Restarting the web container is the whole fix, and it takes a second:
+
+```bash
+docker compose restart web
+curl -s localhost:8080/health          # expect {"status":"ok"}
+```
+
+Do this after any `docker compose up -d --build` that recreated `api` while
+`web` stayed up.
 
 **A large upload never finishes**
 

@@ -3,8 +3,9 @@
 # susoDash
 
 A self-hosted platform for monitoring survey/census data collection. Connect it to a
-Survey Solutions server or upload Stata files, then tabulate, chart, and watch
-field work through dashboards, indicators, alerts and automated quality checks.
+Survey Solutions server or upload Stata, SPSS, CSV or Excel files, then
+tabulate, chart, and watch field work through dashboards, indicators, alerts and
+automated quality checks.
 
 susoDash serves as a functional prototype, illustrating the mechanics of real-time automated monitoring using a robust data pipeline model.
 
@@ -48,12 +49,18 @@ Runs on Ubuntu with Docker. One command to install.
 - Filter with nested AND/OR conditions on any variable.
 - Bin numeric variables, truncate dates to day/week/month/quarter/year.
 - Chart it as a bar, horizontal bar, stacked bar, horizontal stacked bar,
-  population pyramid, line, area, pie, donut, scatter, heatmap or table, with
-  control over ordering, top-N, value labels, 100% stacking, axis title and
-  range, and a target line.
-- Derive variables with a Stata-style script - `gen`, `replace`, `egen`,
-  `label`, `rename`, `drop`, `keep`, with `if` conditions - recorded and
-  replayed automatically after the next export replaces the data.
+  population pyramid, line, area, pie, donut, scatter, box plot, heatmap or
+  table, with control over ordering, top-N, value labels, 100% stacking, axis
+  title and range, and a target line.
+- Box plots for spread rather than average: pick one numeric variable and each
+  group gets a box drawn from its minimum, quartiles, median and maximum.
+- Tabulate a "tick all that apply" question from the 0/1 columns it exports as,
+  as one table rather than twelve.
+- Prepare data with **R, per project**: a script reads any of the project's
+  datasets with `read_dataset()` and writes new ones with `write_dataset()`.
+  The working directory survives between runs, so saved objects and installed
+  packages are there next time, and a script can be set to re-run itself after
+  the next export lands. Off until an administrator enables it.
 - Export any result to CSV or Excel, or download a whole dataset as Stata (with
   its labels), CSV or Excel - merged datasets included.
 
@@ -97,18 +104,29 @@ Runs on Ubuntu with Docker. One command to install.
   panels, notes, countdowns, GPS maps, embedded HTML and a data-freshness
   panel.
 - A dashboard wears your organisation's badge, not ours: upload a logo, set the
-  title's size, face, colour and alignment, and it all travels with the shared
-  link.
+  title's size, face, colour and alignment, give the header a coloured title
+  band and the page a ground of its own, and it all travels with the shared
+  link. Six ready-made looks set the lot in one click.
 - Every widget is editable in place - what it shows, its title, its size - and
   can be moved to another page.
 - Filter controls per page, so each page asks its own question - and click a
   bar, slice or row to filter the rest of the page by it, the chart you clicked
   staying whole so you can pick another.
+- Drill-down: name the levels a board goes through - province, district,
+  enumeration area - and a click narrows the page and regroups every chart one
+  level deeper.
+- Saved views: name a reading of the board - "this week in Malampa" - and it
+  becomes one click away for everybody who opens it, shared links included. One
+  can be the view the board opens in.
+- Comments on any widget, threaded and resolvable, kept against the view they
+  were made under, so a question about a number sits on the number.
 - Saved charts edit where they were built: **Edit** reopens one in Explore with
   its query filled in, and saving writes back to it.
-- Dashboard appearance: background colour or image, canvas width, grid columns
-  and row height, per-dashboard widget transparency, and a colour for the page
-  tab strip.
+- Dashboard appearance: ready-made looks, a title band, a page ground,
+  background colour or image, canvas width, grid columns and row height,
+  per-dashboard widget transparency, and a colour for the page tab strip.
+- Take a dashboard away as one HTML file, with the data behind every widget, so
+  its filters still work on a laptop with no server.
 - A choice of chart palettes, each an ordering of the same validated hues,
   ranked by how far apart neighbouring series stay for colour-blind readers.
 - Read-only public links for people who should not have accounts, and - with
@@ -283,9 +301,11 @@ More in [docs/architecture.md](docs/architecture.md).
   dataset's registered variables and literals are always bound as parameters, so
   a query specification cannot inject SQL.
 - Public dashboard links are opt-in per dashboard and carry a random token.
-- Stata-style commands are parsed into a recognised set of operators and
-  functions before any SQL is built, so what runs is only ever what was
-  understood - never the text as typed.
+- Running R is running a program on the server, so it is off unless an
+  administrator sets `R_SCRIPTS_ENABLED`, reachable only by a manager of the
+  project, bounded by a timeout and a memory cap, and every run is recorded in
+  the audit log with the code it ran. It is not a sandbox, and the
+  documentation says so rather than implying otherwise.
 - Embedded HTML renders in a sandboxed frame with no access to the page around
   it, and uploaded dashboard backgrounds are identified from their bytes rather
   than their name or content type (SVG is refused: it can carry script).
