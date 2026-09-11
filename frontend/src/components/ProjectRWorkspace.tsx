@@ -14,6 +14,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { relativeTime } from '@/lib/format'
 import { useToast } from '@/hooks/useToast'
+import CodeEditor, { CodeSnippet } from '@/components/CodeEditor'
 import { Card, Field, Loading, Modal } from '@/components/ui'
 
 interface ProjectScript {
@@ -182,6 +183,7 @@ export default function ProjectRWorkspace({
               </button>
               <button
                 className="btn-primary btn-sm"
+                title="Ctrl or Cmd with Enter"
                 disabled={!code.trim() || runConsole.isPending}
                 onClick={() => runConsole.mutate()}
               >
@@ -190,14 +192,16 @@ export default function ProjectRWorkspace({
             </div>
           }
         >
-          <textarea
-            className="input min-h-[220px] w-full font-mono text-xs"
-            spellCheck={false}
+          <CodeEditor
+            ariaLabel="R console"
+            value={code}
+            onChange={setCode}
             placeholder={
               'h <- read_dataset("household")\nh$adult <- h$age >= 18\nwrite_dataset(h, "Household prepared")'
             }
-            value={code}
-            onChange={(event) => setCode(event.target.value)}
+            onSubmit={() => {
+              if (code.trim() && !runConsole.isPending) runConsole.mutate()
+            }}
           />
         </Card>
 
@@ -358,7 +362,7 @@ export default function ProjectRWorkspace({
                     setCode((current) => (current ? `${current}\n${example}` : example))
                   }
                 >
-                  {example}
+                  <CodeSnippet source={example} />
                 </button>
               </li>
             ))}
@@ -492,11 +496,11 @@ function SaveScriptModal({
         />
       </Field>
       <Field label="The script">
-        <textarea
-          className="input min-h-[200px] font-mono text-xs"
-          spellCheck={false}
+        <CodeEditor
+          ariaLabel="The script"
           value={body}
-          onChange={(event) => setBody(event.target.value)}
+          onChange={setBody}
+          minHeight={200}
         />
       </Field>
       <label className="flex items-center gap-2 text-sm text-ink-700">

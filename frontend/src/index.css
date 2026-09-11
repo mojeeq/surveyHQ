@@ -190,6 +190,101 @@
     background-color: theme('colors.ink.100');
   }
 
+  /* The typing layer of a code box.
+   *
+   * It has to be see-through so the coloured text behind it shows. That is
+   * harder than it sounds: the box keeps the `.input` styling every other
+   * field has, and under `.dark` that sets both a colour and a background
+   * through a two-selector rule, which beats a utility class on its own. And
+   * `.code-input` alone would not do either: it ties with `.input` on
+   * specificity and loses on source order, since `.input` is defined further
+   * down this file. Tagging the element name puts it above both, whatever
+   * order they end up in.
+   *
+   * The field's own colour moves to the wrapper, so it still reads as
+   * something you type into rather than a hole in the card.
+   */
+  textarea.code-input,
+  .dark textarea.code-input {
+    color: transparent;
+    /* WebKit paints the text of a form control with this rather than `color`,
+       and ignores `color` entirely on some of them. */
+    -webkit-text-fill-color: transparent;
+    background-color: transparent;
+  }
+  textarea.code-input {
+    caret-color: theme('colors.ink.900');
+  }
+  .dark textarea.code-input {
+    caret-color: theme('colors.dark.900');
+  }
+  /* The placeholder is the one thing in the box that must NOT be transparent,
+     and it inherits the fill colour above unless it is told otherwise. */
+  textarea.code-input::placeholder {
+    color: theme('colors.ink.400');
+    -webkit-text-fill-color: theme('colors.ink.400');
+  }
+  .dark textarea.code-input::placeholder {
+    color: theme('colors.dark.400');
+    -webkit-text-fill-color: theme('colors.dark.400');
+  }
+
+  /* Colours for the R boxes. See lib/rsyntax.ts for what earns each class.
+   *
+   * Deliberately a familiar scheme rather than an invented one: somebody
+   * writing R here has read a million lines of it somewhere else, and a
+   * highlighter that disagrees with every other one they have used is a
+   * highlighter they have to learn. Both themes are set here so the editor and
+   * the read-only snippets cannot drift apart.
+   */
+  .r-syntax .r-comment {
+    color: #6a737d;
+    font-style: italic;
+  }
+  .r-syntax .r-string {
+    color: #0a3069;
+  }
+  .r-syntax .r-number,
+  .r-syntax .r-constant {
+    color: #0550ae;
+  }
+  .r-syntax .r-keyword,
+  .r-syntax .r-operator,
+  .r-syntax .r-assign {
+    color: #cf222e;
+  }
+  .r-syntax .r-assign {
+    font-weight: 600;
+  }
+  .r-syntax .r-call {
+    color: #6639ba;
+  }
+  .r-syntax .r-punctuation {
+    color: #57606a;
+  }
+
+  .dark .r-syntax .r-comment {
+    color: #8b949e;
+  }
+  .dark .r-syntax .r-string {
+    color: #a5d6ff;
+  }
+  .dark .r-syntax .r-number,
+  .dark .r-syntax .r-constant {
+    color: #79c0ff;
+  }
+  .dark .r-syntax .r-keyword,
+  .dark .r-syntax .r-operator,
+  .dark .r-syntax .r-assign {
+    color: #ff7b72;
+  }
+  .dark .r-syntax .r-call {
+    color: #d2a8ff;
+  }
+  .dark .r-syntax .r-punctuation {
+    color: #c9d1d9;
+  }
+
   /* The card gloss has to be a tint, not a coat of paint.
    *
    * A background-image is painted over background-color, so a gradient with
