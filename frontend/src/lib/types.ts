@@ -367,7 +367,7 @@ export type ChartType =
   | 'bar' | 'horizontal_bar' | 'stacked_bar' | 'horizontal_stacked_bar'
   | 'population_pyramid' | 'line' | 'area' | 'pie'
   | 'donut' | 'scatter' | 'table' | 'kpi' | 'heatmap' | 'crosstab' | 'map'
-  | 'gauge' | 'funnel'
+  | 'gauge' | 'funnel' | 'boxplot'
 
 export interface Chart {
   id: string

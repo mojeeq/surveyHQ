@@ -25,6 +25,7 @@ import type {
   Variable,
 } from '@/lib/types'
 import ChartCard from '@/components/ChartCard'
+import { BOX_MEASURES } from '@/lib/charts'
 import type { BuildOptions } from '@/lib/charts'
 import CrosstabTable from '@/components/CrosstabTable'
 import FilterBuilder, { emptyFilter } from '@/components/FilterBuilder'
@@ -65,6 +66,7 @@ const CHART_TYPES: { value: ChartType; label: string }[] = [
   { value: 'donut', label: 'Donut' },
   { value: 'pie', label: 'Pie' },
   { value: 'scatter', label: 'Scatter' },
+  { value: 'boxplot', label: 'Box plot' },
   { value: 'heatmap', label: 'Heatmap' },
   { value: 'table', label: 'Table' },
 ]
@@ -303,6 +305,68 @@ export default function Explore() {
 
 type VariableList = Dataset['variables']
 
+/**
+ * What a box plot asks for in place of a list of measures.
+ *
+ * One variable, because the five numbers a box is drawn from are five
+ * summaries of the same thing - so a list of measures would be a list with
+ * only one right answer in it.
+ *
+ * The note underneath is there because "box plot" does not say which box plot.
+ * These whiskers reach the smallest and largest value in the group rather than
+ * one and a half times the box, so nothing sits outside them as an outlier and
+ * nothing is quietly left out of the picture. Somebody comparing this against
+ * a box drawn in R has to be told that.
+ */
+function BoxMeasure({
+  numeric,
+  variable,
+  weight,
+  onVariable,
+  onWeight,
+}: {
+  numeric: NonNullable<VariableList>
+  variable: string
+  weight: string | null
+  onVariable: (next: string) => void
+  onWeight: (next: string | null) => void
+}) {
+  return (
+    <div className="space-y-2 rounded-card border border-ink-200 p-3">
+      <select
+        className="input py-1.5 text-xs"
+        aria-label="Variable to summarise"
+        value={variable}
+        onChange={(event) => onVariable(event.target.value)}
+      >
+        {numeric.map((v) => (
+          <option key={v.name} value={v.name}>
+            {optionLabel(v)}
+          </option>
+        ))}
+      </select>
+      <select
+        className="input py-1.5 text-xs"
+        aria-label="Weight"
+        value={weight ?? ''}
+        onChange={(event) => onWeight(event.target.value || null)}
+      >
+        <option value="">Unweighted</option>
+        {numeric.map((v) => (
+          <option key={v.name} value={v.name}>
+            Weight by {v.name}
+          </option>
+        ))}
+      </select>
+      <p className="text-xs text-ink-500 dark:text-dark-500">
+        One box for each group, drawn from{' '}
+        {BOX_MEASURES.map((measure) => measure.label.toLowerCase()).join(', ')}. The whiskers
+        reach the smallest and largest value in the group, so nothing is left outside them.
+      </p>
+    </div>
+  )
+}
+
 function AggregateBuilder({
   datasetId,
   datasetName,
@@ -328,6 +392,18 @@ function AggregateBuilder({
   const [measures, setMeasures] = useState<Measure[]>([{ agg: 'count', alias: 'count' }])
   const [filters, setFilters] = useState<FilterGroup>(emptyFilter())
   const [chartType, setChartType] = useState<ChartType>('bar')
+  /**
+   * The variable a box plot summarises, and the weight it is summarised under.
+   *
+   * Kept apart from the measure list rather than written into it. A box plot is
+   * five aggregations of one variable, and putting those five in the list would
+   * mean rewriting it every time the chart type changed - and leaving somebody
+   * who switched to a bar chart and back with five bars per category. Held here,
+   * the two builders do not disturb each other, and the five are written only
+   * into the query that is sent.
+   */
+  const [boxVariable, setBoxVariable] = useState('')
+  const [boxWeight, setBoxWeight] = useState<string | null>(null)
   const [display, setDisplay] = useState<BuildOptions>({ sort: 'value_desc' })
   const [limit, setLimit] = useState(50)
   const [result, setResult] = useState<QueryResult | null>(null)
@@ -340,6 +416,8 @@ function AggregateBuilder({
   useEffect(() => {
     setDimensions([])
     setMeasures([{ agg: 'count', alias: 'count' }])
+    setBoxVariable('')
+    setBoxWeight(null)
     setFilters(emptyFilter())
     setResult(null)
   }, [datasetId])
@@ -351,6 +429,13 @@ function AggregateBuilder({
     if (!saved) return
     setDimensions(saved.dimensions ?? [])
     setMeasures(saved.measures ?? [{ agg: 'count', alias: 'count' }])
+    // A saved box plot carries the five; which variable they are five of is
+    // read back off any one of them.
+    const middle = saved.measures?.find((measure) => measure.alias === 'box_median')
+    if (middle) {
+      setBoxVariable(middle.variable ?? '')
+      setBoxWeight(middle.weight ?? null)
+    }
     setFilters(saved.filters ?? emptyFilter())
     setLimit(saved.limit ?? 50)
     setChartType(editing.chart_type as ChartType)
@@ -367,13 +452,29 @@ function AggregateBuilder({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending, dimensions])
 
+  const isBox = chartType === 'boxplot'
+  /** Falls back to the first numeric variable until one has been picked. */
+  const boxColumn = boxVariable || numeric[0]?.name || ''
+  const queryMeasures: Measure[] = isBox
+    ? BOX_MEASURES.map((measure) => ({
+        agg: measure.agg as Aggregation,
+        variable: boxColumn,
+        alias: measure.alias,
+        weight: boxWeight,
+      }))
+    : measures
+
   const spec: QuerySpec = {
     dimensions,
-    measures,
+    measures: queryMeasures,
     filters,
-    sort: measures.length
-      ? [{ field: measures[0].alias || measures[0].agg, direction: 'desc' }]
-      : [],
+    // The boxes are ranked by where their middle sits, not by their smallest
+    // number: ordering groups by their minimum puts the widest spread last.
+    sort: isBox
+      ? [{ field: 'box_median', direction: 'desc' }]
+      : measures.length
+        ? [{ field: measures[0].alias || measures[0].agg, direction: 'desc' }]
+        : [],
     limit,
     use_labels: true,
   }
@@ -491,99 +592,111 @@ function AggregateBuilder({
           )}
         </Card>
 
-        <Card title="Measure">
-          {measures.map((measure, index) => {
-            const definition = AGGREGATIONS.find((a) => a.value === measure.agg)
-            return (
-              <div key={index} className="mb-3 space-y-2 rounded-card border border-ink-200 p-3">
-                <div className="flex items-center gap-2">
-                  <select
-                    className="input flex-1 py-1.5 text-xs"
-                    value={measure.agg}
-                    onChange={(event) => {
-                      const agg = event.target.value as Aggregation
-                      const needs = AGGREGATIONS.find((a) => a.value === agg)?.needsVariable
-                      setMeasures(
-                        measures.map((m, i) =>
-                          i === index
-                            ? {
-                                ...m,
-                                agg,
-                                variable: needs ? m.variable || numeric[0]?.name : null,
-                                alias: needs ? `${agg}_${m.variable || numeric[0]?.name}` : agg,
-                              }
-                            : m,
-                        ),
-                      )
-                    }}
-                  >
-                    {AGGREGATIONS.map((a) => (
-                      <option key={a.value} value={a.value}>
-                        {a.label}
-                      </option>
-                    ))}
-                  </select>
-                  {measures.length > 1 && (
-                    <button
-                      className="btn-ghost btn-sm text-red-600"
-                      onClick={() => setMeasures(measures.filter((_, i) => i !== index))}
+        <Card title={isBox ? 'Summarise' : 'Measure'}>
+          {isBox ? (
+            <BoxMeasure
+              numeric={numeric}
+              variable={boxColumn}
+              weight={boxWeight}
+              onVariable={setBoxVariable}
+              onWeight={setBoxWeight}
+            />
+          ) : (
+            <>
+            {measures.map((measure, index) => {
+              const definition = AGGREGATIONS.find((a) => a.value === measure.agg)
+              return (
+                <div key={index} className="mb-3 space-y-2 rounded-card border border-ink-200 p-3">
+                  <div className="flex items-center gap-2">
+                    <select
+                      className="input flex-1 py-1.5 text-xs"
+                      value={measure.agg}
+                      onChange={(event) => {
+                        const agg = event.target.value as Aggregation
+                        const needs = AGGREGATIONS.find((a) => a.value === agg)?.needsVariable
+                        setMeasures(
+                          measures.map((m, i) =>
+                            i === index
+                              ? {
+                                  ...m,
+                                  agg,
+                                  variable: needs ? m.variable || numeric[0]?.name : null,
+                                  alias: needs ? `${agg}_${m.variable || numeric[0]?.name}` : agg,
+                                }
+                              : m,
+                          ),
+                        )
+                      }}
                     >
-                      ✕
-                    </button>
+                      {AGGREGATIONS.map((a) => (
+                        <option key={a.value} value={a.value}>
+                          {a.label}
+                        </option>
+                      ))}
+                    </select>
+                    {measures.length > 1 && (
+                      <button
+                        className="btn-ghost btn-sm text-red-600"
+                        onClick={() => setMeasures(measures.filter((_, i) => i !== index))}
+                      >
+                        ✕
+                      </button>
+                    )}
+                  </div>
+                  {definition?.needsVariable && (
+                    <select
+                      className="input py-1.5 text-xs"
+                      value={measure.variable ?? ''}
+                      onChange={(event) =>
+                        setMeasures(
+                          measures.map((m, i) =>
+                            i === index
+                              ? {
+                                  ...m,
+                                  variable: event.target.value,
+                                  alias: `${m.agg}_${event.target.value}`,
+                                }
+                              : m,
+                          ),
+                        )
+                      }
+                    >
+                      {numeric.map((v) => (
+                        <option key={v.name} value={v.name}>
+                          {optionLabel(v)}
+                        </option>
+                      ))}
+                    </select>
                   )}
-                </div>
-                {definition?.needsVariable && (
                   <select
                     className="input py-1.5 text-xs"
-                    value={measure.variable ?? ''}
+                    value={measure.weight ?? ''}
                     onChange={(event) =>
                       setMeasures(
                         measures.map((m, i) =>
-                          i === index
-                            ? {
-                                ...m,
-                                variable: event.target.value,
-                                alias: `${m.agg}_${event.target.value}`,
-                              }
-                            : m,
+                          i === index ? { ...m, weight: event.target.value || null } : m,
                         ),
                       )
                     }
                   >
+                    <option value="">Unweighted</option>
                     {numeric.map((v) => (
                       <option key={v.name} value={v.name}>
-                        {optionLabel(v)}
+                        Weight by {v.name}
                       </option>
                     ))}
                   </select>
-                )}
-                <select
-                  className="input py-1.5 text-xs"
-                  value={measure.weight ?? ''}
-                  onChange={(event) =>
-                    setMeasures(
-                      measures.map((m, i) =>
-                        i === index ? { ...m, weight: event.target.value || null } : m,
-                      ),
-                    )
-                  }
-                >
-                  <option value="">Unweighted</option>
-                  {numeric.map((v) => (
-                    <option key={v.name} value={v.name}>
-                      Weight by {v.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )
-          })}
-          <button
-            className="btn-secondary btn-sm w-full"
-            onClick={() => setMeasures([...measures, { agg: 'count', alias: `count_${measures.length}` }])}
-          >
-            + Add measure
-          </button>
+                </div>
+              )
+            })}
+            <button
+              className="btn-secondary btn-sm w-full"
+              onClick={() => setMeasures([...measures, { agg: 'count', alias: `count_${measures.length}` }])}
+            >
+              + Add measure
+            </button>
+            </>
+          )}
         </Card>
 
         <Card title="Filters">
@@ -596,7 +709,9 @@ function AggregateBuilder({
             hint={
               chartType === 'population_pyramid'
                 ? 'Group by an age band and then by sex: the bands become the axis, the two sexes the two sides.'
-                : undefined
+                : isBox
+                  ? 'Group by the thing to compare across - province, interviewer, month - and each one gets a box.'
+                  : undefined
             }
           >
             <select
@@ -629,7 +744,11 @@ function AggregateBuilder({
 
           <Field
             label="Show only the top"
-            hint="The rest are added together into one 'Other'. Blank keeps them all."
+            hint={
+              isBox
+                ? 'The rest are left off. Boxes cannot be added together, so there is no "Other" box to put them in.'
+                : "The rest are added together into one 'Other'. Blank keeps them all."
+            }
           >
             <input
               className="input py-1.5 text-xs"
