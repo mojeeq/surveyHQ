@@ -82,8 +82,14 @@ export default function ChartCard({
     const shown = filterRows(result.rows, result.columns, columnFilters)
     const narrowed = shown.length !== result.rows.length
     return (
-      <div className="flex flex-col">
-        <div className="flex items-center gap-2">
+      // `fill` is the dashboard asking for the widget's whole height. The
+      // table used to ignore it and keep its own 320px ceiling, so a widget
+      // dragged taller showed the same few rows with the rest of the card
+      // empty beneath them - and a long table went on scrolling inside that
+      // ceiling while half the widget stood unused. Filling means the rows
+      // get the room, and resizing the widget does what it looks like it does.
+      <div className={`flex flex-col ${fill ? 'h-full min-h-0' : ''}`}>
+        <div className="flex shrink-0 items-center gap-2">
           {showToggle && chartType !== 'table' && (
             <ViewToggle view={view} onChange={setView} />
           )}
@@ -97,7 +103,10 @@ export default function ChartCard({
             ⌕ {narrowed ? `${formatNumber(shown.length)} of ${formatNumber(result.rows.length)}` : 'Filter'}
           </button>
         </div>
-        <div className="overflow-auto" style={{ maxHeight: height }}>
+        <div
+          className={`overflow-auto ${fill ? 'min-h-0 flex-1' : ''}`}
+          style={fill ? undefined : { maxHeight: height }}
+        >
           <table className="table-base">
             <thead className="sticky top-0">
               <tr>

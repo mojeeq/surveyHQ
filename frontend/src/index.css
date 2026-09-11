@@ -319,13 +319,31 @@
    * knowing which it is over. */
   /* The gloss on its own, so a surface that is not a `.card` - a widget filling
      the window, say - can wear the same one rather than a copy of it. */
+  /* Lit from above, shaded below - but as a wash rather than a step.
+   *
+   * This used to change from a white highlight to a dark one across a tenth
+   * of a percent at the halfway mark. That is what Aero does on a control
+   * thirty pixels tall, where the two halves read as a curved glass face. On
+   * a panel it lands as a hard horizontal line across the middle: measured at
+   * exactly 49.9% to 50.0% of a dashboard widget, a full-width step from
+   * #ffffff to #fafafa. Under a table with a few rows in it, that seam is
+   * what made the empty half look like a broken box rather than spare room.
+   *
+   * The same journey, spread over a quarter of the height instead of a tenth
+   * of a percent. Every neighbouring pair is now within a level or two of
+   * each other, so there is no edge for the eye to find, and a surface reads
+   * the same whether it is a summary card or a widget eight rows tall.
+   *
+   * aero-gloss keeps the hard split, because the things wearing it - buttons,
+   * the sidebar tiles - are the size the split was designed for.
+   */
   .aero-surface {
     background-image: linear-gradient(
       to bottom,
-      rgba(255, 255, 255, 0.16) 0%,
-      rgba(255, 255, 255, 0.05) 49.9%,
-      rgba(0, 0, 0, 0.02) 50%,
-      rgba(0, 0, 0, 0.07) 100%
+      rgba(255, 255, 255, 0.22) 0%,
+      rgba(255, 255, 255, 0.06) 38%,
+      rgba(0, 0, 0, 0.012) 62%,
+      rgba(0, 0, 0, 0.05) 100%
     );
   }
   .card {
