@@ -475,14 +475,28 @@ def chapter_dataset(document: Document) -> None:
         "Male and Female wherever they are shown.",
     )
 
-    document.add_heading("The command box", level=2)
+    document.add_heading("Preparing data with R", level=2)
     para(
         document,
-        "For the changes that are quicker typed than clicked, the command box "
-        "takes Stata-like commands against the dataset: `gen`, `egen`, "
-        "`replace`, `label`, `drop`, `rename`, `recode`. They are checked before "
-        "they run, and what they change is recorded, so a derived variable can "
-        "be traced back to the line that made it.",
+        "For the changes that are quicker written than clicked, R runs against "
+        "the **project** rather than one dataset, on the project's **R** tab. A "
+        "script reads any of the project's datasets with `read_dataset()` and "
+        "writes new ones with `write_dataset()`, which is what a recode that "
+        "reads the household file and writes the person file needs.",
+    )
+    para(
+        document,
+        "The working directory is kept between runs, so an object saved with "
+        "`saveRDS` or a package installed once is there next time. A script "
+        "worth keeping is saved and named, and can be set to re-run itself "
+        "after the next export lands - which is how a derived dataset survives "
+        "the upload this platform is built around.",
+    )
+    note(
+        document,
+        "Running R is running a program on the server, so it is switched off "
+        "until an administrator turns it on, and only a manager of the project "
+        "can reach it.",
     )
     page_break(document)
 
@@ -615,7 +629,9 @@ def chapter_dashboards(document: Document) -> None:
     document.add_heading("Making it yours", level=2)
     para(
         document,
-        "**Appearance** dresses the whole dashboard: a background colour or "
+        "**Appearance** dresses the whole dashboard: six ready-made looks that "
+        "set everything at once, a coloured title band behind the name, a "
+        "ground behind the whole page, the board's own background colour or "
         "image, the canvas width, how fine the grid is, how transparent the "
         "widgets are, and the colour behind the page tabs.",
     )
@@ -1026,6 +1042,7 @@ def chapter_reference(document: Document) -> None:
             ["Line, area", "A quantity over time"],
             ["Pie, donut", "Parts of one whole, for a handful of categories"],
             ["Scatter", "Two measures against each other"],
+            ["Box plot", "How spread out the answers are inside each group"],
             ["Heatmap", "Two categories crossed, read by colour"],
             ["Funnel", "Stages that narrow"],
             ["Table", "When the numbers themselves are the point"],

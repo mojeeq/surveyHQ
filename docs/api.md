@@ -45,6 +45,24 @@ Every listing returns only what the caller may reach. A dataset, dashboard or
 chart outside their projects answers `404`, not `403`, so responses cannot be
 used to enumerate other people's projects.
 
+### Accounts and keys
+
+```
+POST   /auth/login                        {"email": …, "password": …}
+GET    /auth/me                           the signed-in user
+POST   /auth/change-password              {"current_password": …, "new_password": …}
+GET    /auth/api-keys                     your keys, without their secrets
+POST   /auth/api-keys                     create one; the secret is shown once
+DELETE /auth/api-keys/{id}                revoke one
+GET    /users                             every account                  [admin]
+GET    /users/roles                       the roles, for a picker
+POST   /users                             create an account              [admin]
+PATCH  /users/{id}                        role, name, password, whether they
+                                          are limited to assigned projects
+                                                                         [admin]
+DELETE /users/{id}                                                       [admin]
+```
+
 ### Projects
 
 ```
@@ -72,6 +90,70 @@ PUT    /projects/assign/dataset/{id}      {"project_id": "..."} or null for the
 PUT    /projects/assign/dashboard/{id}    the same, for a dashboard
 ```
 
+#### The project's R workspace
+
+R runs against a project rather than against one dataset: a script that
+prepares a survey reads several of its datasets and writes several others.
+Every route here needs manager rights on the project. Where R is switched off
+or not installed, a run answers **422** saying which of the two it is - those
+need different people to fix them - and `/tools` says the same thing before the
+console is drawn, so a server without R does not offer a box that can only
+fail.
+
+```
+GET    /projects/{id}/tools               whether R can be run here, why not if
+                                          it cannot, and the datasets a script
+                                          can read
+POST   /projects/{id}/run                 {"code": "..."} - run code without
+                                          saving it, as at a console  [manager]
+GET    /projects/{id}/scripts             the saved scripts, in the order they
+                                          are run
+POST   /projects/{id}/scripts             save one: name, description, code,
+                                          run_on_import               [manager]
+PATCH  /projects/{id}/scripts/{sid}       change any of those, or display_order
+                                                                      [manager]
+POST   /projects/{id}/scripts/{sid}/run   run that one                [manager]
+DELETE /projects/{id}/scripts/{sid}       forget it; what it wrote stays
+                                                                      [manager]
+GET    /projects/{id}/workspace           what is in the working directory
+                                                                      [manager]
+DELETE /projects/{id}/workspace           empty it, packages and saved objects
+                                          included. The datasets are untouched
+                                                                      [manager]
+```
+
+A script is given two functions and one value: `read_dataset(name)` returns a
+data frame by the dataset's name or slug, `write_dataset(df, name)` creates a
+dataset in the project or replaces one of that name, and `datasets` is a data
+frame of what can be read. Everything else is base R plus whatever the
+administrator installed.
+
+Both run routes answer with the same shape:
+
+```json
+{
+  "message": "Ran against 3 datasets, wrote Adults",
+  "output": "…whatever the script printed…",
+  "written": [{"name": "Adults", "id": "0f3c…", "rows": 438}],
+  "files":   ["lookup.rds", "adults.rds"]
+}
+```
+
+`files` names what is in the working directory afterwards. `GET
+/projects/{id}/workspace` returns the same directory in more detail, as
+`{"files": [{"path": "lookup.rds", "bytes": 4096}]}`, up to 200 entries.
+
+A script that fails answers **422** with the error R gave, and writes nothing:
+the frames are read, the code runs, and only a run that finished writes back. A
+saved script keeps its last run's success and output, so the failure can be
+read without running it again.
+
+The working directory survives between runs, so an object saved with `saveRDS`
+or a package installed into the project's own library is there next time. That
+is a deliberate widening of what a script can reach: files one script leaves
+are readable by the next script anyone runs in the same project. A script
+marked `run_on_import` is re-run when a newer export lands in the project.
+
 ### Relationships and merges
 
 ```
@@ -96,8 +178,8 @@ POST   /relationships/rebuild/{id}        re-run that merge against the current
 ```
 
 A merged dataset also rebuilds itself whenever a source is replaced by a newer
-import or changed by a command, so `/rebuild` is for forcing the issue rather
-than for keeping up.
+import or rewritten by an R script, so `/rebuild` is for forcing the issue
+rather than for keeping up.
 
 A many-to-many link is refused by `/merge`: joining two rosters on the interview
 multiplies rows rather than adding columns.
@@ -126,10 +208,6 @@ GET    /datasets/{id}/preview             raw rows
 GET    /datasets/{id}/download?format=      the whole dataset as a file: dta
                                           (with labels), csv or xlsx [manager]
 GET    /datasets/{id}/variables/{v}/values  distinct values
-POST   /datasets/{id}/command             run a Stata-style script [manager]
-GET    /datasets/{id}/commands            what will be replayed after a replace
-DELETE /datasets/{id}/commands            stop replaying them, without undoing
-                                          what they did            [manager]
 GET    /datasets/{id}/tags                tags in use
 ```
 
@@ -188,18 +266,14 @@ Uploading an archive returns:
 Ids the caller cannot reach are skipped rather than refused - the listing they
 were chosen from is already scoped, so a stray id is a stale page.
 
-`POST /datasets/{id}/command` takes `{"command": "gen adult = age >= 18"}`, one
-command per line. The reply reports each line that ran and what it changed. A
-line that fails stops the script; everything above it has already run and is
-committed, as in a do-file, and the error names the line and the reason.
-Commands are recorded and replayed after a later export replaces the data.
-
 ### Analysis
 
 ```
 POST /analytics/query                              run a query specification
 POST /analytics/query/export?format=csv|xlsx       download the result
 GET  /analytics/datasets/{id}/frequency/{variable} one-way frequencies
+POST /analytics/datasets/{id}/frequency/{variable} the same, with a filter
+                                                  group in the body
 POST /analytics/datasets/{id}/crosstab             two-way table; max_rows
                                                   (default 5,000) and max_columns
                                                   (default 1,000) bound it, and the
@@ -208,15 +282,24 @@ POST /analytics/datasets/{id}/crosstab             two-way table; max_rows
 POST /analytics/datasets/{id}/crosstab/export      download it
 POST /analytics/datasets/{id}/summary              descriptive statistics
 POST /analytics/datasets/{id}/suggest              suggested analyses
+GET  /analytics/datasets/{id}/multiselect-groups    sets of 0/1 columns that
+                                                   look like one question
+POST /analytics/datasets/{id}/multiselect          tabulate a "tick all that
+                                                   apply" question from them
 GET  /analytics/saved-queries
 POST /analytics/saved-queries                                    [analyst]
+DELETE /analytics/saved-queries/{id}                             [analyst]
 ```
 
 ### Connections
 
 ```
-GET    /connections
+GET    /connections                       list (?project_id= narrows it)
+GET    /connections/{id}                  one, without its password
 POST   /connections                       create               [manager]
+PATCH  /connections/{id}                  change any of it, password included
+                                                               [manager]
+DELETE /connections/{id}                  its imported datasets stay [manager]
 POST   /connections/test                  test before saving   [manager]
 POST   /connections/{id}/test             test a saved one     [manager]
 GET    /connections/{id}/questionnaires   list from the server
@@ -296,13 +379,42 @@ GET/POST/PATCH/DELETE /dashboards/{id}/share-links[/{link}]
                                           "take it off" by whether the field is
                                           sent, so an explicit null clears one
                                                                 [analyst]
+GET/POST/PATCH/DELETE /dashboards/html-snippets[/{id}]
+                                          the reusable library behind the
+                                          embedded-HTML widget, so a footer or
+                                          a logo is written once  [analyst]
 PUT    /dashboards/{id}/hostname          give a shared dashboard its own
                                           address, or "" to remove it
                                                                 [analyst]
+GET    /dashboards/{id}/filter-values/{v}  the values a filter control offers,
+                                          read from the datasets the board uses
+GET    /dashboards/{id}/boundaries/{lid}  a boundary layer's geometry, reachable
+                                          because the board draws it
+GET/POST/PATCH/DELETE /dashboards/{id}/views[/{vid}]
+                                          named filter selections. A view stores
+                                          {page, filters, drill} in `state`;
+                                          is_default marks the one the board
+                                          opens in, is_shared whether others see
+                                          it. Saved on the dashboard, so a shared
+                                          link carries them
+GET/POST/PATCH/DELETE /dashboards/{id}/comments[/{cid}]
+                                          the comment threads on its widgets.
+                                          A comment carries widget_id, body, an
+                                          optional parent_id for a reply (one
+                                          level), and an optional view_id - the
+                                          reading it was made under. On the
+                                          listing, ?view_id= returns that view's
+                                          comments plus the board's own, and
+                                          ?widget_id= narrows it to one widget.
+                                          PATCH sets the body or is_resolved
 GET    /public/dashboards/{token}         no authentication
 POST   /public/dashboards/{token}/data    no authentication
 GET    /public/dashboards/{token}/background  no authentication
 GET    /public/dashboards/{token}/logo        no authentication
+GET    /public/dashboards/{token}/views       no authentication
+GET    /public/dashboards/{token}/filter-values/{v}   no authentication
+GET    /public/dashboards/{token}/boundaries/{lid}    no authentication
+POST   /public/dashboards/{token}/unlock      a password-protected link
 GET    /public/site                           no authentication; says whether the
                                               host this was asked on is a named
                                               dashboard
@@ -337,12 +449,25 @@ sits on), `filters` (the controls offered to viewers, each belonging to a page),
 
   "logo_image": "…", "logo_version": "…", "logo_height": 44,
   "title_size": 38, "title_font": "serif", "title_color": "#0b5e3c",
-  "title_align": "left", "header_rule": true, "hide_subtitle": false
+  "title_align": "left", "header_rule": true, "hide_subtitle": false,
+
+  "header_background": "#0d4b74", "header_background_2": "#1c84bd",
+  "header_angle": 120,
+  "page_background": "#0a2135", "page_background_2": "#0f3a5c",
+  "page_angle": 160
 }
 ```
 
 `title_font` names a stack the frontend knows (`grotesque`, `serif`, `slab`,
 `mono`, or empty for the interface face) rather than carrying CSS.
+
+`header_background` puts a band behind the dashboard's name, which turns the
+header into a masthead; a second colour makes it a gradient at `header_angle`
+degrees. `page_background` is the ground behind the whole page, around the
+board, and works the same way. Both are drawn by the frontend, on the editing
+view and on a shared link alike; the text on the band is chosen light or dark
+from the first colour's luminance unless `title_color` says otherwise. Setting
+a band also moves the dashboard's own toolbar to a row below it.
 
 A rendered chart widget carries `grouped_on`, the variables its query groups
 on. That is what lets a click on a mark say which variable the category it
@@ -352,11 +477,40 @@ A widget is one of `chart`, `crosstab`, `indicator`, `quality`, `text`,
 `countdown`, `map`, `html` or `freshness`, and the rest of what it needs lives in
 its `config` - the countdown's target, the map's latitude, longitude, detail
 columns and aggregate, the HTML to embed, or the freshness widget's datasets,
-thresholds and any date variable chosen by hand.
+thresholds and any date variable chosen by hand. (`table` and `kpi` are still in
+the stored enum from an earlier shape of this and nothing renders them; a table
+is a saved chart with `chart_type: "table"`, and the KPI reading is what an
+indicator tile draws.)
 
 Filter conditions sent to `/data` are applied per widget: each one receives only
 the conditions its own dataset has variables for, and reports the rest in
 `filters_ignored`.
+
+### Boundaries
+
+Areas a map draws under its points: provinces, districts, enumeration areas.
+
+```
+GET    /boundaries                        this project's layers plus every
+                                          shared one (?project_id= narrows it)
+POST   /boundaries                        multipart upload of GeoJSON, a
+                                          GeoPackage, or a zipped shapefile.
+                                          Form fields: name, description,
+                                          project_id, and layer for a
+                                          GeoPackage holding several  [manager]
+GET    /boundaries/{id}                   the layer's detail: its properties,
+                                          feature count and bounding box,
+                                          without the geometry
+GET    /boundaries/{id}/geojson           the areas themselves, served whole -
+                                          a map needs all of them
+PATCH  /boundaries/{id}                   name, description, project_id
+                                                                       [manager]
+DELETE /boundaries/{id}                                                [manager]
+```
+
+A dashboard reaches a layer it draws through
+`GET /dashboards/{id}/boundaries/{layer}`, and a shared link through the public
+route of the same name, so a viewer with no account still gets the outlines.
 
 ### Monitoring
 
@@ -382,6 +536,7 @@ GET  /monitoring/alerts?status=open
 POST /monitoring/alerts/{id}/acknowledge | /resolve
 GET/POST/PATCH/DELETE /monitoring/quality-rules[/{id}]
 POST /monitoring/quality-rules/{id}/run
+GET  /monitoring/quality-results                 the last result of each check
 POST /monitoring/datasets/{id}/quality/run-all
 GET  /monitoring/datasets/{id}/quality/suggestions
 POST /monitoring/datasets/{id}/field-progress
@@ -392,10 +547,13 @@ GET  /monitoring/summary
 
 ```
 GET  /system/jobs            background jobs
+GET  /system/jobs/{id}       one job, with its result once it succeeds
 GET  /system/notifications
+POST /system/notifications/{id}/read
+POST /system/notifications/read-all
 GET  /system/audit                                              [admin]
-GET  /system/info
-GET  /health                 no authentication
+GET  /system/info            the platform's name and dashboard domain
+GET  /health                 no authentication, and outside /api/v1
 ```
 
 `/system/jobs` returns all jobs to administrators, and only the caller's own

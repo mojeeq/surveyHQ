@@ -116,8 +116,8 @@ rows rather than add columns. Those links are recorded but cannot be merged.
 
 The merge is saved with the dataset it produces. **Rebuild from sources** re-runs
 it on demand, and a merged dataset rebuilds itself automatically whenever a
-source is replaced by a newer export or changed by a command - including a merge
-of a merge, which waits for the merge underneath it to finish first.
+source is replaced by a newer export or rewritten by an R script - including a
+merge of a merge, which waits for the merge underneath it to finish first.
 
 ## Getting data in
 
@@ -211,7 +211,8 @@ What survives a replacement, and is put back automatically:
 
 - the dataset's id, so nothing pointing at it breaks,
 - variable and value labels you wrote by hand (the file does not carry them),
-- variables you generated with commands, replayed in the order you ran them,
+- whatever the project's R scripts derived, where they are marked to run after
+  an import; they re-run in their saved order,
 - datasets merged out of it, rebuilt from the new data.
 
 Two things it will tell you rather than let pass quietly:
@@ -273,7 +274,7 @@ the day it was uploaded.
 **Stata**, **CSV** and **Excel** on a dataset download the whole table. All
 three are written from the data the platform is actually querying, not from
 whatever was uploaded - so a merged dataset, which never had a file of its own,
-downloads like any other, and so does a dataset changed by commands.
+downloads like any other, and so does one an R script wrote.
 
 Prefer **Stata**: it carries the variable labels and, where the codes are whole
 numbers, the value labels. CSV carries neither. Excel stops at a million rows
@@ -283,7 +284,7 @@ Downloading is a manager's action, and it is recorded in the audit log.
 
 ## Looking at a dataset
 
-The dataset page has four tabs, and a fifth for managers:
+The dataset page has four tabs:
 
 - **Variables** - every variable with its label, type, missing count, distinct
   count and range. Variables missing on more than 20% of records are highlighted.
@@ -294,7 +295,6 @@ The dataset page has four tabs, and a fifth for managers:
 - **Field progress** - submissions over time, interviews per interviewer and
   supervisor, status breakdown, coverage by area and a GPS map. Appears
   automatically when the relevant columns are recognised.
-- **Command** - the Stata-style script box, below. Managers only.
 
 ### Naming variables and their codes
 
@@ -314,88 +314,91 @@ cell's tooltip. A categorical column stored as numbers with no names for its
 codes says so in amber, because until they are written every table of it prints
 the codes. A column of 0s and 1s is left alone: that is a tick, not a code.
 
-### The command box
+### Preparing data with R
 
-**Command** runs a Stata-style script against the dataset, one command per
-line, in the order written. The useful subset:
+A survey's data almost never arrives in the shape its tables want. Recoding a
+battery of questions, deriving a poverty line, reshaping a roster, building a
+person file out of a household file: each is a few lines of R and no lines of
+anything this platform could reasonably invent.
 
-| Command | Example |
+R runs against a **project**, not against a dataset. Open the project and go to
+the **R** tab. A script that prepares a survey usually reads several of its
+datasets and writes several others, so pinning one to a single dataset was
+always a fiction - and it meant a two-file job had to be written twice or not
+at all.
+
+#### The contract
+
+Two functions and one value, defined before your code runs:
+
+| | |
 |---|---|
-| `gen` | `gen adult = age >= 18` |
-| `replace` | `replace adult = 0 if age == .` |
-| `egen` | `egen hh_total = total(income), by(interview__key)` |
-| `egen` (rowwise) | `egen answered = rownonmiss(q1 q2 q3)` |
-| `label variable` | `label variable adult "Adult (18+)"` |
-| `label define` / `label values` | `label define yesno 0 "No" 1 "Yes"` then `label values adult yesno` |
-| `rename` | `rename DEM_SEX sex` |
-| `drop` / `keep` | `drop if interview__status != 100` |
-
-`egen` supports `total`, `sum`, `mean`, `count`, `min`, `max`, `median`, `sd`,
-`group` and `tag` down a column (with `by()`), and `rowtotal`, `rowmean`,
-`rowmiss`, `rownonmiss`, `rowmax`, `rowmin` across a row. Comments (`*`, `//`)
-and continuations (`///`) work as in a do-file. Ctrl/⌘+Enter runs the script.
-
-A line that fails stops the script and says which line and why. Everything above
-it has already run, as in a do-file, so it stays - the log tells you what got
-through.
-
-Commands are **recorded on the dataset and replayed** after a newer export
-replaces it. A variable somebody generated is not in the export file, so without
-that it would vanish on exactly the upload this platform is built around, taking
-every chart built on it. The history is listed under the box: **Edit** puts a
-command back in the box, and **Clear** stops the replay without undoing what the
-commands already did.
-
-### Running R over a dataset
-
-The Stata box covers generating a variable and labelling it. Everything past
-that - recoding a battery of questions, deriving a poverty line, reshaping a
-roster - is a few lines of R and no lines of anything this platform could
-reasonably invent. So the **R script** tab hands the dataset to R.
-
-The contract is one sentence: **the dataset is a data frame called `data`, and
-whatever `data` holds when the script ends is what the dataset becomes** - its
-rows, its columns and their types.
+| `read_dataset("household")` | a data frame, by the dataset's name or its slug |
+| `write_dataset(df, "Adults")` | create a dataset in this project, or replace one of that name |
+| `datasets` | a data frame of what is available to read |
 
 ```r
-data$adult <- ifelse(data$age >= 18, 1, 0)
-data$age_band <- cut(data$age, c(0, 15, 25, 65, Inf), right = FALSE)
-data <- data[!is.na(data$age), ]
+hh     <- read_dataset("household")
+people <- read_dataset("roster")
+
+people$adult    <- as.integer(people$age >= 18)
+people$province <- hh$province[match(people$interview__key, hh$interview__key)]
+
+write_dataset(people[people$adult == 1, ], "Adults")
 ```
 
-Base R is enough; nothing needs installing. Packages an administrator has
-installed on the server are available too - base R is the floor, not a ceiling.
-Anything the script prints comes back under the box, so `cat()` and `print()`
-are how it is debugged.
+Everything else is base R, plus whatever packages the administrator installed
+on the server. Anything the script prints comes back under the box, so `cat()`
+and `print()` are how it is debugged. Ctrl or ⌘ with Enter runs it.
 
-A script that fails changes nothing: the frame is read, the script runs, and
-only a script that finished writes anything back. The error R gave is shown as
-R gave it.
+**What you can read** lists the project's datasets with the name to pass, and
+each one can be dropped into the console as a `read_dataset` line rather than
+typed.
 
-Like a Stata command, the script is **recorded and replayed** after a newer
-export replaces the dataset, and in its turn among the Stata commands beside
-it - so a script reading a variable that `gen` created still runs after it. The
-list on the right shows both, in the order they will be re-run, with the R ones
-marked.
+#### The workspace
 
-The round trip goes through CSV, which is what base R reads and writes with no
-packages at all. Types are therefore re-read on the way back in, exactly as
-they would be from an uploaded CSV, and a variable's label survives as long as
-its column does.
+The working directory **survives between runs**. An object saved with
+`saveRDS`, a lookup table written to disk, a package installed into the
+project's own library: all still there next time. That is what makes a project
+an environment rather than a series of unrelated runs, and it is what lets one
+script set something up for the next.
 
-**What this is and is not.** Running R here is running a program on the server.
-It can read what the server can read and reach what the server can reach. The
-timeout and the memory limit stop a script that runs away; nothing stops one
-written to do harm, and there is no list of forbidden functions, because a list
-like that over a language with `eval(parse(text=))` would only be a promise
-nobody can keep.
+**Working directory** lists what is in it. **Empty it** clears the scratch
+space, packages and saved objects included; the project's datasets are not
+touched, because those live in the platform rather than in the workspace.
 
-So it is **off until an administrator turns it on**, with `R_SCRIPTS_ENABLED=true`,
-and only a manager or an administrator can reach it. Turn it on where the
-people who can open the command box are people you would trust with a shell on
-that server. `R_TIMEOUT_SECONDS` (60 by default) and `R_MEMORY_MB` (2048) bound
-one run; every script that runs is written to the audit log with the account
-that ran it.
+#### Saved scripts
+
+The console is for trying something. A script worth keeping is saved, named and
+ordered, and the **Saved scripts** panel runs them in that order. A script ticked
+**After each import** is re-run automatically when a newer export lands in the
+project, which is what keeps a derived dataset from vanishing on exactly the
+upload this platform is built around.
+
+A script that fails changes nothing: the frames are read, the code runs, and
+only a run that finished writes anything back. The error R gave is shown as R
+gave it, and a saved script keeps its last failure so the panel can show what
+went wrong without running it again.
+
+#### What this is and is not
+
+Running R here is running a program on the server. It can read what the server
+can read and reach what the server can reach. The timeout and the memory limit
+stop a script that runs away; nothing stops one written to do harm, and there
+is no list of forbidden functions, because a list like that over a language
+with `eval(parse(text=))` would only be a promise nobody can keep.
+
+The workspace persisting widens that on purpose: files one script leaves are
+readable by the next script anyone runs in the same project. A project is the
+trust boundary, and the people who can run R in one are the people who could
+already read everything in it.
+
+So it is **off until an administrator turns it on**, with
+`R_SCRIPTS_ENABLED=true`, and only a manager of the project or an administrator
+can reach it. Turn it on where the people who can open the console are people
+you would trust with a shell on that server. `R_TIMEOUT_SECONDS` (60 by
+default) and `R_MEMORY_MB` (2048) bound one run, and every script that runs is
+written to the audit log with the account that ran it and the code it ran.
 
 ## Explore
 
@@ -428,13 +431,13 @@ from the dataset's own variables - one click to run.
 
 | Control | What it does |
 |---|---|
-| Chart type | Bar, horizontal bar, stacked bar, horizontal stacked bar, population pyramid, line, area, donut, pie, scatter, heatmap, table |
+| Chart type | Bar, horizontal bar, stacked bar, horizontal stacked bar, population pyramid, line, area, donut, pie, scatter, box plot, heatmap, table |
 | Order | Leave the query's order, or sort by value or by label, ascending or descending |
 | Show only the top | Keep the largest N categories and fold the rest into one "Other" |
 | Value axis title | Name the value axis |
 | Axis from … to | Fix its minimum and maximum, so two charts can be compared |
 | Target line | A line across the plot with a label, e.g. the target this is read against |
-| Print the numbers on the chart | On bars and slices, up to 24 of them. Not offered on lines, where they collide |
+| Print the numbers on the chart | Up to 24 marks, on any chart that has marks. Past that they overlap, so they are dropped |
 | Stack to 100% | Read composition rather than magnitude, on a stacked bar or area |
 | Smooth the line | Curve a line or area chart |
 | Row limit | How many rows the query returns |
@@ -446,6 +449,22 @@ A **population pyramid** wants an age band on the first grouping and sex on the
 second; it draws the two sides back to back. Bands are ordered by the number
 they start with rather than as text, so "5-9" lands between "0-4" and "10-14"
 rather than after "45-49".
+
+A **box plot** asks a different question from the rest: not what the average
+is, but how spread out the answers are inside each group. Choosing it turns the
+**Measure** card into **Summarise** - pick one numeric variable, and each value
+of the grouping gets a box. A province where half the sample earns nothing and
+a province where everybody earns a little have the same mean wage and very
+different boxes.
+
+The five numbers are measured for you: the minimum, the lower quartile, the
+median, the upper quartile and the maximum. The whiskers reach the **smallest
+and largest value in the group** rather than one and a half times the box, so
+nothing is left off the plot as an outlier - worth knowing if you are comparing
+it against a box drawn in R or Stata, which by default do the other thing. The
+boxes are ordered by where their middles sit, and "show only the top" keeps the
+largest of them rather than folding the rest into an "Other", since two boxes
+cannot be added into a third.
 
 Every chart with more than one series carries a legend, and every chart has a
 table toggle exposing the same numbers, because colour alone is never the only
@@ -582,7 +601,8 @@ To build a dashboard:
    move it earlier or later. A page takes its widgets with it, so reordering is
    safe. Each page lays out on its own and has its own filters.
 6. **Filters** - see below.
-7. **Appearance** - background, canvas and transparency; see below.
+7. **Appearance** - ready-made looks, the title band, the page ground, the
+   board's own background, the canvas and transparency; see below.
 8. **Colours** - the picker in the header sets which palette this dashboard's
    charts use. The alternatives are the same hues in a different order, chosen
    for how far apart neighbouring series stay for colour-blind readers.
@@ -598,13 +618,23 @@ To build a dashboard:
 | Widget | Shows |
 |---|---|
 | **Saved chart or cross-tab** | A chart or a two-way table saved from Explore, re-run against current data |
-| **Indicator tile** | One tracked number with its target, status colour and trend - and optionally its breakdown drawn as a chart beneath |
+| **Indicator tile** | One tracked number, how far it is from its target, the shape of its recent history, its progress bar and status colour - and optionally its breakdown drawn as a chart beneath |
 | **Data quality panel** | The last result of every check on a dataset, and how old the oldest one is |
 | **Text note** | A heading, an explanation, a caveat |
 | **Countdown to a date** | Time remaining to a deadline, ticking, with your own label and a message for when it passes |
 | **Map of interview locations** | GPS points from a dataset, grouped by coordinate - up to 50,000 places. Click a point for its count or any aggregate, plus the detail columns you chose |
 | **Embedded HTML** | Whatever HTML you paste, rendered in a sandboxed frame - a logo, an embedded video, a link bar |
 | **How recent the data is** | When each dataset was last imported, and how old its newest record is |
+
+An indicator tile is read across a room, so it says more than the number. Under
+it, **how far off target it is** in the indicator's own units and as a
+percentage - "283 behind target", "+12% ahead" - worded the way the indicator's
+direction means it, so passing a ceiling reads as "over the limit" rather than
+as good news. Under that, a **sparkline** of its recent values: no axes, no
+legend, just the shape, which is what says whether a number that is behind is
+catching up. Both appear only when there is something to show - an indicator
+with no target has no variance, and one with a single stored value has no
+trend.
 
 The **freshness** widget answers two questions, because a monitoring tool needs
 both. *When did the platform last receive data* says whether the import is
@@ -900,6 +930,23 @@ up, dimmed slightly, until the new ones arrive - so a click is acknowledged
 without the page being torn down and rebuilt. A dashboard left up on a wall is
 not dimmed by its own timed refresh, only by a selection somebody made.
 
+### Drill-down
+
+Clicking a bar narrows the page. **Drill-down** makes it go a level deeper as
+well.
+
+**Drill-down** in the header names the levels the board drills through,
+broadest first: province, then district, then enumeration area. With those set,
+clicking a province narrows the whole page to it *and* regroups every chart by
+district. Click a district and the charts regroup by enumeration area. The bar
+above the board shows where you are and takes you back up a level.
+
+The levels come from the datasets the board already uses, so add a widget
+before opening the dialog. A chart grouped on something outside the list -
+interviewer, say, or a date - keeps its own grouping and simply narrows, which
+is right: a chart of submissions per day is still a chart of submissions per
+day inside one province.
+
 ### Filters
 
 **Filters** on a dashboard adds controls its readers can use: pick a variable
@@ -935,6 +982,26 @@ tick-box to untick, and saving wrote it straight back.
 The bar itself can be made to fit the dashboard: **Appearance → Filter bar
 colour** sets its background, for when plain white floats oddly over a coloured
 one.
+
+### Saved views
+
+A board is usually read several ways: the national picture, this week in
+Malampa, everything the supervisors are behind on. Setting the filters by hand
+every time is how a board stops being opened.
+
+Narrow the board however you want it - page, filters and drill path - then
+**Save this view** and name it. It becomes a chip above the filters, and one
+click puts the board back into that reading. The chips are deliberately not a
+dropdown: a dropdown hides how many readings a board has and which one you are
+looking at.
+
+Views are saved on the dashboard rather than in your browser. A view saved by
+an analyst or above is **shared**: everyone who opens the board sees it,
+**shared links included**, and one of them can be marked the **default** the
+board opens in - which is what you want for a screen on a wall. A view saved by
+a viewer, or by somebody reading through a shared link, is theirs alone, so a
+reader can keep their own readings without rearranging the board for everybody
+else.
 
 ### Making it yours
 
@@ -1062,6 +1129,23 @@ Use it for what the reader cannot see: which rows are counted, what was
 excluded, where a target came from. A caption travels with the widget onto a
 shared dashboard, so the people reading the link get it too.
 
+### Comments on a widget
+
+Numbers on a board raise questions, and the answers usually live in an email
+nobody can find later. Each widget carries its own comment thread instead:
+hover it and the count appears beside its title, or open its menu and choose
+**Comment**.
+
+A comment can be replied to, edited, and **resolved** once it has been dealt
+with - resolved ones are folded away and can be shown again. The thread stays
+with the widget, so the discussion about a number sits on the number.
+
+A comment also belongs to **the view it was made under**. "This looks wrong"
+means something different under the national figures than under this week in
+Malampa, so a comment made while a saved view was open is shown when that view
+is open, and the board's own comments are shown on the board. Deleting a view
+does not take its comments with it - they lose the view and stay on the widget.
+
 ### One widget at a time
 
 **✎ on a widget** sets what belongs to that widget rather than the whole
@@ -1101,9 +1185,24 @@ picture rather than as something on top of it.
 
 The rest of **Appearance** controls how the dashboard is dressed:
 
-- **Background** - a colour, or an uploaded image (PNG, JPEG, GIF or WebP, up to
-  8 MB), set to fill the page, fit whole, or repeat, with a fade slider so text
-  stays readable over it.
+- **Ready-made looks** - Plain, Paper, Harbour, Forest, Ochre and Midnight, at
+  the top of the dialog. Each sets the page ground, the title band, the board,
+  the tab band and the filter bar together, because dressing a board well means
+  picking colours that agree and getting one of them wrong is what makes a
+  dashboard look worse than the grey it started as. Everything below stays
+  editable afterwards, so a look is a starting point rather than a lock.
+- **Title band** - a colour, or two for a gradient, behind the dashboard's
+  name. With one set the header becomes a masthead: the name larger on the
+  band, the description under it, and the buttons moved to a row of their own
+  underneath. The text follows the band, light on a dark one and dark on a pale
+  one, so a band of any colour still reads.
+- **Page ground** - what is painted behind the whole page, around the board.
+  It belongs to this dashboard: every other page in the platform keeps the
+  usual grey, leaving the dashboard puts it back, and the setting carries onto
+  the shared link, so what an office sees on the wall is the dressed version.
+- **Background** - the board itself: a colour, or an uploaded image (PNG, JPEG,
+  GIF or WebP, up to 8 MB), set to fill the page, fit whole, or repeat, with a
+  fade slider so text stays readable over it.
 - **Canvas width** - fit the window, or a fixed width that scrolls, for a
   dashboard meant to go on a wall. **Columns** and **row height** set how fine
   the grid underneath the widgets is.
