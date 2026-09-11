@@ -112,6 +112,23 @@ const BASE_TEXT = {
   fontSize: 12,
 }
 
+/**
+ * The five numbers a box plot is drawn from, in the order ECharts wants them.
+ *
+ * Named rather than positional: a saved chart can carry its measures in any
+ * order, and matching on the column name is what stops a box drawn upside down
+ * when somebody reorders them in the builder. Every one of these is an
+ * aggregation the query engine already had, so a box plot is a way of drawing
+ * a query rather than a new thing to compute.
+ */
+export const BOX_MEASURES = [
+  { alias: 'box_min', agg: 'min', label: 'Minimum' },
+  { alias: 'box_p25', agg: 'p25', label: 'Lower quartile' },
+  { alias: 'box_median', agg: 'median', label: 'Median' },
+  { alias: 'box_p75', agg: 'p75', label: 'Upper quartile' },
+  { alias: 'box_max', agg: 'max', label: 'Maximum' },
+] as const
+
 /** More than this many categories and the tail is folded into "Other". */
 export const MAX_SERIES = 8
 
@@ -485,6 +502,100 @@ function shape(
   return { categories: names, series: rows }
 }
 
+/**
+ * A translucent wash of a chart colour, for a fill that has an outline over it.
+ *
+ * A box plot is the one mark here that is drawn rather than filled: the outline
+ * and the median line inside it carry the reading, so the body behind them has
+ * to be faint. Taking the series colour down in alpha rather than mixing it
+ * toward white is what keeps it faint on a dark dashboard too.
+ */
+function tint(colour: string, alpha: number): string {
+  const hex = colour.replace('#', '')
+  if (hex.length !== 6) return colour
+  const [r, g, b] = [0, 2, 4].map((at) => parseInt(hex.slice(at, at + 2), 16))
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
+/**
+ * Read the five numbers of each box out of a result.
+ *
+ * Matched by the aliases the builder writes, and by position when they are not
+ * there, so five measures put in min-to-max order by hand draw too. A group
+ * missing any of the five is dropped rather than drawn short: half a box is
+ * read as a whole one by everybody who looks at it.
+ */
+function boxes(result: QueryResult, options: BuildOptions) {
+  const names = result.columns.map((column) => column.name)
+  const measures = result.columns.filter((column) => column.type === 'measure')
+  if (measures.length < BOX_MEASURES.length) return null
+
+  const byName = BOX_MEASURES.map((measure) => names.indexOf(measure.alias))
+  const columns = byName.every((index) => index >= 0)
+    ? byName
+    : BOX_MEASURES.map((_, index) => names.indexOf(measures[index].name))
+
+  const dimensions = result.columns.filter((column) => column.type === 'dimension')
+  const labelIndex = dimensions.length ? names.indexOf(dimensions[0].name) : -1
+
+  // "Median of Age at last birthday" names the axis better as the variable it
+  // is five summaries of. Nothing rests on the strip: a label that does not
+  // start that way is simply used as it is.
+  const valueLabel = (result.columns[columns[2]]?.label ?? '').replace(/^median of /i, '')
+
+  let groups = result.rows.flatMap((row, index) => {
+    const five = columns.map((column) => Number(row[column]))
+    if (five.some((value) => !Number.isFinite(value))) return []
+    return [
+      {
+        // Ungrouped, this is one box over the whole dataset, and the variable
+        // is the only name it has.
+        name:
+          labelIndex >= 0
+            ? formatCell(row[labelIndex])
+            : result.rows.length === 1
+              ? valueLabel
+              : `#${index + 1}`,
+        five,
+        middle: five[2],
+      },
+    ]
+  })
+  if (!groups.length) return null
+
+  switch (options.sort) {
+    case 'value_desc':
+      groups = [...groups].sort((a, b) => b.middle - a.middle)
+      break
+    case 'value_asc':
+      groups = [...groups].sort((a, b) => a.middle - b.middle)
+      break
+    case 'label_asc':
+      groups = [...groups].sort((a, b) => byLabel(a.name, b.name))
+      break
+    case 'label_desc':
+      groups = [...groups].sort((a, b) => byLabel(b.name, a.name))
+      break
+    default:
+      break
+  }
+
+  // Kept rather than folded, unlike everywhere else: two boxes cannot be added
+  // into a third, so "Other" would be a box drawn from numbers nobody measured.
+  const top = options.topN && options.topN > 0 ? options.topN : 0
+  if (top && groups.length > top) {
+    const ranked = [...groups].sort((a, b) => b.middle - a.middle).slice(0, top)
+    const kept = new Set(ranked)
+    groups = groups.filter((group) => kept.has(group))
+  }
+
+  return {
+    names: groups.map((group) => group.name),
+    data: groups.map((group) => group.five),
+    valueLabel,
+  }
+}
+
 export function buildChartOption(
   result: QueryResult,
   chartType: ChartType,
@@ -833,6 +944,86 @@ function buildOption(
                     formatNumber(magnitude(params.value), options.decimals ?? 0),
                 }
               : { show: false },
+          },
+        ],
+      }
+    }
+
+    case 'boxplot': {
+      // Read from the result rather than from the pivot above: the pivot names
+      // its series from the measure labels, and "Median of Age" is not a name
+      // this can match on.
+      const box = boxes(result, options)
+      if (!box) {
+        return {
+          ...common,
+          legend: { show: false },
+          title: {
+            text: 'A box plot needs five numbers for each group',
+            subtext:
+              'Choose Box plot in the builder and pick the variable to summarise; the minimum, ' +
+              'quartiles, median and maximum are measured for you.',
+            left: 'center',
+            top: 'middle',
+            textStyle: { color: INK.muted, ...BASE_TEXT, fontSize: 13 },
+            subtextStyle: { color: INK.muted, ...BASE_TEXT },
+          },
+          xAxis: { show: false },
+          yAxis: { show: false },
+          series: [],
+        }
+      }
+      const horizontal = Boolean(options.horizontal)
+      const groupAxis = {
+        type: 'category' as const,
+        data: box.names,
+        ...axisCommon(horizontal ? 0 : box.names.length > 8 ? 30 : 0),
+      }
+      const numberAxis = {
+        ...valueAxis(options.valueTitle ?? box.valueLabel),
+        ...bounds(options),
+        // On its own range, not from zero: the spread inside the box is the
+        // whole point, and a wage box forced down to zero is a flat line.
+        scale: options.valueMin === null || options.valueMin === undefined,
+      }
+      return {
+        ...common,
+        legend: { show: false },
+        tooltip: {
+          ...tooltipBase,
+          trigger: 'item',
+          formatter: (params: any) => {
+            // The five, read from the end: ECharts puts the category index in
+            // front of them in some arrangements and not in others.
+            const five = (params.value as unknown[]).slice(-5).map(Number)
+            const rows = BOX_MEASURES.map(
+              (measure, index) =>
+                `${measure.label}<span style="float:right;padding-left:20px"><b>${formatNumber(
+                  five[index],
+                  options.decimals ?? 2,
+                )}</b></span>`,
+            )
+            // Largest at the top, the way the box is drawn.
+            return `${params.marker} ${params.name}<br/>${[...rows].reverse().join('<br/>')}`
+          },
+        },
+        xAxis: horizontal ? numberAxis : groupAxis,
+        yAxis: horizontal ? groupAxis : numberAxis,
+        series: [
+          {
+            type: 'boxplot',
+            data: box.data,
+            boxWidth: [8, 48],
+            itemStyle: {
+              color: tint(palette[0], 0.18),
+              borderColor: palette[0],
+              borderWidth: 2,
+            },
+            emphasis: { itemStyle: { borderWidth: 3 } },
+            // The target line runs across the value axis, and referenceLine
+            // draws it against y - which is the value axis only when the boxes
+            // stand upright.
+            ...(horizontal ? {} : { markLine: referenceLine(options) }),
           },
         ],
       }

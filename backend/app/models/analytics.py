@@ -41,6 +41,7 @@ class ChartType(str, enum.Enum):
     horizontal_stacked_bar = "horizontal_stacked_bar"
     population_pyramid = "population_pyramid"
     funnel = "funnel"
+    boxplot = "boxplot"
 
 
 class WidgetType(str, enum.Enum):
