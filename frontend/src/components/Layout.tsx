@@ -62,7 +62,7 @@ export default function Layout() {
   useClickOutside([mobileNavRef, mobileToggleRef], () => setMenuOpen(false))
 
   return (
-    <div className="flex min-h-screen bg-ink-100 dark:bg-dark-100">
+    <div className="app-ground flex min-h-screen bg-ink-100 dark:bg-dark-100">
       {/* The one dark surface in the interface, as it is in Redash: the
           navigation is furniture, and keeping it out of the paper-white
           working area is what makes a dashboard read as the content. */}

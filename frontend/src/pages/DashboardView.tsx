@@ -64,11 +64,13 @@ import MapWidget, {
   type BoundaryOverlay,
 } from '@/components/MapWidget'
 import AppearanceModal, {
+  bandStyle,
   canvasStyle,
   isDark,
   TITLE_FONTS,
   titleFontStack,
   useBackgroundImage,
+  usePageGround,
 } from '@/components/DashboardAppearance'
 import {
   Badge,
@@ -659,6 +661,23 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
   const logoUrl = useBackgroundImage(basePath, appearance, 'logo')
   const canvas = canvasStyle(appearance, backgroundUrl)
   const onDarkGround = Boolean(canvas) && isDark(appearance.background_color)
+  // The masthead, and the ground the page is mounted on. A gradient is judged
+  // light or dark by the colour it starts from, which is the corner the title
+  // sits in.
+  const masthead = bandStyle(
+    appearance.header_background,
+    appearance.header_background_2,
+    appearance.header_angle,
+  )
+  const onMasthead = isDark(appearance.header_background)
+  const onDarkPage = isDark(appearance.page_background)
+  const ground = bandStyle(
+    appearance.page_background,
+    appearance.page_background_2,
+    appearance.page_angle,
+    false,
+  )
+  usePageGround(ground?.backgroundImage as string)
   // The tabs sit on their own band when one is set, so what they have to stay
   // readable against is that band rather than the dashboard's background.
   const tabsOnDark = appearance.tab_background
@@ -733,6 +752,9 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         onTitleClick={
           !isPublic && can('analyst') ? () => setEditingStyle(true) : undefined
         }
+        band={masthead}
+        onBand={onMasthead}
+        onDarkGround={onDarkPage}
         actions={
           !isPublic && (
             <>

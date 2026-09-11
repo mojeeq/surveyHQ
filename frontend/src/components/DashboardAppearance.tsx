@@ -102,6 +102,173 @@ export function useBackgroundImage(
   return url
 }
 
+/**
+ * A flat colour or a two-colour gradient, as one CSS background.
+ *
+ * The gloss on top is the same curve the cards and buttons carry, laid over
+ * the colour in the same property rather than added as a class: `.aero-gloss`
+ * sets `background-image`, and so does a gradient, so one of the two would
+ * have won and the other would have been the one that disappeared.
+ */
+export function bandStyle(
+  from?: string,
+  to?: string,
+  angle?: number,
+  gloss = true,
+): React.CSSProperties | undefined {
+  if (!from) return undefined
+  const sheen = gloss
+    ? 'linear-gradient(to bottom, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.03) 46%, ' +
+      'rgba(0,0,0,0.02) 54%, rgba(0,0,0,0.07) 100%),'
+    : ''
+  const colour = to
+    ? `linear-gradient(${angle ?? 135}deg, ${from}, ${to})`
+    : `linear-gradient(${from}, ${from})`
+  return { backgroundColor: from, backgroundImage: `${sheen}${colour}` }
+}
+
+/**
+ * Ready-made looks.
+ *
+ * Six choices rather than eight colour pickers. Dressing a board well from
+ * scratch means picking a page ground, a masthead, a canvas, a tab band and a
+ * filter bar that all agree, and getting one of the five wrong is what makes a
+ * dashboard look worse than the plain grey it started as. These were picked
+ * together, and every one of them is still only a starting point: each field
+ * stays editable underneath.
+ *
+ * Each look is a patch, not a whole appearance - the grid, the logo, the title
+ * size and the widget opacity are the board's own and are not touched.
+ */
+export const LOOKS: { key: string; label: string; note: string; patch: Appearance }[] = [
+  {
+    key: 'plain',
+    label: 'Plain',
+    note: 'The default grey, with no band and no ground.',
+    patch: {
+      page_background: '',
+      page_background_2: '',
+      header_background: '',
+      header_background_2: '',
+      background_color: '',
+      tab_background: '',
+      tab_color: '',
+      filter_background: '',
+      filter_color: '',
+    },
+  },
+  {
+    key: 'paper',
+    label: 'Paper',
+    note: 'A dark masthead over a pale page. The report look.',
+    patch: {
+      page_background: '#edf0f4',
+      page_background_2: '#dfe5ec',
+      page_angle: 160,
+      header_background: '#1f2a37',
+      header_background_2: '#38495e',
+      header_angle: 135,
+      background_color: '#f7f8fa',
+      tab_background: '#e6ebf1',
+      tab_color: '#1f2a37',
+      filter_background: '#ffffff',
+      filter_color: '#4a5565',
+    },
+  },
+  {
+    key: 'harbour',
+    label: 'Harbour',
+    note: 'Deep sea blue, for a board that hangs in an office.',
+    patch: {
+      page_background: '#0a2135',
+      page_background_2: '#0f3a5c',
+      page_angle: 160,
+      header_background: '#0d4b74',
+      header_background_2: '#1c84bd',
+      header_angle: 120,
+      background_color: '#0e2d47',
+      tab_background: '#12395a',
+      tab_color: '#d7e8f5',
+      filter_background: '#12395a',
+      filter_color: '#c2dcee',
+    },
+  },
+  {
+    key: 'forest',
+    label: 'Forest',
+    note: 'Green, and dark enough to read a chart against.',
+    patch: {
+      page_background: '#0d1e17',
+      page_background_2: '#14291f',
+      page_angle: 160,
+      header_background: '#14503a',
+      header_background_2: '#248059',
+      header_angle: 120,
+      background_color: '#11251c',
+      tab_background: '#183326',
+      tab_color: '#d3e8dd',
+      filter_background: '#183326',
+      filter_color: '#bcd8c9',
+    },
+  },
+  {
+    key: 'ochre',
+    label: 'Ochre',
+    note: 'Warm earth, which suits a printed cover page.',
+    patch: {
+      page_background: '#241a12',
+      page_background_2: '#33261a',
+      page_angle: 160,
+      header_background: '#7b4818',
+      header_background_2: '#bf7d2c',
+      header_angle: 120,
+      background_color: '#2b1f15',
+      tab_background: '#3a2b1d',
+      tab_color: '#f0dfc6',
+      filter_background: '#3a2b1d',
+      filter_color: '#e0cbab',
+    },
+  },
+  {
+    key: 'midnight',
+    label: 'Midnight',
+    note: 'Near black, for a screen left on overnight.',
+    patch: {
+      page_background: '#0b0f14',
+      page_background_2: '#12181f',
+      page_angle: 160,
+      header_background: '#161f2b',
+      header_background_2: '#293b52',
+      header_angle: 120,
+      background_color: '#101720',
+      tab_background: '#1a242f',
+      tab_color: '#cbd5e1',
+      filter_background: '#1a242f',
+      filter_color: '#b6c2d0',
+    },
+  },
+]
+
+/**
+ * Paint the ground the whole page sits on, for as long as this board is open.
+ *
+ * Written as a custom property on the document rather than as a style on an
+ * element, because the thing that has to be painted is the shell around the
+ * board - the margin outside <main> - and a dashboard does not own that
+ * element. The shell opts in by carrying `.app-ground`; every other page is
+ * untouched, and leaving the dashboard puts the grey back.
+ */
+export function usePageGround(image?: string) {
+  useEffect(() => {
+    if (!image) return
+    const root = document.documentElement
+    root.style.setProperty('--app-ground', image)
+    return () => {
+      root.style.removeProperty('--app-ground')
+    }
+  }, [image])
+}
+
 /** The CSS for a canvas carrying this appearance, image included. */
 export function canvasStyle(
   appearance: Appearance | undefined,
@@ -124,6 +291,80 @@ export function canvasStyle(
     style.backgroundPosition = 'center'
   }
   return style
+}
+
+/**
+ * The two colours and the angle that make one band.
+ *
+ * A second colour is what turns a flat panel into a gradient, so the angle
+ * only appears once there is something for it to run between - an angle
+ * control on a single colour is a control that does nothing.
+ */
+function BandFields({
+  label,
+  hint,
+  from,
+  to,
+  angle,
+  onChange,
+}: {
+  label: string
+  hint: string
+  from: string
+  to: string
+  angle: number
+  onChange: (next: { from?: string; to?: string; angle?: number }) => void
+}) {
+  return (
+    <Field label={label} hint={hint}>
+      <div className="space-y-2">
+        {/* Two identical grids of swatches one above the other are two grids
+            nobody can tell apart, and the picker's own label is read out
+            rather than drawn. So each one is captioned. */}
+        <p className="text-[11px] uppercase tracking-wide text-ink-400">Colour</p>
+        <ColorPicker
+          label={`${label} colour`}
+          value={from}
+          onChange={(next) => onChange({ from: next, ...(next ? {} : { to: '' }) })}
+          allowNone
+          noneLabel="None"
+        />
+        {from && (
+          <>
+            <p className="pt-1 text-[11px] uppercase tracking-wide text-ink-400">
+              Second colour, for a gradient
+            </p>
+            <ColorPicker
+              label={`${label} second colour`}
+              value={to}
+              onChange={(next) => onChange({ to: next })}
+              allowNone
+              noneLabel="Flat, with no gradient"
+            />
+            {to && (
+              <label className="block text-xs text-ink-500">
+                Gradient angle: {angle}&deg;
+                <input
+                  type="range"
+                  className="w-full"
+                  min={0}
+                  max={350}
+                  step={10}
+                  value={angle}
+                  onChange={(event) => onChange({ angle: Number(event.target.value) })}
+                />
+              </label>
+            )}
+          </>
+        )}
+        <div
+          className="h-10 rounded-control border border-ink-200"
+          style={bandStyle(from || '#e6e8ec', to || undefined, angle)}
+          aria-hidden="true"
+        />
+      </div>
+    </Field>
+  )
 }
 
 export default function AppearanceModal({
@@ -278,8 +519,65 @@ export default function AppearanceModal({
       }
     >
       <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-ink-500">
+        Ready-made looks
+      </p>
+
+      <Field
+        label="Start from one of these"
+        hint="Each one sets the page, the title band, the board and the filter bar together. Everything below stays editable afterwards."
+      >
+        <div className="flex flex-wrap gap-2">
+          {LOOKS.map((look) => (
+            <button
+              key={look.key}
+              className="w-[104px] overflow-hidden rounded-control border border-ink-200 p-0 text-left hover:border-brand-500"
+              title={look.note}
+              onClick={() => setDraft({ ...draft, ...look.patch })}
+            >
+              <span
+                className="block h-7"
+                style={bandStyle(
+                  look.patch.header_background || '#e6e8ec',
+                  look.patch.header_background_2 || undefined,
+                  look.patch.header_angle,
+                )}
+              />
+              <span
+                className="block h-5"
+                style={bandStyle(
+                  look.patch.page_background || '#eceef1',
+                  look.patch.page_background_2 || undefined,
+                  look.patch.page_angle,
+                  false,
+                )}
+              />
+              <span className="block bg-white px-2 py-1 text-[11px] text-ink-700">
+                {look.label}
+              </span>
+            </button>
+          ))}
+        </div>
+      </Field>
+
+      <p className="mb-3 mt-5 border-t border-ink-200 pt-4 text-xs font-semibold uppercase tracking-wide text-ink-500">
         Header
       </p>
+
+      <BandFields
+        label="Title band"
+        hint="A band behind the dashboard's name. With one set, the buttons move to a row of their own underneath it."
+        from={draft.header_background ?? ''}
+        to={draft.header_background_2 ?? ''}
+        angle={draft.header_angle ?? 135}
+        onChange={(next) =>
+          setDraft({
+            ...draft,
+            ...(next.from === undefined ? {} : { header_background: next.from }),
+            ...(next.to === undefined ? {} : { header_background_2: next.to }),
+            ...(next.angle === undefined ? {} : { header_angle: next.angle }),
+          })
+        }
+      />
 
       <Field
         label="Logo"
@@ -412,6 +710,26 @@ export default function AppearanceModal({
         />
         Hide the description under the title
       </label>
+
+      <p className="mb-3 mt-5 border-t border-ink-200 pt-4 text-xs font-semibold uppercase tracking-wide text-ink-500">
+        Page
+      </p>
+
+      <BandFields
+        label="Page ground"
+        hint="What is painted behind the whole page, around the board. It stays on this dashboard: every other page keeps the usual grey."
+        from={draft.page_background ?? ''}
+        to={draft.page_background_2 ?? ''}
+        angle={draft.page_angle ?? 160}
+        onChange={(next) =>
+          setDraft({
+            ...draft,
+            ...(next.from === undefined ? {} : { page_background: next.from }),
+            ...(next.to === undefined ? {} : { page_background_2: next.to }),
+            ...(next.angle === undefined ? {} : { page_angle: next.angle }),
+          })
+        }
+      />
 
       <p className="mb-3 mt-5 border-t border-ink-200 pt-4 text-xs font-semibold uppercase tracking-wide text-ink-500">
         Canvas

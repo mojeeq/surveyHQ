@@ -473,6 +473,25 @@ export interface Appearance {
   header_rule?: boolean
   /** Show the description under the title. */
   hide_subtitle?: boolean
+
+  // --- the masthead, and the ground the whole page sits on ------------------
+  /**
+   * A band behind the title. One colour paints it flat; a second turns it into
+   * a gradient. Set, it also moves the toolbar out of the title row and onto
+   * its own line, because a row of buttons across a masthead is a masthead
+   * with a row of buttons across it.
+   */
+  header_background?: string
+  header_background_2?: string
+  /** Gradient angle in degrees, clockwise from up. 135 lights it from top left. */
+  header_angle?: number
+  /**
+   * The ground behind the whole page, outside the board itself - the margin
+   * the board is mounted on. Same two-colour arrangement as the band.
+   */
+  page_background?: string
+  page_background_2?: string
+  page_angle?: number
 }
 
 export interface Dashboard {

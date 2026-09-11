@@ -211,6 +211,9 @@ export function PageHeader({
   align = 'left',
   rule = false,
   onTitleClick,
+  band,
+  onBand = false,
+  onDarkGround = false,
 }: {
   title: string
   description?: string
@@ -221,13 +224,106 @@ export function PageHeader({
   rule?: boolean
   /** Makes the title itself the way in to styling it. */
   onTitleClick?: () => void
+  /**
+   * A coloured band to set the title on, which turns the header into a
+   * masthead. Given one, the actions drop to a row of their own underneath:
+   * a masthead is the board's name, and a line of buttons across it is a
+   * toolbar with a name in it.
+   */
+  band?: CSSProperties
+  /** Whether that band is dark enough to need light text on it. */
+  onBand?: boolean
+  /**
+   * Whether the page behind the header is dark. Separate from the band,
+   * because the two are different surfaces: a board can carry a pale band on
+   * a navy page, and the buttons beside or below it sit on the page, not on
+   * the band. Without this a dashboard on a navy ground had its title, and
+   * then its whole toolbar, in near-black.
+   */
+  onDarkGround?: boolean
 }) {
   const centred = align === 'center'
+
+  // A band does the separating, so `rule` is not drawn on one: a hairline
+  // under a coloured panel is a line under a line.
+  if (band) {
+    const heading = (
+      <h1
+        className={`text-[28px] font-semibold leading-tight ${
+          onBand ? 'text-white' : 'text-ink-900'
+        }`}
+        style={titleStyle}
+      >
+        {title}
+      </h1>
+    )
+    return (
+      <div className="mb-6">
+        <div
+          className="rounded-card border px-6 py-7 lg:px-8"
+          style={{
+            ...band,
+            // The band's own edge, taken from the light it is lit by rather
+            // than from a token: a grey hairline reads as a seam on a colour,
+            // and the same border has to sit on navy and on sand.
+            borderColor: onBand ? 'rgba(255,255,255,0.14)' : 'rgba(0,0,0,0.10)',
+          }}
+        >
+          <div
+            className={
+              centred
+                ? 'flex flex-col items-center gap-3 text-center'
+                : 'flex items-center gap-4'
+            }
+          >
+            {logo}
+            <div>
+              {onTitleClick ? (
+                <button
+                  className="rounded-control text-left decoration-dotted underline-offset-4 hover:underline"
+                  onClick={onTitleClick}
+                  title="Change the title's size, font and colour"
+                >
+                  {heading}
+                </button>
+              ) : (
+                heading
+              )}
+              {description && (
+                <p
+                  // 85 rather than the 75 a caption would take on paper. The
+                  // band is any colour somebody picked, and on a mid-tone blue
+                  // the quieter grey measures under 3:1 - the description is
+                  // the line that says what the board is for, so it takes the
+                  // contrast and gives up a little of the hierarchy.
+                  className={`mt-1.5 text-sm ${onBand ? 'text-white/85' : 'text-ink-600'}`}
+                >
+                  {description}
+                </p>
+              )}
+            </div>
+          </div>
+        </div>
+        {actions && (
+          <div
+            className={`mt-3 flex flex-wrap items-center gap-2 ${
+              onDarkGround ? 'on-dark' : ''
+            }`}
+          >
+            {actions}
+          </div>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div
       className={`mb-6 flex flex-wrap items-start justify-between gap-3 ${
         rule ? 'border-b border-ink-200 pb-4 dark:border-dark-200' : ''
-      } ${centred ? 'flex-col items-center text-center' : ''}`}
+      } ${centred ? 'flex-col items-center text-center' : ''} ${
+        onDarkGround ? 'on-dark' : ''
+      }`}
     >
       <div className={centred ? 'flex flex-col items-center gap-2' : 'flex items-center gap-3'}>
         {logo}
