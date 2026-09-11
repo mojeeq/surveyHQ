@@ -15,7 +15,7 @@ export default function SharedDashboard({ token: given }: { token?: string } = {
   const { token: fromPath = '' } = useParams()
   const token = given ?? fromPath
   return (
-    <div className="flex min-h-screen flex-col bg-ink-50">
+    <div className="app-ground flex min-h-screen flex-col bg-ink-50">
       <main className="mx-auto w-full max-w-[1500px] flex-1 p-6">
         <DashboardView publicToken={token} />
       </main>

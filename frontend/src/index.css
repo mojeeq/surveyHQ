@@ -509,6 +509,23 @@
      a solid-enough background a browser with no backdrop-filter renders the
      header as a see-through strip with text from the page behind running
      through it. */
+  /* The ground a dashboard is mounted on.
+   *
+   * Only the image is set here, never the colour: the shells that carry this
+   * class set their own background colour with a utility, and a utility beats
+   * a component rule, so a colour written here would be the one thing on the
+   * page that never appeared. A flat ground comes through as a gradient of one
+   * colour, which covers the utility underneath it just the same.
+   *
+   * Fixed, so the gradient is the size of the window rather than the size of a
+   * board that may be four screens tall - down which it would otherwise
+   * stretch until it read as a flat colour at the top and another at the end.
+   */
+  .app-ground {
+    background-image: var(--app-ground, none);
+    background-attachment: fixed;
+  }
+
   .aero-glass {
     background-color: rgba(255, 255, 255, 0.96);
     background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.75), rgba(236, 241, 247, 0.6));
