@@ -122,6 +122,29 @@
   .on-dark .border-ink-300 {
     border-color: rgb(255 255 255 / 0.18);
   }
+  /* A table drawn for white paper.
+   *
+   * Its header carries a gradient and its rows a near-white hairline, and
+   * neither is an ink class - so the remapping above never reached them. On a
+   * dark tile that left the column headings white on white: measured at
+   * 1.06:1, which is not dim, it is gone. The frozen first column was already
+   * handled by the bg-white rule below; this is the rest of the table.
+   */
+  .on-dark .table-base thead th {
+    background-image: linear-gradient(
+      to bottom,
+      rgb(255 255 255 / 0.09),
+      rgb(255 255 255 / 0.03)
+    );
+  }
+  .on-dark .table-base thead th,
+  .on-dark .table-base tbody td {
+    border-color: rgb(255 255 255 / 0.18);
+  }
+  .on-dark .table-base tbody tr:hover {
+    background-color: rgb(255 255 255 / 0.06);
+  }
+
   /* The two that carry a verdict rather than a level. Kept as green and red -
    * that is the message - but at the lightness a dark ground needs. */
   .on-dark .text-emerald-600,
