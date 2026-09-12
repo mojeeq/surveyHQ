@@ -7,15 +7,12 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # curl is used by the container health check; build-essential and libpq-dev are
-# build dependencies for pyreadstat and psycopg2.
-#
-# r-base-core is here so that R_SCRIPTS_ENABLED is one setting rather than a
-# rebuild. Installing it does not switch the feature on: the setting defaults
-# to false, because an R script runs with this container's permissions and that
-# is a decision for whoever deploys the platform, not for its image.
+# build dependencies for pyreadstat and psycopg2. libseccomp-dev builds the
+# unprivileged R sandbox launcher; the runtime library remains installed.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         libpq-dev \
+        libseccomp-dev \
         curl \
         r-base-core \
     && rm -rf /var/lib/apt/lists/*
@@ -27,6 +24,15 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY pyproject.toml .
+COPY sandbox/r-sandbox.c /tmp/r-sandbox.c
+# Build a dedicated launcher that applies Landlock filesystem allowlisting and
+# a seccomp syscall policy before execing /usr/bin/Rscript. Keeping the raw R
+# binary under its normal name means SurveyHQ can probe the launcher explicitly
+# and refuse to run if somebody accidentally configures unsandboxed Rscript.
+RUN cc -O2 -Wall -Wextra -Werror /tmp/r-sandbox.c -lseccomp \
+        -o /usr/local/bin/surveyhq-r-sandbox \
+    && chmod 0755 /usr/local/bin/surveyhq-r-sandbox \
+    && rm /tmp/r-sandbox.c
 
 # Run as a non-root user; /data is a mounted volume so it needs to be writable.
 RUN useradd --create-home --uid 10001 surveyhq \
