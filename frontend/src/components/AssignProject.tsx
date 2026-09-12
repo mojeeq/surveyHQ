@@ -30,9 +30,11 @@ export default function AssignProject({
   const [open, setOpen] = useState(false)
   const [choice, setChoice] = useState(projectId ?? '')
 
+  // Moving is an assignment operation, not a list view. Keep the full project
+  // catalogue available even while the workspace itself is scoped to one.
   const projects = useQuery({
-    queryKey: ['projects'],
-    queryFn: () => api.get<Project[]>('/projects'),
+    queryKey: ['projects', 'assignment-picker'],
+    queryFn: () => api.get<Project[]>('/projects?scope=all'),
   })
   const current = projects.data?.find((project) => project.id === projectId)
   const label = projectId ? (current?.name ?? 'Another project') : 'Shared area'

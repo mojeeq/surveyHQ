@@ -7,6 +7,7 @@ import { useTheme } from '@/hooks/useTheme'
 import type { Notification } from '@/lib/types'
 import { relativeTime } from '@/lib/format'
 import AppIcon, { type AppIconName } from '@/components/AppIcon'
+import ProjectFilter from '@/components/ProjectFilter'
 
 function useClickOutside(refs: React.RefObject<HTMLElement>[], onOutside: () => void) {
   useEffect(() => {
@@ -201,6 +202,10 @@ export default function Layout() {
             <p className="mt-0.5 truncate text-sm font-semibold text-slate-900 dark:text-slate-100">
               Monitor collection, analyse data and publish results
             </p>
+          </div>
+
+          <div className="ml-auto hidden md:block">
+            <ProjectFilter compact />
           </div>
 
           <div className="flex items-center gap-1.5">

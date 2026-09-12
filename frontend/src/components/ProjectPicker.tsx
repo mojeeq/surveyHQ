@@ -10,6 +10,9 @@ import { Field } from './ui'
  * The empty value is the shared area, not "unset" - it is a real destination
  * that every user can see, and the wording says so rather than leaving a blank
  * option to be guessed at.
+ *
+ * Assignment is deliberately not narrowed by the workspace scope: filtering to
+ * Project A must not make Project B disappear from a "move to project" control.
  */
 export default function ProjectPicker({
   value,
@@ -26,8 +29,8 @@ export default function ProjectPicker({
   managedOnly?: boolean
 }) {
   const projects = useQuery({
-    queryKey: ['projects'],
-    queryFn: () => api.get<Project[]>('/projects'),
+    queryKey: ['projects', 'assignment-picker'],
+    queryFn: () => api.get<Project[]>('/projects?scope=all'),
   })
 
   const options = (projects.data ?? []).filter(
