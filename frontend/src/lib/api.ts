@@ -82,12 +82,17 @@ function parsed(path: string) {
   return new URL(path, 'https://surveyhq.local')
 }
 
-/** Add/replace project_id on the list calls that have a server-side filter. */
+/** Fill project_id on project-aware list calls that did not specify one. */
 function scopedGetPath(path: string): string {
   const project = getProjectScope()
   if (project === null || path.startsWith('/public/')) return path
 
   const url = parsed(path)
+  // An explicit project belongs to the screen making the request (for example a
+  // Project detail page). The workspace scope is a default for lists, not a way
+  // to rewrite a resource-specific request into a different project.
+  if (url.searchParams.has('project_id')) return path
+
   if (NONE_FOR_SHARED.has(url.pathname)) {
     url.searchParams.set('project_id', project || 'none')
   } else if (EMPTY_FOR_SHARED.has(url.pathname)) {
