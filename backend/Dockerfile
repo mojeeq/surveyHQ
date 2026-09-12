@@ -7,18 +7,14 @@ ENV PYTHONUNBUFFERED=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # curl is used by the container health check; build-essential and libpq-dev are
-# build dependencies for pyreadstat and psycopg2.
-#
-# r-base-core is here so that R_SCRIPTS_ENABLED is one setting rather than a
-# rebuild. bubblewrap is the security boundary for arbitrary project R code:
-# it gives each run a private filesystem/network namespace with only that
-# project's workspace writable. Installing R does not switch the feature on.
+# build dependencies for pyreadstat and psycopg2. libseccomp-dev builds the
+# unprivileged R sandbox launcher; the runtime library remains installed.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         libpq-dev \
+        libseccomp-dev \
         curl \
         r-base-core \
-        bubblewrap \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -28,10 +24,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY pyproject.toml .
-# Shadow /usr/bin/Rscript with the sandbox launcher. The launcher invokes the
-# real binary explicitly after creating the isolated namespaces.
-COPY bin/surveyhq-rscript /usr/local/bin/Rscript
-RUN chmod 0755 /usr/local/bin/Rscript
+COPY sandbox/r-sandbox.c /tmp/r-sandbox.c
+# Shadow /usr/bin/Rscript with a launcher that applies Landlock filesystem
+# allowlisting plus a seccomp syscall policy before execing the real interpreter.
+# It needs no extra capabilities, setuid bit, Docker socket or privileged mode.
+RUN cc -O2 -Wall -Wextra -Werror /tmp/r-sandbox.c -lseccomp -o /usr/local/bin/Rscript \
+    && chmod 0755 /usr/local/bin/Rscript \
+    && rm /tmp/r-sandbox.c
 
 # Run as a non-root user; /data is a mounted volume so it needs to be writable.
 RUN useradd --create-home --uid 10001 surveyhq \
