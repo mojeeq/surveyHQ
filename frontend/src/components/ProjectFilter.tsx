@@ -19,7 +19,6 @@ import { useProjectScope, type ProjectScope } from '@/hooks/useProjectScope'
 export default function ProjectFilter({
   value,
   onChange,
-  label = 'Project',
   compact = false,
 }: {
   value?: ProjectScope
