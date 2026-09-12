@@ -59,7 +59,26 @@ JOB_RETENTION_DAYS = 30
 
 @celery_app.task(name="app.workers.tasks.run_connection_sync", bind=True)
 def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
-    """Export the configured questionnaires from a server and import them."""
+    """Export/import one connection through the adapter that owns it."""
+    # Survey Solutions keeps its established archive-aware path below. Every
+    # other connector uses the generic tabular adapter path, but scheduled and
+    # on-demand jobs keep the same Celery task name and queue.
+    with session_scope() as db:
+        dispatch_job = db.get(Job, job_id)
+        dispatch_params = dict(dispatch_job.params or {}) if dispatch_job else {}
+        dispatch_connection = db.get(Connection, dispatch_params.get("connection_id"))
+        source_type = (
+            dispatch_connection.source_type or "survey_solutions"
+            if dispatch_connection is not None
+            else "survey_solutions"
+        )
+    if source_type != "survey_solutions":
+        from app.services.external_sync import run_external_connection_sync
+
+        return run_external_connection_sync(
+            job_id, getattr(self.request, "id", "") or ""
+        )
+
     with session_scope() as db:
         job = db.get(Job, job_id)
         if job is None:
