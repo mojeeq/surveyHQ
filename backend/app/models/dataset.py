@@ -33,6 +33,11 @@ class DatasetStatus(str, enum.Enum):
 class DatasetSource(str, enum.Enum):
     upload = "upload"
     survey_solutions = "survey_solutions"
+    odk = "odk"
+    kobo = "kobo"
+    csweb = "csweb"
+    surveycto = "surveycto"
+    sdmx = "sdmx"
     derived = "derived"
 
 
@@ -78,13 +83,11 @@ class Dataset(UUIDMixin, TimestampMixin, Base):
     # {"type": "merge", "relationship_id": ..., "how": "left", ...}. Empty for
     # an uploaded dataset. Holding the recipe rather than only the result is
     # what lets the merge be re-run when its sources change.
-    derivation: Mapped[dict] = mapped_column(
-        JSON, default=dict, server_default=text("'{}'")
-    )
-    # Variables the platform recognises as meaningful for monitoring
+    derivation: Mapped[dict] = mapped_column(JSON, default=dict)
     meta: Mapped[dict] = mapped_column(JSON, default=dict)
-    version: Mapped[int] = mapped_column(Integer, default=1)
+    version: Mapped[int] = mapped_column(Integer, default=0)
     refreshed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
     created_by: Mapped[str | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -94,29 +97,3 @@ class Dataset(UUIDMixin, TimestampMixin, Base):
         cascade="all, delete-orphan",
         order_by="Variable.position",
     )
-
-
-class Variable(UUIDMixin, Base):
-    __tablename__ = "variables"
-
-    dataset_id: Mapped[str] = mapped_column(
-        ForeignKey("datasets.id", ondelete="CASCADE"), index=True
-    )
-    name: Mapped[str] = mapped_column(String(300), index=True)
-    label: Mapped[str] = mapped_column(Text, default="")
-    var_type: Mapped[VariableType] = mapped_column(
-        Enum(VariableType, name="variable_type"), default=VariableType.text
-    )
-    storage_type: Mapped[str] = mapped_column(String(50), default="")
-    position: Mapped[int] = mapped_column(Integer, default=0)
-    n_missing: Mapped[int] = mapped_column(BigInteger, default=0)
-    n_unique: Mapped[int] = mapped_column(BigInteger, default=0)
-    min_value: Mapped[float | None] = mapped_column(Float)
-    max_value: Mapped[float | None] = mapped_column(Float)
-    mean_value: Mapped[float | None] = mapped_column(Float)
-    value_labels: Mapped[dict] = mapped_column(JSON, default=dict)
-    # Stata tagged missings present on this variable, e.g. [".a", ".b"]
-    missing_tags: Mapped[list] = mapped_column(JSON, default=list, nullable=True)
-    is_hidden: Mapped[bool] = mapped_column(Boolean, default=False)
-
-    dataset: Mapped[Dataset] = relationship(back_populates="variables")
