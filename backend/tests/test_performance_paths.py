@@ -4,10 +4,10 @@ from types import SimpleNamespace
 
 import pandas as pd
 
+from app.schemas.query import Aggregation, Measure, QuerySpec
 from app.services import columnar, monitoring_precompute
 from app.services.fast_ingest import build_metadata_from_parquet_fast
 from app.services.query_runtime import _key
-from app.schemas.query import Aggregation, Measure, QuerySpec
 
 
 def test_columnar_append_unions_schema_without_loading_existing_frame(tmp_path):
