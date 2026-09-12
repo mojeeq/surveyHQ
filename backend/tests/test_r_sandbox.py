@@ -60,7 +60,7 @@ def test_r_has_no_outbound_or_host_loopback_network(tmp_path: Path) -> None:
             self.end_headers()
             self.wfile.write(b"host-network")
 
-        def log_message(self, format: str, *args: object) -> None:
+        def log_message(self, _format: str, *_args: object) -> None:
             return
 
     with socketserver.TCPServer(("127.0.0.1", 0), QuietHandler) as server:
