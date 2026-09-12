@@ -88,49 +88,39 @@ def test_duckdb_delimited_reader_streams_to_parquet(tmp_path):
 
 def test_monitoring_summary_is_versioned_and_reusable(tmp_path):
     path = tmp_path / "data.parquet"
-    pd.DataFrame(
-        {
-            "status": [1, 1, 2],
-            "interviewer": ["Ana", "Ana", "Ben"],
-            "region": ["North", "South", "North"],
-            "duration": [10.0, 20.0, 15.0],
-            "submitted": pd.to_datetime(["2026-01-01", "2026-01-01", "2026-01-02"]),
-        }
-    ).to_parquet(path, index=False)
-
-    variables = [
-        SimpleNamespace(name="status", value_labels={"1": "Completed", "2": "Rejected"}),
-        SimpleNamespace(name="interviewer", value_labels={}),
-        SimpleNamespace(name="region", value_labels={}),
-        SimpleNamespace(name="duration", value_labels={}),
-        SimpleNamespace(name="submitted", value_labels={}),
-    ]
+    pd.DataFrame({"status": [1, 1, 2]}).to_parquet(path, index=False)
     dataset = SimpleNamespace(
         id="dataset-1",
         name="Fieldwork",
         storage_path=str(path),
         version=7,
         row_count=3,
-        variables=variables,
-        meta={
-            "monitoring_fields": {
-                "status": "status",
-                "interviewer": "interviewer",
-                "region": "region",
-                "duration": "duration",
-                "date": "submitted",
-            }
-        },
+        meta={"monitoring_fields": {"status": "status"}},
     )
 
-    built = monitoring_precompute.build(dataset)
+    def canonical_builder(_dataset, _filters, _grain):
+        return {
+            "dataset_id": "dataset-1",
+            "dataset_name": "Fieldwork",
+            "total_records": 3,
+            "detected_fields": {"status": "status"},
+            "available_views": ["status_breakdown"],
+            "status_breakdown": [
+                {"status": "Completed", "count": 2},
+                {"status": "Rejected", "count": 1},
+            ],
+            "completed_records": 2,
+            "completion_rate": 66.67,
+        }
+
+    built = monitoring_precompute.precompute(dataset, canonical_builder)
     loaded = monitoring_precompute.load(dataset)
     assert built is not None
     assert loaded is not None
     assert loaded["dataset_version"] == 7
     assert loaded["completed_records"] == 2
     assert loaded["completion_rate"] == 66.67
-    assert loaded["by_interviewer"][0]["interviews"] == 2
+    assert loaded["status_breakdown"][0]["status"] == "Completed"
 
     dataset.version = 8
     assert monitoring_precompute.load(dataset) is None
