@@ -81,7 +81,11 @@ def _saved_credentials_problem(connection: Connection) -> str:
     if provider == "sdmx":
         return ""
     if provider == "kobotoolbox":
-        return "Set an API token before testing or importing." if not connection.password_encrypted else ""
+        return (
+            "Set an API token before testing or importing."
+            if not connection.password_encrypted
+            else ""
+        )
     if not connection.username or not connection.password_encrypted:
         return "Set a user name and password before testing or importing."
     return ""
@@ -176,13 +180,18 @@ def create_connection(
 
 
 @router.get("/{connection_id}", response_model=ConnectionOut)
-def read_connection(connection_id: str, db: DbSession, user: CurrentUser) -> ConnectionOut:
+def read_connection(
+    connection_id: str, db: DbSession, user: CurrentUser
+) -> ConnectionOut:
     return _to_out(_get(connection_id, db, user))
 
 
 @router.patch("/{connection_id}", response_model=ConnectionOut)
 def update_connection(
-    connection_id: str, payload: ConnectionUpdate, db: DbSession, user: RequireManager
+    connection_id: str,
+    payload: ConnectionUpdate,
+    db: DbSession,
+    user: RequireManager,
 ) -> ConnectionOut:
     connection = _editable(connection_id, db, user)
     data = payload.model_dump(exclude_unset=True)
@@ -212,7 +221,9 @@ def update_connection(
 
 
 @router.delete("/{connection_id}", response_model=Message)
-def delete_connection(connection_id: str, db: DbSession, user: RequireManager) -> Message:
+def delete_connection(
+    connection_id: str, db: DbSession, user: RequireManager
+) -> Message:
     connection = _editable(connection_id, db, user)
     name = connection.name
     db.delete(connection)
@@ -333,7 +344,10 @@ def list_interviews(
     if _provider(connection) != "survey_solutions":
         raise HTTPException(
             status_code=400,
-            detail="Live interview browsing is currently available for Survey Solutions connections only.",
+            detail=(
+                "Live interview browsing is currently available for "
+                "Survey Solutions connections only."
+            ),
         )
     try:
         with SurveySolutionsClient(
@@ -364,7 +378,10 @@ def list_interviews(
 
 @router.post("/{connection_id}/sync", response_model=JobOut, status_code=202)
 def trigger_sync(
-    connection_id: str, payload: SyncRequest, db: DbSession, user: RequireManager
+    connection_id: str,
+    payload: SyncRequest,
+    db: DbSession,
+    user: RequireManager,
 ) -> Job:
     """Queue an export + import run for selected source resources."""
     connection = _editable(connection_id, db, user)
@@ -378,8 +395,8 @@ def trigger_sync(
         raise HTTPException(
             status_code=400,
             detail=(
-                "Choose at least one source resource to import, or set a default list "
-                "on the connection."
+                "Choose at least one source resource to import, or set a default "
+                "list on the connection."
             ),
         )
 
@@ -408,7 +425,7 @@ def trigger_sync(
     db.commit()
     db.refresh(job)
 
-    from app.workers.tasks import run_connection_sync
+    from app.workers.source_sync import run_connection_sync
 
     try:
         async_result = run_connection_sync.delay(job.id)
@@ -444,7 +461,12 @@ def download_sync_archive(
         )
     stem = slugify(run.questionnaire or "export") or "export"
     suffix = path.suffix.lower() or ".dat"
-    media = "application/zip" if suffix == ".zip" else "text/csv" if suffix == ".csv" else "application/octet-stream"
+    if suffix == ".zip":
+        media = "application/zip"
+    elif suffix == ".csv":
+        media = "text/csv"
+    else:
+        media = "application/octet-stream"
     return FileResponse(
         path,
         media_type=media,
@@ -454,7 +476,10 @@ def download_sync_archive(
 
 @router.get("/{connection_id}/runs", response_model=list[SyncRunOut])
 def list_sync_runs(
-    connection_id: str, db: DbSession, user: CurrentUser, limit: int = 20
+    connection_id: str,
+    db: DbSession,
+    user: CurrentUser,
+    limit: int = 20,
 ) -> list[SyncRunOut]:
     _get(connection_id, db, user)
     runs = db.scalars(
