@@ -59,6 +59,20 @@ class Settings(BaseSettings):
     # Redis / Celery
     redis_url: str = "redis://redis:6379/0"
 
+    # Analytics / DuckDB.  Zero threads means choose a conservative value from
+    # the machine's CPU count.  Keeping these deployment settings rather than
+    # literals in query_engine lets an 8-core VM and a 32-core analytical host
+    # use very different resource envelopes without rebuilding the image.
+    duckdb_threads: int = 0
+    duckdb_memory_limit: str = "2GB"
+    duckdb_temp_dir: str = ""
+    analytics_cache_enabled: bool = True
+    analytics_cache_ttl_seconds: int = 300
+    # Large delimited Survey Solutions members bypass pandas and are parsed by
+    # DuckDB directly once they cross this on-disk threshold.
+    duckdb_csv_above_mb: int = 32
+    monitoring_precompute_enabled: bool = True
+
     # Rate limiting. On by default; the switch exists so a test can run a
     # hundred logins without tripping it, and so an operator behind a proxy that
     # collapses every visitor onto one address can turn it off knowingly.
@@ -74,7 +88,7 @@ class Settings(BaseSettings):
     smtp_user: str = ""
     smtp_password: str = ""
     smtp_tls: bool = True
-    smtp_from: str = "susoDash <no-reply@example.com>"
+    smtp_from: str = "susoDash <no-reply@example.org>"
 
     # R scripts over a dataset.
     #
@@ -136,6 +150,10 @@ class Settings(BaseSettings):
         return self.storage_path / "boundaries"
 
     @property
+    def duckdb_temp_path(self) -> Path:
+        return Path(self.duckdb_temp_dir) if self.duckdb_temp_dir else self.storage_path / "duckdb_tmp"
+
+    @property
     def workspaces_path(self) -> Path:
         """Where each project's R workspace lives.
 
@@ -152,6 +170,7 @@ class Settings(BaseSettings):
             self.exports_path,
             self.boundaries_path,
             self.workspaces_path,
+            self.duckdb_temp_path,
         ):
             path.mkdir(parents=True, exist_ok=True)
 
