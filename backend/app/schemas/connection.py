@@ -8,16 +8,30 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 from app.models.connection import ExportFormat, SyncStatus
 from app.services.scheduling import valid_time, valid_timezone
 
+SourceType = Literal[
+    "survey_solutions",
+    "odk",
+    "kobo",
+    "csweb",
+    "surveycto",
+    "sdmx",
+]
+
 
 class ConnectionBase(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     base_url: str
+    source_type: SourceType = "survey_solutions"
+    source_config: dict[str, Any] = Field(default_factory=dict)
     workspace: str = "primary"
     username: str = ""
     verify_ssl: bool = True
     sync_enabled: bool = False
     sync_interval_minutes: int = Field(default=360, ge=5, le=10080)
     export_format: ExportFormat = ExportFormat.stata
+    # Kept under the historical API name for backward compatibility. For ODK,
+    # Kobo, CSWeb, SurveyCTO and SDMX these are remote resource ids rather than
+    # Survey Solutions questionnaire identities.
     questionnaires: list[str] = Field(default_factory=list)
     interview_status: str = "All"
     project_id: str | None = None
@@ -32,7 +46,6 @@ class ConnectionBase(BaseModel):
         for text in cleaned:
             if not valid_time(text):
                 raise ValueError(f"'{text}' is not a time of day. Use 24-hour HH:MM, e.g. 06:00")
-        # Sorted and de-duplicated: two identical times are one time.
         return sorted(set(cleaned))
 
     @field_validator("sync_timezone")
@@ -49,18 +62,25 @@ class ConnectionBase(BaseModel):
         value = value.strip().rstrip("/")
         if not value.startswith(("http://", "https://")):
             raise ValueError("The server URL must start with http:// or https://")
-        # Reject a URL that already includes an API path; we build those ourselves
         HttpUrl(value)
         return value
 
+    @field_validator("workspace")
+    @classmethod
+    def _clean_workspace(cls, value: str) -> str:
+        return value.strip()
+
 
 class ConnectionCreate(ConnectionBase):
+    # Password for user/password sources, API token for token-based sources.
     password: str = ""
 
 
 class ConnectionUpdate(BaseModel):
     name: str | None = None
     base_url: str | None = None
+    source_type: SourceType | None = None
+    source_config: dict[str, Any] | None = None
     workspace: str | None = None
     username: str | None = None
     password: str | None = None
@@ -86,6 +106,8 @@ class ConnectionOut(BaseModel):
     id: str
     name: str
     base_url: str
+    source_type: SourceType = "survey_solutions"
+    source_config: dict[str, Any] = Field(default_factory=dict)
     workspace: str
     username: str
     verify_ssl: bool
@@ -104,7 +126,7 @@ class ConnectionOut(BaseModel):
     last_sync_error: str = ""
     server_info: dict[str, Any] = Field(default_factory=dict)
     created_at: dt.datetime
-    # Never serialise the stored password; this flag is all the UI needs
+    # Never serialise the stored password/token; this flag is all the UI needs.
     has_password: bool = False
 
 
@@ -115,12 +137,21 @@ class ConnectionTestResult(BaseModel):
 
 
 class QuestionnaireOut(BaseModel):
+    """One selectable remote resource.
+
+    The name is kept for API compatibility with the old Survey Solutions-only
+    endpoint. ``kind`` and ``meta`` make the same object work for forms,
+    dictionaries, datasets and SDMX dataflows.
+    """
+
     id: str
-    version: int
+    version: int = 0
     title: str
     variable: str = ""
     identity: str
     last_entry_date: str | None = None
+    kind: str = "survey"
+    meta: dict[str, Any] = Field(default_factory=dict)
 
 
 class SyncRunOut(BaseModel):
@@ -136,14 +167,11 @@ class SyncRunOut(BaseModel):
     datasets_created: int
     message: str = ""
     log: list[Any] = Field(default_factory=list)
-    # Whether the export zip is still on disk to be downloaded.
     has_archive: bool = False
 
 
 class SyncRequest(BaseModel):
     questionnaires: list[str] = Field(default_factory=list)
     interview_status: str | None = None
-    # Where the imported datasets land. Absent falls back to the connection's
-    # own project, which is how a scheduled sync knows where to put things.
     project_id: str | None = None
     mode: Literal["replace", "append"] = "replace"
