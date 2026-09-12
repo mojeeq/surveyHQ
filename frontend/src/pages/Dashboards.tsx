@@ -350,14 +350,6 @@ function ChartPreview({
         )
       }
     >
-      <div className="mb-3 flex flex-wrap gap-2">
-        <Badge tone="neutral" icon="◫">
-          Project: {chart.project_name || 'Shared area'}
-        </Badge>
-        <Badge tone="info" icon="▤">
-          Dataset: {chart.dataset_name}
-        </Badge>
-      </div>
       {data.isLoading ? (
         <Loading />
       ) : data.error ? (
