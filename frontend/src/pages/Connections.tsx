@@ -4,7 +4,7 @@ import { api, downloadFile } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { relativeTime } from '@/lib/format'
-import type { Connection, SyncRun } from '@/lib/types'
+import type { Connection, Questionnaire, SyncRun } from '@/lib/types'
 import ProjectPicker from '@/components/ProjectPicker'
 import QuestionnairePicker, { describeSelection } from '@/components/QuestionnairePicker'
 import {
@@ -20,13 +20,62 @@ import {
   Toggle,
 } from '@/components/ui'
 
-/**
- * Every zone the browser knows, so the times are set where the fieldwork is.
- *
- * Intl.supportedValuesOf is not in every browser; where it is missing the list
- * falls back to this machine's own zone and UTC, which covers the case it
- * exists for - somebody scheduling an import for the country they are in.
- */
+type SourceType =
+  | 'survey_solutions'
+  | 'odk'
+  | 'kobo'
+  | 'csweb'
+  | 'surveycto'
+  | 'sdmx'
+
+type SourceConnection = Connection & {
+  source_type?: SourceType
+  source_config?: Record<string, unknown>
+}
+
+type RemoteResource = Questionnaire & {
+  kind?: string
+  meta?: Record<string, unknown>
+}
+
+const SOURCES: Record<
+  SourceType,
+  { label: string; description: string; urlHint: string; workspace?: string }
+> = {
+  survey_solutions: {
+    label: 'Survey Solutions',
+    description: 'World Bank CAPI headquarters exports, rosters and paradata',
+    urlHint: 'https://your-server.mysurvey.solutions',
+    workspace: 'Workspace',
+  },
+  odk: {
+    label: 'ODK Central',
+    description: 'ODK forms, submissions and repeat groups through Central OData',
+    urlHint: 'https://central.example.org',
+    workspace: 'ODK project ID',
+  },
+  kobo: {
+    label: 'KoboToolbox',
+    description: 'Kobo survey assets and submissions through the v2 API',
+    urlHint: 'https://kf.kobotoolbox.org',
+  },
+  csweb: {
+    label: 'CSPro / CSWeb',
+    description: 'CSPro dictionaries and cases synchronised through CSWeb',
+    urlHint: 'https://example.org/csweb/api',
+  },
+  surveycto: {
+    label: 'SurveyCTO',
+    description: 'SurveyCTO forms and wide JSON submission data',
+    urlHint: 'https://your-server.surveycto.com',
+  },
+  sdmx: {
+    label: 'SDMX API',
+    description: 'Published official-statistics data from an SDMX REST endpoint',
+    urlHint: 'https://api.example.org/public/rest/v1',
+  },
+}
+
 const ZONES: string[] = (() => {
   const here = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
   try {
@@ -41,6 +90,8 @@ const ZONES: string[] = (() => {
 const BLANK = {
   name: '',
   base_url: '',
+  source_type: 'survey_solutions' as SourceType,
+  source_config: {} as Record<string, unknown>,
   workspace: 'primary',
   username: '',
   password: '',
@@ -53,23 +104,40 @@ const BLANK = {
   project_id: '',
   sync_mode: 'interval' as 'interval' | 'daily',
   sync_times: [] as string[],
-  sync_timezone:
-    // The browser's own zone is nearly always the one the fieldwork is in,
-    // and is a far better guess than UTC.
-    Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+  sync_timezone: Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC',
+}
+
+function sourceOf(connection: SourceConnection): SourceType {
+  return connection.source_type ?? 'survey_solutions'
+}
+
+function sourceName(connection: SourceConnection): string {
+  return SOURCES[sourceOf(connection)].label
+}
+
+function resourceWord(source: SourceType, plural = false): string {
+  const word =
+    source === 'survey_solutions'
+      ? 'questionnaire'
+      : source === 'csweb'
+        ? 'dictionary'
+        : source === 'sdmx'
+          ? 'data query'
+          : 'form'
+  return plural ? `${word}s` : word
 }
 
 export default function Connections() {
   const { can } = useAuth()
   const toast = useToast()
   const queryClient = useQueryClient()
-  const [editing, setEditing] = useState<Connection | null>(null)
+  const [editing, setEditing] = useState<SourceConnection | null>(null)
   const [creating, setCreating] = useState(false)
-  const [importing, setImporting] = useState<Connection | null>(null)
+  const [importing, setImporting] = useState<SourceConnection | null>(null)
 
   const connections = useQuery({
     queryKey: ['connections'],
-    queryFn: () => api.get<Connection[]>('/connections'),
+    queryFn: () => api.get<SourceConnection[]>('/connections'),
   })
 
   const test = useMutation({
@@ -93,8 +161,8 @@ export default function Connections() {
   return (
     <>
       <PageHeader
-        title="Survey Solutions connections"
-        description="Link a headquarters server to import interview data automatically."
+        title="Data connections"
+        description="Bring survey microdata and published statistics into SurveyHQ on a schedule."
         actions={
           can('manager') && (
             <button className="btn-primary" onClick={() => setCreating(true)}>
@@ -112,8 +180,8 @@ export default function Connections() {
         <Card>
           <EmptyState
             icon="⇄"
-            title="No servers connected"
-            description="Connect your Survey Solutions headquarters server with an API user account to pull interview data on a schedule."
+            title="No data sources connected"
+            description="Connect Survey Solutions, ODK Central, KoboToolbox, CSWeb, SurveyCTO or an SDMX REST API."
             action={
               can('manager') && (
                 <button className="btn-primary btn-sm" onClick={() => setCreating(true)}>
@@ -125,76 +193,95 @@ export default function Connections() {
         </Card>
       ) : (
         <div className="space-y-4">
-          {connections.data.map((connection) => (
-            <Card
-              key={connection.id}
-              title={connection.name}
-              subtitle={`${connection.base_url} · workspace "${connection.workspace}"`}
-              actions={
-                <>
-                  <SyncBadge connection={connection} />
-                  <button
-                    className="btn-secondary btn-sm"
-                    onClick={() => test.mutate(connection.id)}
-                    disabled={test.isPending}
-                  >
-                    Test
-                  </button>
-                  {can('manager') && (
-                    <>
-                      <button
-                        className="btn-primary btn-sm"
-                        onClick={() => setImporting(connection)}
-                      >
-                        Import data
-                      </button>
-                      <button className="btn-ghost btn-sm" onClick={() => setEditing(connection)}>
-                        Edit
-                      </button>
-                      <button
-                        className="btn-ghost btn-sm text-red-600"
-                        onClick={() => {
-                          if (confirm(`Delete the connection "${connection.name}"?`))
-                            remove.mutate(connection.id)
-                        }}
-                      >
-                        Delete
-                      </button>
-                    </>
-                  )}
-                </>
-              }
-            >
-              <dl className="grid gap-4 text-sm sm:grid-cols-4">
-                <div>
-                  <dt className="text-xs uppercase text-ink-400">API user</dt>
-                  <dd className="text-ink-700">{connection.username || 'not set'}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs uppercase text-ink-400">Export format</dt>
-                  <dd className="text-ink-700">{connection.export_format}</dd>
-                </div>
-                <div>
-                  <dt className="text-xs uppercase text-ink-400">Scheduled sync</dt>
-                  <dd className="text-ink-700">
-                    {connection.sync_enabled
-                      ? `every ${connection.sync_interval_minutes} min`
-                      : 'off'}
-                  </dd>
-                </div>
-                <div>
-                  <dt className="text-xs uppercase text-ink-400">Last sync</dt>
-                  <dd className="text-ink-700">{relativeTime(connection.last_sync_at)}</dd>
-                </div>
-              </dl>
-              {connection.last_sync_error && (
-                <p className="mt-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
-                  {connection.last_sync_error}
-                </p>
-              )}
-              <SyncHistory connectionId={connection.id} />
-            </Card>
-          ))}
+          {connections.data.map((connection) => {
+            const source = sourceOf(connection)
+            const workspace = SOURCES[source].workspace
+            return (
+              <Card
+                key={connection.id}
+                title={connection.name}
+                subtitle={`${sourceName(connection)} · ${connection.base_url}${
+                  workspace && connection.workspace ? ` · ${connection.workspace}` : ''
+                }`}
+                actions={
+                  <>
+                    <SyncBadge connection={connection} />
+                    <button
+                      className="btn-secondary btn-sm"
+                      onClick={() => test.mutate(connection.id)}
+                      disabled={test.isPending}
+                    >
+                      Test
+                    </button>
+                    {can('manager') && (
+                      <>
+                        <button
+                          className="btn-primary btn-sm"
+                          onClick={() => setImporting(connection)}
+                        >
+                          Import data
+                        </button>
+                        <button
+                          className="btn-ghost btn-sm"
+                          onClick={() => setEditing(connection)}
+                        >
+                          Edit
+                        </button>
+                        <button
+                          className="btn-ghost btn-sm text-red-600"
+                          onClick={() => {
+                            if (confirm(`Delete the connection "${connection.name}"?`))
+                              remove.mutate(connection.id)
+                          }}
+                        >
+                          Delete
+                        </button>
+                      </>
+                    )}
+                  </>
+                }
+              >
+                <dl className="grid gap-4 text-sm sm:grid-cols-4">
+                  <div>
+                    <dt className="text-xs uppercase text-ink-400">Source</dt>
+                    <dd className="text-ink-700">{SOURCES[source].label}</dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs uppercase text-ink-400">Account</dt>
+                    <dd className="text-ink-700">
+                      {source === 'kobo'
+                        ? connection.has_password
+                          ? 'API token stored'
+                          : 'token not set'
+                        : source === 'sdmx' && !connection.username
+                          ? 'public endpoint'
+                          : connection.username || 'not set'}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs uppercase text-ink-400">Scheduled sync</dt>
+                    <dd className="text-ink-700">
+                      {connection.sync_enabled
+                        ? connection.sync_mode === 'daily'
+                          ? connection.sync_times.join(', ') || 'daily'
+                          : `every ${connection.sync_interval_minutes} min`
+                        : 'off'}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs uppercase text-ink-400">Last sync</dt>
+                    <dd className="text-ink-700">{relativeTime(connection.last_sync_at)}</dd>
+                  </div>
+                </dl>
+                {connection.last_sync_error && (
+                  <p className="mt-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
+                    {connection.last_sync_error}
+                  </p>
+                )}
+                <SyncHistory connectionId={connection.id} />
+              </Card>
+            )
+          })}
         </div>
       )}
 
@@ -245,7 +332,11 @@ function SyncHistory({ connectionId }: { connectionId: string }) {
             <span className="flex items-center gap-2">
               <Badge
                 tone={
-                  run.status === 'success' ? 'success' : run.status === 'failed' ? 'danger' : 'warning'
+                  run.status === 'success'
+                    ? 'success'
+                    : run.status === 'failed'
+                      ? 'danger'
+                      : 'warning'
                 }
               >
                 {run.status}
@@ -283,17 +374,20 @@ function ConnectionModal({
   connection,
   onClose,
 }: {
-  connection: Connection | null
+  connection: SourceConnection | null
   onClose: () => void
 }) {
   const toast = useToast()
   const queryClient = useQueryClient()
+  const existingSource = connection ? sourceOf(connection) : BLANK.source_type
   const [form, setForm] = useState({
     ...BLANK,
     ...(connection
       ? {
           name: connection.name,
           base_url: connection.base_url,
+          source_type: existingSource,
+          source_config: connection.source_config ?? {},
           workspace: connection.workspace,
           username: connection.username,
           password: '',
@@ -313,6 +407,7 @@ function ConnectionModal({
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null)
 
   const update = (patch: Partial<typeof form>) => setForm({ ...form, ...patch })
+  const source = SOURCES[form.source_type]
 
   const testUnsaved = useMutation({
     mutationFn: () => api.post<{ ok: boolean; message: string }>('/connections/test', form),
@@ -322,7 +417,10 @@ function ConnectionModal({
 
   const save = useMutation({
     mutationFn: () => {
-      const payload: Record<string, unknown> = { ...form, project_id: form.project_id || null }
+      const payload: Record<string, unknown> = {
+        ...form,
+        project_id: form.project_id || null,
+      }
       if (connection && !form.password) delete payload.password
       return connection
         ? api.patch(`/connections/${connection.id}`, payload)
@@ -336,11 +434,27 @@ function ConnectionModal({
     onError: (error: Error) => toast.push(error.message, 'error'),
   })
 
+  const sdmxResources = ((form.source_config.resources as unknown[]) ?? [])
+    .map((item) => (typeof item === 'string' ? item : String((item as any)?.path ?? '')))
+    .filter(Boolean)
+    .join('\n')
+
+  const setSdmxResources = (text: string) => {
+    const paths = text
+      .split(/\r?\n/)
+      .map((value) => value.trim())
+      .filter(Boolean)
+    update({
+      questionnaires: paths,
+      source_config: { ...form.source_config, resources: paths },
+    })
+  }
+
   return (
     <Modal
       open
       onClose={onClose}
-      title={connection ? 'Edit connection' : 'Add Survey Solutions connection'}
+      title={connection ? 'Edit data connection' : 'Add data connection'}
       wide
       footer={
         <>
@@ -374,40 +488,96 @@ function ConnectionModal({
         </div>
       )}
 
+      <Field label="Source platform">
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+          {(Object.entries(SOURCES) as [SourceType, (typeof SOURCES)[SourceType]][]).map(
+            ([value, option]) => (
+              <button
+                key={value}
+                type="button"
+                className={`rounded-card border p-3 text-left transition ${
+                  form.source_type === value
+                    ? 'border-brand-500 bg-brand-50 ring-1 ring-brand-500'
+                    : 'border-ink-200 bg-white hover:border-brand-300'
+                }`}
+                onClick={() =>
+                  update({
+                    source_type: value,
+                    workspace: value === 'survey_solutions' ? 'primary' : '',
+                    questionnaires: [],
+                    source_config: {},
+                    username: '',
+                    password: '',
+                  })
+                }
+              >
+                <span className="block text-sm font-semibold text-ink-900">{option.label}</span>
+                <span className="mt-1 block text-xs leading-5 text-ink-500">
+                  {option.description}
+                </span>
+              </button>
+            ),
+          )}
+        </div>
+      </Field>
+
       <div className="grid gap-x-4 sm:grid-cols-2">
         <Field label="Connection name">
           <input
             className="input"
             value={form.name}
             onChange={(event) => update({ name: event.target.value })}
-            placeholder="National Household Survey"
+            placeholder={`${source.label} connection`}
           />
         </Field>
-        <Field label="Server URL" hint="The site root, e.g. https://demo.mysurvey.solutions">
+        <Field label="Server / API URL" hint={source.urlHint}>
           <input
             className="input"
             value={form.base_url}
             onChange={(event) => update({ base_url: event.target.value })}
-            placeholder="https://your-server.mysurvey.solutions"
+            placeholder={source.urlHint}
           />
         </Field>
-        <Field label="Workspace" hint="Usually 'primary'">
-          <input
-            className="input"
-            value={form.workspace}
-            onChange={(event) => update({ workspace: event.target.value })}
-          />
-        </Field>
-        <Field label="API user name" hint="A headquarters or API user on that workspace">
-          <input
-            className="input"
-            value={form.username}
-            onChange={(event) => update({ username: event.target.value })}
-          />
-        </Field>
+
+        {source.workspace && (
+          <Field
+            label={source.workspace}
+            hint={
+              form.source_type === 'survey_solutions'
+                ? "Usually 'primary'"
+                : 'The numeric project id shown by ODK Central'
+            }
+          >
+            <input
+              className="input"
+              value={form.workspace}
+              onChange={(event) => update({ workspace: event.target.value })}
+            />
+          </Field>
+        )}
+
+        {form.source_type !== 'kobo' && (
+          <Field
+            label={form.source_type === 'odk' ? 'Central email / username' : 'API user name'}
+            hint={form.source_type === 'sdmx' ? 'Optional for a protected SDMX endpoint' : undefined}
+          >
+            <input
+              className="input"
+              value={form.username}
+              onChange={(event) => update({ username: event.target.value })}
+            />
+          </Field>
+        )}
+
         <Field
-          label="Password"
-          hint={connection ? 'Leave blank to keep the stored password' : 'Encrypted at rest'}
+          label={form.source_type === 'kobo' ? 'API token' : 'Password'}
+          hint={
+            connection
+              ? `Leave blank to keep the stored ${form.source_type === 'kobo' ? 'token' : 'password'}`
+              : form.source_type === 'sdmx'
+                ? 'Optional for a public endpoint'
+                : 'Encrypted at rest'
+          }
         >
           <input
             className="input"
@@ -416,46 +586,74 @@ function ConnectionModal({
             onChange={(event) => update({ password: event.target.value })}
           />
         </Field>
-        <Field label="Export format">
-          <select
-            className="input"
-            value={form.export_format}
-            onChange={(event) =>
-              update({ export_format: event.target.value as typeof form.export_format })
-            }
-          >
-            <option value="STATA">Stata (.dta) - keeps value labels</option>
-            <option value="Tabular">Tab-delimited</option>
-            <option value="SPSS">SPSS (.sav)</option>
-          </select>
-        </Field>
+
+        {form.source_type === 'survey_solutions' && (
+          <>
+            <Field label="Export format">
+              <select
+                className="input"
+                value={form.export_format}
+                onChange={(event) =>
+                  update({ export_format: event.target.value as typeof form.export_format })
+                }
+              >
+                <option value="STATA">Stata (.dta) - keeps value labels</option>
+                <option value="Tabular">Tab-delimited</option>
+                <option value="SPSS">SPSS (.sav)</option>
+              </select>
+            </Field>
+            <Field label="Interview status to import">
+              <select
+                className="input"
+                value={form.interview_status}
+                onChange={(event) => update({ interview_status: event.target.value })}
+              >
+                {[
+                  'All',
+                  'Completed',
+                  'ApprovedBySupervisor',
+                  'ApprovedByHeadquarters',
+                  'RejectedBySupervisor',
+                  'InterviewerAssigned',
+                ].map((status) => (
+                  <option key={status} value={status}>
+                    {status}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </>
+        )}
+
+        {form.source_type === 'surveycto' && (
+          <Field label="Review status" hint="Which SurveyCTO submissions the API should return.">
+            <select
+              className="input"
+              value={String(form.source_config.review_status ?? 'approved')}
+              onChange={(event) =>
+                update({
+                  source_config: {
+                    ...form.source_config,
+                    review_status: event.target.value,
+                  },
+                })
+              }
+            >
+              <option value="approved">Approved</option>
+              <option value="pending">Pending</option>
+              <option value="rejected">Rejected</option>
+              <option value="all">All</option>
+            </select>
+          </Field>
+        )}
+
         <ProjectPicker
           value={form.project_id}
           onChange={(project_id) => update({ project_id })}
           label="Default project for imports"
-          hint="Where this server's data lands. A single import can be sent elsewhere."
+          hint="Where this connection's datasets land."
         />
 
-        <Field label="Interview status to import">
-          <select
-            className="input"
-            value={form.interview_status}
-            onChange={(event) => update({ interview_status: event.target.value })}
-          >
-            {[
-              'All',
-              'Completed',
-              'ApprovedBySupervisor',
-              'ApprovedByHeadquarters',
-              'RejectedBySupervisor',
-              'InterviewerAssigned',
-            ].map((status) => (
-              <option key={status} value={status}>
-                {status}
-              </option>
-            ))}
-          </select>
-        </Field>
         <Field label="Import automatically">
           <select
             className="input"
@@ -496,10 +694,24 @@ function ConnectionModal({
         )}
       </div>
 
+      {form.source_type === 'sdmx' && (
+        <Field
+          label="SDMX data query paths"
+          hint="One REST data path per line, relative to the API URL. Example: data/DF_LFS/.FJ...."
+        >
+          <textarea
+            className="input min-h-28 font-mono text-xs"
+            value={sdmxResources}
+            onChange={(event) => setSdmxResources(event.target.value)}
+            placeholder={'data/DF_POP/.FJ....\ndata/DF_LABOUR/.FJ....'}
+          />
+        </Field>
+      )}
+
       {form.sync_mode === 'daily' && (
         <Field
           label="Import at"
-          hint="24-hour times. The check runs every few minutes, so an import starts shortly after the time you set."
+          hint="24-hour times. Imports begin shortly after each time in the selected zone."
         >
           <div className="flex flex-wrap items-center gap-2">
             {form.sync_times.map((time, index) => (
@@ -537,41 +749,46 @@ function ConnectionModal({
         </Field>
       )}
 
-      {/* Which questionnaires the scheduled import pulls. There was nowhere to
-          say, so a connection could have automatic imports switched on and a
-          schedule set and still never import anything: the scheduler skips a
-          connection with nothing chosen, and said nothing about it. */}
-      <div className="border-t border-ink-200 pt-4">
-        <Field
-          label="Questionnaires to import automatically"
-          hint={
-            connection
-              ? 'Ticking a questionnaire takes every version of it, including ones published after today. A single import can still be aimed at particular versions.'
-              : undefined
-          }
-        >
-          {connection ? (
-            <QuestionnairePicker
-              connectionId={connection.id}
-              value={form.questionnaires}
-              onChange={(questionnaires) => update({ questionnaires })}
-            />
-          ) : (
-            <p className="text-sm text-ink-500">
-              Save the connection first, then reopen it to choose from the questionnaires
-              on the server.
+      {form.source_type !== 'sdmx' && (
+        <div className="border-t border-ink-200 pt-4">
+          <Field
+            label={`${resourceWord(form.source_type, true)} to import automatically`}
+            hint={
+              connection
+                ? `Choose the ${resourceWord(form.source_type, true)} this scheduled connection should refresh.`
+                : undefined
+            }
+          >
+            {connection ? (
+              form.source_type === 'survey_solutions' ? (
+                <QuestionnairePicker
+                  connectionId={connection.id}
+                  value={form.questionnaires}
+                  onChange={(questionnaires) => update({ questionnaires })}
+                />
+              ) : (
+                <ResourcePicker
+                  connectionId={connection.id}
+                  value={form.questionnaires}
+                  onChange={(questionnaires) => update({ questionnaires })}
+                  source={form.source_type}
+                />
+              )
+            ) : (
+              <p className="text-sm text-ink-500">
+                Save the connection first, then reopen it to discover and choose its remote
+                {` ${resourceWord(form.source_type, true)}.`}
+              </p>
+            )}
+          </Field>
+          {form.sync_enabled && !form.questionnaires.length && (
+            <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+              Automatic imports will not run until at least one remote resource is chosen.
             </p>
           )}
-        </Field>
-        {form.sync_enabled && !form.questionnaires.length && (
-          <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
-            Automatic imports will not run until at least one questionnaire is chosen here.
-          </p>
-        )}
-      </div>
+        </div>
+      )}
 
-      {/* items-start: a Toggle is an inline-flex label, so two of them in a
-          space-y column sat on one line and overlapped each other's text. */}
       <div className="flex flex-col items-start gap-3 border-t border-ink-200 pt-4">
         <Toggle
           checked={form.sync_enabled}
@@ -594,9 +811,71 @@ function ConnectionModal({
   )
 }
 
-function ImportModal({ connection, onClose }: { connection: Connection; onClose: () => void }) {
+function ResourcePicker({
+  connectionId,
+  value,
+  onChange,
+  source,
+}: {
+  connectionId: string
+  value: string[]
+  onChange: (value: string[]) => void
+  source: SourceType
+}) {
+  const resources = useQuery({
+    queryKey: ['connection-resources', connectionId],
+    queryFn: () => api.get<RemoteResource[]>(`/connections/${connectionId}/resources`),
+  })
+  if (resources.isLoading) return <Loading />
+  if (resources.error) return <ErrorNote error={resources.error} retry={resources.refetch} />
+  if (!resources.data?.length) {
+    return (
+      <p className="rounded border border-ink-200 bg-ink-50 px-3 py-2 text-sm text-ink-500">
+        No {resourceWord(source, true)} were returned by this connection.
+      </p>
+    )
+  }
+  return (
+    <div className="max-h-64 space-y-1 overflow-auto rounded-card border border-ink-200 p-2">
+      {resources.data.map((resource) => (
+        <label
+          key={resource.identity}
+          className="flex cursor-pointer items-start gap-2 rounded px-2 py-2 hover:bg-ink-50"
+        >
+          <input
+            className="mt-0.5"
+            type="checkbox"
+            checked={value.includes(resource.identity)}
+            onChange={(event) =>
+              onChange(
+                event.target.checked
+                  ? [...new Set([...value, resource.identity])]
+                  : value.filter((item) => item !== resource.identity),
+              )
+            }
+          />
+          <span className="min-w-0">
+            <span className="block text-sm font-medium text-ink-800">{resource.title}</span>
+            <span className="block truncate font-mono text-xs text-ink-400">
+              {resource.identity}
+            </span>
+          </span>
+        </label>
+      ))}
+    </div>
+  )
+}
+
+function ImportModal({
+  connection,
+  onClose,
+}: {
+  connection: SourceConnection
+  onClose: () => void
+}) {
   const toast = useToast()
   const queryClient = useQueryClient()
+  const source = sourceOf(connection)
   const [selected, setSelected] = useState<string[]>(connection.questionnaires)
   const [projectId, setProjectId] = useState(connection.project_id ?? '')
   const [mode, setMode] = useState<'replace' | 'append'>('replace')
@@ -610,7 +889,7 @@ function ImportModal({ connection, onClose }: { connection: Connection; onClose:
       }),
     onSuccess: () => {
       toast.push(
-        'Import started. It runs in the background and can take a few minutes for large surveys.',
+        'Import started. It runs in the background and can take a few minutes for large sources.',
         'success',
       )
       queryClient.invalidateQueries({ queryKey: ['sync-runs'] })
@@ -619,6 +898,11 @@ function ImportModal({ connection, onClose }: { connection: Connection; onClose:
     },
     onError: (error: Error) => toast.push(error.message, 'error'),
   })
+
+  const importLabel =
+    source === 'survey_solutions'
+      ? `Import ${describeSelection(selected)}`
+      : `Import ${selected.length} ${resourceWord(source, selected.length !== 1)}`
 
   return (
     <Modal
@@ -637,20 +921,16 @@ function ImportModal({ connection, onClose }: { connection: Connection; onClose:
             disabled={!selected.length || start.isPending}
           >
             {start.isPending && <Spinner className="h-4 w-4 text-white" />}
-            Import {describeSelection(selected)}
+            {importLabel}
           </button>
         </>
       }
     >
       <div className="mb-4 grid gap-x-4 sm:grid-cols-2">
-        <ProjectPicker
-          value={projectId}
-          onChange={setProjectId}
-          label="Import into project"
-        />
+        <ProjectPicker value={projectId} onChange={setProjectId} label="Import into project" />
         <Field
           label="If these datasets already exist"
-          hint="Replacing keeps the datasets' ids, so charts, indicators and merges built on them go on working."
+          hint="Replacing keeps their dataset ids, so charts, indicators and dashboards continue to work."
         >
           <select
             className="input"
@@ -658,21 +938,74 @@ function ImportModal({ connection, onClose }: { connection: Connection; onClose:
             onChange={(event) => setMode(event.target.value as 'replace' | 'append')}
           >
             <option value="replace">Replace their data</option>
-            <option value="append">Add these rows to them</option>
+            <option value="append">Append these rows</option>
           </select>
         </Field>
       </div>
 
       <p className="mb-3 text-sm text-ink-500">
-        Each questionnaire's whole export is imported - one dataset per roster level, with
-        the paradata - and re-importing refreshes them in place, so saved charts and
-        indicators keep working.
+        {source === 'survey_solutions'
+          ? 'Each questionnaire export becomes one dataset per roster level, including paradata.'
+          : source === 'sdmx'
+            ? 'Each SDMX query becomes a refreshable SurveyHQ dataset while retaining its dimensions and codes.'
+            : `SurveyHQ imports each ${resourceWord(source)} and separates nested repeat/roster records into linked tabular datasets.`}
       </p>
-      <QuestionnairePicker
-        connectionId={connection.id}
-        value={selected}
-        onChange={setSelected}
-      />
+
+      {source === 'survey_solutions' ? (
+        <QuestionnairePicker
+          connectionId={connection.id}
+          value={selected}
+          onChange={setSelected}
+        />
+      ) : source === 'sdmx' ? (
+        <SdmxSelection connection={connection} value={selected} onChange={setSelected} />
+      ) : (
+        <ResourcePicker
+          connectionId={connection.id}
+          value={selected}
+          onChange={setSelected}
+          source={source}
+        />
+      )}
     </Modal>
+  )
+}
+
+function SdmxSelection({
+  connection,
+  value,
+  onChange,
+}: {
+  connection: SourceConnection
+  value: string[]
+  onChange: (value: string[]) => void
+}) {
+  const configured = ((connection.source_config?.resources as unknown[]) ?? [])
+    .map((item) => (typeof item === 'string' ? item : String((item as any)?.path ?? '')))
+    .filter(Boolean)
+  const options = [...new Set([...configured, ...connection.questionnaires])]
+  if (!options.length) {
+    return (
+      <p className="rounded border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+        Edit this connection and add at least one SDMX data query path first.
+      </p>
+    )
+  }
+  return (
+    <div className="space-y-1 rounded-card border border-ink-200 p-2">
+      {options.map((path) => (
+        <label key={path} className="flex cursor-pointer items-start gap-2 rounded px-2 py-2 hover:bg-ink-50">
+          <input
+            className="mt-0.5"
+            type="checkbox"
+            checked={value.includes(path)}
+            onChange={(event) =>
+              onChange(event.target.checked ? [...new Set([...value, path])] : value.filter((x) => x !== path))
+            }
+          />
+          <code className="break-all text-xs text-ink-700">{path}</code>
+        </label>
+      ))}
+    </div>
   )
 }
