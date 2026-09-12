@@ -11,6 +11,7 @@ from app.core.security import hash_password
 from app.db.init_db import initialise
 from app.db.session import SessionLocal
 from app.models import Role, User
+from app.services.accounts import next_available_username
 
 
 def gen_encryption_key() -> None:
@@ -34,12 +35,15 @@ def create_admin() -> None:
             existing.hashed_password = hash_password(password)
             existing.role = Role.admin
             existing.is_active = True
+            if not existing.username:
+                existing.username = next_available_username(db, email)
             db.commit()
             print(f"Updated existing user {email} to administrator with a new password.")
             return
         db.add(
             User(
                 email=email,
+                username=next_available_username(db, email),
                 full_name=full_name,
                 role=Role.admin,
                 hashed_password=hash_password(password),
