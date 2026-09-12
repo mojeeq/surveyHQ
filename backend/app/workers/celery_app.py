@@ -16,7 +16,11 @@ celery_app = Celery(
     "surveyhq",
     broker=settings.redis_url,
     backend=settings.redis_url,
-    include=["app.workers.tasks"],
+    # source_sync deliberately loads after tasks and registers the same two
+    # connection-sync task names as provider-aware dispatchers. Old queued task
+    # names remain valid while Survey Solutions still delegates to its mature
+    # implementation in tasks.py.
+    include=["app.workers.tasks", "app.workers.source_sync"],
 )
 
 celery_app.conf.update(
@@ -33,7 +37,7 @@ celery_app.conf.update(
     broker_connection_retry_on_startup=True,
     task_default_queue="default",
     task_routes={
-        # File parsing and Survey Solutions downloads can saturate CPU / disk for
+        # File parsing and external-source downloads can saturate CPU / disk for
         # minutes. They must not make alerts and monitoring wait in the same queue.
         "app.workers.tasks.run_upload_import": {"queue": "imports"},
         "app.workers.tasks.run_connection_sync": {"queue": "imports"},
