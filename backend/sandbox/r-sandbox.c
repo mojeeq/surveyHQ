@@ -19,6 +19,8 @@
 #define O_PATH 010000000
 #endif
 
+#define SANDBOX_PROBE "surveyhq-r-sandbox-v1"
+
 static void die(const char *message) {
     fprintf(stderr, "SurveyHQ R sandbox: %s: %s\n", message, strerror(errno));
     exit(126);
@@ -96,12 +98,10 @@ static void install_filesystem_sandbox(const char *workspace) {
     const uint64_t read_only = LANDLOCK_ACCESS_FS_EXECUTE |
                                LANDLOCK_ACCESS_FS_READ_FILE |
                                LANDLOCK_ACCESS_FS_READ_DIR;
-    uint64_t workspace_access = handled;
 
     /* Runtime paths contain R, its shared libraries, locales and standard
        command-line tools. They are readable/executable but never writable. */
     add_path_rule(ruleset_fd, "/usr", read_only, false);
-    add_path_rule(ruleset_fd, "/usr/local", read_only, true);
     add_path_rule(ruleset_fd, "/bin", read_only, true);
     add_path_rule(ruleset_fd, "/lib", read_only, true);
     add_path_rule(ruleset_fd, "/lib64", read_only, true);
@@ -117,9 +117,9 @@ static void install_filesystem_sandbox(const char *workspace) {
     add_path_rule(ruleset_fd, "/dev/urandom", device_rw, false);
 
     /* This is the only host-backed location arbitrary project code may change
-       or inspect. Sibling project workspaces and the rest of /data are absent
+       or read. Sibling project workspaces and the rest of /data are absent
        from the allowlist and therefore denied by Landlock. */
-    add_path_rule(ruleset_fd, workspace, workspace_access, false);
+    add_path_rule(ruleset_fd, workspace, handled, false);
 
     if (prctl(PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) < 0) {
         close(ruleset_fd);
@@ -248,7 +248,14 @@ static void prepare_environment(const char *workspace) {
 }
 
 int main(int argc, char **argv) {
-    (void)argc;
+    /* The application probes the configured executable before enabling R. A
+       raw /usr/bin/Rscript cannot answer this, so a configuration mistake
+       fails closed instead of silently restoring arbitrary server code exec. */
+    if (argc == 2 && strcmp(argv[1], "--surveyhq-sandbox-probe") == 0) {
+        puts(SANDBOX_PROBE);
+        return 0;
+    }
+
     char workspace[4096];
     if (getcwd(workspace, sizeof(workspace)) == NULL) {
         die("could not identify the project workspace");
