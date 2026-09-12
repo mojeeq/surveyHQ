@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-
 WRAPPER = Path(__file__).resolve().parents[1] / "bin" / "surveyhq-rscript"
 
 
