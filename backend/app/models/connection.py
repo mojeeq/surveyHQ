@@ -1,4 +1,4 @@
-"""Survey Solutions server connections and sync history."""
+"""External data-source connections and sync history."""
 
 from __future__ import annotations
 
@@ -39,12 +39,26 @@ sync_status_type = Enum(SyncStatus, name="sync_status")
 
 
 class Connection(UUIDMixin, TimestampMixin, Base):
-    """Credentials and sync settings for one Survey Solutions workspace."""
+    """Credentials and sync settings for one external data source.
+
+    ``source_type`` selects the adapter. The older Survey Solutions-specific
+    columns remain because they are useful generic concepts too: ``workspace``
+    is an ODK project / Survey Solutions workspace, ``questionnaires`` is the
+    selected remote-resource list, and ``password_encrypted`` stores whichever
+    secret the adapter needs (password or API token). ``source_config`` holds
+    adapter-specific non-secret options.
+    """
 
     __tablename__ = "connections"
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     base_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    # Kept as a string rather than a database enum so adding another connector
+    # does not require an enum migration on existing PostgreSQL deployments.
+    source_type: Mapped[str] = mapped_column(
+        String(40), default="survey_solutions", server_default=text("'survey_solutions'")
+    )
+    source_config: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'"))
     workspace: Mapped[str] = mapped_column(String(120), default="primary")
     username: Mapped[str] = mapped_column(String(200), default="")
     password_encrypted: Mapped[str] = mapped_column(Text, default="")
@@ -62,20 +76,16 @@ class Connection(UUIDMixin, TimestampMixin, Base):
     sync_mode: Mapped[str] = mapped_column(
         String(20), default="interval", server_default=text("'interval'")
     )
-    # Times of day to import at, as "HH:MM", read in sync_timezone. Several are
-    # allowed: a morning and an evening pull is a common shape.
     sync_times: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
-    # The zone those times are read in. Fieldwork happens somewhere, and "06:00"
-    # means six in the morning there, not six in UTC.
     sync_timezone: Mapped[str] = mapped_column(
         String(60), default="UTC", server_default=text("'UTC'")
     )
-    # Which questionnaires to pull; empty means "all"
+    # Remote resource ids. Historically these were Survey Solutions
+    # questionnaires; retaining the column keeps old deployments compatible.
     questionnaires: Mapped[list] = mapped_column(JSON, default=list)
     interview_status: Mapped[str] = mapped_column(String(50), default="All")
 
-    # Where this connection's imports land. Null is the shared area, which is
-    # where every import went before a connection could name a project.
+    # Where this connection's imports land. Null is the shared area.
     project_id: Mapped[str | None] = mapped_column(
         ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
     )
@@ -114,8 +124,8 @@ class SyncRun(UUIDMixin, Base):
     datasets_created: Mapped[int] = mapped_column(Integer, default=0)
     message: Mapped[str] = mapped_column(Text, default="")
     log: Mapped[list] = mapped_column(JSON, default=list)
-    # The export zip as it arrived, kept so it can be downloaded and re-used
-    # like any other export archive. Empty once it has been pruned.
+    # Survey Solutions keeps the original export zip. Other adapters generally
+    # stream JSON/CSV and leave this empty.
     archive_path: Mapped[str] = mapped_column(String(500), default="", server_default=text("''"))
 
     connection: Mapped[Connection] = relationship(back_populates="runs")
