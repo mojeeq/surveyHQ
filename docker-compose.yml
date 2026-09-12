@@ -1,16 +1,13 @@
-# susoDash - survey monitoring platform
+# SurveyHQ - survey monitoring platform
 #
 #   cp .env.example .env   # then edit every CHANGE-ME value
 #   docker compose up -d --build
 #
-# The stack is: nginx (web) -> FastAPI (api) -> Postgres, with a Celery worker
+# The stack is: nginx (web) -> FastAPI (api) -> Postgres, with Celery workers
 # and beat scheduler sharing the api image for background imports and monitoring.
 
 # The compose project name, the volume names, the database and the container
-# user stay "surveyhq" deliberately. They are not the brand - they are the
-# identifiers an existing installation's data is filed under, and renaming them
-# would leave a running platform pointing at a database and a volume that do
-# not exist. The name people see is set by PROJECT_NAME.
+# user stay "surveyhq" deliberately. They are stable installation identifiers.
 name: surveyhq
 
 x-backend-env: &backend-env
@@ -40,9 +37,18 @@ x-backend-env: &backend-env
   SMTP_USER: ${SMTP_USER:-}
   SMTP_PASSWORD: ${SMTP_PASSWORD:-}
   SMTP_TLS: ${SMTP_TLS:-true}
-  SMTP_FROM: ${SMTP_FROM:-susoDash <no-reply@example.com>}
+  SMTP_FROM: ${SMTP_FROM:-susoDash <no-reply@example.org>}
   SYNC_TICK_MINUTES: ${SYNC_TICK_MINUTES:-5}
   MONITOR_TICK_MINUTES: ${MONITOR_TICK_MINUTES:-15}
+  # Columnar analytics tuning. DUCKDB_THREADS=0 chooses a conservative value
+  # from the host's CPUs and leaves headroom for API/Postgres/Celery.
+  DUCKDB_THREADS: ${DUCKDB_THREADS:-0}
+  DUCKDB_MEMORY_LIMIT: ${DUCKDB_MEMORY_LIMIT:-2GB}
+  DUCKDB_TEMP_DIR: ${DUCKDB_TEMP_DIR:-/data/duckdb_tmp}
+  DUCKDB_CSV_ABOVE_MB: ${DUCKDB_CSV_ABOVE_MB:-32}
+  ANALYTICS_CACHE_ENABLED: ${ANALYTICS_CACHE_ENABLED:-true}
+  ANALYTICS_CACHE_TTL_SECONDS: ${ANALYTICS_CACHE_TTL_SECONDS:-300}
+  MONITORING_PRECOMPUTE_ENABLED: ${MONITORING_PRECOMPUTE_ENABLED:-true}
 
 services:
   postgres:
@@ -92,6 +98,9 @@ services:
       - "127.0.0.1:${API_PORT:-8000}:8000"
     networks: [surveyhq]
 
+  # Heavy file parsing, connection downloads and default ad-hoc background work.
+  # Keeping this queue separate means a census import cannot occupy the worker
+  # slots responsible for alerts and field monitoring.
   worker:
     build:
       context: ./backend
@@ -99,7 +108,32 @@ services:
     restart: unless-stopped
     command:
       ["celery", "-A", "app.workers.celery_app.celery_app", "worker",
-       "--loglevel=info", "--concurrency=2", "--max-tasks-per-child=50"]
+       "--loglevel=info", "--queues=imports,default",
+       "--concurrency=${IMPORT_WORKER_CONCURRENCY:-2}", "--max-tasks-per-child=50"]
+    environment: *backend-env
+    volumes:
+      - survey-data:/data
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app.celery_app inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 40s
+    networks: [surveyhq]
+
+  # Latency-sensitive scheduled work has its own worker pool.
+  worker-monitoring:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command:
+      ["celery", "-A", "app.workers.celery_app.celery_app", "worker",
+       "--loglevel=info", "--queues=monitoring,quality,maintenance",
+       "--concurrency=${MONITOR_WORKER_CONCURRENCY:-2}", "--max-tasks-per-child=100"]
     environment: *backend-env
     volumes:
       - survey-data:/data
