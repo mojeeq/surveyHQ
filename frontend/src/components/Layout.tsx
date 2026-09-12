@@ -8,7 +8,6 @@ import type { Notification } from '@/lib/types'
 import { relativeTime } from '@/lib/format'
 import AppIcon, { type AppIconName } from '@/components/AppIcon'
 
-/** Closes a popover when a click lands outside every ref it's given. */
 function useClickOutside(refs: React.RefObject<HTMLElement>[], onOutside: () => void) {
   useEffect(() => {
     const onPointerDown = (event: MouseEvent) => {
@@ -20,27 +19,130 @@ function useClickOutside(refs: React.RefObject<HTMLElement>[], onOutside: () => 
   }, [refs, onOutside])
 }
 
-const NAV: { to: string; label: string; icon: AppIconName; end?: boolean }[] = [
-  { to: '/', label: 'Overview', icon: 'overview', end: true },
-  { to: '/projects', label: 'Projects', icon: 'projects' },
-  { to: '/datasets', label: 'Datasets', icon: 'datasets' },
-  { to: '/connections', label: 'Connections', icon: 'connections' },
-  { to: '/explore', label: 'Explore', icon: 'explore' },
-  { to: '/dashboards', label: 'Dashboards', icon: 'dashboards' },
-  { to: '/monitoring', label: 'Monitoring', icon: 'monitoring' },
-  { to: '/quality', label: 'Data quality', icon: 'quality' },
-  { to: '/alerts', label: 'Alerts', icon: 'alerts' },
+type NavItem = { to: string; label: string; icon: AppIconName; end?: boolean }
+type NavGroup = { label: string; items: NavItem[] }
+
+const NAV_GROUPS: NavGroup[] = [
+  {
+    label: 'Workspace',
+    items: [
+      { to: '/', label: 'Overview', icon: 'overview', end: true },
+      { to: '/projects', label: 'Projects', icon: 'projects' },
+    ],
+  },
+  {
+    label: 'Data',
+    items: [
+      { to: '/datasets', label: 'Datasets', icon: 'datasets' },
+      { to: '/connections', label: 'Connections', icon: 'connections' },
+    ],
+  },
+  {
+    label: 'Analyse',
+    items: [
+      { to: '/explore', label: 'Analyse', icon: 'explore' },
+      { to: '/dashboards', label: 'Dashboards', icon: 'dashboards' },
+    ],
+  },
+  {
+    label: 'Monitor',
+    items: [
+      { to: '/monitoring', label: 'Fieldwork', icon: 'monitoring' },
+      { to: '/quality', label: 'Data quality', icon: 'quality' },
+      { to: '/alerts', label: 'Alerts', icon: 'alerts' },
+    ],
+  },
 ]
 
-/* One row of the sidebar. The selected one is lit from above like everything
-   else here, and carries a bright rule down its left edge - which is how Aero
-   marked a selection, and reads at a glance better than a change of shade. */
 const navRow = (isActive: boolean) =>
-  `group/nav relative flex items-center gap-2.5 rounded-control px-3 py-1.5 text-[13px] transition-colors duration-150 ${
+  `group/nav relative flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all duration-150 ${
     isActive
-      ? 'nav-selected text-white'
-      : 'text-sidebar-text hover:bg-white/[0.06] hover:text-white'
+      ? 'bg-white text-slate-950 shadow-sm dark:bg-slate-800 dark:text-white'
+      : 'text-slate-400 hover:bg-white/5 hover:text-white'
   }`
+
+function MenuIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden>
+      <path d="M4 7h16M4 12h16M4 17h16" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function BellIcon() {
+  return (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+      <path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9" strokeLinecap="round" strokeLinejoin="round" />
+      <path d="M10 21h4" strokeLinecap="round" />
+    </svg>
+  )
+}
+
+function ThemeIcon({ dark }: { dark: boolean }) {
+  return dark ? (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+      <circle cx="12" cy="12" r="4" />
+      <path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4" strokeLinecap="round" />
+    </svg>
+  ) : (
+    <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden>
+      <path d="M20.3 15.2A8.5 8.5 0 0 1 8.8 3.7 8.5 8.5 0 1 0 20.3 15.2Z" strokeLinecap="round" strokeLinejoin="round" />
+    </svg>
+  )
+}
+
+function Brand() {
+  return (
+    <div className="flex items-center gap-3">
+      <div className="grid h-9 w-9 place-items-center rounded-xl bg-brand-500 shadow-lg shadow-brand-500/20">
+        <img src="/logo.svg" alt="" className="h-6 w-6" />
+      </div>
+      <div className="min-w-0">
+        <div className="text-[15px] font-bold tracking-tight text-white">SurveyHQ</div>
+        <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-slate-500">Survey operations</div>
+      </div>
+    </div>
+  )
+}
+
+function SidebarNav({ admin = false, onNavigate }: { admin?: boolean; onNavigate?: () => void }) {
+  return (
+    <nav className="flex-1 overflow-y-auto px-3 py-4">
+      <div className="space-y-5">
+        {NAV_GROUPS.map((group) => (
+          <section key={group.label}>
+            <p className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600">
+              {group.label}
+            </p>
+            <div className="space-y-1">
+              {group.items.map((item) => (
+                <NavLink
+                  key={item.to}
+                  to={item.to}
+                  end={item.end}
+                  onClick={onNavigate}
+                  className={({ isActive }) => navRow(isActive)}
+                >
+                  <AppIcon name={item.icon} size={19} glow={false} className="shrink-0" />
+                  <span className="truncate">{item.label}</span>
+                </NavLink>
+              ))}
+            </div>
+          </section>
+        ))}
+        {admin && (
+          <section>
+            <p className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600">System</p>
+            <NavLink to="/admin" onClick={onNavigate} className={({ isActive }) => navRow(isActive)}>
+              <AppIcon name="admin" size={19} glow={false} className="shrink-0" />
+              Administration
+            </NavLink>
+          </section>
+        )}
+      </div>
+    </nav>
+  )
+}
 
 export default function Layout() {
   const { user, signOut, can } = useAuth()
@@ -62,93 +164,78 @@ export default function Layout() {
   useClickOutside([mobileNavRef, mobileToggleRef], () => setMenuOpen(false))
 
   return (
-    <div className="app-ground flex min-h-screen bg-ink-100 dark:bg-dark-100">
-      {/* The one dark surface in the interface, as it is in Redash: the
-          navigation is furniture, and keeping it out of the paper-white
-          working area is what makes a dashboard read as the content. */}
-      <aside className="aero-sidebar hidden w-56 shrink-0 flex-col lg:flex">
-        <div className="flex h-14 items-center gap-2.5 border-b border-white/[0.07] px-5">
-          <img src="/logo.svg" alt="" className="h-8 w-8 drop-shadow-[0_1px_3px_rgba(77,184,255,0.55)]" />
-          <span className="text-[16px] font-semibold text-white [text-shadow:0_1px_2px_rgba(0,0,0,0.5)]">
-            suso<span className="font-normal text-sidebar-text">Dash</span>
-          </span>
+    <div className="flex min-h-screen bg-slate-50 text-slate-700 dark:bg-slate-950 dark:text-slate-300">
+      <aside className="hidden w-[248px] shrink-0 flex-col border-r border-white/[0.06] bg-slate-950 lg:flex">
+        <div className="flex h-[72px] items-center border-b border-white/[0.06] px-5">
+          <Brand />
         </div>
-        <nav className="flex-1 space-y-0.5 overflow-y-auto p-3">
-          {NAV.map((item) => (
-            <NavLink
-              key={item.to}
-              to={item.to}
-              end={item.end}
-              className={({ isActive }) => navRow(isActive)}
-            >
-              <AppIcon name={item.icon} size={22} className="shrink-0" />
-              {item.label}
-            </NavLink>
-          ))}
-          {can('admin') && (
-            <NavLink
-              to="/admin"
-              className={({ isActive }) => navRow(isActive)}
-            >
-              <AppIcon name="admin" size={22} className="shrink-0" />
-              Administration
-            </NavLink>
-          )}
-        </nav>
-        <div className="p-3 text-xs text-sidebar-text/60">susoDash v1.0</div>
+        <SidebarNav admin={can('admin')} />
+        <div className="border-t border-white/[0.06] px-5 py-4">
+          <div className="text-xs font-medium text-slate-400">SurveyHQ</div>
+          <div className="mt-0.5 text-[11px] text-slate-600">Monitoring · analysis · publishing</div>
+        </div>
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="aero-glass sticky top-0 z-30 flex h-14 items-center justify-between gap-3 border-b border-ink-200 px-4 transition-colors dark:border-dark-200 lg:px-6">
-          <div className="flex items-center gap-2 lg:hidden">
+        <header className="sticky top-0 z-30 flex h-[72px] items-center justify-between gap-3 border-b border-slate-200/80 bg-white/90 px-4 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-950/90 lg:px-7">
+          <div className="flex min-w-0 items-center gap-3 lg:hidden">
             <button
               ref={mobileToggleRef}
-              className="btn-ghost btn-sm"
+              className="icon-button"
               onClick={() => setMenuOpen((open) => !open)}
               aria-label="Toggle navigation menu"
               aria-expanded={menuOpen}
             >
-              ☰
+              <MenuIcon />
             </button>
-            <img src="/logo.svg" alt="" className="h-7 w-7 drop-shadow-[0_1px_2px_rgba(77,184,255,0.4)]" />
-            <span className="font-semibold">
-              suso<span className="font-normal text-ink-500 dark:text-dark-500">Dash</span>
-            </span>
+            <div className="flex items-center gap-2.5">
+              <div className="grid h-8 w-8 place-items-center rounded-lg bg-brand-500">
+                <img src="/logo.svg" alt="" className="h-5 w-5" />
+              </div>
+              <span className="font-bold tracking-tight text-slate-950 dark:text-white">SurveyHQ</span>
+            </div>
           </div>
-          <div className="hidden lg:block" />
 
-          <div className="flex items-center gap-2">
+          <div className="hidden min-w-0 lg:block">
+            <p className="text-xs font-medium uppercase tracking-[0.12em] text-slate-400">Survey workspace</p>
+            <p className="mt-0.5 truncate text-sm font-semibold text-slate-900 dark:text-slate-100">
+              Monitor collection, analyse data and publish results
+            </p>
+          </div>
+
+          <div className="flex items-center gap-1.5">
             <button
-              className="btn-ghost btn-sm"
+              className="icon-button"
               onClick={toggleTheme}
               aria-label={resolvedTheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
               title={resolvedTheme === 'dark' ? 'Switch to light theme' : 'Switch to dark theme'}
             >
-              <span className="text-base leading-none transition-transform duration-200" aria-hidden>
-                {resolvedTheme === 'dark' ? '☀' : '☾'}
-              </span>
+              <ThemeIcon dark={resolvedTheme === 'dark'} />
             </button>
 
             <div className="relative" ref={notificationsRef}>
               <button
-                className="btn-ghost btn-sm relative"
+                className="icon-button relative"
                 onClick={() => setNotificationsOpen((open) => !open)}
                 aria-label="Notifications"
                 aria-expanded={notificationsOpen}
               >
-                🔔
+                <BellIcon />
                 {notifications.length > 0 && (
-                  <span className="absolute -right-0.5 -top-0.5 grid h-4 min-w-4 place-items-center rounded-full bg-red-600 px-1 text-[10px] font-semibold text-white">
-                    {notifications.length}
+                  <span className="absolute right-1 top-1 grid h-4 min-w-4 place-items-center rounded-full bg-red-500 px-1 text-[9px] font-bold text-white ring-2 ring-white dark:ring-slate-950">
+                    {notifications.length > 9 ? '9+' : notifications.length}
                   </span>
                 )}
               </button>
               {notificationsOpen && (
-                <div className="absolute right-0 top-10 z-40 w-80 origin-top-right animate-[fade-in_150ms_ease-out] rounded-card border border-ink-200 bg-white shadow-pop dark:border-dark-200 dark:bg-dark-50">
-                  <div className="flex items-center justify-between border-b border-ink-200 px-4 py-2.5 dark:border-dark-200">
-                    <span className="text-sm font-semibold dark:text-dark-900">Notifications</span>
+                <div className="absolute right-0 top-12 z-40 w-[360px] max-w-[calc(100vw-2rem)] overflow-hidden rounded-xl border border-slate-200 bg-white shadow-2xl shadow-slate-950/10 dark:border-slate-800 dark:bg-slate-900">
+                  <div className="flex items-center justify-between border-b border-slate-100 px-4 py-3.5 dark:border-slate-800">
+                    <div>
+                      <span className="text-sm font-semibold text-slate-900 dark:text-slate-100">Notifications</span>
+                      <p className="mt-0.5 text-xs text-slate-500">Recent system and monitoring activity</p>
+                    </div>
                     <button
-                      className="text-xs text-brand-500 hover:underline dark:text-brand-400"
+                      className="text-xs font-semibold text-brand-600 hover:text-brand-700 dark:text-brand-400"
                       onClick={async () => {
                         await api.post('/system/notifications/read-all')
                         setNotificationsOpen(false)
@@ -157,28 +244,22 @@ export default function Layout() {
                       Mark all read
                     </button>
                   </div>
-                  <div className="max-h-80 overflow-y-auto">
+                  <div className="max-h-96 overflow-y-auto">
                     {notifications.length === 0 ? (
-                      <p className="px-4 py-6 text-center text-sm text-ink-500 dark:text-dark-500">
-                        Nothing new right now.
-                      </p>
+                      <p className="px-4 py-10 text-center text-sm text-slate-500">Nothing new right now.</p>
                     ) : (
                       notifications.map((notification) => (
                         <button
                           key={notification.id}
-                          className="block w-full border-b border-ink-100 px-4 py-3 text-left transition-colors hover:bg-ink-50 dark:border-dark-200 dark:hover:bg-dark-200/60"
+                          className="block w-full border-b border-slate-100 px-4 py-3.5 text-left transition-colors last:border-0 hover:bg-slate-50 dark:border-slate-800 dark:hover:bg-slate-800/70"
                           onClick={() => {
                             setNotificationsOpen(false)
                             if (notification.link) navigate(notification.link)
                           }}
                         >
-                          <p className="text-sm font-medium text-ink-800 dark:text-dark-800">{notification.title}</p>
-                          <p className="mt-0.5 line-clamp-2 text-xs text-ink-500 dark:text-dark-500">
-                            {notification.body}
-                          </p>
-                          <p className="mt-1 text-[11px] text-ink-400 dark:text-dark-400">
-                            {relativeTime(notification.created_at)}
-                          </p>
+                          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{notification.title}</p>
+                          <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500 dark:text-slate-400">{notification.body}</p>
+                          <p className="mt-2 text-[11px] font-medium text-slate-400">{relativeTime(notification.created_at)}</p>
                         </button>
                       ))
                     )}
@@ -187,49 +268,28 @@ export default function Layout() {
               )}
             </div>
 
-            <div className="flex items-center gap-2 border-l border-ink-200 pl-3 dark:border-dark-200">
+            <div className="ml-1 flex items-center gap-3 border-l border-slate-200 pl-3 dark:border-slate-800">
               <div className="hidden text-right sm:block">
-                <p className="text-sm font-medium leading-tight text-ink-800 dark:text-dark-800">
+                <p className="max-w-[180px] truncate text-sm font-semibold text-slate-900 dark:text-slate-100">
                   {user?.full_name || user?.email}
                 </p>
-                <p className="text-[11px] capitalize leading-tight text-ink-500 dark:text-dark-500">{user?.role}</p>
+                <p className="mt-0.5 text-[11px] font-medium capitalize text-slate-500">{user?.role}</p>
               </div>
-              <button className="btn-secondary btn-sm" onClick={signOut}>
-                Sign out
-              </button>
+              <button className="btn-secondary btn-sm" onClick={signOut}>Sign out</button>
             </div>
           </div>
         </header>
 
         <nav
           ref={mobileNavRef}
-          className={`overflow-hidden border-b border-ink-200 bg-white transition-[max-height,opacity] duration-200 ease-out dark:border-dark-200 dark:bg-dark-50 lg:hidden ${
-            menuOpen ? 'max-h-96 opacity-100' : 'pointer-events-none max-h-0 opacity-0'
+          className={`overflow-hidden border-b border-slate-800 bg-slate-950 transition-[max-height,opacity] duration-200 ease-out lg:hidden ${
+            menuOpen ? 'max-h-[75vh] opacity-100' : 'pointer-events-none max-h-0 opacity-0'
           }`}
         >
-          <div className="p-3">
-            {NAV.map((item) => (
-              <NavLink
-                key={item.to}
-                to={item.to}
-                end={item.end}
-                onClick={() => setMenuOpen(false)}
-                className={({ isActive }) =>
-                  `flex items-center gap-2.5 rounded-card px-3 py-2 text-sm transition-colors ${
-                    isActive
-                      ? 'bg-brand-50 text-brand-700 dark:bg-brand-500/10 dark:text-brand-400'
-                      : 'text-ink-700 dark:text-dark-700'
-                  }`
-                }
-              >
-                <AppIcon name={item.icon} size={20} glow={false} className="shrink-0" />
-                {item.label}
-              </NavLink>
-            ))}
-          </div>
+          <SidebarNav admin={can('admin')} onNavigate={() => setMenuOpen(false)} />
         </nav>
 
-        <main className="mx-auto w-full max-w-[1500px] flex-1 animate-[fade-in_200ms_ease-out] p-4 lg:p-6">
+        <main className="mx-auto w-full max-w-[1560px] flex-1 px-4 py-5 sm:px-6 lg:px-8 lg:py-7">
           <Outlet />
         </main>
       </div>
