@@ -56,19 +56,25 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
-      # R tests run on one database leg. Install the same isolation boundary
-      # used by production and shadow the system Rscript with SurveyHQ's launcher
-      # so the existing end-to-end project tests exercise the sandbox too.
+      # R tests run on one database leg. Compile the exact unprivileged launcher
+      # used by the production image so both the focused security tests and the
+      # existing project-R tests execute through Landlock/seccomp.
       - name: Install R sandbox
         if: matrix.database == 'sqlite'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends r-base-core bubblewrap
-          sudo install -m 0755 bin/surveyhq-rscript /usr/local/bin/Rscript
+          sudo apt-get install -y --no-install-recommends r-base-core libseccomp-dev
+          cc -O2 -Wall -Wextra -Werror sandbox/r-sandbox.c -lseccomp -o /tmp/surveyhq-r-sandbox
+          sudo install -m 0755 /tmp/surveyhq-r-sandbox /usr/local/bin/surveyhq-r-sandbox
 
       - name: Check sandboxed R is there
         if: matrix.database == 'sqlite'
-        run: Rscript --version
+        run: |
+          test "$(surveyhq-r-sandbox --surveyhq-sandbox-probe)" = "surveyhq-r-sandbox-v1"
+          room=$(mktemp -d)
+          printf '%s\n' 'cat("sandbox-ok")' > "$room/check.R"
+          cd "$room"
+          test "$(surveyhq-r-sandbox --vanilla check.R)" = "sandbox-ok"
 
       - name: Lint
         run: ruff check app tests
@@ -148,17 +154,29 @@ jobs:
           echo "the API never became healthy"
           exit 1
 
-      # Exercise the sandbox from inside the actual production image. The R
-      # process must not be able to see the platform's /data mount even though
-      # its parent API process can.
+      # Exercise the sandbox from inside the actual production image. The parent
+      # API process sees /data and Docker networking; arbitrary R must see only
+      # its project workspace and must be unable to create a network socket.
       - name: R is isolated inside the backend container
         run: |
           docker compose exec -T api sh -lc '
+            test "$(surveyhq-r-sandbox --surveyhq-sandbox-probe)" = "surveyhq-r-sandbox-v1"
             room=/data/workspaces/ci-sandbox
+            secret=/data/ci-sandbox-secret.txt
             rm -rf "$room" && mkdir -p "$room"
-            printf "%s\n" "cat(file.exists(\"/data\"))" > "$room/test.R"
+            printf "not-for-r\n" > "$secret"
+            cat > "$room/test.R" <<"RSCRIPT"
+          outside <- tryCatch(readLines("/data/ci-sandbox-secret.txt"), error=function(e) character())
+          network <- tryCatch({
+            con <- socketConnection(host="127.0.0.1", port=9, open="r+", timeout=1)
+            close(con)
+            TRUE
+          }, error=function(e) FALSE, warning=function(w) FALSE)
+          cat(length(outside) == 0, "|", network)
+          RSCRIPT
             cd "$room"
-            test "$(Rscript --vanilla test.R)" = "FALSE"
+            test "$(surveyhq-r-sandbox --vanilla test.R)" = "TRUE | FALSE"
+            rm -f "$secret"
           '
 
       # Proves more than a health probe: the schema was created, the bootstrap
