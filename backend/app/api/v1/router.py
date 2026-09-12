@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from app.api.v1.endpoints import (
     analytics,
     auth,
+    chart_library,
     connections,
     dashboards,
     datasets,
@@ -28,6 +29,9 @@ api_router.include_router(
 api_router.include_router(connections.router, prefix="/connections", tags=["connections"])
 api_router.include_router(analytics.router, prefix="/analytics", tags=["analytics"])
 api_router.include_router(geography.router, prefix="/boundaries", tags=["boundaries"])
+# Keep the static chart-library route ahead of the dashboards router, whose
+# /charts/{chart_id} family is more general.
+api_router.include_router(chart_library.router, prefix="/dashboards", tags=["dashboards"])
 api_router.include_router(dashboards.router, prefix="/dashboards", tags=["dashboards"])
 api_router.include_router(monitoring.router, prefix="/monitoring", tags=["monitoring"])
 api_router.include_router(system.router, prefix="/system", tags=["system"])
