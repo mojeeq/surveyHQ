@@ -6,7 +6,7 @@ Each provider presents the same small contract to the API and sync worker:
 * list importable resources (forms, dictionaries, data queries);
 * export one resource to a local CSV/ZIP file.
 
-The ingestion layer therefore does not need provider-specific knowledge.  A new
+The ingestion layer therefore does not need provider-specific knowledge. A new
 collector is one adapter here, not another parallel connection subsystem.
 """
 
@@ -80,8 +80,7 @@ def write_rows_csv(rows: list[dict[str, Any]], destination: Path) -> Path:
                 seen.add(name)
                 fields.append(name)
     if not fields:
-        # The normal CSV reader still needs a header.  An empty source is a
-        # valid refresh and should not become an opaque parser error.
+        # An empty source is a valid refresh, but a CSV reader still needs a header.
         fields = ["_empty"]
     destination.parent.mkdir(parents=True, exist_ok=True)
     with destination.open("w", encoding="utf-8-sig", newline="") as handle:
@@ -103,6 +102,7 @@ class HTTPSourceConnector:
         base_url: str,
         username: str = "",
         secret: str = "",
+        workspace: str = "",
         verify_ssl: bool = True,
         source_config: dict[str, Any] | None = None,
         auth: httpx.Auth | tuple[str, str] | None = None,
@@ -111,6 +111,7 @@ class HTTPSourceConnector:
         self.base_url = base_url.rstrip("/")
         self.username = username
         self.secret = secret
+        self.workspace = workspace
         self.source_config = dict(source_config or {})
         self._client = httpx.Client(
             auth=auth,
@@ -142,7 +143,9 @@ class HTTPSourceConnector:
         parsed = urlparse(url)
         base = urlparse(self.base_url)
         if parsed.scheme and (parsed.scheme, parsed.netloc) != (base.scheme, base.netloc):
-            raise SourceConnectorError("The source returned a pagination link on another host")
+            raise SourceConnectorError(
+                "The source returned a pagination link on another host"
+            )
         if not parsed.scheme:
             return url
         return parsed.path + (f"?{parsed.query}" if parsed.query else "")
@@ -151,20 +154,25 @@ class HTTPSourceConnector:
         try:
             response = self._client.request(method, self._url(path), **kwargs)
         except (httpx.TransportError, httpx.TimeoutException) as exc:
-            raise SourceConnectorError(f"Could not reach {self.base_url}: {exc}") from exc
+            raise SourceConnectorError(
+                f"Could not reach {self.base_url}: {exc}"
+            ) from exc
         if response.status_code in (401, 403):
             raise SourceConnectorError(
-                f"Authentication failed ({response.status_code}). Check the credentials and access role."
+                f"Authentication failed ({response.status_code}). "
+                "Check the credentials and access role."
             )
         if response.status_code == 404:
             raise SourceConnectorError(
-                f"The source endpoint was not found: {response.request.url}. Check the server URL."
+                f"The source endpoint was not found: {response.request.url}. "
+                "Check the server URL."
             )
         if response.status_code >= 400:
             text = response.text[:400].strip()
+            label = PROVIDER_LABELS.get(self.provider, self.provider)
             raise SourceConnectorError(
-                f"{PROVIDER_LABELS.get(self.provider, self.provider)} returned "
-                f"{response.status_code}: {text or response.reason_phrase}"
+                f"{label} returned {response.status_code}: "
+                f"{text or response.reason_phrase}"
             )
         return response
 
@@ -173,7 +181,9 @@ class HTTPSourceConnector:
         try:
             return response.json()
         except ValueError as exc:
-            raise SourceConnectorError("The source did not return JSON where JSON was expected") from exc
+            raise SourceConnectorError(
+                "The source did not return JSON where JSON was expected"
+            ) from exc
 
     def test_connection(self) -> dict[str, Any]:
         resources = self.list_resources()
@@ -265,6 +275,9 @@ class ODKCentralConnector(HTTPSourceConnector):
     provider = "odk_central"
 
     def __init__(self, **kwargs: Any) -> None:
+        # Central accepts HTTPS Basic authentication for web users. It is less
+        # efficient than a session token, but avoids storing a second long-lived
+        # secret and is explicitly supported by Central's API.
         username = str(kwargs.get("username") or "")
         secret = str(kwargs.get("secret") or "")
         super().__init__(**kwargs, auth=(username, secret))
@@ -275,10 +288,16 @@ class ODKCentralConnector(HTTPSourceConnector):
             project_ids = [configured]
         else:
             projects = self._json("/v1/projects")
-            project_ids = [str(row.get("id")) for row in projects if row.get("id") is not None]
+            project_ids = [
+                str(row.get("id"))
+                for row in projects
+                if row.get("id") is not None
+            ]
         resources: list[SourceResource] = []
         for project_id in project_ids:
-            forms = self._json(f"/v1/projects/{quote(project_id, safe='')}/forms")
+            forms = self._json(
+                f"/v1/projects/{quote(project_id, safe='')}/forms"
+            )
             for form in forms:
                 xml_id = str(form.get("xmlFormId") or form.get("id") or "")
                 if not xml_id:
@@ -365,7 +384,11 @@ class SurveyCTOConnector(HTTPSourceConnector):
 
     def list_resources(self) -> list[SourceResource]:
         payload = self._json("/api/v2/forms")
-        forms = payload if isinstance(payload, list) else payload.get("forms") or payload.get("results") or []
+        forms = (
+            payload
+            if isinstance(payload, list)
+            else payload.get("forms") or payload.get("results") or []
+        )
         resources: list[SourceResource] = []
         for form in forms:
             if isinstance(form, str):
@@ -381,7 +404,12 @@ class SurveyCTOConnector(HTTPSourceConnector):
                 title = str(form.get("title") or form.get("name") or form_id)
             if form_id:
                 resources.append(
-                    SourceResource(id=form_id, identity=form_id, title=title, kind="form")
+                    SourceResource(
+                        id=form_id,
+                        identity=form_id,
+                        title=title,
+                        kind="form",
+                    )
                 )
         return resources
 
@@ -401,14 +429,41 @@ class CSWebConnector(HTTPSourceConnector):
     provider = "csweb"
 
     def __init__(self, **kwargs: Any) -> None:
-        username = str(kwargs.get("username") or "")
-        secret = str(kwargs.get("secret") or "")
         base_url = str(kwargs.get("base_url") or "").rstrip("/")
         if not base_url.endswith("/api"):
             kwargs["base_url"] = f"{base_url}/api"
-        super().__init__(**kwargs, auth=(username, secret))
+        super().__init__(**kwargs)
+        self._access_token = ""
+
+    def _authenticate(self) -> None:
+        if self._access_token:
+            return
+        response = self._request(
+            "POST",
+            "/token",
+            json={
+                "client_id": "cspro_android",
+                "client_secret": "cspro",
+                "grant_type": "password",
+                "username": self.username,
+                "password": self.secret,
+            },
+            headers={"Accept": "application/json"},
+        )
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise SourceConnectorError(
+                "CSWeb did not return a login token"
+            ) from exc
+        token = str(payload.get("access_token") or "")
+        if not token:
+            raise SourceConnectorError("CSWeb did not return an access token")
+        self._access_token = token
+        self._client.headers["Authorization"] = f"Bearer {token}"
 
     def list_resources(self) -> list[SourceResource]:
+        self._authenticate()
         payload = self._json("/dictionaries")
         resources: list[SourceResource] = []
         for item in payload if isinstance(payload, list) else []:
@@ -416,15 +471,26 @@ class CSWebConnector(HTTPSourceConnector):
                 name = item
                 title = item
             else:
-                name = str(item.get("name") or item.get("dictionary") or item.get("id") or "")
+                name = str(
+                    item.get("name")
+                    or item.get("dictionary")
+                    or item.get("id")
+                    or ""
+                )
                 title = str(item.get("label") or item.get("name") or name)
             if name:
                 resources.append(
-                    SourceResource(id=name, identity=name, title=title, kind="dictionary")
+                    SourceResource(
+                        id=name,
+                        identity=name,
+                        title=title,
+                        kind="dictionary",
+                    )
                 )
         return resources
 
     def export_to_file(self, identity: str, destination: Path) -> Path:
+        self._authenticate()
         rows: list[dict[str, Any]] = []
         start_after = ""
         page_size = 1000
@@ -437,7 +503,12 @@ class CSWebConnector(HTTPSourceConnector):
                 f"/dictionaries/{quote(identity, safe='')}/cases",
                 headers=headers,
             )
-            payload = response.json()
+            try:
+                payload = response.json()
+            except ValueError as exc:
+                raise SourceConnectorError(
+                    "CSWeb did not return case data as JSON"
+                ) from exc
             batch = payload if isinstance(payload, list) else payload.get("cases") or []
             batch = [row for row in batch if isinstance(row, dict)]
             rows.extend(batch)
@@ -453,6 +524,12 @@ class CSWebConnector(HTTPSourceConnector):
 
 class SDMXConnector(HTTPSourceConnector):
     provider = "sdmx"
+
+    def __init__(self, **kwargs: Any) -> None:
+        username = str(kwargs.get("username") or "")
+        secret = str(kwargs.get("secret") or "")
+        auth = (username, secret) if username and secret else None
+        super().__init__(**kwargs, auth=auth)
 
     def _configured(self) -> list[SourceResource]:
         resources = self.source_config.get("resources") or []
@@ -479,7 +556,12 @@ class SDMXConnector(HTTPSourceConnector):
         data_path = str(self.source_config.get("data_path") or "").strip()
         if data_path and all(row.identity != data_path for row in out):
             out.append(
-                SourceResource(id=data_path, identity=data_path, title=data_path, kind="data query")
+                SourceResource(
+                    id=data_path,
+                    identity=data_path,
+                    title=data_path,
+                    kind="data query",
+                )
             )
         return out
 
@@ -493,7 +575,10 @@ class SDMXConnector(HTTPSourceConnector):
             "GET",
             path,
             headers={
-                "Accept": "text/csv, application/vnd.sdmx.data+csv;version=2.0, */*;q=0.1"
+                "Accept": (
+                    "text/csv, application/vnd.sdmx.data+csv;version=2.0, "
+                    "*/*;q=0.1"
+                )
             },
         )
         return {
@@ -506,13 +591,17 @@ class SDMXConnector(HTTPSourceConnector):
     def export_to_file(self, identity: str, destination: Path) -> Path:
         allowed = {resource.identity for resource in self._configured()}
         if identity not in allowed:
-            raise SourceConnectorError("That SDMX data query is not configured on this connection")
+            raise SourceConnectorError(
+                "That SDMX data query is not configured on this connection"
+            )
         response = self._request(
             "GET",
             identity,
             headers={
-                "Accept": "text/csv, application/vnd.sdmx.data+csv;version=2.0, "
-                "application/vnd.sdmx.data+csv;version=1.0"
+                "Accept": (
+                    "text/csv, application/vnd.sdmx.data+csv;version=2.0, "
+                    "application/vnd.sdmx.data+csv;version=1.0"
+                )
             },
         )
         body = response.content.lstrip()
