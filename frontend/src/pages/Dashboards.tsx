@@ -23,6 +23,12 @@ import {
   Tabs,
 } from '@/components/ui'
 
+type LibraryChart = Chart & {
+  dataset_name: string
+  project_id: string | null
+  project_name: string | null
+}
+
 export default function Dashboards() {
   const { can } = useAuth()
   const toast = useToast()
@@ -33,17 +39,12 @@ export default function Dashboards() {
   const [projectId, setProjectId] = useState('')
   /** Which project this page is narrowed to. Null is all of them. */
   const [project, setProject] = useState<string | null>(null)
+  const [datasetId, setDatasetId] = useState('')
 
-  // Both lists take the same filter. A dashboard carries a project of its own;
-  // a chart takes one from its dataset, which the server resolves - so the two
-  // agree about which project something is in without the page having to hold
-  // a dataset-to-project map of its own.
-  //
-  // Built with URLSearchParams rather than by trimming the leading "&" off a
-  // helper written for appending: that read correctly only as long as the
-  // helper kept returning a string that starts with one, which is a contract
-  // nothing states and nothing checks. "none" is the shared area, which these
-  // endpoints spell that way because an absent project_id means "no filter".
+  // Both lists take the same project filter. A dashboard carries a project of
+  // its own; a chart takes one from its dataset. The chart-library endpoint also
+  // returns the resolved dataset/project names so the UI can show ownership
+  // without reconstructing it from a separately paginated dataset list.
   const scope = new URLSearchParams(project === null ? {} : { project_id: project || 'none' })
   const query = scope.toString() ? `?${scope}` : ''
 
@@ -52,9 +53,22 @@ export default function Dashboards() {
     queryFn: () => api.get<Dashboard[]>(`/dashboards${query}`),
   })
   const charts = useQuery({
-    queryKey: ['charts', project],
-    queryFn: () => api.get<Chart[]>(`/dashboards/charts${query}`),
+    queryKey: ['charts', 'library', project],
+    queryFn: () => api.get<LibraryChart[]>(`/dashboards/chart-library${query}`),
   })
+
+  const chartDatasets = Array.from(
+    new Map(
+      (charts.data ?? []).map((chart) => [
+        chart.dataset_id,
+        { id: chart.dataset_id, name: chart.dataset_name },
+      ]),
+    ).values(),
+  ).sort((a, b) => a.name.localeCompare(b.name))
+
+  const visibleCharts = datasetId
+    ? (charts.data ?? []).filter((chart) => chart.dataset_id === datasetId)
+    : (charts.data ?? [])
 
   const create = useMutation({
     mutationFn: () =>
@@ -85,7 +99,13 @@ export default function Dashboards() {
         description="Assemble saved charts and indicators into a monitoring view."
         actions={
           <div className="flex flex-wrap items-center gap-2">
-            <ProjectFilter value={project} onChange={setProject} />
+            <ProjectFilter
+              value={project}
+              onChange={(next) => {
+                setProject(next)
+                setDatasetId('')
+              }}
+            />
             {can('analyst') && (
               <button className="btn-primary" onClick={() => setCreating(true)}>
                 New dashboard
@@ -177,41 +197,89 @@ export default function Dashboards() {
             </div>
           ))}
 
-        {tab === 'charts' &&
-          (charts.isLoading ? (
-            <Loading />
-          ) : !charts.data?.length ? (
-            <Card>
-              <EmptyState
-                icon="◱"
-                title={project === null ? 'No saved charts' : 'No saved charts in this project'}
-                description={
-                  project === null
-                    ? "Build a query in Explore and use 'Save as chart' to reuse it on dashboards."
-                    : 'A chart belongs to the project its dataset is in. Choose another project, or save one from Explore.'
-                }
-                action={
-                  <Link to="/explore" className="btn-primary btn-sm">
-                    Go to Explore
-                  </Link>
-                }
-              />
-            </Card>
-          ) : (
-            <div className="grid gap-4 lg:grid-cols-2">
-              {charts.data.map((chart) => (
-                <ErrorBoundary key={chart.id} what={`"${chart.name}"`}>
-                  <ChartPreview
-                    chart={chart}
-                    canDelete={can('analyst')}
-                    onDelete={() => {
-                      if (confirm(`Delete the chart "${chart.name}"?`)) removeChart.mutate(chart.id)
-                    }}
-                  />
-                </ErrorBoundary>
-              ))}
-            </div>
-          ))}
+        {tab === 'charts' && (
+          <>
+            {!charts.isLoading && !charts.error && charts.data?.length ? (
+              <div className="mb-4 flex flex-wrap items-center gap-3 rounded-card border border-ink-200 bg-white px-4 py-3 dark:border-dark-200 dark:bg-dark-100">
+                <label className="flex items-center gap-2 text-sm text-ink-600 dark:text-dark-600">
+                  Dataset
+                  <select
+                    className="input w-64 py-1.5"
+                    value={datasetId}
+                    onChange={(event) => setDatasetId(event.target.value)}
+                  >
+                    <option value="">All datasets</option>
+                    {chartDatasets.map((dataset) => (
+                      <option key={dataset.id} value={dataset.id}>
+                        {dataset.name}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <span className="text-xs text-ink-500 dark:text-dark-500">
+                  Showing {visibleCharts.length} of {charts.data.length} saved chart
+                  {charts.data.length === 1 ? '' : 's'}
+                </span>
+                {datasetId && (
+                  <button className="btn-ghost btn-sm" onClick={() => setDatasetId('')}>
+                    Clear dataset filter
+                  </button>
+                )}
+              </div>
+            ) : null}
+
+            {charts.isLoading ? (
+              <Loading />
+            ) : charts.error ? (
+              <ErrorNote error={charts.error} />
+            ) : !charts.data?.length ? (
+              <Card>
+                <EmptyState
+                  icon="◱"
+                  title={project === null ? 'No saved charts' : 'No saved charts in this project'}
+                  description={
+                    project === null
+                      ? "Build a query in Explore and use 'Save as chart' to reuse it on dashboards."
+                      : 'A chart belongs to the project its dataset is in. Choose another project, or save one from Explore.'
+                  }
+                  action={
+                    <Link to="/explore" className="btn-primary btn-sm">
+                      Go to Explore
+                    </Link>
+                  }
+                />
+              </Card>
+            ) : !visibleCharts.length ? (
+              <Card>
+                <EmptyState
+                  icon="◱"
+                  title="No saved charts for this dataset"
+                  description="Choose another dataset or clear the dataset filter."
+                  action={
+                    <button className="btn-secondary btn-sm" onClick={() => setDatasetId('')}>
+                      Show all datasets
+                    </button>
+                  }
+                />
+              </Card>
+            ) : (
+              <div className="grid gap-4 lg:grid-cols-2">
+                {visibleCharts.map((chart) => (
+                  <ErrorBoundary key={chart.id} what={`"${chart.name}"`}>
+                    <ChartPreview
+                      chart={chart}
+                      canDelete={can('analyst')}
+                      onDelete={() => {
+                        if (confirm(`Delete the chart "${chart.name}"?`))
+                          removeChart.mutate(chart.id)
+                      }}
+                    />
+                  </ErrorBoundary>
+                ))}
+              </div>
+            )}
+          </>
+        )}
       </div>
 
       <Modal
@@ -249,7 +317,7 @@ function ChartPreview({
   canDelete,
   onDelete,
 }: {
-  chart: Chart
+  chart: LibraryChart
   canDelete: boolean
   onDelete: () => void
 }) {
@@ -282,6 +350,14 @@ function ChartPreview({
         )
       }
     >
+      <div className="mb-3 flex flex-wrap gap-2">
+        <Badge tone="neutral" icon="◫">
+          Project: {chart.project_name || 'Shared area'}
+        </Badge>
+        <Badge tone="info" icon="▤">
+          Dataset: {chart.dataset_name}
+        </Badge>
+      </div>
       {data.isLoading ? (
         <Loading />
       ) : data.error ? (
