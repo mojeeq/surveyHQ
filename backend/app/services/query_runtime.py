@@ -12,7 +12,8 @@ from __future__ import annotations
 import hashlib
 import json
 import threading
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import redis
 
@@ -128,7 +129,6 @@ def install_query_runtime() -> None:
 
         cached_execute_query.__name__ = original_execute.__name__
         cached_execute_query.__doc__ = original_execute.__doc__
-        setattr(cached_execute_query, "__surveyhq_cached__", True)
         query_engine.execute_query = cached_execute_query
 
         # Ingest / metadata ------------------------------------------------
