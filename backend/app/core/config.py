@@ -151,7 +151,9 @@ class Settings(BaseSettings):
 
     @property
     def duckdb_temp_path(self) -> Path:
-        return Path(self.duckdb_temp_dir) if self.duckdb_temp_dir else self.storage_path / "duckdb_tmp"
+        if self.duckdb_temp_dir:
+            return Path(self.duckdb_temp_dir)
+        return self.storage_path / "duckdb_tmp"
 
     @property
     def workspaces_path(self) -> Path:
