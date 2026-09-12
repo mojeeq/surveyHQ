@@ -1,9 +1,10 @@
-"""Runtime wiring for fast DuckDB queries and version-aware Redis caching.
+"""Runtime wiring for SurveyHQ's high-throughput data paths.
 
-Kept outside query_engine so the compiler stays deterministic and easy to test.
-The API and Celery entry points install this once before importing endpoint/task
-modules; every caller that subsequently imports execute_query receives the cached
-wrapper, while all query-engine SQL uses the configured DuckDB connection.
+The compiler and file readers remain independently testable; the API and Celery
+entry points install this layer once before importing endpoint/task modules.
+That gives every production caller configured DuckDB resources, version-aware
+query caching, columnar append/merge, batched metadata scans, direct large CSV
+parsing and precomputed field monitoring without duplicating endpoint contracts.
 """
 
 from __future__ import annotations
@@ -87,31 +88,92 @@ def _put(key: str, result: QueryResult) -> None:
 
 
 def install_query_runtime() -> None:
-    """Install configured DuckDB resources and cache aggregate query results."""
+    """Install all performance accelerators once per API/worker process."""
     global _installed
     if _installed:
         return
     with _lock:
         if _installed:
             return
+
+        # Query execution --------------------------------------------------
         from app.services import query_engine
 
         query_engine._connect = columnar.connect
-        original: Callable[..., QueryResult] = query_engine.execute_query
+        original_execute: Callable[..., QueryResult] = query_engine.execute_query
+        original_from_model = query_engine.DatasetContext.from_model
+
+        @classmethod
+        def versioned_context(cls: Any, dataset: Any) -> Any:
+            ctx = original_from_model(dataset)
+            # DatasetContext is intentionally a small dataclass and not slotted,
+            # so the version can travel with it without changing every test that
+            # constructs one directly.
+            ctx.version = int(getattr(dataset, "version", 0) or 0)
+            return ctx
+
+        query_engine.DatasetContext.from_model = versioned_context
 
         def cached_execute_query(ctx: Any, spec: Any) -> QueryResult:
-            # Contexts built in older tests do not carry a version. They still
-            # work; production contexts do, and therefore invalidate precisely.
             key = _key(ctx, spec)
             cached = _get(key)
             if cached is not None:
                 return cached
-            result = original(ctx, spec)
+            result = original_execute(ctx, spec)
             _put(key, result)
             return result
 
-        cached_execute_query.__name__ = original.__name__
-        cached_execute_query.__doc__ = original.__doc__
+        cached_execute_query.__name__ = original_execute.__name__
+        cached_execute_query.__doc__ = original_execute.__doc__
         setattr(cached_execute_query, "__surveyhq_cached__", True)
         query_engine.execute_query = cached_execute_query
+
+        # Ingest / metadata ------------------------------------------------
+        from app.services import fast_ingest, ingest
+
+        original_ingest_file = ingest.ingest_file
+        ingest.build_metadata_from_parquet = fast_ingest.build_metadata_from_parquet_fast
+        ingest.dataframe_preview = fast_ingest.dataframe_preview_fast
+
+        def ingest_file(source: Any, destination_dir: Any) -> Any:
+            return fast_ingest.ingest_file_fast(source, destination_dir, original_ingest_file)
+
+        ingest.ingest_file = ingest_file
+
+        # Datasets imports ingest_file by name, so import it only after the
+        # ingest module is patched. Internal calls resolve _apply_ingest and
+        # append_frame_into_dataset from its module globals at execution time.
+        from app.services import datasets, monitoring_precompute
+
+        original_apply_ingest = datasets._apply_ingest
+
+        def apply_ingest_with_summary(db: Any, dataset: Any, result: Any) -> Any:
+            ready = original_apply_ingest(db, dataset, result)
+            if settings.monitoring_precompute_enabled:
+                monitoring_precompute.build(ready)
+            return ready
+
+        datasets._apply_ingest = apply_ingest_with_summary
+        datasets.append_frame_into_dataset = fast_ingest.append_frame_fast
+
+        # Derived merges now COPY their join result directly to Parquet instead
+        # of fetchall() -> DataFrame -> PyArrow -> Parquet.
+        from app.services import derived
+
+        derived.run_merge = fast_ingest.run_merge_fast
+
+        # The unfiltered day-grain field overview is precomputed on each import.
+        # Filtered views continue through the canonical query engine.
+        from app.services import field_progress
+
+        original_build_overview = field_progress.build_overview
+
+        def build_overview(
+            dataset: Any, filters: Any = None, grain: str = "day"
+        ) -> dict[str, Any]:
+            return monitoring_precompute.build_overview_fast(
+                dataset, original_build_overview, filters, grain
+            )
+
+        field_progress.build_overview = build_overview
         _installed = True
