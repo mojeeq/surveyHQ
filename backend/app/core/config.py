@@ -59,8 +59,8 @@ class Settings(BaseSettings):
     # Redis / Celery
     redis_url: str = "redis://redis:6379/0"
 
-    # Analytics / DuckDB.  Zero threads means choose a conservative value from
-    # the machine's CPU count.  Keeping these deployment settings rather than
+    # Analytics / DuckDB. Zero threads means choose a conservative value from
+    # the machine's CPU count. Keeping these deployment settings rather than
     # literals in query_engine lets an 8-core VM and a 32-core analytical host
     # use very different resource envelopes without rebuilding the image.
     duckdb_threads: int = 0
@@ -88,7 +88,7 @@ class Settings(BaseSettings):
     smtp_user: str = ""
     smtp_password: str = ""
     smtp_tls: bool = True
-    smtp_from: str = "susoDash <no-reply@example.org>"
+    smtp_from: str = "susoDash <no-reply@example.com>"
 
     # R scripts over a dataset.
     #
