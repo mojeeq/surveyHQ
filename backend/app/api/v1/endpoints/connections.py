@@ -1,4 +1,4 @@
-"""Survey Solutions server connections: CRUD, testing and sync triggering."""
+"""External data connections: CRUD, testing, discovery and sync triggering."""
 
 from __future__ import annotations
 
@@ -27,6 +27,12 @@ from app.schemas.connection import (
 )
 from app.schemas.monitoring import JobOut
 from app.services.audit import record
+from app.services.external_sources import (
+    ExternalSourceClient,
+    SourceError,
+    SourceResource,
+    source_label,
+)
 from app.services.projects import can_edit, can_view, restrict, scope_for
 from app.services.survey_solutions import (
     SurveySolutionsClient,
@@ -57,7 +63,7 @@ def _to_out(connection: Connection) -> ConnectionOut:
     return out
 
 
-def _client(connection: Connection) -> SurveySolutionsClient:
+def _survey_solutions_client(connection: Connection) -> SurveySolutionsClient:
     return SurveySolutionsClient(
         base_url=connection.base_url,
         username=connection.username,
@@ -67,12 +73,64 @@ def _client(connection: Connection) -> SurveySolutionsClient:
     )
 
 
+def _external_client(connection: Connection) -> ExternalSourceClient:
+    return ExternalSourceClient(
+        source_type=connection.source_type,
+        base_url=connection.base_url,
+        workspace=connection.workspace,
+        username=connection.username,
+        secret=decrypt(connection.password_encrypted),
+        verify_ssl=connection.verify_ssl,
+        config=dict(connection.source_config or {}),
+    )
+
+
+def _external_client_from_payload(payload: ConnectionCreate) -> ExternalSourceClient:
+    return ExternalSourceClient(
+        source_type=payload.source_type,
+        base_url=payload.base_url,
+        workspace=payload.workspace,
+        username=payload.username,
+        secret=payload.password,
+        verify_ssl=payload.verify_ssl,
+        config=dict(payload.source_config or {}),
+    )
+
+
+def _needs_credentials(source_type: str) -> str:
+    """What must be present before an authenticated adapter can be used."""
+    if source_type == "sdmx":
+        return "none"
+    if source_type == "kobo":
+        return "secret"
+    return "both"
+
+
+def _credentials_ready(
+    source_type: str, username: str, has_secret: bool
+) -> bool:
+    need = _needs_credentials(source_type)
+    if need == "none":
+        return True
+    if need == "secret":
+        return has_secret
+    return bool(username) and has_secret
+
+
+def _credential_message(source_type: str) -> str:
+    if source_type == "kobo":
+        return "Set the Kobo API token before testing or importing."
+    if source_type == "sdmx":
+        return ""
+    return f"Set the {source_label(source_type)} user name and password before testing or importing."
+
+
 def _get(connection_id: str, db: DbSession, user: User) -> Connection:
     """A connection the caller may reach.
 
     Every route here takes an id, and a connection is not an innocuous record:
-    it names a server, it can be made to import, and its runs hand back the raw
-    export. Scoping the listing alone would leave all of that reachable to
+    it names a server, it can be made to import, and its runs can expose raw
+    exports. Scoping the listing alone would leave all of that reachable to
     anyone who knew the id.
     """
     connection = db.get(Connection, connection_id)
@@ -82,18 +140,28 @@ def _get(connection_id: str, db: DbSession, user: User) -> Connection:
 
 
 def _editable(connection_id: str, db: DbSession, user: User) -> Connection:
-    """The same, for a call that changes something or pulls data through it."""
     connection = _get(connection_id, db, user)
     if not can_edit(db, user, connection.project_id, Role.manager):
         raise HTTPException(status_code=404, detail="Connection not found")
     return connection
 
 
+def _resource_out(resource: SourceResource) -> QuestionnaireOut:
+    return QuestionnaireOut(
+        id=resource.id,
+        version=resource.version,
+        title=resource.title,
+        variable=resource.variable,
+        identity=resource.identity,
+        last_entry_date=resource.last_entry_date,
+        kind=resource.kind,
+        meta=resource.meta,
+    )
+
+
 @router.get("", response_model=list[ConnectionOut])
 def list_connections(db: DbSession, user: CurrentUser) -> list[ConnectionOut]:
     rows = db.scalars(
-        # A connection carries the project its imports land in, so it is
-        # scoped by that like everything else that has one.
         restrict(
             select(Connection), scope_for(db, user).filter(Connection.project_id)
         ).order_by(Connection.created_at.desc())
@@ -110,7 +178,9 @@ def create_connection(
     connection = Connection(
         name=payload.name,
         base_url=payload.base_url,
-        workspace=payload.workspace or "primary",
+        source_type=payload.source_type,
+        source_config=payload.source_config,
+        workspace=payload.workspace or "",
         username=payload.username,
         password_encrypted=encrypt(payload.password) if payload.password else "",
         verify_ssl=payload.verify_ssl,
@@ -131,7 +201,11 @@ def create_connection(
         user=user,
         action="create_connection",
         entity_type="connection",
-        detail={"name": payload.name, "url": payload.base_url},
+        detail={
+            "name": payload.name,
+            "url": payload.base_url,
+            "source_type": payload.source_type,
+        },
     )
     db.commit()
     db.refresh(connection)
@@ -150,10 +224,10 @@ def update_connection(
     connection = _editable(connection_id, db, user)
     data = payload.model_dump(exclude_unset=True)
     password = data.pop("password", None)
-    # Moving a connection is a write to where it is going as well as to where
-    # it was, so both ends are checked.
     moving = "project_id" in data and data["project_id"] != connection.project_id
-    if moving and not can_edit(db, user, data["project_id"], Role.manager):
+    if moving and data["project_id"] and not can_edit(
+        db, user, data["project_id"], Role.manager
+    ):
         raise HTTPException(status_code=404, detail="Project not found")
     for field, value in data.items():
         setattr(connection, field, value)
@@ -194,31 +268,38 @@ def test_connection(
 ) -> ConnectionTestResult:
     connection = _editable(connection_id, db, user)
     _throttle_tests(user)
-    if not connection.username or not connection.password_encrypted:
+    if not _credentials_ready(
+        connection.source_type,
+        connection.username,
+        bool(connection.password_encrypted),
+    ):
         return ConnectionTestResult(
-            ok=False, message="Set an API user name and password before testing."
+            ok=False, message=_credential_message(connection.source_type)
         )
     try:
-        with _client(connection) as client:
-            info = client.test_connection()
-    except SurveySolutionsError as exc:
+        if connection.source_type == "survey_solutions":
+            with _survey_solutions_client(connection) as client:
+                info = client.test_connection()
+            message = (
+                f"Connected to workspace '{info['workspace']}'. "
+                f"{info['questionnaire_count']} questionnaire(s) visible."
+            )
+        else:
+            with _external_client(connection) as client:
+                info = client.test_connection()
+            message = (
+                f"Connected to {source_label(connection.source_type)}. "
+                f"{info.get('resource_count', 0)} resource(s) visible."
+            )
+    except (SurveySolutionsError, SourceError, ValueError) as exc:
         connection.last_sync_error = str(exc)
         db.commit()
-        return ConnectionTestResult(ok=False, message=str(exc))
-    except ValueError as exc:
         return ConnectionTestResult(ok=False, message=str(exc))
 
     connection.server_info = info
     connection.last_sync_error = ""
     db.commit()
-    return ConnectionTestResult(
-        ok=True,
-        message=(
-            f"Connected to workspace '{info['workspace']}'. "
-            f"{info['questionnaire_count']} questionnaire(s) visible."
-        ),
-        details=info,
-    )
+    return ConnectionTestResult(ok=True, message=message, details=info)
 
 
 @router.post("/test", response_model=ConnectionTestResult)
@@ -227,48 +308,68 @@ def test_unsaved_connection(
 ) -> ConnectionTestResult:
     """Let the UI validate credentials before the connection is saved."""
     _throttle_tests(user)
+    if not _credentials_ready(payload.source_type, payload.username, bool(payload.password)):
+        return ConnectionTestResult(
+            ok=False, message=_credential_message(payload.source_type)
+        )
     try:
-        with SurveySolutionsClient(
-            base_url=payload.base_url,
-            username=payload.username,
-            password=payload.password,
-            workspace=payload.workspace or "primary",
-            verify_ssl=payload.verify_ssl,
-        ) as client:
-            info = client.test_connection()
-    except SurveySolutionsError as exc:
+        if payload.source_type == "survey_solutions":
+            with SurveySolutionsClient(
+                base_url=payload.base_url,
+                username=payload.username,
+                password=payload.password,
+                workspace=payload.workspace or "primary",
+                verify_ssl=payload.verify_ssl,
+            ) as client:
+                info = client.test_connection()
+            message = (
+                f"Connected to workspace '{info['workspace']}'. "
+                f"{info['questionnaire_count']} questionnaire(s) visible."
+            )
+        else:
+            with _external_client_from_payload(payload) as client:
+                info = client.test_connection()
+            message = (
+                f"Connected to {source_label(payload.source_type)}. "
+                f"{info.get('resource_count', 0)} resource(s) visible."
+            )
+    except (SurveySolutionsError, SourceError, ValueError) as exc:
         return ConnectionTestResult(ok=False, message=str(exc))
-    return ConnectionTestResult(
-        ok=True,
-        message=(
-            f"Connected to workspace '{info['workspace']}'. "
-            f"{info['questionnaire_count']} questionnaire(s) visible."
-        ),
-        details=info,
-    )
+    return ConnectionTestResult(ok=True, message=message, details=info)
 
 
+@router.get("/{connection_id}/resources", response_model=list[QuestionnaireOut])
 @router.get("/{connection_id}/questionnaires", response_model=list[QuestionnaireOut])
-def list_questionnaires(
+def list_resources(
     connection_id: str, db: DbSession, user: CurrentUser
 ) -> list[QuestionnaireOut]:
+    """Discover forms/dictionaries/dataflows visible through this connection.
+
+    ``/questionnaires`` remains as an alias so older Survey Solutions clients
+    and the existing frontend keep working while the UI moves to generic
+    resource language.
+    """
     connection = _get(connection_id, db, user)
     try:
-        with _client(connection) as client:
-            questionnaires = client.list_questionnaires()
-    except SurveySolutionsError as exc:
+        if connection.source_type == "survey_solutions":
+            with _survey_solutions_client(connection) as client:
+                questionnaires = client.list_questionnaires()
+            return [
+                QuestionnaireOut(
+                    id=q.id,
+                    version=q.version,
+                    title=q.title,
+                    variable=q.variable,
+                    identity=q.identity,
+                    last_entry_date=q.last_entry_date,
+                    kind="questionnaire",
+                )
+                for q in questionnaires
+            ]
+        with _external_client(connection) as client:
+            return [_resource_out(resource) for resource in client.list_resources()]
+    except (SurveySolutionsError, SourceError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return [
-        QuestionnaireOut(
-            id=q.id,
-            version=q.version,
-            title=q.title,
-            variable=q.variable,
-            identity=q.identity,
-            last_entry_date=q.last_entry_date,
-        )
-        for q in questionnaires
-    ]
 
 
 @router.get("/{connection_id}/interviews", response_model=dict)
@@ -281,10 +382,15 @@ def list_interviews(
     status: str = "",
     limit: int = Query(default=200, le=1000),
 ) -> dict[str, Any]:
-    """Live interview summaries straight from the server, without exporting."""
+    """Live Survey Solutions interview summaries, without exporting."""
     connection = _get(connection_id, db, user)
+    if connection.source_type != "survey_solutions":
+        raise HTTPException(
+            status_code=400,
+            detail="Live interview status is currently available for Survey Solutions connections only.",
+        )
     try:
-        with _client(connection) as client:
+        with _survey_solutions_client(connection) as client:
             interviews: list[dict[str, Any]] = []
             for interview in client.iter_interviews(
                 questionnaire_id=questionnaire_id or None,
@@ -308,24 +414,26 @@ def list_interviews(
 def trigger_sync(
     connection_id: str, payload: SyncRequest, db: DbSession, user: RequireManager
 ) -> Job:
-    """Queue an export + import run for the selected questionnaires."""
+    """Queue an import for the selected remote resources."""
     connection = _editable(connection_id, db, user)
-    if not connection.username or not connection.password_encrypted:
+    if not _credentials_ready(
+        connection.source_type,
+        connection.username,
+        bool(connection.password_encrypted),
+    ):
         raise HTTPException(
-            status_code=400, detail="This connection has no credentials configured."
+            status_code=400, detail=_credential_message(connection.source_type)
         )
     target_project = payload.project_id or connection.project_id
     if target_project and not can_edit(db, user, target_project, Role.manager):
-        # The import creates datasets in that project, so aiming one at a
-        # project the caller does not manage is a write they may not make.
         raise HTTPException(status_code=404, detail="Project not found")
-    questionnaires = payload.questionnaires or connection.questionnaires
-    if not questionnaires:
+    resources = payload.questionnaires or connection.questionnaires
+    if not resources:
         raise HTTPException(
             status_code=400,
             detail=(
-                "Choose at least one questionnaire to import, or set a default list "
-                "on the connection."
+                "Choose at least one remote resource to import, or set a default "
+                "resource list on the connection."
             ),
         )
 
@@ -335,7 +443,7 @@ def trigger_sync(
         title=f"Import from {connection.name}",
         params={
             "connection_id": connection.id,
-            "questionnaires": questionnaires,
+            "questionnaires": resources,
             "interview_status": payload.interview_status or connection.interview_status,
             "project_id": target_project,
             "mode": payload.mode,
@@ -349,7 +457,7 @@ def trigger_sync(
         action="trigger_sync",
         entity_type="connection",
         entity_id=connection_id,
-        detail={"questionnaires": questionnaires},
+        detail={"resources": resources, "source_type": connection.source_type},
     )
     db.commit()
     db.refresh(job)
@@ -377,11 +485,7 @@ def trigger_sync(
 def download_sync_archive(
     connection_id: str, run_id: str, db: DbSession, user: CurrentUser
 ) -> Response:
-    """The export zip exactly as the server sent it.
-
-    Worth keeping and worth handing back: it is the only record of what was
-    actually imported, and it can be re-uploaded like any other archive.
-    """
+    """The raw Survey Solutions export zip, where this source produces one."""
     _get(connection_id, db, user)
     run = db.get(SyncRun, run_id)
     if run is None or run.connection_id != connection_id:
@@ -414,8 +518,6 @@ def list_sync_runs(
     out: list[SyncRunOut] = []
     for run in runs:
         item = SyncRunOut.model_validate(run)
-        # Checked on disk rather than believed from the row: archives are
-        # pruned, and offering a download that 404s is worse than not offering.
         item.has_archive = bool(run.archive_path) and Path(run.archive_path).is_file()
         out.append(item)
     return out
