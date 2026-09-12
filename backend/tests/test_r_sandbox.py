@@ -24,7 +24,7 @@ def _run_r(workspace: Path, code: str) -> subprocess.CompletedProcess[str]:
     script = workspace / "sandbox-test.R"
     script.write_text(code, encoding="utf-8")
     return subprocess.run(
-        [str(WRAPPER), "--vanilla", script.name],
+        ["bash", str(WRAPPER), "--vanilla", script.name],
         cwd=workspace,
         capture_output=True,
         text=True,
