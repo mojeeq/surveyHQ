@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { api } from '@/lib/api'
+import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { formatNumber, relativeTime } from '@/lib/format'
 import type {
@@ -13,6 +14,7 @@ import type {
   ProjectMember,
   Relationship,
   Role,
+  User,
 } from '@/lib/types'
 import ProjectRWorkspace from '@/components/ProjectRWorkspace'
 import RelationshipMap from '@/components/RelationshipMap'
@@ -259,6 +261,7 @@ function Members({
 }) {
   const toast = useToast()
   const queryClient = useQueryClient()
+  const { can } = useAuth()
   const [adding, setAdding] = useState(false)
 
   const refresh = () => {
@@ -285,9 +288,10 @@ function Members({
     <Card
       className="mt-4"
       title="Members"
-      subtitle="Project managers can add an existing SurveyHQ user by username."
+      subtitle="A member’s role here never exceeds their own role on the platform."
       actions={
-        canManage && (
+        canManage &&
+        can('admin') && (
           <button className="btn-primary btn-sm" onClick={() => setAdding(true)}>
             Add member
           </button>
@@ -298,7 +302,7 @@ function Members({
         <EmptyState
           icon="◍"
           title="No members"
-          description="Add another SurveyHQ user by username to collaborate on this project."
+          description="Only administrators can reach this project until someone is added."
         />
       ) : (
         <ul className="divide-y divide-ink-100">
@@ -345,6 +349,7 @@ function Members({
       {adding && (
         <AddMemberModal
           projectId={projectId}
+          existing={members.map((m) => m.user_id)}
           onClose={() => setAdding(false)}
           onAdded={() => {
             toast.push('Member added', 'success')
@@ -359,24 +364,29 @@ function Members({
 
 function AddMemberModal({
   projectId,
+  existing,
   onClose,
   onAdded,
 }: {
   projectId: string
+  existing: string[]
   onClose: () => void
   onAdded: () => void
 }) {
   const toast = useToast()
-  const [username, setUsername] = useState('')
+  const [userId, setUserId] = useState('')
   const [role, setRole] = useState<Role>('viewer')
 
+  // Listing users is an administrator-only endpoint, which is why adding a
+  // member is offered only to administrators.
+  const users = useQuery({
+    queryKey: ['users'],
+    queryFn: () => api.get<Page<User>>('/users?limit=200'),
+  })
+  const candidates = (users.data?.items ?? []).filter((u) => !existing.includes(u.id))
+
   const add = useMutation({
-    mutationFn: async () => {
-      const account = await api.get<{ id: string; username: string; full_name: string }>(
-        `/users/lookup/${encodeURIComponent(username.trim().toLowerCase())}`,
-      )
-      return api.put(`/projects/${projectId}/members`, { user_id: account.id, role })
-    },
+    mutationFn: () => api.put(`/projects/${projectId}/members`, { user_id: userId, role }),
     onSuccess: onAdded,
     onError: (error: Error) => toast.push(error.message, 'error'),
   })
@@ -391,45 +401,51 @@ function AddMemberModal({
           <button className="btn-secondary" onClick={onClose}>
             Cancel
           </button>
-          <button
-            className="btn-primary"
-            onClick={() => add.mutate()}
-            disabled={username.trim().length < 3 || add.isPending}
-          >
-            {add.isPending ? 'Adding…' : 'Add member'}
+          <button className="btn-primary" onClick={() => add.mutate()} disabled={!userId}>
+            Add
           </button>
         </>
       }
     >
-      <Field
-        label="Username"
-        hint="Enter the exact SurveyHQ username. The person must already have an account."
-      >
-        <input
-          className="input"
-          value={username}
-          onChange={(event) => setUsername(event.target.value)}
-          placeholder="mosese"
-          autoComplete="off"
-          autoFocus
-        />
-      </Field>
-      <Field
-        label="Role on this project"
-        hint={PROJECT_ROLES.find((r) => r.value === role)?.description}
-      >
-        <select
-          className="input"
-          value={role}
-          onChange={(event) => setRole(event.target.value as Role)}
-        >
-          {PROJECT_ROLES.map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-      </Field>
+      {users.isLoading ? (
+        <Loading />
+      ) : !candidates.length ? (
+        <p className="text-sm text-ink-500">Every user is already a member of this project.</p>
+      ) : (
+        <>
+          <Field label="User">
+            <select
+              className="input"
+              value={userId}
+              onChange={(event) => setUserId(event.target.value)}
+            >
+              <option value="">Choose a user…</option>
+              {candidates.map((user) => (
+                <option key={user.id} value={user.id}>
+                  {user.full_name ? `${user.full_name} - ${user.email}` : user.email}
+                  {user.restricted_to_projects ? ' (project-only)' : ''}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field
+            label="Role on this project"
+            hint={PROJECT_ROLES.find((r) => r.value === role)?.description}
+          >
+            <select
+              className="input"
+              value={role}
+              onChange={(event) => setRole(event.target.value as Role)}
+            >
+              {PROJECT_ROLES.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+        </>
+      )}
     </Modal>
   )
 }

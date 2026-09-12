@@ -14,7 +14,6 @@ class ProjectMemberOut(BaseModel):
     id: str
     user_id: str
     role: Role
-    username: str = ""
     email: str = ""
     full_name: str = ""
 
