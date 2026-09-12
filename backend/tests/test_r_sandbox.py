@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import http.server
-import os
 import socketserver
 import subprocess
 import threading
