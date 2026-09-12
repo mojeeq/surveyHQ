@@ -10,14 +10,15 @@ ENV PYTHONUNBUFFERED=1 \
 # build dependencies for pyreadstat and psycopg2.
 #
 # r-base-core is here so that R_SCRIPTS_ENABLED is one setting rather than a
-# rebuild. Installing it does not switch the feature on: the setting defaults
-# to false, because an R script runs with this container's permissions and that
-# is a decision for whoever deploys the platform, not for its image.
+# rebuild. bubblewrap is the security boundary for arbitrary project R code:
+# it gives each run a private filesystem/network namespace with only that
+# project's workspace writable. Installing R does not switch the feature on.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential \
         libpq-dev \
         curl \
         r-base-core \
+        bubblewrap \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -27,6 +28,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY pyproject.toml .
+COPY bin/surveyhq-rscript /usr/local/bin/surveyhq-rscript
+RUN chmod 0755 /usr/local/bin/surveyhq-rscript
 
 # Run as a non-root user; /data is a mounted volume so it needs to be writable.
 RUN useradd --create-home --uid 10001 surveyhq \
