@@ -33,6 +33,7 @@ class DatasetStatus(str, enum.Enum):
 class DatasetSource(str, enum.Enum):
     upload = "upload"
     survey_solutions = "survey_solutions"
+    external = "external"
     derived = "derived"
 
 
