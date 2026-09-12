@@ -7,6 +7,7 @@ import { AuthProvider } from '@/hooks/useAuth'
 import { ToastProvider } from '@/hooks/useToast'
 import { ThemeProvider } from '@/hooks/useTheme'
 import './index.css'
+import './redesign.css'
 
 const queryClient = new QueryClient({
   defaultOptions: {
