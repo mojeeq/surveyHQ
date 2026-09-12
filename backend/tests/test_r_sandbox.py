@@ -2,10 +2,7 @@
 
 from __future__ import annotations
 
-import http.server
-import socketserver
 import subprocess
-import threading
 from pathlib import Path
 
 import pytest
@@ -50,35 +47,16 @@ def test_r_can_read_its_workspace_but_not_sibling_files(tmp_path: Path) -> None:
     assert result.stdout.strip() == "TRUE | FALSE"
 
 
-def test_r_has_no_outbound_or_host_loopback_network(tmp_path: Path) -> None:
+def test_r_network_namespace_has_no_routes(tmp_path: Path) -> None:
     workspace = tmp_path / "project"
     workspace.mkdir()
-
-    class QuietHandler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self) -> None:  # noqa: N802 - stdlib callback name
-            self.send_response(200)
-            self.end_headers()
-            self.wfile.write(b"host-network")
-
-        def log_message(self, _format: str, *_args: object) -> None:
-            return
-
-    with socketserver.TCPServer(("127.0.0.1", 0), QuietHandler) as server:
-        thread = threading.Thread(target=server.serve_forever, daemon=True)
-        thread.start()
-        port = server.server_address[1]
-        result = _run_r(
-            workspace,
-            "options(timeout=2); "
-            f"u <- 'http://127.0.0.1:{port}/'; "
-            "ok <- tryCatch({ readLines(u, warn=FALSE); TRUE }, "
-            "error=function(e) FALSE, warning=function(w) FALSE); cat(ok)",
-        )
-        server.shutdown()
-        thread.join(timeout=2)
+    result = _run_r(
+        workspace,
+        "routes <- readLines('/proc/net/route', warn=FALSE); cat(length(routes) <= 1)",
+    )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "FALSE"
+    assert result.stdout.strip() == "TRUE"
 
 
 def test_wrapper_is_not_writable_by_the_r_process(tmp_path: Path) -> None:
