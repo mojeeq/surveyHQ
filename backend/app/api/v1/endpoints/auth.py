@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Request, status
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.api.deps import CurrentUser, DbSession, client_ip
 from app.core.config import settings
@@ -95,7 +96,17 @@ def signup(payload: SignupRequest, db: DbSession, request: Request) -> Token:
         last_login_at=utcnow(),
     )
     db.add(user)
-    db.flush()
+    try:
+        # The pre-checks give specific messages in the normal case; the unique
+        # indexes are still the authority when two signups race between those
+        # checks and this write.
+        db.flush()
+    except IntegrityError as exc:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="That username or email address is already in use",
+        ) from exc
     record(
         db,
         user=user,
