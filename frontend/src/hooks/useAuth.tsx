@@ -10,10 +10,18 @@ import {
 import { api, tokenStore } from '@/lib/api'
 import type { Role, User } from '@/lib/types'
 
+export interface SignupInput {
+  username: string
+  email: string
+  full_name: string
+  password: string
+}
+
 interface AuthState {
   user: User | null
   loading: boolean
-  signIn: (email: string, password: string) => Promise<void>
+  signIn: (identifier: string, password: string) => Promise<void>
+  signUp: (input: SignupInput) => Promise<void>
   signOut: () => void
   can: (minimum: Role) => boolean
   /** Called after a forced password change, so the gate lifts without a reload. */
@@ -40,11 +48,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       .finally(() => setLoading(false))
   }, [])
 
-  const signIn = useCallback(async (email: string, password: string) => {
-    const token = await api.post<{ access_token: string }>('/auth/login', { email, password })
-    tokenStore.set(token.access_token)
-    setUser(await api.get<User>('/auth/me'))
+  const establishSession = useCallback(async (accessToken: string) => {
+    tokenStore.set(accessToken)
+    try {
+      setUser(await api.get<User>('/auth/me'))
+    } catch (error) {
+      tokenStore.clear()
+      throw error
+    }
   }, [])
+
+  const signIn = useCallback(
+    async (identifier: string, password: string) => {
+      const token = await api.post<{ access_token: string }>('/auth/login', {
+        identifier,
+        password,
+      })
+      await establishSession(token.access_token)
+    },
+    [establishSession],
+  )
+
+  const signUp = useCallback(
+    async (input: SignupInput) => {
+      const token = await api.post<{ access_token: string }>('/auth/signup', input)
+      await establishSession(token.access_token)
+    },
+    [establishSession],
+  )
 
   const signOut = useCallback(() => {
     tokenStore.clear()
@@ -62,8 +93,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   )
 
   const value = useMemo(
-    () => ({ user, loading, signIn, signOut, can, refresh }),
-    [user, loading, signIn, signOut, can, refresh],
+    () => ({ user, loading, signIn, signUp, signOut, can, refresh }),
+    [user, loading, signIn, signUp, signOut, can, refresh],
   )
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>
 }
