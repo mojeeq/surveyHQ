@@ -350,6 +350,11 @@ function ChartPreview({
         )
       }
     >
+      <div className="mb-3">
+        <Badge tone="info" icon="▤">
+          {chart.dataset_name}
+        </Badge>
+      </div>
       {data.isLoading ? (
         <Loading />
       ) : data.error ? (
