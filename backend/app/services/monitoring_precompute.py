@@ -1,8 +1,8 @@
 """Small precomputed field-monitoring views beside each survey Parquet.
 
-Monitoring asks the same handful of questions after every refresh.  Computing
+Monitoring asks the same handful of questions after every refresh. Computing
 those once, from the freshly written Parquet, makes the monitoring page a JSON
-read rather than six independent GROUP BY scans.  Filtered/ad-hoc views still
+read rather than six independent GROUP BY scans. Filtered/ad-hoc views still
 fall back to the normal query engine so semantics are unchanged.
 """
 
@@ -12,8 +12,9 @@ import datetime as dt
 import json
 import os
 import uuid
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from app.core.config import settings
 from app.core.logging import get_logger
