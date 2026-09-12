@@ -43,8 +43,8 @@ export default function Dashboards() {
 
   // Both lists take the same project filter. A dashboard carries a project of
   // its own; a chart takes one from its dataset. The chart-library endpoint also
-  // returns the resolved dataset/project names so the UI can show ownership
-  // without reconstructing it from a separately paginated dataset list.
+  // returns the resolved dataset name so the UI can filter and identify charts
+  // without reconstructing ownership from a separately paginated dataset list.
   const scope = new URLSearchParams(project === null ? {} : { project_id: project || 'none' })
   const query = scope.toString() ? `?${scope}` : ''
 
@@ -350,6 +350,9 @@ function ChartPreview({
         )
       }
     >
+      <p className="mb-3 text-xs font-medium text-ink-500 dark:text-dark-500">
+        {chart.dataset_name}
+      </p>
       {data.isLoading ? (
         <Loading />
       ) : data.error ? (
