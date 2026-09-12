@@ -12,6 +12,7 @@ from app.core.security import hash_password
 from app.db.base import Base
 from app.db.session import SessionLocal, engine
 from app.models import Role, User  # noqa: F401 - registers every table
+from app.services.accounts import next_available_username, username_from_email
 
 logger = get_logger(__name__)
 
@@ -56,6 +57,19 @@ def ensure_columns() -> None:
                     text(f'ALTER TABLE "{table.name}" ADD COLUMN {definition}')
                 )
             logger.info("Added missing column %s.%s", table.name, column.name)
+
+
+def ensure_usernames() -> None:
+    """Give accounts created before usernames existed a stable public handle."""
+    with SessionLocal() as db:
+        users = list(
+            db.scalars(select(User).where((User.username.is_(None)) | (User.username == "")))
+        )
+        for user in users:
+            user.username = next_available_username(db, user.email)
+        if users:
+            db.commit()
+            logger.info("Backfilled usernames for %d existing account(s)", len(users))
 
 
 def ensure_indexes() -> None:
@@ -173,6 +187,7 @@ def create_first_admin() -> None:
         email = settings.first_admin_email.lower()
         admin = User(
             email=email,
+            username=username_from_email(email),
             full_name=settings.first_admin_name,
             role=Role.admin,
             is_active=True,
@@ -197,6 +212,9 @@ def initialise() -> None:
     settings.ensure_directories()
     create_tables()
     ensure_columns()
+    # Backfill before indexes so an upgraded database receives canonical unique
+    # values before the new unique username index is created.
+    ensure_usernames()
     ensure_indexes()
     ensure_enum_values()
     create_first_admin()
