@@ -90,16 +90,16 @@ class Settings(BaseSettings):
     smtp_tls: bool = True
     smtp_from: str = "susoDash <no-reply@example.com>"
 
-    # R scripts over a project.
+    # R scripts over a dataset.
     #
-    # R remains off unless an administrator enables it. When it is enabled,
-    # SurveyHQ requires its own sandbox launcher rather than invoking Rscript
-    # directly. The launcher confines filesystem access to the current project
-    # workspace, removes network access and applies no-new-privileges/seccomp.
-    # A missing or incompatible launcher makes R unavailable rather than
-    # silently falling back to unsandboxed execution.
+    # Off unless somebody turns it on, and deliberately so: an R script is a
+    # program, not an expression, and it runs with the permissions of the
+    # process serving this platform. The timeout and the memory cap stop a
+    # runaway script; nothing here stops a hostile one, and pretending
+    # otherwise would be worse than saying so. Turn it on where the people who
+    # can run R in a project are the people you would trust with a shell.
     r_scripts_enabled: bool = False
-    r_binary: str = "surveyhq-r-sandbox"
+    r_binary: str = "Rscript"
     r_timeout_seconds: int = 60
     r_memory_mb: int = 2048
 
@@ -160,10 +160,8 @@ class Settings(BaseSettings):
         """Where each project's R workspace lives.
 
         Kept between runs on purpose: a project is an environment, so an object
-        saved with saveRDS or a lookup table written to disk is still there next
-        time. Network access is blocked inside the sandbox; administrators add
-        system packages to the image rather than letting project code download
-        arbitrary software at runtime.
+        saved with saveRDS, a lookup table written to disk, or a package
+        installed into the project's own library is still there next time.
         """
         return self.storage_path / "workspaces"
 

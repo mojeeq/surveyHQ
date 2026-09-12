@@ -170,11 +170,8 @@ services:
       context: ./frontend
       dockerfile: Dockerfile
     restart: unless-stopped
-    # Secure default: plain HTTP is reachable only from the host itself and is
-    # intended to sit behind Caddy/nginx TLS. Set WEB_BIND_ADDRESS=0.0.0.0 only
-    # when you deliberately want direct LAN exposure.
     ports:
-      - "${WEB_BIND_ADDRESS:-127.0.0.1}:${WEB_PORT:-8080}:80"
+      - "${WEB_PORT:-8080}:80"
     depends_on:
       - api
     networks: [surveyhq]
