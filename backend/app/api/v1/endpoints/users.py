@@ -1,4 +1,4 @@
-"""User administration and exact username lookup for project sharing."""
+"""User administration."""
 
 from __future__ import annotations
 
@@ -8,14 +8,8 @@ from sqlalchemy import func, select
 from app.api.deps import CurrentUser, DbSession, RequireAdmin
 from app.core.security import hash_password
 from app.models import Role, User
-from app.schemas.auth import UserCreate, UserLookup, UserOut, UserUpdate
+from app.schemas.auth import UserCreate, UserOut, UserUpdate
 from app.schemas.common import Message, Page
-from app.services.accounts import (
-    next_available_username,
-    normalize_username,
-    username_taken,
-    validate_username,
-)
 from app.services.audit import record
 
 router = APIRouter()
@@ -33,9 +27,7 @@ def list_users(
     if search:
         pattern = f"%{search.lower()}%"
         statement = statement.where(
-            func.lower(User.email).like(pattern)
-            | func.lower(User.full_name).like(pattern)
-            | func.lower(User.username).like(pattern)
+            func.lower(User.email).like(pattern) | func.lower(User.full_name).like(pattern)
         )
     total = db.scalar(select(func.count()).select_from(statement.subquery())) or 0
     users = db.scalars(
@@ -49,32 +41,13 @@ def list_users(
     )
 
 
-@router.get("/lookup/{username}", response_model=UserLookup)
-def lookup_user(username: str, db: DbSession, _: CurrentUser) -> UserLookup:
-    """Resolve one exact username without exposing the installation's user list."""
-    try:
-        normalized = validate_username(username)
-    except ValueError:
-        raise HTTPException(status_code=404, detail="No active user has that username") from None
-    user = db.scalar(
-        select(User).where(User.username == normalized, User.is_active.is_(True))
-    )
-    if user is None or not user.username:
-        raise HTTPException(status_code=404, detail="No active user has that username")
-    return UserLookup(id=user.id, username=user.username, full_name=user.full_name)
-
-
 @router.post("", response_model=UserOut, status_code=201)
 def create_user(payload: UserCreate, db: DbSession, admin: RequireAdmin) -> User:
-    email = str(payload.email).lower()
+    email = payload.email.lower()
     if db.scalar(select(User).where(User.email == email)):
         raise HTTPException(status_code=409, detail="A user with that email already exists")
-    if payload.username and username_taken(db, payload.username):
-        raise HTTPException(status_code=409, detail="That username is already taken")
-    username = payload.username or next_available_username(db, email)
     user = User(
         email=email,
-        username=username,
         full_name=payload.full_name,
         role=payload.role,
         is_active=payload.is_active,
@@ -84,13 +57,7 @@ def create_user(payload: UserCreate, db: DbSession, admin: RequireAdmin) -> User
         must_change_password=True,
     )
     db.add(user)
-    record(
-        db,
-        user=admin,
-        action="create_user",
-        entity_type="user",
-        detail={"email": email, "username": username},
-    )
+    record(db, user=admin, action="create_user", entity_type="user", detail={"email": email})
     db.commit()
     db.refresh(user)
     return user
@@ -111,11 +78,6 @@ def update_user(
     if payload.is_active is False and user.id == admin.id:
         raise HTTPException(status_code=400, detail="You cannot deactivate your own account")
 
-    if payload.username is not None:
-        username = normalize_username(payload.username)
-        if username_taken(db, username, exclude_user_id=user.id):
-            raise HTTPException(status_code=409, detail="That username is already taken")
-        user.username = username
     if payload.full_name is not None:
         user.full_name = payload.full_name
     if payload.role is not None:
