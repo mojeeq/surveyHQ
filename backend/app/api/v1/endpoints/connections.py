@@ -1,4 +1,4 @@
-"""Survey Solutions server connections: CRUD, testing and sync triggering."""
+"""External data-source connections: CRUD, discovery, testing and sync triggering."""
 
 from __future__ import annotations
 
@@ -28,17 +28,16 @@ from app.schemas.connection import (
 from app.schemas.monitoring import JobOut
 from app.services.audit import record
 from app.services.projects import can_edit, can_view, restrict, scope_for
-from app.services.survey_solutions import (
-    SurveySolutionsClient,
-    SurveySolutionsError,
+from app.services.source_connectors import (
+    PROVIDER_LABELS,
+    SourceConnectorError,
+    make_connector,
 )
+from app.services.survey_solutions import SurveySolutionsClient, SurveySolutionsError
 
 logger = get_logger(__name__)
 router = APIRouter()
 
-# Testing a connection makes this server fetch a URL the caller chose. Managers
-# are trusted, so this is not a wall - it is what turns "probe every port on the
-# internal network" from a script into an afternoon.
 TESTS_PER_MINUTE = 10
 
 
@@ -57,24 +56,49 @@ def _to_out(connection: Connection) -> ConnectionOut:
     return out
 
 
-def _client(connection: Connection) -> SurveySolutionsClient:
-    return SurveySolutionsClient(
+def _provider(connection: Connection) -> str:
+    return connection.provider or "survey_solutions"
+
+
+def _secret(connection: Connection) -> str:
+    return decrypt(connection.password_encrypted) if connection.password_encrypted else ""
+
+
+def _connector(connection: Connection):
+    return make_connector(
+        provider=_provider(connection),
         base_url=connection.base_url,
         username=connection.username,
-        password=decrypt(connection.password_encrypted),
+        secret=_secret(connection),
         workspace=connection.workspace,
         verify_ssl=connection.verify_ssl,
+        source_config=dict(connection.source_config or {}),
     )
 
 
-def _get(connection_id: str, db: DbSession, user: User) -> Connection:
-    """A connection the caller may reach.
+def _saved_credentials_problem(connection: Connection) -> str:
+    provider = _provider(connection)
+    if provider == "sdmx":
+        return ""
+    if provider == "kobotoolbox":
+        return "Set an API token before testing or importing." if not connection.password_encrypted else ""
+    if not connection.username or not connection.password_encrypted:
+        return "Set a user name and password before testing or importing."
+    return ""
 
-    Every route here takes an id, and a connection is not an innocuous record:
-    it names a server, it can be made to import, and its runs hand back the raw
-    export. Scoping the listing alone would leave all of that reachable to
-    anyone who knew the id.
-    """
+
+def _payload_credentials_problem(payload: ConnectionCreate) -> str:
+    if payload.provider == "sdmx":
+        return ""
+    if payload.provider == "kobotoolbox":
+        return "Set the Kobo API token before testing." if not payload.password else ""
+    if not payload.username or not payload.password:
+        return "Set a user name and password before testing."
+    return ""
+
+
+def _get(connection_id: str, db: DbSession, user: User) -> Connection:
+    """A connection the caller may reach."""
     connection = db.get(Connection, connection_id)
     if connection is None or not can_view(db, user, connection.project_id):
         raise HTTPException(status_code=404, detail="Connection not found")
@@ -82,18 +106,25 @@ def _get(connection_id: str, db: DbSession, user: User) -> Connection:
 
 
 def _editable(connection_id: str, db: DbSession, user: User) -> Connection:
-    """The same, for a call that changes something or pulls data through it."""
     connection = _get(connection_id, db, user)
     if not can_edit(db, user, connection.project_id, Role.manager):
         raise HTTPException(status_code=404, detail="Connection not found")
     return connection
 
 
+def _test_message(provider: str, info: dict[str, Any]) -> str:
+    label = PROVIDER_LABELS.get(provider, provider)
+    count = int(info.get("resource_count") or info.get("questionnaire_count") or 0)
+    noun = "resource" if count == 1 else "resources"
+    suffix = ""
+    if provider == "sdmx" and not info.get("configured", True):
+        suffix = " Add one or more SDMX data queries before importing."
+    return f"Connected to {label}. {count} importable {noun} configured/visible.{suffix}"
+
+
 @router.get("", response_model=list[ConnectionOut])
 def list_connections(db: DbSession, user: CurrentUser) -> list[ConnectionOut]:
     rows = db.scalars(
-        # A connection carries the project its imports land in, so it is
-        # scoped by that like everything else that has one.
         restrict(
             select(Connection), scope_for(db, user).filter(Connection.project_id)
         ).order_by(Connection.created_at.desc())
@@ -110,6 +141,8 @@ def create_connection(
     connection = Connection(
         name=payload.name,
         base_url=payload.base_url,
+        provider=payload.provider,
+        source_config=payload.source_config,
         workspace=payload.workspace or "primary",
         username=payload.username,
         password_encrypted=encrypt(payload.password) if payload.password else "",
@@ -131,7 +164,11 @@ def create_connection(
         user=user,
         action="create_connection",
         entity_type="connection",
-        detail={"name": payload.name, "url": payload.base_url},
+        detail={
+            "name": payload.name,
+            "url": payload.base_url,
+            "provider": payload.provider,
+        },
     )
     db.commit()
     db.refresh(connection)
@@ -150,15 +187,18 @@ def update_connection(
     connection = _editable(connection_id, db, user)
     data = payload.model_dump(exclude_unset=True)
     password = data.pop("password", None)
-    # Moving a connection is a write to where it is going as well as to where
-    # it was, so both ends are checked.
     moving = "project_id" in data and data["project_id"] != connection.project_id
     if moving and not can_edit(db, user, data["project_id"], Role.manager):
         raise HTTPException(status_code=404, detail="Project not found")
+    provider_changed = "provider" in data and data["provider"] != _provider(connection)
     for field, value in data.items():
         setattr(connection, field, value)
     if password:
         connection.password_encrypted = encrypt(password)
+    if provider_changed:
+        # A form id on one platform has no meaning on another.
+        connection.questionnaires = []
+        connection.server_info = {}
     record(
         db,
         user=user,
@@ -194,18 +234,14 @@ def test_connection(
 ) -> ConnectionTestResult:
     connection = _editable(connection_id, db, user)
     _throttle_tests(user)
-    if not connection.username or not connection.password_encrypted:
-        return ConnectionTestResult(
-            ok=False, message="Set an API user name and password before testing."
-        )
+    if problem := _saved_credentials_problem(connection):
+        return ConnectionTestResult(ok=False, message=problem)
     try:
-        with _client(connection) as client:
-            info = client.test_connection()
-    except SurveySolutionsError as exc:
+        with _connector(connection) as source:
+            info = source.test_connection()
+    except (SourceConnectorError, ValueError) as exc:
         connection.last_sync_error = str(exc)
         db.commit()
-        return ConnectionTestResult(ok=False, message=str(exc))
-    except ValueError as exc:
         return ConnectionTestResult(ok=False, message=str(exc))
 
     connection.server_info = info
@@ -213,10 +249,7 @@ def test_connection(
     db.commit()
     return ConnectionTestResult(
         ok=True,
-        message=(
-            f"Connected to workspace '{info['workspace']}'. "
-            f"{info['questionnaire_count']} questionnaire(s) visible."
-        ),
+        message=_test_message(_provider(connection), info),
         details=info,
     )
 
@@ -227,48 +260,62 @@ def test_unsaved_connection(
 ) -> ConnectionTestResult:
     """Let the UI validate credentials before the connection is saved."""
     _throttle_tests(user)
+    if problem := _payload_credentials_problem(payload):
+        return ConnectionTestResult(ok=False, message=problem)
     try:
-        with SurveySolutionsClient(
+        with make_connector(
+            provider=payload.provider,
             base_url=payload.base_url,
             username=payload.username,
-            password=payload.password,
+            secret=payload.password,
             workspace=payload.workspace or "primary",
             verify_ssl=payload.verify_ssl,
-        ) as client:
-            info = client.test_connection()
-    except SurveySolutionsError as exc:
+            source_config=payload.source_config,
+        ) as source:
+            info = source.test_connection()
+    except (SourceConnectorError, ValueError) as exc:
         return ConnectionTestResult(ok=False, message=str(exc))
     return ConnectionTestResult(
         ok=True,
-        message=(
-            f"Connected to workspace '{info['workspace']}'. "
-            f"{info['questionnaire_count']} questionnaire(s) visible."
-        ),
+        message=_test_message(payload.provider, info),
         details=info,
     )
+
+
+def _resource_rows(connection: Connection) -> list[QuestionnaireOut]:
+    try:
+        with _connector(connection) as source:
+            resources = source.list_resources()
+    except SourceConnectorError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return [
+        QuestionnaireOut(
+            id=row.id,
+            version=row.version,
+            title=row.title,
+            variable=row.variable,
+            identity=row.identity,
+            last_entry_date=row.last_entry_date,
+            kind=row.kind,
+        )
+        for row in resources
+    ]
+
+
+@router.get("/{connection_id}/resources", response_model=list[QuestionnaireOut])
+def list_resources(
+    connection_id: str, db: DbSession, user: CurrentUser
+) -> list[QuestionnaireOut]:
+    """Forms/dictionaries/data queries the connection can import."""
+    return _resource_rows(_get(connection_id, db, user))
 
 
 @router.get("/{connection_id}/questionnaires", response_model=list[QuestionnaireOut])
 def list_questionnaires(
     connection_id: str, db: DbSession, user: CurrentUser
 ) -> list[QuestionnaireOut]:
-    connection = _get(connection_id, db, user)
-    try:
-        with _client(connection) as client:
-            questionnaires = client.list_questionnaires()
-    except SurveySolutionsError as exc:
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
-    return [
-        QuestionnaireOut(
-            id=q.id,
-            version=q.version,
-            title=q.title,
-            variable=q.variable,
-            identity=q.identity,
-            last_entry_date=q.last_entry_date,
-        )
-        for q in questionnaires
-    ]
+    """Compatibility alias retained for existing Survey Solutions clients."""
+    return _resource_rows(_get(connection_id, db, user))
 
 
 @router.get("/{connection_id}/interviews", response_model=dict)
@@ -281,10 +328,21 @@ def list_interviews(
     status: str = "",
     limit: int = Query(default=200, le=1000),
 ) -> dict[str, Any]:
-    """Live interview summaries straight from the server, without exporting."""
+    """Live interview summaries, currently a Survey Solutions capability."""
     connection = _get(connection_id, db, user)
+    if _provider(connection) != "survey_solutions":
+        raise HTTPException(
+            status_code=400,
+            detail="Live interview browsing is currently available for Survey Solutions connections only.",
+        )
     try:
-        with _client(connection) as client:
+        with SurveySolutionsClient(
+            base_url=connection.base_url,
+            username=connection.username,
+            password=_secret(connection),
+            workspace=connection.workspace,
+            verify_ssl=connection.verify_ssl,
+        ) as client:
             interviews: list[dict[str, Any]] = []
             for interview in client.iter_interviews(
                 questionnaire_id=questionnaire_id or None,
@@ -308,23 +366,19 @@ def list_interviews(
 def trigger_sync(
     connection_id: str, payload: SyncRequest, db: DbSession, user: RequireManager
 ) -> Job:
-    """Queue an export + import run for the selected questionnaires."""
+    """Queue an export + import run for selected source resources."""
     connection = _editable(connection_id, db, user)
-    if not connection.username or not connection.password_encrypted:
-        raise HTTPException(
-            status_code=400, detail="This connection has no credentials configured."
-        )
+    if problem := _saved_credentials_problem(connection):
+        raise HTTPException(status_code=400, detail=problem)
     target_project = payload.project_id or connection.project_id
     if target_project and not can_edit(db, user, target_project, Role.manager):
-        # The import creates datasets in that project, so aiming one at a
-        # project the caller does not manage is a write they may not make.
         raise HTTPException(status_code=404, detail="Project not found")
-    questionnaires = payload.questionnaires or connection.questionnaires
-    if not questionnaires:
+    resources = payload.questionnaires or connection.questionnaires
+    if not resources:
         raise HTTPException(
             status_code=400,
             detail=(
-                "Choose at least one questionnaire to import, or set a default list "
+                "Choose at least one source resource to import, or set a default list "
                 "on the connection."
             ),
         )
@@ -335,7 +389,7 @@ def trigger_sync(
         title=f"Import from {connection.name}",
         params={
             "connection_id": connection.id,
-            "questionnaires": questionnaires,
+            "questionnaires": resources,
             "interview_status": payload.interview_status or connection.interview_status,
             "project_id": target_project,
             "mode": payload.mode,
@@ -349,7 +403,7 @@ def trigger_sync(
         action="trigger_sync",
         entity_type="connection",
         entity_id=connection_id,
-        detail={"questionnaires": questionnaires},
+        detail={"resources": resources, "provider": _provider(connection)},
     )
     db.commit()
     db.refresh(job)
@@ -377,11 +431,7 @@ def trigger_sync(
 def download_sync_archive(
     connection_id: str, run_id: str, db: DbSession, user: CurrentUser
 ) -> Response:
-    """The export zip exactly as the server sent it.
-
-    Worth keeping and worth handing back: it is the only record of what was
-    actually imported, and it can be re-uploaded like any other archive.
-    """
+    """The raw source export kept for recent sync runs."""
     _get(connection_id, db, user)
     run = db.get(SyncRun, run_id)
     if run is None or run.connection_id != connection_id:
@@ -390,13 +440,15 @@ def download_sync_archive(
     if path is None or not path.is_file():
         raise HTTPException(
             status_code=404,
-            detail="The export file for this run is no longer on the server.",
+            detail="The source file for this run is no longer on the server.",
         )
     stem = slugify(run.questionnaire or "export") or "export"
+    suffix = path.suffix.lower() or ".dat"
+    media = "application/zip" if suffix == ".zip" else "text/csv" if suffix == ".csv" else "application/octet-stream"
     return FileResponse(
         path,
-        media_type="application/zip",
-        filename=f"{stem}-{run.started_at:%Y%m%d-%H%M}.zip",
+        media_type=media,
+        filename=f"{stem}-{run.started_at:%Y%m%d-%H%M}{suffix}",
     )
 
 
@@ -414,8 +466,6 @@ def list_sync_runs(
     out: list[SyncRunOut] = []
     for run in runs:
         item = SyncRunOut.model_validate(run)
-        # Checked on disk rather than believed from the row: archives are
-        # pruned, and offering a download that 404s is worse than not offering.
         item.has_archive = bool(run.archive_path) and Path(run.archive_path).is_file()
         out.append(item)
     return out
