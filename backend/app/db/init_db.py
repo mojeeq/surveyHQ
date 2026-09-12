@@ -67,6 +67,10 @@ def ensure_usernames() -> None:
         )
         for user in users:
             user.username = next_available_username(db, user.email)
+            # Make this assignment visible to the uniqueness query for the next
+            # legacy row. Without the flush two `same@...` addresses in one
+            # batch can both choose `same` before either UPDATE reaches SQL.
+            db.flush()
         if users:
             db.commit()
             logger.info("Backfilled usernames for %d existing account(s)", len(users))
