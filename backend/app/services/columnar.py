@@ -1,6 +1,6 @@
 """High-throughput DuckDB/Parquet helpers used by ingest and derived datasets.
 
-The core rule here is simple: large survey data should stay columnar.  Operations
+The core rule here is simple: large survey data should stay columnar. Operations
 that can be expressed as a DuckDB query are streamed directly from source files
 to Parquet instead of being materialised as Python tuples or pandas frames.
 """
@@ -35,7 +35,7 @@ def _configured_threads() -> int:
     if settings.duckdb_threads > 0:
         return settings.duckdb_threads
     cpus = os.cpu_count() or 4
-    # Leave headroom for the API, postgres and celery.  An operator can override
+    # Leave headroom for the API, postgres and celery. An operator can override
     # this explicitly on a large analytical host.
     return max(1, min(8, max(1, cpus // 2)))
 
@@ -111,9 +111,9 @@ def append_frame_to_parquet(
 ) -> tuple[list[str], list[str]]:
     """Append a pandas *incoming* frame to an existing Parquet file in DuckDB.
 
-    Only the newly-arrived rows are materialised in pandas.  The existing survey
+    Only the newly-arrived rows are materialised in pandas. The existing survey
     remains in Parquet and DuckDB performs UNION ALL BY NAME directly into the
-    replacement file.  The destination is swapped atomically after COPY finishes.
+    replacement file. The destination is swapped atomically after COPY finishes.
 
     Returns (existing_columns, incoming_columns) for schema-change warnings.
     """
@@ -148,6 +148,33 @@ def append_frame_to_parquet(
         return existing_columns, incoming_columns
     finally:
         incoming_path.unlink(missing_ok=True)
+
+
+def overlapping_frame_values(
+    existing_path: str | Path,
+    incoming: pd.DataFrame,
+    column: str,
+    *,
+    examples: int = 3,
+) -> tuple[int, list[Any]]:
+    """Find duplicate identifiers while only the incoming rows live in pandas."""
+    if column not in incoming.columns:
+        return 0, []
+    con = connect()
+    try:
+        con.register("incoming_rows", incoming[[column]])
+        col = quote_ident(column)
+        base = (
+            f"SELECT DISTINCT e.{col} AS value "
+            f"FROM read_parquet({quote_path(existing_path)}) e "
+            f"INNER JOIN incoming_rows i ON e.{col} = i.{col} "
+            f"WHERE e.{col} IS NOT NULL"
+        )
+        count = int(con.execute(f"SELECT COUNT(*) FROM ({base}) x").fetchone()[0])
+        sample = [row[0] for row in con.execute(f"{base} LIMIT {int(examples)}").fetchall()]
+        return count, sample
+    finally:
+        con.close()
 
 
 def overlapping_values(
@@ -188,7 +215,6 @@ def copy_join_to_parquet(
 ) -> tuple[int, list[str]]:
     """Stream a relationship join directly to Parquet and return its shape."""
     selected: list[str] = []
-    output_names: list[str] = []
     for column in right_columns:
         if column == right_key:
             continue
@@ -196,7 +222,6 @@ def copy_join_to_parquet(
         if alias in left_columns:
             alias = f"{alias}__right"
         selected.append(f"r.{quote_ident(column)} AS {quote_ident(alias)}")
-        output_names.append(alias)
 
     join = "LEFT JOIN" if how == "left" else "INNER JOIN"
     query = (
@@ -281,8 +306,10 @@ def profile_parquet(
     """Profile a wide Parquet in batched scans instead of one query per column.
 
     A 600-column census file previously caused more than a thousand complete
-    scans (statistics, integrality tests, tagged missings).  This groups many
+    scans (statistics, integrality tests, tagged missings). This groups many
     aggregates into each scan while keeping exact distinct counts for metadata.
+    Hidden tagged-missing companion columns are retained in the profile because
+    the query engine needs them even though the UI hides them.
     """
     con = connect()
     try:
@@ -292,16 +319,12 @@ def profile_parquet(
         total = int(
             con.execute(f"SELECT COUNT(*) FROM read_parquet({quote_path(path)})").fetchone()[0]
         )
-        storage_by_name = {str(row[0]): str(row[1]) for row in described}
-        visible = [
-            (str(row[0]), str(row[1]))
-            for row in described
-            if not str(row[0]).endswith(hidden_suffix)
-        ]
+        columns = [(str(row[0]), str(row[1])) for row in described]
+        storage_by_name = dict(columns)
 
         profiles: list[ColumnProfile] = []
-        for start in range(0, len(visible), max(1, batch_size)):
-            batch = visible[start : start + max(1, batch_size)]
+        for start in range(0, len(columns), max(1, batch_size)):
+            batch = columns[start : start + max(1, batch_size)]
             expressions: list[str] = []
             shape: list[tuple[str, str, bool]] = []
             for index, (name, storage) in enumerate(batch):
@@ -358,7 +381,9 @@ def profile_parquet(
                 )
 
         tags: dict[str, list[str]] = {}
-        for name, _storage in visible:
+        for name, _storage in columns:
+            if name.endswith(hidden_suffix):
+                continue
             companion = f"{name}{hidden_suffix}"
             if companion not in storage_by_name:
                 continue
