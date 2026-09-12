@@ -32,6 +32,12 @@ class User(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "users"
 
     email: Mapped[str] = mapped_column(String(320), unique=True, index=True, nullable=False)
+    # Nullable at the SQL level so the additive schema upgrader can safely add
+    # this column to an existing users table. Startup immediately backfills
+    # legacy rows; every newly created account receives a username.
+    username: Mapped[str | None] = mapped_column(
+        String(32), unique=True, index=True, nullable=True
+    )
     full_name: Mapped[str] = mapped_column(String(200), default="")
     hashed_password: Mapped[str] = mapped_column(String(200), nullable=False)
     role: Mapped[Role] = mapped_column(Enum(Role, name="user_role"), default=Role.viewer)
