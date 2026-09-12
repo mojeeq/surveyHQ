@@ -56,17 +56,17 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
-      # The command box can hand a dataset to R, and those tests skip
-      # themselves where R is missing - which on a runner without it means a
-      # feature with eleven tests silently has none. Installed on one leg of
-      # the matrix, since nothing about it depends on the database.
-      - name: Install R
+      # R tests run on one database leg. Install the same isolation boundary
+      # used by production and shadow the system Rscript with SurveyHQ's launcher
+      # so the existing end-to-end project tests exercise the sandbox too.
+      - name: Install R sandbox
         if: matrix.database == 'sqlite'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends r-base-core
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends r-base-core bubblewrap
+          sudo install -m 0755 bin/surveyhq-rscript /usr/local/bin/Rscript
 
-      # Proves it before the suite runs, so the R tests cannot pass by being
-      # skipped.
-      - name: Check R is there
+      - name: Check sandboxed R is there
         if: matrix.database == 'sqlite'
         run: Rscript --version
 
@@ -133,6 +133,9 @@ jobs:
       - name: Build and start the whole stack
         run: docker compose up -d --build
 
+      - name: Plain HTTP is bound only to localhost
+        run: docker compose port web 80 | grep -Eq '^127\.0\.0\.1:'
+
       - name: The API answers through nginx
         run: |
           for _ in $(seq 1 60); do
@@ -144,6 +147,19 @@ jobs:
           done
           echo "the API never became healthy"
           exit 1
+
+      # Exercise the sandbox from inside the actual production image. The R
+      # process must not be able to see the platform's /data mount even though
+      # its parent API process can.
+      - name: R is isolated inside the backend container
+        run: |
+          docker compose exec -T api sh -lc '
+            room=/data/workspaces/ci-sandbox
+            rm -rf "$room" && mkdir -p "$room"
+            printf "%s\n" "cat(file.exists(\"/data\"))" > "$room/test.R"
+            cd "$room"
+            test "$(Rscript --vanilla test.R)" = "FALSE"
+          '
 
       # Proves more than a health probe: the schema was created, the bootstrap
       # administrator exists, nginx proxies POSTs to the API, and the first
