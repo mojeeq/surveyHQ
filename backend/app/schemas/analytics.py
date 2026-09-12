@@ -56,6 +56,14 @@ class ChartOut(BaseModel):
     updated_at: dt.datetime
 
 
+class ChartLibraryOut(ChartOut):
+    """A saved chart together with the source context needed by the library UI."""
+
+    dataset_name: str
+    project_id: str | None = None
+    project_name: str | None = None
+
+
 class WidgetIn(BaseModel):
     id: str | None = None
     title: str = ""
