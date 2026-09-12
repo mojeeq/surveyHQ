@@ -146,8 +146,6 @@ def _import_table(
                 f"Refreshed {dataset.name} ({before:,} -> {dataset.row_count:,} rows)"
                 + (f"; rebuilt {len(rebuilt)} derived dataset(s)" if rebuilt else "")
             )
-        # Keep provenance authoritative even for records created by an older
-        # release before DatasetSource.external existed.
         dataset.connection_id = connection_id
         dataset.source = DatasetSource.external
         dataset.source_ref = source_ref
@@ -228,7 +226,11 @@ def _finish_job(job_id: str, connection_id: str, summary: dict[str, Any]) -> Non
             job.error = errors[0]["error"] if errors else ""
 
 
-@celery_app.task(name="app.workers.source_sync.run_connection_sync", bind=True)
+# These names intentionally replace the older Survey-Solutions-only task names
+# in Celery's registry. API callers and old queued jobs keep the same task name,
+# while the dispatcher below sends Survey Solutions back through the mature
+# legacy implementation and handles every other provider itself.
+@celery_app.task(name="app.workers.tasks.run_connection_sync", bind=True)
 def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
     """Import a connection regardless of which collection system it uses."""
     with session_scope() as db:
@@ -244,8 +246,6 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
             return {"error": job.error}
         provider = _provider(connection)
 
-    # Keep the mature Survey Solutions path unchanged, including questionnaire
-    # version merging, Stata labels and paradata semantics.
     if provider == "survey_solutions":
         from app.workers.tasks import run_connection_sync as survey_solutions_sync
 
@@ -283,7 +283,10 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
                 resource = catalogue.get(identity)
                 if resource is None:
                     summary["errors"].append(
-                        {"resource": identity, "error": "The selected source resource no longer exists"}
+                        {
+                            "resource": identity,
+                            "error": "The selected source resource no longer exists",
+                        }
                     )
                     continue
 
@@ -327,7 +330,9 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
                             run.log = outcome["log"]
                 except (SourceConnectorError, IngestError, OSError, ValueError) as exc:
                     logger.error("%s sync failed for %s: %s", provider, identity, exc)
-                    summary["errors"].append({"resource": resource.title, "error": str(exc)})
+                    summary["errors"].append(
+                        {"resource": resource.title, "error": str(exc)}
+                    )
                     with session_scope() as db:
                         run = db.get(SyncRun, run_id)
                         if run:
@@ -347,7 +352,7 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
         shutil.rmtree(workdir, ignore_errors=True)
 
 
-@celery_app.task(name="app.workers.source_sync.schedule_due_syncs")
+@celery_app.task(name="app.workers.tasks.schedule_due_syncs")
 def schedule_due_syncs() -> dict[str, Any]:
     """Queue due automatic imports for every supported provider."""
     queued: list[str] = []
