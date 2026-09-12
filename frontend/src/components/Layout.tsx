@@ -266,7 +266,7 @@ export default function Layout() {
                           <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500 dark:text-slate-400">{notification.body}</p>
                           <p className="mt-2 text-[11px] font-medium text-slate-400">{relativeTime(notification.created_at)}</p>
                         </button>
-                      ))}
+                      ))
                     )}
                   </div>
                 </div>
