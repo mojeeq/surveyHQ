@@ -1,15 +1,16 @@
 """Drop-in high-throughput implementations for the survey-data hot paths.
 
 These functions deliberately preserve the public contracts in ingest/datasets/
-derived.  The performance runtime installs them before endpoint and worker
+derived. The performance runtime installs them before endpoint and worker
 modules are imported, so the rest of the application does not need a second set
 of code paths or schemas.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import pandas as pd
 
@@ -29,8 +30,8 @@ def build_metadata_from_parquet_fast(
     """Build exact metadata with batched Parquet scans.
 
     The old streaming path issued at least one full scan per variable and a
-    second scan for every numeric integrality test.  Wide census files could
-    therefore read the same Parquet more than a thousand times.  profile_parquet
+    second scan for every numeric integrality test. Wide census files could
+    therefore read the same Parquet more than a thousand times. profile_parquet
     combines many independent aggregates into each pass.
     """
     from app.services.ingest import MISSING_TAG_SUFFIX, VariableMeta, _safe_float, classify
