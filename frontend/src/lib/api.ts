@@ -1,5 +1,7 @@
 // Thin fetch wrapper: attaches the token, unwraps JSON and normalises errors.
 
+import { getProjectScope } from '@/hooks/useProjectScope'
+
 const TOKEN_KEY = 'surveyhq.token'
 const GRANT_PREFIX = 'surveyhq.share.'
 
@@ -53,6 +55,72 @@ export const tokenStore = {
 }
 
 type Options = Omit<RequestInit, 'body'> & { body?: unknown; raw?: boolean }
+
+/**
+ * Lists that understand project_id themselves. Most dataset-owned resources use
+ * an empty value for the shared area; dataset/dashboard-style lists use `none`
+ * because an empty project_id means "no filter" on those endpoints.
+ */
+const NONE_FOR_SHARED = new Set([
+  '/datasets',
+  '/dashboards',
+  '/dashboards/charts',
+  '/dashboards/chart-library',
+  '/boundaries',
+  '/relationships',
+])
+const EMPTY_FOR_SHARED = new Set([
+  '/monitoring/summary',
+  '/monitoring/indicators',
+  '/monitoring/indicators/values',
+  '/monitoring/alerts',
+  '/monitoring/alert-rules',
+  '/monitoring/quality-rules',
+])
+
+function parsed(path: string) {
+  return new URL(path, 'https://surveyhq.local')
+}
+
+/** Add/replace project_id on the list calls that have a server-side filter. */
+function scopedGetPath(path: string): string {
+  const project = getProjectScope()
+  if (project === null || path.startsWith('/public/')) return path
+
+  const url = parsed(path)
+  if (NONE_FOR_SHARED.has(url.pathname)) {
+    url.searchParams.set('project_id', project || 'none')
+  } else if (EMPTY_FOR_SHARED.has(url.pathname)) {
+    url.searchParams.set('project_id', project)
+  } else {
+    return path
+  }
+  return `${url.pathname}${url.search}${url.hash}`
+}
+
+/**
+ * Two older collection endpoints do not expose a project_id query parameter.
+ * They already return only resources the caller may see, so filtering that
+ * authorised response in the browser is both safe and avoids a backend API
+ * change just for presentation scope.
+ *
+ * `/projects?scope=all` is the deliberate escape hatch used by the workspace
+ * switcher: it must always be able to list the projects the user can switch to.
+ */
+function filterScopedCollection<T>(requestedPath: string, value: T): T {
+  const project = getProjectScope()
+  if (project === null || !Array.isArray(value)) return value
+
+  const url = parsed(requestedPath)
+  if (url.pathname === '/connections') {
+    return value.filter((item: any) => (item.project_id ?? '') === project) as T
+  }
+  if (url.pathname === '/projects' && url.searchParams.get('scope') !== 'all') {
+    if (project === '') return [] as T
+    return value.filter((item: any) => item.id === project) as T
+  }
+  return value
+}
 
 async function request<T>(path: string, options: Options = {}): Promise<T> {
   const { body, raw, headers, ...rest } = options
@@ -128,7 +196,10 @@ async function detailOf(response: Response): Promise<string> {
 }
 
 export const api = {
-  get: <T>(path: string) => request<T>(path),
+  get: async <T>(path: string) => {
+    const value = await request<T>(scopedGetPath(path))
+    return filterScopedCollection(path, value)
+  },
   post: <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body }),
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', body }),
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PUT', body }),
