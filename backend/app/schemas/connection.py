@@ -8,16 +8,29 @@ from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
 from app.models.connection import ExportFormat, SyncStatus
 from app.services.scheduling import valid_time, valid_timezone
 
+ConnectionProvider = Literal[
+    "survey_solutions",
+    "odk_central",
+    "kobotoolbox",
+    "surveycto",
+    "csweb",
+    "sdmx",
+]
+
 
 class ConnectionBase(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     base_url: str
+    provider: ConnectionProvider = "survey_solutions"
+    source_config: dict[str, Any] = Field(default_factory=dict)
     workspace: str = "primary"
     username: str = ""
     verify_ssl: bool = True
     sync_enabled: bool = False
     sync_interval_minutes: int = Field(default=360, ge=5, le=10080)
     export_format: ExportFormat = ExportFormat.stata
+    # Historical name retained in the API for compatibility. For non-Survey
+    # Solutions providers these are selected forms/dictionaries/data queries.
     questionnaires: list[str] = Field(default_factory=list)
     interview_status: str = "All"
     project_id: str | None = None
@@ -32,7 +45,6 @@ class ConnectionBase(BaseModel):
         for text in cleaned:
             if not valid_time(text):
                 raise ValueError(f"'{text}' is not a time of day. Use 24-hour HH:MM, e.g. 06:00")
-        # Sorted and de-duplicated: two identical times are one time.
         return sorted(set(cleaned))
 
     @field_validator("sync_timezone")
@@ -49,18 +61,21 @@ class ConnectionBase(BaseModel):
         value = value.strip().rstrip("/")
         if not value.startswith(("http://", "https://")):
             raise ValueError("The server URL must start with http:// or https://")
-        # Reject a URL that already includes an API path; we build those ourselves
         HttpUrl(value)
         return value
 
 
 class ConnectionCreate(ConnectionBase):
+    # Password, API token or secret depending on provider. It is encrypted at
+    # rest and never returned by ConnectionOut.
     password: str = ""
 
 
 class ConnectionUpdate(BaseModel):
     name: str | None = None
     base_url: str | None = None
+    provider: ConnectionProvider | None = None
+    source_config: dict[str, Any] | None = None
     workspace: str | None = None
     username: str | None = None
     password: str | None = None
@@ -86,6 +101,8 @@ class ConnectionOut(BaseModel):
     id: str
     name: str
     base_url: str
+    provider: ConnectionProvider = "survey_solutions"
+    source_config: dict[str, Any] = Field(default_factory=dict)
     workspace: str
     username: str
     verify_ssl: bool
@@ -104,7 +121,7 @@ class ConnectionOut(BaseModel):
     last_sync_error: str = ""
     server_info: dict[str, Any] = Field(default_factory=dict)
     created_at: dt.datetime
-    # Never serialise the stored password; this flag is all the UI needs
+    # Never serialise the stored secret; this flag is all the UI needs.
     has_password: bool = False
 
 
@@ -115,18 +132,22 @@ class ConnectionTestResult(BaseModel):
 
 
 class QuestionnaireOut(BaseModel):
+    """Backwards-compatible shape for any selectable source resource."""
+
     id: str
-    version: int
+    version: int = 1
     title: str
     variable: str = ""
     identity: str
     last_entry_date: str | None = None
+    kind: str = "resource"
 
 
 class SyncRunOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    connection_id: str
     connection_id: str
     questionnaire: str
     status: SyncStatus
@@ -136,14 +157,11 @@ class SyncRunOut(BaseModel):
     datasets_created: int
     message: str = ""
     log: list[Any] = Field(default_factory=list)
-    # Whether the export zip is still on disk to be downloaded.
     has_archive: bool = False
 
 
 class SyncRequest(BaseModel):
     questionnaires: list[str] = Field(default_factory=list)
     interview_status: str | None = None
-    # Where the imported datasets land. Absent falls back to the connection's
-    # own project, which is how a scheduled sync knows where to put things.
     project_id: str | None = None
     mode: Literal["replace", "append"] = "replace"
