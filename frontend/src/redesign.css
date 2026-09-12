@@ -149,6 +149,17 @@ main > div > header h1 {
   letter-spacing: -0.025em;
 }
 
+/*
+ * Project scope is now a single workspace control in the application header.
+ * Explore still carries its old project select internally so legacy deep links
+ * keep working, but it must not render a second workspace selector beside the
+ * dataset picker. This selector is uniquely identified by its Shared area
+ * option (`none`) and its legacy width class.
+ */
+main select.input.w-52:has(> option[value="none"]) {
+  display: none;
+}
+
 /* Keep analytics and dashboard workspaces comfortable on large displays. */
 @media (min-width: 1280px) {
   .table-base tbody td,

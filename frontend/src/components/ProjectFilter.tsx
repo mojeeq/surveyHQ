@@ -5,9 +5,10 @@
  * rules and alerts, so one project choice can consistently narrow all of those
  * views. Null is every project; the empty string is the shared area.
  *
- * `value`/`onChange` remain supported for the older pages that kept local
- * project state. The global scope is authoritative and the effect below keeps
- * those local states in step while they are migrated away.
+ * `value`/`onChange` remain supported for older pages that kept local project
+ * state. Those page-level instances are now compatibility adapters only: they
+ * synchronize their local state with the global workspace but do not render a
+ * second selector. The one visible project switcher lives in the app header.
  */
 import { useEffect } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -18,7 +19,6 @@ import { useProjectScope, type ProjectScope } from '@/hooks/useProjectScope'
 export default function ProjectFilter({
   value,
   onChange,
-  label = 'Project',
   compact = false,
 }: {
   value?: ProjectScope
@@ -51,7 +51,10 @@ export default function ProjectFilter({
     }
   }, [project, projects.data, queryClient, setProject])
 
-  if (!projects.data?.length) return null
+  // Only the compact instance in Layout is visible. Older pages still mount
+  // this component so their local project state follows the workspace scope,
+  // but showing those controls as well would duplicate the header switcher.
+  if (!compact || !projects.data?.length) return null
 
   const choose = (next: ProjectScope) => {
     setProject(next)
@@ -64,20 +67,17 @@ export default function ProjectFilter({
 
   return (
     <label
-      className={`flex items-center gap-2 text-sm text-ink-600 dark:text-dark-600 ${
-        compact ? 'min-w-0' : ''
-      }`}
-      title={compact ? 'Project workspace' : undefined}
+      className="flex min-w-0 items-center gap-2 text-sm text-ink-600 dark:text-dark-600"
+      title="Project workspace"
     >
-      {!compact && label}
       <select
-        className={`input py-1.5 ${compact ? 'w-44 lg:w-52' : 'w-52'}`}
+        className="input w-44 py-1.5 lg:w-52"
         value={project === null ? '__all__' : project}
         onChange={(event) => {
           const selected = event.target.value
           choose(selected === '__all__' ? null : selected)
         }}
-        aria-label={compact ? 'Project workspace' : label}
+        aria-label="Project workspace"
       >
         <option value="__all__">All projects</option>
         <option value="">Shared area</option>
