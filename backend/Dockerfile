@@ -28,8 +28,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
 COPY pyproject.toml .
-COPY bin/surveyhq-rscript /usr/local/bin/surveyhq-rscript
-RUN chmod 0755 /usr/local/bin/surveyhq-rscript
+# Shadow /usr/bin/Rscript with the sandbox launcher. The launcher invokes the
+# real binary explicitly after creating the isolated namespaces.
+COPY bin/surveyhq-rscript /usr/local/bin/Rscript
+RUN chmod 0755 /usr/local/bin/Rscript
 
 # Run as a non-root user; /data is a mounted volume so it needs to be writable.
 RUN useradd --create-home --uid 10001 surveyhq \
