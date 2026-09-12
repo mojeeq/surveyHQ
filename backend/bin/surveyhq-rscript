@@ -1,0 +1,60 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# SurveyHQ's R entry point. The application runs this wrapper instead of
+# /usr/bin/Rscript directly so arbitrary project R code only sees its own
+# workspace and a read-only copy of the runtime it needs.
+BWRAP="${SURVEYHQ_BWRAP:-/usr/bin/bwrap}"
+REAL_RSCRIPT="${SURVEYHQ_REAL_RSCRIPT:-/usr/bin/Rscript}"
+
+if [[ ! -x "$BWRAP" ]]; then
+  echo "SurveyHQ R sandbox is unavailable: bubblewrap was not found at $BWRAP" >&2
+  exit 126
+fi
+if [[ ! -x "$REAL_RSCRIPT" ]]; then
+  echo "SurveyHQ R sandbox is unavailable: Rscript was not found at $REAL_RSCRIPT" >&2
+  exit 126
+fi
+
+workspace="$(pwd -P)"
+if [[ ! -d "$workspace" ]]; then
+  echo "SurveyHQ R sandbox is unavailable: workspace does not exist" >&2
+  exit 126
+fi
+
+args=(
+  "$BWRAP"
+  --die-with-parent
+  --new-session
+  --unshare-all
+  --proc /proc
+  --dev /dev
+)
+
+# R and its dynamic linker live under these system paths. They are available
+# read-only inside the sandbox. No application storage path is exposed here.
+for path in /usr /bin /lib /lib64 /etc; do
+  if [[ -e "$path" ]]; then
+    args+=(--ro-bind "$path" "$path")
+  fi
+done
+
+args+=(
+  --tmpfs /tmp
+  --bind "$workspace" /workspace
+  --chdir /workspace
+  --clearenv
+  --setenv PATH /usr/local/bin:/usr/bin:/bin
+  --setenv HOME /workspace
+  --setenv TMPDIR /tmp
+  --setenv R_LIBS_USER /workspace/rlibs
+  --setenv LANG C.UTF-8
+  --setenv LC_ALL C.UTF-8
+  --setenv TZ UTC
+)
+
+# --unshare-all gives the process fresh user, mount, PID, IPC, UTS, cgroup and
+# network namespaces. The only writable host-backed path is this project's own
+# workspace. In particular /data, other projects and the Docker socket are not
+# mounted, and outbound network access is absent.
+exec "${args[@]}" "$REAL_RSCRIPT" "$@"
