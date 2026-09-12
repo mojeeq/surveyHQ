@@ -100,7 +100,7 @@ const BLANK = {
   verify_ssl: true,
   sync_enabled: false,
   sync_interval_minutes: 360,
-  export_format: 'STATA' as const,
+  export_format: 'STATA' as Connection['export_format'],
   questionnaires: [] as string[],
   interview_status: 'All',
   project_id: '',
