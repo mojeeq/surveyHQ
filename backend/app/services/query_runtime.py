@@ -143,6 +143,13 @@ def install_query_runtime() -> None:
 
         ingest.ingest_file = ingest_file
 
+        # Import field_progress after the query runtime is installed so the
+        # canonical overview itself benefits from the configured DuckDB engine
+        # and Redis cache. Keep its original function for exact precomputation.
+        from app.services import field_progress
+
+        original_build_overview = field_progress.build_overview
+
         # Datasets imports ingest_file by name, so import it only after the
         # ingest module is patched. Internal calls resolve _apply_ingest and
         # append_frame_into_dataset from its module globals at execution time.
@@ -153,7 +160,7 @@ def install_query_runtime() -> None:
         def apply_ingest_with_summary(db: Any, dataset: Any, result: Any) -> Any:
             ready = original_apply_ingest(db, dataset, result)
             if settings.monitoring_precompute_enabled:
-                monitoring_precompute.build(ready)
+                monitoring_precompute.precompute(ready, original_build_overview)
             return ready
 
         datasets._apply_ingest = apply_ingest_with_summary
@@ -167,10 +174,6 @@ def install_query_runtime() -> None:
 
         # The unfiltered day-grain field overview is precomputed on each import.
         # Filtered views continue through the canonical query engine.
-        from app.services import field_progress
-
-        original_build_overview = field_progress.build_overview
-
         def build_overview(
             dataset: Any, filters: Any = None, grain: str = "day"
         ) -> dict[str, Any]:
