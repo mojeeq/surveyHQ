@@ -148,7 +148,6 @@ class SyncRunOut(BaseModel):
 
     id: str
     connection_id: str
-    connection_id: str
     questionnaire: str
     status: SyncStatus
     started_at: dt.datetime
