@@ -7,12 +7,11 @@ from pathlib import Path
 
 import pytest
 
-WRAPPER = Path(__file__).resolve().parents[1] / "bin" / "surveyhq-rscript"
-
+SANDBOX = Path("/usr/local/bin/surveyhq-r-sandbox")
 
 pytestmark = pytest.mark.skipif(
-    not Path("/usr/bin/bwrap").exists() or not Path("/usr/bin/Rscript").exists(),
-    reason="bubblewrap and R are required for the sandbox integration tests",
+    not SANDBOX.exists() or not Path("/usr/bin/Rscript").exists(),
+    reason="the compiled SurveyHQ R sandbox and R are required",
 )
 
 
@@ -20,7 +19,7 @@ def _run_r(workspace: Path, code: str) -> subprocess.CompletedProcess[str]:
     script = workspace / "sandbox-test.R"
     script.write_text(code, encoding="utf-8")
     return subprocess.run(
-        ["bash", str(WRAPPER), "--vanilla", script.name],
+        [str(SANDBOX), "--vanilla", script.name],
         cwd=workspace,
         capture_output=True,
         text=True,
@@ -38,33 +37,51 @@ def test_r_can_read_its_workspace_but_not_sibling_files(tmp_path: Path) -> None:
 
     result = _run_r(
         workspace,
-        "cat(file.exists('inside.txt'), '|', "
-        f"file.exists({secret.as_posix()!r}))",
+        "inside <- tryCatch(readLines('inside.txt'), error=function(e) character()); "
+        f"outside <- tryCatch(readLines({secret.as_posix()!r}), "
+        "error=function(e) character()); "
+        "cat(identical(inside, 'visible'), '|', length(outside) == 0)",
     )
 
     assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "TRUE | FALSE"
+    assert result.stdout.strip() == "TRUE | TRUE"
 
 
-def test_r_network_namespace_has_no_routes(tmp_path: Path) -> None:
+def test_r_cannot_create_network_socket(tmp_path: Path) -> None:
     workspace = tmp_path / "project"
     workspace.mkdir()
     result = _run_r(
         workspace,
-        "routes <- readLines('/proc/net/route', warn=FALSE); cat(length(routes) <= 1)",
-    )
-
-    assert result.returncode == 0, result.stderr
-    assert result.stdout.strip() == "TRUE"
-
-
-def test_wrapper_is_not_writable_by_the_r_process(tmp_path: Path) -> None:
-    workspace = tmp_path / "project"
-    workspace.mkdir()
-    result = _run_r(
-        workspace,
-        "cat(file.access('/usr/local/bin', 2) == 0)",
+        "ok <- tryCatch({ con <- socketConnection(host='127.0.0.1', port=9, "
+        "open='r+', blocking=TRUE, timeout=1); close(con); TRUE }, "
+        "error=function(e) FALSE, warning=function(w) FALSE); cat(ok)",
     )
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == "FALSE"
+
+
+def test_r_cannot_write_runtime_paths(tmp_path: Path) -> None:
+    workspace = tmp_path / "project"
+    workspace.mkdir()
+    result = _run_r(
+        workspace,
+        "target <- '/usr/local/bin/surveyhq-r-sandbox-write-test'; "
+        "ok <- tryCatch({ writeLines('x', target); TRUE }, error=function(e) FALSE); "
+        "cat(ok)",
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == "FALSE"
+
+
+def test_launcher_identifies_itself() -> None:
+    result = subprocess.run(
+        [str(SANDBOX), "--surveyhq-sandbox-probe"],
+        capture_output=True,
+        text=True,
+        timeout=5,
+        check=False,
+    )
+    assert result.returncode == 0
+    assert result.stdout.strip() == "surveyhq-r-sandbox-v1"
