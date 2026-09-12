@@ -4,12 +4,6 @@ import { api } from '@/lib/api'
 import type { Questionnaire } from '@/lib/types'
 import { EmptyState, ErrorNote, Loading } from '@/components/ui'
 
-/**
- * A questionnaire and every version of it the server holds.
- *
- * Survey Solutions lists each version as its own entry, so a questionnaire
- * revised twice arrives as three unrelated-looking rows. They are one survey.
- */
 export interface QuestionnaireGroup {
   id: string
   title: string
@@ -35,13 +29,6 @@ export function groupQuestionnaires(list: Questionnaire[] | undefined): Question
   return groups.sort((a, b) => a.title.localeCompare(b.title))
 }
 
-/**
- * What a selection says, in words.
- *
- * Three versions of one questionnaire is one survey, not three surveys, and
- * counting the entries made it read as though three separate datasets were
- * about to appear.
- */
 export function describeSelection(selected: string[]): string {
   const questionnaires = new Set(selected.map((choice) => choice.split('$')[0]))
   const surveys = `${questionnaires.size} questionnaire${questionnaires.size === 1 ? '' : 's'}`
@@ -52,43 +39,88 @@ export function describeSelection(selected: string[]): string {
     : surveys
 }
 
+type SourceResource = Questionnaire & { kind?: string }
+
 /**
- * Choose which questionnaires - and which of their versions - to import.
+ * Pick importable resources from any connection.
  *
- * A choice is stored either as a bare questionnaire id, meaning every version
- * of it, or as the ``guid$version`` identity of one particular version. The
- * difference matters for anything that runs more than once: a questionnaire
- * revised again next month publishes a version a pinned list has never heard
- * of, and a scheduled import would go on pulling the versions it was set up
- * with while the fieldwork moved on without it.
+ * Survey Solutions gets its richer questionnaire/version treatment. Other
+ * sources expose a flat list of forms, CSPro dictionaries or configured SDMX
+ * data queries and therefore only need one checkbox per resource.
  */
 export default function QuestionnairePicker({
   connectionId,
   value,
   onChange,
+  provider = 'survey_solutions',
 }: {
   connectionId: string
   value: string[]
   onChange: (value: string[]) => void
+  provider?: string
 }) {
-  const questionnaires = useQuery({
-    queryKey: ['questionnaires', connectionId],
-    queryFn: () => api.get<Questionnaire[]>(`/connections/${connectionId}/questionnaires`),
+  const resources = useQuery({
+    queryKey: ['source-resources', connectionId],
+    queryFn: () =>
+      api.get<SourceResource[]>(`/connections/${connectionId}/resources`),
   })
-  const grouped = useMemo(() => groupQuestionnaires(questionnaires.data), [questionnaires.data])
+  const grouped = useMemo(
+    () => groupQuestionnaires(resources.data),
+    [resources.data],
+  )
 
-  if (questionnaires.isLoading)
-    return <Loading label="Fetching questionnaires from the server" />
-  if (questionnaires.error)
-    return <ErrorNote error={questionnaires.error} retry={questionnaires.refetch} />
-  if (!questionnaires.data?.length)
+  if (resources.isLoading)
+    return <Loading label="Fetching available data from the source" />
+  if (resources.error)
+    return <ErrorNote error={resources.error} retry={resources.refetch} />
+  if (!resources.data?.length)
     return (
       <EmptyState
         icon="◌"
-        title="No questionnaires visible"
-        description="The API user may not have access to any questionnaires in this workspace."
+        title="No importable resources"
+        description={
+          provider === 'sdmx'
+            ? 'Add one or more SDMX data query paths to this connection first.'
+            : 'The account may not have access to any forms or data resources on this source.'
+        }
       />
     )
+
+  if (provider !== 'survey_solutions') {
+    return (
+      <div className="max-h-80 space-y-2 overflow-y-auto">
+        {resources.data.map((resource) => {
+          const checked = value.includes(resource.identity)
+          return (
+            <label
+              key={resource.identity}
+              className="flex cursor-pointer items-center gap-3 rounded-card border border-ink-200 px-3 py-2.5 hover:bg-ink-50"
+            >
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={(event) =>
+                  onChange(
+                    event.target.checked
+                      ? [...value, resource.identity]
+                      : value.filter((item) => item !== resource.identity),
+                  )
+                }
+              />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-ink-800">
+                  {resource.title}
+                </p>
+                <p className="truncate text-xs text-ink-500">
+                  {resource.kind || 'resource'} · {resource.id}
+                </p>
+              </div>
+            </label>
+          )
+        })}
+      </div>
+    )
+  }
 
   /** Replace one questionnaire's entries, leaving every other one alone. */
   const put = (group: QuestionnaireGroup, choices: string[]) => {
@@ -110,13 +142,8 @@ export default function QuestionnairePicker({
                 type="checkbox"
                 checked={included}
                 ref={(el) => {
-                  // Part-selected reads as neither on nor off, which is what
-                  // it is: some versions of this questionnaire.
                   if (el) el.indeterminate = !everyVersion && pinned.length > 0
                 }}
-                // Ticking a questionnaire takes all of its versions, which is
-                // nearly always what is wanted: the interviews are spread
-                // across them and they are one survey.
                 onChange={(event) => put(group, event.target.checked ? [group.id] : [])}
               />
               <div className="min-w-0 flex-1">
@@ -152,9 +179,6 @@ export default function QuestionnairePicker({
                     type="radio"
                     name={`versions-${group.id}`}
                     checked={!everyVersion}
-                    // Falling back to the newest rather than to nothing: an
-                    // empty choice would clear the questionnaire, and the
-                    // reader has just said they want it.
                     onChange={() => put(group, [latest.identity])}
                   />
                   Only the versions ticked below
