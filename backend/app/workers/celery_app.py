@@ -7,8 +7,10 @@ from celery.schedules import crontab
 
 from app.core.config import settings
 from app.core.logging import configure_logging
+from app.services.query_runtime import install_query_runtime
 
 configure_logging()
+install_query_runtime()
 
 celery_app = Celery(
     "surveyhq",
@@ -29,6 +31,17 @@ celery_app.conf.update(
     worker_max_tasks_per_child=50,
     result_expires=60 * 60 * 24 * 3,
     broker_connection_retry_on_startup=True,
+    task_default_queue="default",
+    task_routes={
+        # File parsing and Survey Solutions downloads can saturate CPU / disk for
+        # minutes. They must not make alerts and monitoring wait in the same queue.
+        "app.workers.tasks.run_upload_import": {"queue": "imports"},
+        "app.workers.tasks.run_connection_sync": {"queue": "imports"},
+        "app.workers.tasks.schedule_due_syncs": {"queue": "monitoring"},
+        "app.workers.tasks.refresh_all_indicators": {"queue": "monitoring"},
+        "app.workers.tasks.run_all_quality_checks": {"queue": "quality"},
+        "app.workers.tasks.prune_history": {"queue": "maintenance"},
+    },
 )
 
 celery_app.conf.beat_schedule = {

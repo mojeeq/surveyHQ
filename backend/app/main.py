@@ -15,14 +15,20 @@ from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
 
 from app import __version__
-from app.api.v1.router import api_router
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
-from app.db.init_db import initialise
-from app.db.session import engine
-from app.services.ingest import IngestError
-from app.services.query_engine import QueryError
-from app.services.survey_solutions import SurveySolutionsError
+from app.services.query_runtime import install_query_runtime
+
+# Install this before router imports. Endpoint modules import execute_query by
+# name, so they need to see the cached/configured function from the outset.
+install_query_runtime()
+
+from app.api.v1.router import api_router  # noqa: E402
+from app.db.init_db import initialise  # noqa: E402
+from app.db.session import engine  # noqa: E402
+from app.services.ingest import IngestError  # noqa: E402
+from app.services.query_engine import QueryError  # noqa: E402
+from app.services.survey_solutions import SurveySolutionsError  # noqa: E402
 
 configure_logging()
 logger = get_logger(__name__)
