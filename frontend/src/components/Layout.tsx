@@ -7,6 +7,7 @@ import { useTheme } from '@/hooks/useTheme'
 import type { Notification } from '@/lib/types'
 import { relativeTime } from '@/lib/format'
 import AppIcon, { type AppIconName } from '@/components/AppIcon'
+import ProjectFilter from '@/components/ProjectFilter'
 
 function useClickOutside(refs: React.RefObject<HTMLElement>[], onOutside: () => void) {
   useEffect(() => {
@@ -203,6 +204,10 @@ export default function Layout() {
             </p>
           </div>
 
+          <div className="ml-auto hidden md:block">
+            <ProjectFilter compact />
+          </div>
+
           <div className="flex items-center gap-1.5">
             <button
               className="icon-button"
@@ -261,7 +266,7 @@ export default function Layout() {
                           <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500 dark:text-slate-400">{notification.body}</p>
                           <p className="mt-2 text-[11px] font-medium text-slate-400">{relativeTime(notification.created_at)}</p>
                         </button>
-                      ))
+                      ))}
                     )}
                   </div>
                 </div>
