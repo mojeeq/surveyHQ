@@ -25,11 +25,13 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 COPY pyproject.toml .
 COPY sandbox/r-sandbox.c /tmp/r-sandbox.c
-# Shadow /usr/bin/Rscript with a launcher that applies Landlock filesystem
-# allowlisting plus a seccomp syscall policy before execing the real interpreter.
-# It needs no extra capabilities, setuid bit, Docker socket or privileged mode.
-RUN cc -O2 -Wall -Wextra -Werror /tmp/r-sandbox.c -lseccomp -o /usr/local/bin/Rscript \
-    && chmod 0755 /usr/local/bin/Rscript \
+# Build a dedicated launcher that applies Landlock filesystem allowlisting and
+# a seccomp syscall policy before execing /usr/bin/Rscript. Keeping the raw R
+# binary under its normal name means SurveyHQ can probe the launcher explicitly
+# and refuse to run if somebody accidentally configures unsandboxed Rscript.
+RUN cc -O2 -Wall -Wextra -Werror /tmp/r-sandbox.c -lseccomp \
+        -o /usr/local/bin/surveyhq-r-sandbox \
+    && chmod 0755 /usr/local/bin/surveyhq-r-sandbox \
     && rm /tmp/r-sandbox.c
 
 # Run as a non-root user; /data is a mounted volume so it needs to be writable.
