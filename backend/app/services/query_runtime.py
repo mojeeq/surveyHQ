@@ -29,7 +29,10 @@ _client: redis.Redis | None = None
 
 def _redis() -> redis.Redis | None:
     global _client
-    if not settings.analytics_cache_enabled:
+    # Unit/integration test legs deliberately run without a Redis service. The
+    # cache is an accelerator, never a correctness dependency, so avoid a failed
+    # TCP connect on every test query.
+    if not settings.analytics_cache_enabled or settings.environment.lower() in {"test", "testing"}:
         return None
     if _client is None:
         _client = redis.Redis.from_url(
