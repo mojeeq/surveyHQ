@@ -1,4 +1,4 @@
-"""Survey Solutions server connections and sync history."""
+"""External data-source connections and sync history."""
 
 from __future__ import annotations
 
@@ -39,12 +39,23 @@ sync_status_type = Enum(SyncStatus, name="sync_status")
 
 
 class Connection(UUIDMixin, TimestampMixin, Base):
-    """Credentials and sync settings for one Survey Solutions workspace."""
+    """Credentials, provider settings and sync schedule for one external source."""
 
     __tablename__ = "connections"
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     base_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    # Kept as text rather than a database enum: connectors are deliberately
+    # extensible and adding a provider should not require a destructive schema
+    # migration. Existing rows become Survey Solutions on upgrade.
+    provider: Mapped[str] = mapped_column(
+        String(40), default="survey_solutions", server_default=text("'survey_solutions'")
+    )
+    # Provider-specific, non-secret settings. Examples: an ODK project id or a
+    # list of SDMX data query paths. Secrets continue to use password_encrypted.
+    source_config: Mapped[dict] = mapped_column(
+        JSON, default=dict, server_default=text("'{}'")
+    )
     workspace: Mapped[str] = mapped_column(String(120), default="primary")
     username: Mapped[str] = mapped_column(String(200), default="")
     password_encrypted: Mapped[str] = mapped_column(Text, default="")
@@ -54,6 +65,8 @@ class Connection(UUIDMixin, TimestampMixin, Base):
     # Sync configuration
     sync_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     sync_interval_minutes: Mapped[int] = mapped_column(Integer, default=360)
+    # Survey Solutions uses this directly. Other providers currently export the
+    # richest tabular representation their API offers.
     export_format: Mapped[ExportFormat] = mapped_column(
         Enum(ExportFormat, name="export_format"), default=ExportFormat.stata
     )
@@ -62,20 +75,17 @@ class Connection(UUIDMixin, TimestampMixin, Base):
     sync_mode: Mapped[str] = mapped_column(
         String(20), default="interval", server_default=text("'interval'")
     )
-    # Times of day to import at, as "HH:MM", read in sync_timezone. Several are
-    # allowed: a morning and an evening pull is a common shape.
     sync_times: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
-    # The zone those times are read in. Fieldwork happens somewhere, and "06:00"
-    # means six in the morning there, not six in UTC.
     sync_timezone: Mapped[str] = mapped_column(
         String(60), default="UTC", server_default=text("'UTC'")
     )
-    # Which questionnaires to pull; empty means "all"
+    # Historical column name kept for backwards compatibility. It now stores
+    # selected source-resource identities: questionnaires, forms, dictionaries
+    # or configured SDMX data queries depending on provider.
     questionnaires: Mapped[list] = mapped_column(JSON, default=list)
     interview_status: Mapped[str] = mapped_column(String(50), default="All")
 
-    # Where this connection's imports land. Null is the shared area, which is
-    # where every import went before a connection could name a project.
+    # Where this connection's imports land. Null is the shared area.
     project_id: Mapped[str | None] = mapped_column(
         ForeignKey("projects.id", ondelete="SET NULL"), nullable=True, index=True
     )
@@ -104,6 +114,8 @@ class SyncRun(UUIDMixin, Base):
     connection_id: Mapped[str] = mapped_column(
         ForeignKey("connections.id", ondelete="CASCADE"), index=True
     )
+    # Historical name: this is the human-readable resource title for every
+    # provider, not only a Survey Solutions questionnaire.
     questionnaire: Mapped[str] = mapped_column(String(300), default="")
     status: Mapped[SyncStatus] = mapped_column(
         sync_status_type, default=SyncStatus.running
@@ -114,8 +126,6 @@ class SyncRun(UUIDMixin, Base):
     datasets_created: Mapped[int] = mapped_column(Integer, default=0)
     message: Mapped[str] = mapped_column(Text, default="")
     log: Mapped[list] = mapped_column(JSON, default=list)
-    # The export zip as it arrived, kept so it can be downloaded and re-used
-    # like any other export archive. Empty once it has been pruned.
     archive_path: Mapped[str] = mapped_column(String(500), default="", server_default=text("''"))
 
     connection: Mapped[Connection] = relationship(back_populates="runs")
