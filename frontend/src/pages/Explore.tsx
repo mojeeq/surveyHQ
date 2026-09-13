@@ -428,7 +428,12 @@ function AggregateBuilder({
     if (!editing) return
     const saved = (editing.spec?.query ?? editing.spec) as QuerySpec | undefined
     if (!saved) return
-    setDimensions(saved.dimensions ?? [])
+    const savedDimensions = saved.dimensions ?? []
+    setDimensions(
+      editing.chart_type === 'kpi'
+        ? savedDimensions.filter((dimension) => dimension.alias !== '__kpi_category')
+        : savedDimensions,
+    )
     setMeasures(saved.measures ?? [{ agg: 'count', alias: 'count' }])
     // A saved box plot carries the five; which variable they are five of is
     // read back off any one of them.
@@ -459,7 +464,22 @@ function AggregateBuilder({
   /** Falls back to the first numeric variable until one has been picked. */
   const boxColumn = boxVariable || numeric[0]?.name || ''
   const selectedKpi = measures[0]
-  const kpiColumn = selectedKpi?.variable || numeric[0]?.name || ''
+  type KpiDisplay = BuildOptions & {
+    kpiVariable?: string
+    kpiTarget?: string
+  }
+  const kpiDisplay = display as KpiDisplay
+  const kpiColumn = kpiDisplay.kpiVariable || selectedKpi?.variable || groupable[0]?.name || ''
+  const kpiVariable = allVariables.find((variable) => variable.name === kpiColumn)
+  const kpiTargets = Object.values(kpiVariable?.value_labels ?? {})
+  const defaultKpiTarget = kpiVariable?.value_labels?.['1'] ?? kpiTargets[0] ?? '1'
+  const kpiTarget = kpiDisplay.kpiTarget ?? defaultKpiTarget
+  // The KPI variable itself is always the final dimension. Any copy of it in
+  // Group by is removed so it cannot accidentally turn every card into 100%.
+  const kpiGroups = dimensions.filter((dimension) => dimension.variable !== kpiColumn)
+  const queryDimensions: Dimension[] = isKpi
+    ? [...kpiGroups, { variable: kpiColumn, alias: '__kpi_category' }]
+    : dimensions
   const queryMeasures: Measure[] = isBox
     ? BOX_MEASURES.map((measure) => ({
         agg: measure.agg as Aggregation,
@@ -470,31 +490,31 @@ function AggregateBuilder({
     : isKpi
       ? [
           {
-            agg: 'mean',
-            variable: kpiColumn,
-            alias: 'kpi_percent',
+            agg: 'share',
+            alias: 'kpi_share',
             weight: selectedKpi?.weight ?? null,
           },
         ]
       : measures
 
   const spec: QuerySpec = {
-    dimensions,
+    dimensions: queryDimensions,
     measures: queryMeasures,
     filters,
-    // The boxes are ranked by where their middle sits, not by their smallest
-    // number: ordering groups by their minimum puts the widest spread last.
+    // KPI category shares are re-normalised inside each requested group by the
+    // renderer, so query ordering is immaterial and all valid categories must
+    // be returned. Dropping missing categories gives the usual valid-percent
+    // denominator used in official-statistics tables.
     sort: isBox
       ? [{ field: 'box_median', direction: 'desc' }]
       : isKpi
-        ? dimensions.length
-          ? [{ field: 'kpi_percent', direction: 'desc' }]
-          : []
+        ? []
         : measures.length
           ? [{ field: measures[0].alias || measures[0].agg, direction: 'desc' }]
           : [],
-    limit,
+    limit: isKpi ? 100000 : limit,
     use_labels: true,
+    drop_missing: isKpi,
   }
 
   const run = useMutation({
@@ -621,53 +641,95 @@ function AggregateBuilder({
             />
           ) : isKpi ? (
             <div className="space-y-2 rounded-card border border-ink-200 p-3">
-              <select
-                className="input py-1.5 text-xs"
-                aria-label="0 or 1 variable"
-                value={kpiColumn}
-                onChange={(event) =>
-                  setMeasures([
-                    {
-                      agg: 'mean',
-                      variable: event.target.value,
-                      alias: 'kpi_percent',
-                      weight: selectedKpi?.weight ?? null,
-                    },
-                  ])
-                }
+              <Field
+                label="Variable"
+                hint="The question or categorical variable whose category you want as a percentage."
               >
-                {numeric.map((v) => (
-                  <option key={v.name} value={v.name}>
-                    {optionLabel(v)}
-                  </option>
-                ))}
-              </select>
-              <select
-                className="input py-1.5 text-xs"
-                aria-label="Weight"
-                value={selectedKpi?.weight ?? ''}
-                onChange={(event) =>
-                  setMeasures([
-                    {
-                      agg: 'mean',
-                      variable: kpiColumn,
-                      alias: 'kpi_percent',
-                      weight: event.target.value || null,
-                    },
-                  ])
-                }
+                <select
+                  className="input py-1.5 text-xs"
+                  aria-label="KPI variable"
+                  value={kpiColumn}
+                  onChange={(event) => {
+                    const next = allVariables.find((variable) => variable.name === event.target.value)
+                    const labels = Object.values(next?.value_labels ?? {})
+                    const target = next?.value_labels?.['1'] ?? labels[0] ?? '1'
+                    setMeasures([
+                      {
+                        agg: 'share',
+                        alias: 'kpi_share',
+                        weight: selectedKpi?.weight ?? null,
+                      },
+                    ])
+                    setDisplay({
+                      ...display,
+                      kpiVariable: event.target.value,
+                      kpiTarget: target,
+                    } as BuildOptions)
+                  }}
+                >
+                  {groupable.map((v) => (
+                    <option key={v.name} value={v.name}>
+                      {optionLabel(v)}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field
+                label="Category to display"
+                hint="For labelled survey variables choose the answer label. For unlabelled values enter the stored value, e.g. 1, Urban or Employed."
               >
-                <option value="">Unweighted</option>
-                {numeric.map((v) => (
-                  <option key={v.name} value={v.name}>
-                    Weight by {v.name}
-                  </option>
-                ))}
-              </select>
+                {kpiTargets.length ? (
+                  <select
+                    className="input py-1.5 text-xs"
+                    value={kpiTarget}
+                    onChange={(event) =>
+                      setDisplay({ ...display, kpiTarget: event.target.value } as BuildOptions)
+                    }
+                  >
+                    {kpiTargets.map((label, index) => (
+                      <option key={`${label}-${index}`} value={label}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    className="input py-1.5 text-xs"
+                    value={kpiTarget}
+                    onChange={(event) =>
+                      setDisplay({ ...display, kpiTarget: event.target.value } as BuildOptions)
+                    }
+                    placeholder="1"
+                  />
+                )}
+              </Field>
+              <Field label="Survey weight">
+                <select
+                  className="input py-1.5 text-xs"
+                  aria-label="Weight"
+                  value={selectedKpi?.weight ?? ''}
+                  onChange={(event) =>
+                    setMeasures([
+                      {
+                        agg: 'share',
+                        alias: 'kpi_share',
+                        weight: event.target.value || null,
+                      },
+                    ])
+                  }
+                >
+                  <option value="">Unweighted</option>
+                  {numeric.map((v) => (
+                    <option key={v.name} value={v.name}>
+                      Weight by {v.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
               <p className="text-xs text-ink-500 dark:text-dark-500">
-                Shows the percentage coded 1. For a 0/1 variable this is the weighted mean
-                multiplied by 100; blanks are excluded. Add Sex, Province or another grouping
-                above to show one card per group.
+                The card shows this category as a percentage of valid responses to the variable.
+                Add Sex, Province or another grouping above to calculate the percentage separately
+                inside each group.
               </p>
             </div>
           ) : (
@@ -781,7 +843,7 @@ function AggregateBuilder({
                 : isBox
                   ? 'Group by the thing to compare across - province, interviewer, month - and each one gets a box.'
                   : isKpi
-                    ? 'Shows the percentage coded 1. Add a grouping such as sex to show one KPI card per group.'
+                    ? 'Shows one selected category as a weighted percentage. Add a grouping such as sex to calculate it separately within each group.'
                     : undefined
             }
           >
@@ -792,15 +854,23 @@ function AggregateBuilder({
                 const next = event.target.value as ChartType
                 setChartType(next)
                 if (next === 'kpi') {
+                  const variable =
+                    allVariables.find((item) => item.name === measures[0]?.variable) ?? groupable[0]
+                  const labels = Object.values(variable?.value_labels ?? {})
+                  const target = variable?.value_labels?.['1'] ?? labels[0] ?? '1'
                   setMeasures([
                     {
-                      agg: 'mean',
-                      variable: measures[0]?.variable || numeric[0]?.name || '',
-                      alias: 'kpi_percent',
+                      agg: 'share',
+                      alias: 'kpi_share',
                       weight: measures[0]?.weight ?? null,
                     },
                   ])
-                  setDisplay({ ...display, decimals: display.decimals ?? 1 })
+                  setDisplay({
+                    ...display,
+                    decimals: display.decimals ?? 1,
+                    kpiVariable: variable?.name ?? '',
+                    kpiTarget: target,
+                  } as BuildOptions)
                 }
               }}
             >
