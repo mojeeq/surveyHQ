@@ -1,10 +1,34 @@
 import { useState, type FormEvent } from 'react'
 import { Navigate } from 'react-router-dom'
+import { useQuery } from '@tanstack/react-query'
+import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { Spinner } from '@/components/ui'
 
+/**
+ * Whether this deployment lets people create their own accounts.
+ *
+ * The same query key the application shell uses to resolve the hostname, so on
+ * a signed-out load the answer is already in the cache and this costs nothing.
+ * Absent - an older server, or a reply that never arrived - counts as off: a
+ * form that cannot work is worse than one that is not offered.
+ */
+function useSignupOffered(): boolean {
+  const query = useQuery({
+    queryKey: ['host-site'],
+    queryFn: () =>
+      api.get<{ dashboard: { token: string; name: string } | null; signup_enabled?: boolean }>(
+        '/public/site',
+      ),
+    staleTime: Infinity,
+    retry: false,
+  })
+  return query.data?.signup_enabled === true
+}
+
 export default function Login() {
   const { user, signIn, signUp, loading } = useAuth()
+  const signupOffered = useSignupOffered()
   const [mode, setMode] = useState<'signin' | 'signup'>('signin')
   const [identifier, setIdentifier] = useState('')
   const [username, setUsername] = useState('')
@@ -18,6 +42,11 @@ export default function Login() {
   if (loading) return null
   if (user) return <Navigate to="/" replace />
 
+  // Belt and braces: the toggle below is not rendered when sign-up is off, so
+  // this only matters if the answer arrives after somebody has already pressed
+  // it. Signing in is the mode that always works.
+  const showing = signupOffered ? mode : 'signin'
+
   const changeMode = (next: 'signin' | 'signup') => {
     setMode(next)
     setError('')
@@ -28,13 +57,13 @@ export default function Login() {
   const submit = async (event: FormEvent) => {
     event.preventDefault()
     setError('')
-    if (mode === 'signup' && password !== confirmPassword) {
+    if (showing === 'signup' && password !== confirmPassword) {
       setError('Passwords do not match')
       return
     }
     setBusy(true)
     try {
-      if (mode === 'signup') {
+      if (showing === 'signup') {
         await signUp({
           username: username.trim().toLowerCase(),
           email: email.trim().toLowerCase(),
@@ -45,7 +74,7 @@ export default function Login() {
         await signIn(identifier.trim().toLowerCase(), password)
       }
     } catch (err) {
-      setError(err instanceof Error ? err.message : mode === 'signup' ? 'Sign up failed' : 'Sign in failed')
+      setError(err instanceof Error ? err.message : showing === 'signup' ? 'Sign up failed' : 'Sign in failed')
     } finally {
       setBusy(false)
     }
@@ -105,11 +134,14 @@ export default function Login() {
             </div>
           </div>
 
+          {/* No toggle where there is nothing to toggle to: a "Create account"
+              button on a server with sign-up off is a button that answers 404. */}
+          {signupOffered && (
           <div className="mb-7 grid grid-cols-2 rounded-xl bg-slate-100 p-1 dark:bg-slate-900">
             <button
               type="button"
               className={`rounded-lg px-3 py-2 text-sm font-semibold transition ${
-                mode === 'signin'
+                showing === 'signin'
                   ? 'bg-white text-slate-950 shadow-sm dark:bg-slate-800 dark:text-white'
                   : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
               }`}
@@ -120,7 +152,7 @@ export default function Login() {
             <button
               type="button"
               className={`rounded-lg px-3 py-2 text-sm font-semibold transition ${
-                mode === 'signup'
+                showing === 'signup'
                   ? 'bg-white text-slate-950 shadow-sm dark:bg-slate-800 dark:text-white'
                   : 'text-slate-500 hover:text-slate-800 dark:hover:text-slate-200'
               }`}
@@ -129,16 +161,17 @@ export default function Login() {
               Create account
             </button>
           </div>
+          )}
 
           <div>
             <p className="text-sm font-semibold text-brand-600 dark:text-brand-400">
-              {mode === 'signup' ? 'Start your workspace' : 'Welcome back'}
+              {showing === 'signup' ? 'Start your workspace' : 'Welcome back'}
             </p>
             <h2 className="mt-2 text-3xl font-bold tracking-[-0.025em] text-slate-950 dark:text-white">
-              {mode === 'signup' ? 'Create your SurveyHQ account' : 'Sign in to your workspace'}
+              {showing === 'signup' ? 'Create your SurveyHQ account' : 'Sign in to your workspace'}
             </h2>
             <p className="mt-2 text-sm leading-6 text-slate-500">
-              {mode === 'signup'
+              {showing === 'signup'
                 ? 'Your projects are private until you add another user as a member.'
                 : 'Use your username or email address to continue.'}
             </p>
@@ -151,7 +184,7 @@ export default function Login() {
               </div>
             )}
 
-            {mode === 'signup' ? (
+            {showing === 'signup' ? (
               <>
                 <div>
                   <label className="label" htmlFor="username">Username</label>
@@ -223,15 +256,15 @@ export default function Login() {
                 id="password"
                 type="password"
                 className="input mt-1.5"
-                autoComplete={mode === 'signup' ? 'new-password' : 'current-password'}
-                minLength={mode === 'signup' ? 8 : undefined}
+                autoComplete={showing === 'signup' ? 'new-password' : 'current-password'}
+                minLength={showing === 'signup' ? 8 : undefined}
                 required
                 value={password}
                 onChange={(event) => setPassword(event.target.value)}
               />
             </div>
 
-            {mode === 'signup' && (
+            {showing === 'signup' && (
               <div>
                 <label className="label" htmlFor="confirm-password">Confirm password</label>
                 <input
@@ -249,12 +282,12 @@ export default function Login() {
 
             <button className="btn-primary h-11 w-full" disabled={busy}>
               {busy && <Spinner className="h-4 w-4 text-white" />}
-              {mode === 'signup' ? 'Create account' : 'Sign in'}
+              {showing === 'signup' ? 'Create account' : 'Sign in'}
             </button>
           </form>
 
           <p className="mt-6 text-center text-xs leading-5 text-slate-400">
-            {mode === 'signup'
+            {showing === 'signup'
               ? 'Already have an account? Use Sign in above.'
               : 'New to SurveyHQ? Create an account and start your own projects.'}
           </p>

@@ -45,6 +45,7 @@ Everything lives in `.env`. Values worth attention:
 | `CORS_ORIGINS` | Comma separated. Must include your real domain in production. |
 | `WEB_PORT` | Host port for the web interface. Default 8080. |
 | `MAX_UPLOAD_MB` | The upload ceiling, and the only one: nginx no longer enforces a second. An upload over it is refused with a message naming the size and the limit, before the body is transferred. It also bounds how far a zip may expand once opened - twenty times this - so an archive built to exhaust memory is refused rather than unpacked. |
+| `SIGNUP_ENABLED` | Whether anyone reaching the sign-in page may create their own account. **Off by default** - see below before turning it on. |
 | `RATE_LIMIT_ENABLED` | Caps sign-in attempts and requests to shared dashboards. Leave it on. Turn it off only if every visitor reaches you from one address, as behind some corporate proxies, where they would share one budget. |
 | `SYNC_TICK_MINUTES` | How often the scheduler checks for due imports. A connection set to import at a time of day cannot be honoured more precisely than this. |
 | `MONITOR_TICK_MINUTES` | How often indicators, alerts and checks are evaluated. |
@@ -54,6 +55,33 @@ After editing `.env`:
 ```bash
 docker compose up -d
 ```
+
+### Letting people create their own accounts
+
+`SIGNUP_ENABLED=true` puts a **Create account** button on the sign-in page, and
+anyone who can reach that page may then make themselves an account. It is off
+unless you say otherwise, and it is worth understanding why before you change
+that.
+
+A self-service account is a **manager**. A manager may create a project, and
+becomes that project's manager. A project's manager may **run R in it** - which
+is a program on this server, with this server's permissions. So on a deployment
+with `R_SCRIPTS_ENABLED=true`, opening sign-up hands the ability to run code on
+the machine to anyone who can load the page. Even with R off, a stranger can
+still create an account and take up space and background work.
+
+Turn it on where **at least one** of these is true:
+
+- the sign-in page is not reachable from the public internet - a VPN, an office
+  network, or an IP allow-list in front of nginx;
+- `R_SCRIPTS_ENABLED` is off and you accept strangers holding empty accounts.
+
+Otherwise leave it off and create accounts yourself under **Administration →
+Add user**, which is what a survey office usually wants anyway: the people who
+should be in it are known in advance.
+
+With sign-up off, `POST /auth/signup` answers **404**, the same as any unrouted
+path, and the sign-in page does not offer the button.
 
 ### Turning R on
 
