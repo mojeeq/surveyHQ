@@ -26,6 +26,22 @@ and one value:
 
 Everything else is base R and whatever the administrator installed.
 
+Saving a data file does the same thing as write_dataset(), because that is what
+somebody coming from RStudio writes without thinking about it:
+
+    write.csv(adults, "adults.csv")      a dataset here called adults
+    haven::write_dta(adults, "adults.dta")
+
+Any .csv, .dta, .sav, .tsv, .xls or .xlsx the run leaves in the working
+directory becomes a dataset named after the file. Only files that run wrote:
+the directory survives, so a file from three runs ago became a dataset three
+runs ago. Anything that does not read as a table stays an ordinary file, so a
+log written to .csv is a log.
+
+What the script leaves in R's global environment is listed too, which is what
+the Environment pane is drawn from. Every run is a new R session, so that is a
+record of what the last run made rather than something the next run can reach.
+
 WHAT THIS IS NOT
 ================
 This is not a sandbox. An R script is a program, and a program can read files
@@ -70,7 +86,7 @@ from app.services.datasets import (
     dataset_is_queryable,
     unique_slug,
 )
-from app.services.ingest import ingest_frame
+from app.services.ingest import ingest_frame, read_source
 from app.services.sharing import as_utc
 
 logger = get_logger(__name__)
@@ -81,6 +97,7 @@ logger = get_logger(__name__)
 DATA_DIR = "data"
 OUT_DIR = "out"
 MANIFEST = "susodash_written.json"
+ENVIRONMENT = "susodash_environment.csv"
 SCRIPT = "susodash_project.R"
 # What the launcher answers to --surveyhq-sandbox-probe, and the name the
 # image installs it under. Both are matched exactly: a sandbox that cannot
@@ -93,6 +110,17 @@ LIB_DIR = "rlibs"
 # Printed output kept from a run. A script that prints a whole data frame can
 # produce megabytes, and none of it past the first screenful helps.
 MAX_LOG = 20_000
+
+# Data files a script leaves behind are adopted as datasets of the project.
+# A narrower list than import accepts: .tab and .txt are how a Survey
+# Solutions export arrives, and a script writing one of those is far more
+# often writing a log than a dataset.
+ADOPTED_EXTENSIONS = (".csv", ".dta", ".sav", ".tsv", ".xlsx", ".xls")
+
+# Ceilings on what one run can produce, so a loop with a bug makes a mess in
+# the workspace rather than several thousand rows in the datasets table.
+MAX_ADOPTED = 50
+MAX_OBJECTS = 200
 
 
 class RError(RuntimeError):
@@ -270,6 +298,9 @@ class ProjectRResult:
     written: list[dict[str, object]] = field(default_factory=list)
     # Files the script left in the workspace, so the panel can list them.
     files: list[str] = field(default_factory=list)
+    # What the script left in R's global environment, as
+    # {"name", "kind", "type", "shape", "preview", "bytes"}.
+    environment: list[dict[str, object]] = field(default_factory=list)
 
 
 def workspace(project_id: str) -> Path:
@@ -351,8 +382,12 @@ def run(
             leftover.unlink(missing_ok=True)
 
     (room / SCRIPT).write_text(_wrap(code, ready), encoding="utf-8")
+    # Taken before the run so that "the script saved this" can be told from
+    # "this was already lying here": the workspace survives between runs, and a
+    # file written three runs ago became a dataset three runs ago.
+    before = _census(room)
     printed = _execute(room)
-    written = _collect(db, project, room, created_by)
+    written = _collect(db, project, room, created_by, before)
 
     files = sorted(
         str(path.relative_to(room))
@@ -369,6 +404,7 @@ def run(
         output=printed,
         written=written,
         files=files[:200],
+        environment=snapshot(room),
     )
 
 
@@ -448,18 +484,30 @@ def _wrap(code: str, ready: list[Dataset]) -> str:
             f".susodash_data <- {_r_string(DATA_DIR)}",
             f".susodash_out <- {_r_string(OUT_DIR)}",
             f".susodash_manifest <- {_r_string(MANIFEST)}",
+            f".susodash_environment_file <- {_r_string(ENVIRONMENT)}",
             ".susodash_written <- character(0)",
             f"datasets <- utils::read.csv(text = {_r_string(_catalogue(ready))}, "
             "stringsAsFactors = FALSE)",
             _READER,
             _WRITER,
+            _DESCRIBER,
         ]
     )
     # Written even when the script wrote nothing, so an empty manifest and a
     # crashed run are told apart by the collector rather than guessed at.
-    postamble = (
-        'writeLines(paste0("[", paste(.susodash_written, collapse = ","), "]"), '
-        "file.path(.susodash_out, .susodash_manifest))"
+    #
+    # The environment listing is the same idea for objects rather than
+    # datasets, and its failure is swallowed: describing what a script made
+    # is a courtesy, and a courtesy must not turn a run that worked into a
+    # run that reports an error.
+    postamble = "; ".join(
+        [
+            'writeLines(paste0("[", paste(.susodash_written, collapse = ","), "]"), '
+            "file.path(.susodash_out, .susodash_manifest))",
+            "tryCatch(utils::write.csv(.susodash_describe(),"
+            " file.path(.susodash_out, .susodash_environment_file),"
+            " row.names = FALSE), error = function(e) invisible(NULL))",
+        ]
     )
     return f"{preamble}\n{code}\n{postamble}\n"
 
@@ -517,6 +565,74 @@ _WRITER = (
 )
 
 
+def _one_line(source: str) -> str:
+    """R source written readably, handed to R as a single line.
+
+    The preamble is one line so that an error R reports is at the line the
+    person typed, plus one - see _wrap. Keeping that promise by hand means
+    writing R as a wall of escaped fragments, which is how the two functions
+    above are written and is why they are as short as they are. This collapses
+    the line breaks instead, so the describer below can be read as R.
+
+    Only whitespace around a newline is touched, and no string literal in the
+    source spans one, so nothing inside quotes moves.
+    """
+    return re.sub(r"\s*\n\s*", " ", source).strip()
+
+
+# What the Environment pane is drawn from: one row per object the script left
+# in the global environment. Written as a CSV rather than as JSON for the same
+# reason the catalogue is - base R writes it with no package installed, and
+# write.csv quotes a preview containing a comma or a quote correctly, which
+# hand-rolled JSON in R would not.
+#
+# `ls()` skips dotted names, so the workspace's own values are already out; the
+# three public ones are named because they are the platform's, not the script's.
+_DESCRIBER = _one_line(
+    f"""
+    .susodash_describe <- function() {{
+      empty <- data.frame(name = character(0), kind = character(0),
+                          type = character(0), shape = character(0),
+                          preview = character(0), bytes = numeric(0),
+                          stringsAsFactors = FALSE);
+      found <- setdiff(ls(envir = globalenv()),
+                       c("datasets", "read_dataset", "write_dataset"));
+      if (length(found) == 0) return(empty);
+      if (length(found) > {MAX_OBJECTS}) found <- found[seq_len({MAX_OBJECTS})];
+      rows <- lapply(found, function(nm) tryCatch({{
+        value <- get(nm, envir = globalenv());
+        if (is.function(value)) {{
+          kind <- "function";
+          shape <- "";
+          text <- sub("[[:space:]]*NULL[[:space:]]*$", "",
+                      paste(deparse(args(value)), collapse = " "));
+        }} else if (is.data.frame(value)) {{
+          kind <- "data";
+          shape <- paste(format(nrow(value), big.mark = ","), "obs. of", ncol(value),
+                         if (ncol(value) == 1) "variable" else "variables");
+          text <- paste(names(value), collapse = ", ");
+        }} else {{
+          kind <- "value";
+          shape <- if (!is.null(dim(value))) paste(dim(value), collapse = " x ")
+                   else paste("length", length(value));
+          text <- tryCatch(if (is.list(value)) paste(names(value), collapse = ", ")
+                           else paste(as.character(utils::head(value, 10)), collapse = " "),
+                           error = function(e) "");
+        }};
+        data.frame(name = nm, kind = kind, type = paste(class(value), collapse = "/"),
+                   shape = shape,
+                   preview = substr(gsub("[[:space:]]+", " ", text), 1, 200),
+                   bytes = as.numeric(utils::object.size(value)),
+                   stringsAsFactors = FALSE)
+      }}, error = function(e) NULL));
+      rows <- rows[!vapply(rows, is.null, logical(1))];
+      if (length(rows) == 0) return(empty);
+      do.call(rbind, rows)
+    }}
+    """
+)
+
+
 def _execute(room: Path) -> str:
     """Run Rscript with the workspace as its home, and hand back what it printed."""
     settings = get_settings()
@@ -555,14 +671,63 @@ def _execute(room: Path) -> str:
 
 
 def _collect(
-    db: Session, project: Project, room: Path, created_by: str | None
+    db: Session,
+    project: Project,
+    room: Path,
+    created_by: str | None,
+    before: dict[Path, tuple[int, int]],
 ) -> list[dict[str, object]]:
-    """Turn what write_dataset() left in `out` into datasets of this project.
+    """Turn what the script saved into datasets of this project.
 
-    A name that is already a dataset here is replaced in place, so a script run
-    twice does not leave two copies and every chart pointing at it goes on
-    working. A name that is not becomes a new dataset in this project.
+    Two ways in, because people write R two ways. write_dataset() is the
+    explicit one and names the dataset itself. The other is the one somebody
+    coming from RStudio writes without thinking - write.csv(h, "adults.csv"),
+    haven::write_dta(h, "adults.dta") - and that used to leave a file in the
+    working directory and nothing else. A data file the run produced is now a
+    dataset too, named after itself.
+
+    Only files this run touched: the workspace survives between runs, so a file
+    written three runs ago became a dataset three runs ago and re-adopting it
+    every time would restamp datasets nobody changed.
     """
+    written: list[dict[str, object]] = []
+    claimed: set[str] = set()
+
+    for name, source in _manifest_entries(room):
+        if name in claimed:
+            continue
+        try:
+            frame = pd.read_csv(source, low_memory=False)
+        except (OSError, UnicodeDecodeError, ValueError) as exc:
+            logger.warning("R script wrote %s but it could not be read: %s", source.name, exc)
+            continue
+        claimed.add(name)
+        written.append(_save(db, project, name, frame, {}, {}, created_by))
+
+    for source in _produced_files(room, before):
+        name = source.stem.strip()
+        if not name or name in claimed:
+            continue
+        try:
+            frame, variable_labels, value_labels = read_source(source)
+        except Exception as exc:  # noqa: BLE001 - see below
+            # Deliberately everything. A .csv that is not a table, a half-written
+            # .dta, a reader library raising something of its own: the script
+            # meant to write the file and it worked, so the file stays in the
+            # working directory and the run is still a run that succeeded.
+            # Narrowing this would turn somebody's log file into a failed script.
+            logger.info("Left %s in the workspace, unreadable as data: %s", source.name, exc)
+            continue
+        if not len(frame.columns):
+            continue
+        claimed.add(name)
+        written.append(_save(db, project, name, frame, variable_labels, value_labels, created_by))
+
+    return written
+
+
+def _manifest_entries(room: Path) -> list[tuple[str, Path]]:
+    """The (name, file) pairs write_dataset() recorded, if the run got that far."""
     manifest = room / OUT_DIR / MANIFEST
     if not manifest.exists():
         return []
@@ -571,40 +736,128 @@ def _collect(
     except json.JSONDecodeError:
         return []
 
-    written: list[dict[str, object]] = []
+    pairs: list[tuple[str, Path]] = []
     for entry in entries if isinstance(entries, list) else []:
         if not isinstance(entry, dict):
             continue
         name = str(entry.get("name") or "").strip()
         source = room / OUT_DIR / str(entry.get("file") or "")
-        if not name or not source.is_file():
+        if name and source.is_file():
+            pairs.append((name, source))
+    return pairs
+
+
+def _census(room: Path) -> dict[Path, tuple[int, int]]:
+    """Every adoptable file in the workspace, as it stands, by size and mtime.
+
+    Compared against rather than a clock. Two runs in the same second are
+    ordinary here - a saved script that runs after an import takes milliseconds
+    - and a timestamp cutoff would re-adopt the previous run's output every
+    time, restamping datasets nobody had changed.
+    """
+    census: dict[Path, tuple[int, int]] = {}
+    for path in room.rglob("*"):
+        relative = path.relative_to(room)
+        if not path.is_file() or is_plumbing(relative):
             continue
-        frame = pd.read_csv(source, low_memory=False)
-        dataset = db.scalar(
-            select(Dataset).where(
-                Dataset.project_id == project.id, Dataset.name == name
-            )
-        )
-        if dataset is None:
-            dataset = create_dataset_record(
-                db,
-                name=name,
-                description=f"Written by an R script in {project.name}",
-                created_by=created_by,
-                project_id=project.id,
-            )
-        else:
-            # A rename is the author's to make; what changed here is the data.
-            dataset.slug = dataset.slug or unique_slug(db, name, exclude_id=dataset.id)
-        _apply_ingest(
+        if path.suffix.lower() not in ADOPTED_EXTENSIONS:
+            continue
+        try:
+            stat = path.stat()
+        except OSError:
+            continue
+        census[relative] = (stat.st_mtime_ns, stat.st_size)
+    return census
+
+
+def _produced_files(room: Path, before: dict[Path, tuple[int, int]]) -> list[Path]:
+    """Data files this run wrote: the ones that are new, or are not as they were."""
+    found: list[Path] = []
+    for relative, state in sorted(_census(room).items()):
+        if before.get(relative) == state:
+            continue
+        found.append(room / relative)
+        if len(found) >= MAX_ADOPTED:
+            break
+    return found
+
+
+def _save(
+    db: Session,
+    project: Project,
+    name: str,
+    frame: pd.DataFrame,
+    variable_labels: dict[str, str],
+    value_labels: dict[str, dict[str, str]],
+    created_by: str | None,
+) -> dict[str, object]:
+    """Create or replace the project's dataset of this name.
+
+    Replaced in place rather than added beside, so a script run twice does not
+    leave two copies and every chart pointing at it goes on working.
+    """
+    dataset = db.scalar(
+        select(Dataset).where(Dataset.project_id == project.id, Dataset.name == name)
+    )
+    if dataset is None:
+        dataset = create_dataset_record(
             db,
-            dataset,
-            ingest_frame(frame, {}, {}, dataset_directory(dataset.id), []),
+            name=name,
+            description=f"Written by an R script in {project.name}",
+            created_by=created_by,
+            project_id=project.id,
         )
-        written.append(
-            {"name": name, "id": dataset.id, "rows": int(len(frame))}
+    else:
+        # A rename is the author's to make; what changed here is the data.
+        dataset.slug = dataset.slug or unique_slug(db, name, exclude_id=dataset.id)
+    _apply_ingest(
+        db,
+        dataset,
+        ingest_frame(
+            frame, variable_labels, value_labels, dataset_directory(dataset.id), []
+        ),
+    )
+    return {"name": name, "id": dataset.id, "rows": int(len(frame))}
+
+
+def snapshot(room: Path) -> list[dict[str, object]]:
+    """What the last run left in R's global environment.
+
+    Read from the workspace rather than carried in memory, so the pane still
+    has something to draw after a reload. It lives in `out`, which is emptied
+    at the start of every run: a run that failed leaves no environment, which
+    is the truth - nothing it made survived.
+    """
+    source = room / OUT_DIR / ENVIRONMENT
+    if not source.is_file():
+        return []
+    try:
+        # Every column read as text: a preview of "1 2 3" is not a number, and
+        # letting pandas decide would turn some previews into NaN.
+        frame = pd.read_csv(source, dtype=str, keep_default_na=False)
+    except (OSError, UnicodeDecodeError, ValueError, pd.errors.ParserError):
+        return []
+
+    objects: list[dict[str, object]] = []
+    for row in frame.to_dict("records"):
+        name = str(row.get("name") or "").strip()
+        if not name:
+            continue
+        try:
+            size = int(float(row.get("bytes") or 0))
+        except (TypeError, ValueError):
+            size = 0
+        objects.append(
+            {
+                "name": name,
+                "kind": str(row.get("kind") or "value"),
+                "type": str(row.get("type") or ""),
+                "shape": str(row.get("shape") or ""),
+                "preview": str(row.get("preview") or ""),
+                "bytes": size,
+            }
         )
-    return written
+    return objects[:MAX_OBJECTS]
 
 
 def is_plumbing(relative: Path) -> bool:
@@ -613,4 +866,8 @@ def is_plumbing(relative: Path) -> bool:
     # `data` is what the platform writes for scripts to read and `out` is where
     # it collects what they wrote; both are cleared and rebuilt, so listing
     # them among somebody's own files would be listing the plumbing.
-    return first in (DATA_DIR, OUT_DIR, LIB_DIR) or relative.name in (SCRIPT, MANIFEST)
+    return first in (DATA_DIR, OUT_DIR, LIB_DIR) or relative.name in (
+        SCRIPT,
+        MANIFEST,
+        ENVIRONMENT,
+    )

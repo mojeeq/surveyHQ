@@ -467,18 +467,53 @@ def run_console(
 def list_workspace(
     project_id: str, db: DbSession, user: RequireManager
 ) -> dict[str, Any]:
-    """What is in the project's working directory, which survives between runs."""
+    """What is in the project's working directory, which survives between runs.
+
+    Three things, because a working directory is all three. The datasets are
+    the files the platform puts there for a script to read, so they belong in
+    the same picture as the files a script wrote - and a file that became a
+    dataset says so, which is the only way to tell "adults.csv is a dataset
+    here" from "adults.csv is a file here". The environment is what the last
+    run left behind, read from the workspace so a reload does not empty it.
+    """
     project = _editable_project(project_id, db, user, Role.manager)
     room = rproject.workspace(project.id)
+    datasets = rproject.project_datasets(db, project.id)
+    named = {dataset.name for dataset in datasets}
+
     files = []
     for path in sorted(room.rglob("*")):
         relative = path.relative_to(room)
         if not path.is_file() or rproject.is_plumbing(relative):
             continue
-        files.append({"path": str(relative), "bytes": path.stat().st_size})
+        files.append(
+            {
+                "path": str(relative),
+                "bytes": path.stat().st_size,
+                # Only a file that could be one: "adults.txt" beside a dataset
+                # called "adults" is a note about it, not the dataset.
+                "dataset": path.suffix.lower() in rproject.ADOPTED_EXTENSIONS
+                and path.stem in named,
+            }
+        )
         if len(files) >= 200:
             break
-    return {"files": files}
+
+    return {
+        "files": files,
+        "datasets": [
+            {
+                "name": dataset.name,
+                "slug": dataset.slug,
+                "rows": dataset.row_count or 0,
+                # Where a script actually finds it, for anyone who would rather
+                # read the file than call read_dataset().
+                "path": f"{rproject.DATA_DIR}/{dataset.slug}.csv",
+            }
+            for dataset in datasets
+        ],
+        "environment": rproject.snapshot(room),
+    }
 
 
 @router.delete("/{project_id}/workspace", response_model=Message)
@@ -508,6 +543,7 @@ def _run_payload(result: rproject.ProjectRResult) -> dict[str, Any]:
         "output": result.output,
         "written": result.written,
         "files": result.files,
+        "environment": result.environment,
     }
 
 

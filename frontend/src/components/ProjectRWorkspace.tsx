@@ -9,7 +9,7 @@
  * package installed into the project's own library is still there next time.
  */
 
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { relativeTime } from '@/lib/format'
@@ -32,11 +32,32 @@ interface ProjectScript {
   updated_at: string
 }
 
+/** One object a run left in R's global environment. */
+interface REnvironmentObject {
+  name: string
+  kind: 'data' | 'value' | 'function'
+  type: string
+  shape: string
+  preview: string
+  bytes: number
+}
+
 interface RunResult {
   message: string
   output: string
   written: { name: string; id: string; rows: number }[]
   files: string[]
+  environment: REnvironmentObject[]
+}
+
+/**
+ * The working directory as it stands: the datasets the platform puts there for
+ * a script to read, the files anyone left, and what the last run had in memory.
+ */
+interface Workspace {
+  files: { path: string; bytes: number; dataset: boolean }[]
+  datasets: { name: string; slug: string; rows: number; path: string }[]
+  environment: REnvironmentObject[]
 }
 
 interface Tools {
@@ -51,6 +72,7 @@ const EXAMPLES = [
   'h$adult <- ifelse(h$age >= 18, 1, 0)',
   'both <- merge(read_dataset("household"), read_dataset("person"), by = "interview__key")',
   'write_dataset(h, "Household prepared")',
+  'write.csv(h, "household-prepared.csv", row.names = FALSE)',
   'saveRDS(h, "household.rds")',
   'install.packages("dplyr", repos = "https://cloud.r-project.org")',
 ]
@@ -79,12 +101,12 @@ export default function ProjectRWorkspace({
     queryFn: () => api.get<ProjectScript[]>(`/projects/${projectId}/scripts`),
   })
 
-  const files = useQuery({
+  // The environment comes from here rather than from the last run's reply, so
+  // that it is still drawn after a reload. A run invalidates this query, which
+  // is what refreshes the pane.
+  const workspace = useQuery({
     queryKey: ['project-workspace', projectId],
-    queryFn: () =>
-      api.get<{ files: { path: string; bytes: number }[] }>(
-        `/projects/${projectId}/workspace`,
-      ),
+    queryFn: () => api.get<Workspace>(`/projects/${projectId}/workspace`),
     enabled: canManage,
   })
 
@@ -236,6 +258,8 @@ export default function ProjectRWorkspace({
       </div>
 
       <div className="space-y-4">
+        <REnvironment objects={workspace.data?.environment ?? []} />
+
         <Card
           title="Saved scripts"
           subtitle="Run in this order after a new export lands"
@@ -347,7 +371,10 @@ export default function ProjectRWorkspace({
           )}
           <p className="mt-2 text-xs text-ink-500">
             <code>write_dataset(df, "Name")</code> saves a data frame back as a dataset
-            of this project, replacing one of that name if it is already here.
+            of this project, replacing one of that name if it is already here. So does
+            writing a file: <code>write.csv(df, "adults.csv")</code> or{' '}
+            <code>haven::write_dta(df, "adults.dta")</code> becomes a dataset called
+            adults.
           </p>
         </Card>
 
@@ -373,7 +400,7 @@ export default function ProjectRWorkspace({
           title="Working directory"
           subtitle="Kept between runs, so a saved object is there next time"
           actions={
-            Boolean(files.data?.files.length) && (
+            Boolean(workspace.data?.files.length) && (
               <button
                 className="btn-ghost btn-sm text-danger-600"
                 onClick={() => {
@@ -390,13 +417,42 @@ export default function ProjectRWorkspace({
             )
           }
         >
-          {!files.data?.files.length ? (
-            <p className="text-sm text-ink-400">Nothing here yet.</p>
+          {Boolean(workspace.data?.datasets.length) && (
+            <div className="mb-3">
+              <Heading>Datasets</Heading>
+              <ul className="mt-1 space-y-1 font-mono text-xs text-ink-600">
+                {workspace.data?.datasets.map((dataset) => (
+                  <li key={dataset.slug} className="flex justify-between gap-2">
+                    <span className="truncate" title={dataset.name}>
+                      {dataset.path}
+                    </span>
+                    <span className="shrink-0 text-ink-400">
+                      {dataset.rows.toLocaleString()} rows
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
+
+          {Boolean(workspace.data?.datasets.length) && <Heading>Files</Heading>}
+          {!workspace.data?.files.length ? (
+            <p className="mt-1 text-sm text-ink-400">Nothing else here yet.</p>
           ) : (
-            <ul className="space-y-1 font-mono text-xs text-ink-600">
-              {files.data.files.map((file) => (
+            <ul className="mt-1 space-y-1 font-mono text-xs text-ink-600">
+              {workspace.data.files.map((file) => (
                 <li key={file.path} className="flex justify-between gap-2">
-                  <span className="truncate">{file.path}</span>
+                  <span className="truncate">
+                    {file.path}
+                    {file.dataset && (
+                      <span
+                        className="ml-1.5 font-sans text-[10px] uppercase tracking-wide text-brand-700"
+                        title="This file is a dataset of the project"
+                      >
+                        dataset
+                      </span>
+                    )}
+                  </span>
                   <span className="shrink-0 text-ink-400">
                     {Math.max(1, Math.round(file.bytes / 1024)).toLocaleString()} KB
                   </span>
@@ -417,6 +473,112 @@ export default function ProjectRWorkspace({
       )}
     </div>
   )
+}
+
+/** A small section label inside a card. */
+function Heading({ children }: { children: ReactNode }) {
+  return (
+    <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-400">
+      {children}
+    </p>
+  )
+}
+
+/**
+ * What the last run left in R's global environment.
+ *
+ * Grouped the way RStudio groups it, because that is where the expectation
+ * comes from: the data frames first, then the loose values, then the functions
+ * with their signatures.
+ *
+ * Nothing here is clickable. Every run is a fresh R session - the working
+ * DIRECTORY survives, the session does not - so an object listed here is a
+ * record of what the last run made, not something the next line of code can
+ * reach. Offering to paste `str(h)` into the console would be offering a line
+ * that errors, so the pane says plainly what to do instead.
+ */
+function REnvironment({ objects }: { objects: REnvironmentObject[] }) {
+  const groups: [string, REnvironmentObject[]][] = [
+    ['Data', objects.filter((object) => object.kind === 'data')],
+    ['Values', objects.filter((object) => object.kind === 'value')],
+    ['Functions', objects.filter((object) => object.kind === 'function')],
+  ]
+
+  return (
+    <Card title="Environment" subtitle="What the last run left behind">
+      {!objects.length ? (
+        <p className="text-sm text-ink-400">
+          Nothing yet. Run something, and the objects it makes are listed here.
+        </p>
+      ) : (
+        <div className="space-y-3">
+          {groups.map(([label, members]) =>
+            members.length === 0 ? null : (
+              <div key={label}>
+                <Heading>{label}</Heading>
+                <ul className="mt-1 space-y-1">
+                  {members.map((object) => {
+                    const { shape, detail } = summarise(object)
+                    return (
+                      <li
+                        key={object.name}
+                        className="flex items-baseline gap-2 text-xs"
+                        title={describe(object)}
+                      >
+                        <span className="shrink-0 font-mono font-medium text-ink-800">
+                          {object.name}
+                        </span>
+                        <span
+                          className={`truncate ${
+                            object.kind === 'function' ? 'font-mono' : ''
+                          }`}
+                        >
+                          {shape && <span className="text-ink-400">{shape}</span>}
+                          {detail && (
+                            <span className={`text-ink-500 ${shape ? 'ml-2' : ''}`}>
+                              {detail}
+                            </span>
+                          )}
+                        </span>
+                      </li>
+                    )
+                  })}
+                </ul>
+              </div>
+            ),
+          )}
+        </div>
+      )}
+      <p className="mt-3 text-xs text-ink-500">
+        Every run starts a new R session, so these are gone by the next one. Keep one
+        with <code>write_dataset(df, "Name")</code>, by writing it to a file, or with{' '}
+        <code>saveRDS()</code>.
+      </p>
+    </Card>
+  )
+}
+
+/**
+ * The one line shown beside an object's name, RStudio's way round: a frame is
+ * its size, a function is its signature, and a value is its value - "length 1"
+ * about a number tells nobody anything they wanted to know.
+ */
+function summarise(object: REnvironmentObject): { shape: string; detail: string } {
+  if (object.kind === 'function') return { shape: '', detail: object.preview }
+  if (object.kind === 'data') return { shape: object.shape, detail: '' }
+  if (!object.preview) return { shape: object.shape, detail: '' }
+  if (object.shape === 'length 1') return { shape: '', detail: object.preview }
+  return { shape: object.shape, detail: object.preview }
+}
+
+/** The full story about one object, for the row's tooltip. */
+function describe(object: REnvironmentObject): string {
+  const parts = [object.type]
+  if (object.shape) parts.push(object.shape)
+  if (object.preview && object.kind !== 'function') parts.push(object.preview)
+  if (object.kind === 'function') parts.push(object.preview)
+  if (object.bytes > 0) parts.push(`${Math.max(1, Math.round(object.bytes / 1024))} KB`)
+  return parts.filter(Boolean).join('\n')
 }
 
 function SaveScriptModal({

@@ -337,6 +337,8 @@ Two functions and one value, defined before your code runs:
 | `write_dataset(df, "Adults")` | create a dataset in this project, or replace one of that name |
 | `datasets` | a data frame of what is available to read |
 
+Writing a data file works too: see [Saving a file saves a dataset](#saving-a-file-saves-a-dataset).
+
 ```r
 hh     <- read_dataset("household")
 people <- read_dataset("roster")
@@ -355,6 +357,38 @@ and `print()` are how it is debugged. Ctrl or ⌘ with Enter runs it.
 each one can be dropped into the console as a `read_dataset` line rather than
 typed.
 
+#### Saving a file saves a dataset
+
+`write_dataset()` is the explicit way back. Writing a data file does the same
+thing, because that is what most people write without thinking about it:
+
+```r
+write.csv(adults, "adults.csv", row.names = FALSE)
+haven::write_dta(adults, "adults.dta")
+```
+
+Either one leaves a dataset in the project called `adults`, ready to chart,
+filter and put on a dashboard like any other. The rules are short:
+
+- `.csv`, `.dta`, `.sav`, `.tsv`, `.xls` and `.xlsx` are read; anything else
+  stays an ordinary file.
+- The name comes from the file. Writing `adults.csv` twice replaces the dataset
+  rather than making a second one, so a script can be re-run safely.
+- Only files the run actually wrote. The working directory survives, so a file
+  from three runs ago became a dataset three runs ago.
+- Anything that does not read as a table stays a file, and the run still
+  succeeds. A log written to `.csv` is a log.
+
+#### The Environment pane
+
+**Environment** lists what the last run left behind: the data frames with their
+size, the loose values, and the functions with their signatures. It is the
+quickest way to see whether a merge produced the 4,182 rows you expected.
+
+Every run is a **new R session**, so what is listed is a record of the run that
+made it, not something the next line of code can reach. Keep anything you need
+with `write_dataset()`, by writing it to a file, or with `saveRDS()`.
+
 #### The workspace
 
 The working directory **survives between runs**. An object saved with
@@ -363,9 +397,12 @@ project's own library: all still there next time. That is what makes a project
 an environment rather than a series of unrelated runs, and it is what lets one
 script set something up for the next.
 
-**Working directory** lists what is in it. **Empty it** clears the scratch
-space, packages and saved objects included; the project's datasets are not
-touched, because those live in the platform rather than in the workspace.
+**Working directory** lists what is in it, the project's datasets included: they
+are on disk as `data/<slug>.csv`, which is where `read_dataset()` reads them
+from and where a script can read them itself. A file that is also a dataset is
+marked. **Empty it** clears the scratch space, packages and saved objects
+included; the project's datasets are not touched, because those live in the
+platform rather than in the workspace.
 
 #### Saved scripts
 
