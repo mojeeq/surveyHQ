@@ -78,6 +78,71 @@ export default function ChartCard({
     return <EmptyState icon="◌" title="No data" description="This query returned no rows." />
   }
 
+  // A KPI is a mean of a 0/1 variable. Multiplying that mean by 100 is the
+  // percentage coded 1, and the query engine applies the selected survey weight
+  // before this renderer ever sees the value. With a grouping there is one row
+  // per group, so the same component naturally becomes one KPI card per sex,
+  // province, age band, or other dimension.
+  if (chartType === 'kpi' && view === 'chart') {
+    const dimensionIndexes = result.columns
+      .map((column, index) => (column.type === 'dimension' ? index : -1))
+      .filter((index) => index >= 0)
+    const measureIndex = result.columns.findIndex((column) => column.type === 'measure')
+    if (measureIndex < 0) {
+      return <EmptyState icon="◌" title="No measure" description="This KPI has no value to display." />
+    }
+    const firstDimension = dimensionIndexes[0]
+    const measure = result.columns[measureIndex]
+
+    return (
+      <div className={`flex flex-col ${fill ? 'h-full min-h-0' : ''}`}>
+        {showToggle && <ViewToggle view={view} onChange={setView} />}
+        <div
+          className={`grid gap-3 ${result.rows.length > 1 ? 'sm:grid-cols-2 xl:grid-cols-3' : ''} ${
+            fill ? 'min-h-0 flex-1 auto-rows-fr' : ''
+          }`}
+        >
+          {result.rows.map((row, rowIndex) => {
+            const raw = Number(row[measureIndex])
+            const percentage = raw * 100
+            const group = dimensionIndexes
+              .map((index) => formatCell(row[index]))
+              .filter(Boolean)
+              .join(' · ')
+            const selectable = Boolean(onSelect && firstDimension >= 0 && row[firstDimension] != null)
+            return (
+              <div
+                key={rowIndex}
+                className={`flex min-h-32 flex-col justify-center rounded-card border border-ink-200 bg-white p-5 dark:border-dark-300 dark:bg-dark-100 ${
+                  selectable ? 'cursor-pointer hover:border-brand-400' : ''
+                }`}
+                onClick={
+                  selectable
+                    ? () => onSelect?.(String(row[firstDimension]))
+                    : undefined
+                }
+              >
+                <div className="text-4xl font-semibold tabular-nums tracking-tight text-ink-900 dark:text-dark-900">
+                  {Number.isFinite(percentage)
+                    ? `${formatNumber(percentage, display?.decimals ?? 1)}%`
+                    : 'No value'}
+                </div>
+                <div className="mt-2 text-sm font-medium text-ink-600 dark:text-dark-600">
+                  {group || 'Selected 1'}
+                </div>
+                {!group && (
+                  <div className="mt-1 text-xs text-ink-400 dark:text-dark-500">
+                    {measure.label || measure.name}
+                  </div>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      </div>
+    )
+  }
+
   if (chartType === 'table' || view === 'table') {
     const shown = filterRows(result.rows, result.columns, columnFilters)
     const narrowed = shown.length !== result.rows.length

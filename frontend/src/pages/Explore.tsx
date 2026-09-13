@@ -56,6 +56,7 @@ const AGGREGATIONS: { value: Aggregation; label: string; needsVariable: boolean 
 ]
 
 const CHART_TYPES: { value: ChartType; label: string }[] = [
+  { value: 'kpi', label: 'KPI percentage' },
   { value: 'bar', label: 'Bar' },
   { value: 'horizontal_bar', label: 'Horizontal bar' },
   { value: 'stacked_bar', label: 'Stacked bar' },
@@ -444,17 +445,21 @@ function AggregateBuilder({
   }, [editing])
 
   // Run once the prefilled query has reached the state the request is built
-  // from, rather than from inside the effect that fills it in.
+  // from, rather than from inside the effect that fills it in. An ungrouped
+  // KPI is a valid one-row query, so a grouping is not a prerequisite.
   useEffect(() => {
-    if (!pending || !dimensions.length) return
+    if (!pending) return
     setPending(false)
     run.mutate()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pending, dimensions])
 
   const isBox = chartType === 'boxplot'
+  const isKpi = chartType === 'kpi'
   /** Falls back to the first numeric variable until one has been picked. */
   const boxColumn = boxVariable || numeric[0]?.name || ''
+  const selectedKpi = measures[0]
+  const kpiColumn = selectedKpi?.variable || numeric[0]?.name || ''
   const queryMeasures: Measure[] = isBox
     ? BOX_MEASURES.map((measure) => ({
         agg: measure.agg as Aggregation,
@@ -462,7 +467,16 @@ function AggregateBuilder({
         alias: measure.alias,
         weight: boxWeight,
       }))
-    : measures
+    : isKpi
+      ? [
+          {
+            agg: 'mean',
+            variable: kpiColumn,
+            alias: 'kpi_percent',
+            weight: selectedKpi?.weight ?? null,
+          },
+        ]
+      : measures
 
   const spec: QuerySpec = {
     dimensions,
@@ -472,9 +486,13 @@ function AggregateBuilder({
     // number: ordering groups by their minimum puts the widest spread last.
     sort: isBox
       ? [{ field: 'box_median', direction: 'desc' }]
-      : measures.length
-        ? [{ field: measures[0].alias || measures[0].agg, direction: 'desc' }]
-        : [],
+      : isKpi
+        ? dimensions.length
+          ? [{ field: 'kpi_percent', direction: 'desc' }]
+          : []
+        : measures.length
+          ? [{ field: measures[0].alias || measures[0].agg, direction: 'desc' }]
+          : [],
     limit,
     use_labels: true,
   }
@@ -592,7 +610,7 @@ function AggregateBuilder({
           )}
         </Card>
 
-        <Card title={isBox ? 'Summarise' : 'Measure'}>
+        <Card title={isBox ? 'Summarise' : isKpi ? 'Percentage' : 'Measure'}>
           {isBox ? (
             <BoxMeasure
               numeric={numeric}
@@ -601,6 +619,57 @@ function AggregateBuilder({
               onVariable={setBoxVariable}
               onWeight={setBoxWeight}
             />
+          ) : isKpi ? (
+            <div className="space-y-2 rounded-card border border-ink-200 p-3">
+              <select
+                className="input py-1.5 text-xs"
+                aria-label="0 or 1 variable"
+                value={kpiColumn}
+                onChange={(event) =>
+                  setMeasures([
+                    {
+                      agg: 'mean',
+                      variable: event.target.value,
+                      alias: 'kpi_percent',
+                      weight: selectedKpi?.weight ?? null,
+                    },
+                  ])
+                }
+              >
+                {numeric.map((v) => (
+                  <option key={v.name} value={v.name}>
+                    {optionLabel(v)}
+                  </option>
+                ))}
+              </select>
+              <select
+                className="input py-1.5 text-xs"
+                aria-label="Weight"
+                value={selectedKpi?.weight ?? ''}
+                onChange={(event) =>
+                  setMeasures([
+                    {
+                      agg: 'mean',
+                      variable: kpiColumn,
+                      alias: 'kpi_percent',
+                      weight: event.target.value || null,
+                    },
+                  ])
+                }
+              >
+                <option value="">Unweighted</option>
+                {numeric.map((v) => (
+                  <option key={v.name} value={v.name}>
+                    Weight by {v.name}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-ink-500 dark:text-dark-500">
+                Shows the percentage coded 1. For a 0/1 variable this is the weighted mean
+                multiplied by 100; blanks are excluded. Add Sex, Province or another grouping
+                above to show one card per group.
+              </p>
+            </div>
           ) : (
             <>
             {measures.map((measure, index) => {
@@ -711,13 +780,29 @@ function AggregateBuilder({
                 ? 'Group by an age band and then by sex: the bands become the axis, the two sexes the two sides.'
                 : isBox
                   ? 'Group by the thing to compare across - province, interviewer, month - and each one gets a box.'
-                  : undefined
+                  : isKpi
+                    ? 'Shows the percentage coded 1. Add a grouping such as sex to show one KPI card per group.'
+                    : undefined
             }
           >
             <select
               className="input py-1.5 text-xs"
               value={chartType}
-              onChange={(event) => setChartType(event.target.value as ChartType)}
+              onChange={(event) => {
+                const next = event.target.value as ChartType
+                setChartType(next)
+                if (next === 'kpi') {
+                  setMeasures([
+                    {
+                      agg: 'mean',
+                      variable: measures[0]?.variable || numeric[0]?.name || '',
+                      alias: 'kpi_percent',
+                      weight: measures[0]?.weight ?? null,
+                    },
+                  ])
+                  setDisplay({ ...display, decimals: display.decimals ?? 1 })
+                }
+              }}
             >
               {CHART_TYPES.map((type) => (
                 <option key={type.value} value={type.value}>
