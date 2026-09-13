@@ -197,14 +197,34 @@ rather than a series of unrelated runs, and it is the reason a project is the
 trust boundary here - files one script leaves are readable by the next script
 anyone runs in the same project.
 
-This is not a sandbox. An R script is a program: it can read what the server
-can read, open what the server can open, and call `system()`. There is no
-blocklist of dangerous calls, because a blocklist over a language with
-`eval(parse(text=))` would only be a promise nobody can keep. The containment
-is a wall-clock timeout, an address-space cap and a working directory of its
-own, which stops a runaway script rather than a hostile one. So it is off
-unless `R_SCRIPTS_ENABLED` says otherwise, only a manager of the project can
-reach it, and every run is written to the audit log with the code it ran.
+A script runs inside a sandbox, and the sandbox is the kernel's rather than a
+reading of the code. `sandbox/r-sandbox.c` builds a small launcher that the
+image installs as `surveyhq-r-sandbox`: it opens a Landlock ruleset allowing
+read and execute on the runtime paths, read and write on the project's own
+workspace and nothing else, loads a seccomp filter that denies the socket
+family and the namespace, ptrace and module syscalls, sets `no_new_privs`, and
+only then execs `/usr/bin/Rscript`. So a script reaches its own project and
+stops there - a sibling project's Parquet files are absent from the allowlist
+and therefore unreadable, which is the property that matters when several
+surveys share one server.
+
+Two deliberate details. The launcher keeps `/usr/bin/Rscript` under its
+ordinary name beside it and answers `--surveyhq-sandbox-probe`, so the platform
+can tell the two apart and refuse to start if `R_BINARY` names a bare Rscript -
+a configuration mistake fails closed rather than silently unconfining
+everything. And `--surveyhq-sandbox-selftest` asks the kernel whether Landlock
+can be installed at all, which is asked before R is offered: a host that cannot
+enforce the sandbox is told which check failed instead of discovering it at the
+first script.
+
+What the sandbox is not is a claim about the code. There is no blocklist of
+dangerous R functions, because a blocklist over a language with
+`eval(parse(text=))` would only be a promise nobody can keep; the timeout and
+the address-space cap still stop a runaway rather than a hostile script. It is
+off unless `R_SCRIPTS_ENABLED` says otherwise, only a manager of the project
+can reach it, and every run is written to the audit log with the code it ran.
+`R_SANDBOX_REQUIRED=false` gives the confinement up deliberately, for a host
+whose kernel cannot provide it.
 
 ## Dashboards
 

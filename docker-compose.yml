@@ -21,6 +21,18 @@ x-backend-env: &backend-env
   ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
   CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
   RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+  # Running R over a project. Off unless a deployment turns it on. When it
+  # is on, scripts run through the sandbox launcher this image builds:
+  # Landlock confines them to the project's own workspace, seccomp removes
+  # networking and the kernel escape syscalls. R_SANDBOX_REQUIRED=false
+  # gives up that confinement deliberately; see docs/deployment.md.
+  #
+  # Named here rather than left to .env alone, because compose hands the
+  # container only the variables this file names.
+  R_SCRIPTS_ENABLED: ${R_SCRIPTS_ENABLED:-false}
+  R_SANDBOX_REQUIRED: ${R_SANDBOX_REQUIRED:-true}
+  R_TIMEOUT_SECONDS: ${R_TIMEOUT_SECONDS:-60}
+  R_MEMORY_MB: ${R_MEMORY_MB:-2048}
   FIRST_ADMIN_EMAIL: ${FIRST_ADMIN_EMAIL:-admin@example.com}
   FIRST_ADMIN_PASSWORD: ${FIRST_ADMIN_PASSWORD:?FIRST_ADMIN_PASSWORD must be set in .env}
   FIRST_ADMIN_NAME: ${FIRST_ADMIN_NAME:-Administrator}

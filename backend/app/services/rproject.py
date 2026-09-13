@@ -82,6 +82,11 @@ DATA_DIR = "data"
 OUT_DIR = "out"
 MANIFEST = "susodash_written.json"
 SCRIPT = "susodash_project.R"
+# What the launcher answers to --surveyhq-sandbox-probe, and the name the
+# image installs it under. Both are matched exactly: a sandbox that cannot
+# be identified is not a sandbox.
+SANDBOX_PROBE = "surveyhq-r-sandbox-v1"
+SANDBOX_BINARY = "surveyhq-r-sandbox"
 LIB_DIR = "rlibs"
 
 
@@ -107,26 +112,104 @@ def binary() -> str | None:
     return shutil.which(named)
 
 
+# The self-test runs a subprocess, and the answer cannot change while the
+# process lives: the launcher is baked into the image and the kernel is the
+# kernel. So it is asked once. None means "not asked yet".
+_sandbox_check: tuple[bool, str] | None = None
+
+
+def sandbox_check(executable: str) -> tuple[bool, str]:
+    """Whether this executable is the sandbox and can enforce itself here.
+
+    Two questions, because they fail differently. `--surveyhq-sandbox-probe`
+    says the configured program is our launcher rather than a bare Rscript
+    somebody pointed R_BINARY at. `--surveyhq-sandbox-selftest` says the
+    kernel will actually let it confine anything, which a container on an old
+    kernel or a restrictive runtime will not.
+
+    Asked here rather than at the first script so the answer reaches the
+    interface as a sentence, not a stack trace an hour into somebody's work.
+    """
+    global _sandbox_check
+    if _sandbox_check is not None:
+        return _sandbox_check
+
+    def ask(flag: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            [executable, flag],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            check=False,
+        )
+
+    try:
+        probe = ask("--surveyhq-sandbox-probe")
+        if probe.returncode != 0 or probe.stdout.strip() != SANDBOX_PROBE:
+            _sandbox_check = (
+                False,
+                "R_BINARY does not name the SurveyHQ sandbox launcher, so scripts "
+                "would run unconfined. Leave R_BINARY unset to use the sandbox "
+                "this image builds, or set R_SANDBOX_REQUIRED=false to accept "
+                "unconfined R deliberately.",
+            )
+            return _sandbox_check
+
+        test = ask("--surveyhq-sandbox-selftest")
+        if test.returncode != 0:
+            detail = (test.stderr or test.stdout).strip().splitlines()
+            _sandbox_check = (
+                False,
+                "The R sandbox cannot be enforced on this host: "
+                + (detail[0] if detail else "the self-test failed")
+                + " Run surveyhq-check-r-sandbox on the server to see the same "
+                "check outside the platform. Set R_SANDBOX_REQUIRED=false to run "
+                "R unconfined instead, having read what that allows.",
+            )
+            return _sandbox_check
+    except (OSError, subprocess.SubprocessError) as exc:
+        _sandbox_check = (False, f"The R sandbox launcher could not be run: {exc}")
+        return _sandbox_check
+
+    _sandbox_check = (True, "")
+    return _sandbox_check
+
+
 def unavailable_reason() -> str:
     """Why R cannot be run here, or an empty string when it can.
 
-    Two different answers, because they need two different actions: install R,
-    or turn the setting on. One message saying "unavailable" would send half of
-    the people who hit it to the wrong place.
+    Several different answers, because they need several different actions:
+    turn the setting on, rebuild the image, fix the host, or knowingly accept
+    unconfined R. One message saying "unavailable" would send most of the
+    people who hit it to the wrong place.
     """
     settings = get_settings()
     if not settings.r_scripts_enabled:
         return (
             "Running R is switched off on this server. An administrator turns it "
-            "on with R_SCRIPTS_ENABLED=true, having read what it allows: an R "
-            "script is a program, and it runs with the server's own permissions."
+            "on with R_SCRIPTS_ENABLED=true, having read what it allows."
         )
-    if not binary():
+    executable = binary()
+    if not executable:
+        named = (settings.r_binary or "Rscript").strip()
+        if named == SANDBOX_BINARY:
+            return (
+                "The R sandbox launcher is not in this image. It is built from "
+                "backend/sandbox/r-sandbox.c during the Docker build, so an image "
+                "from before the sandbox existed needs rebuilding: "
+                "docker compose build api worker && docker compose up -d."
+            )
         return (
-            "R is not installed on this server. Install it (apt-get install "
+            f"'{named}' is not on this server's PATH. Install R (apt-get install "
             "r-base-core, or the r-base package for your system) and restart."
         )
-    return ""
+    if not settings.r_sandbox_required:
+        # Deliberately unconfined. Said plainly rather than left to be
+        # discovered: this is the arrangement where a project's script can read
+        # every other project's files.
+        return ""
+    ok, why = sandbox_check(executable)
+    return "" if ok else why
 
 
 def available() -> bool:
