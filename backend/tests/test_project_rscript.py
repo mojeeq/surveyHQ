@@ -9,6 +9,8 @@ it, and the working directory survives between runs.
 
 from __future__ import annotations
 
+import shutil
+
 import pandas as pd
 import pytest
 
@@ -17,8 +19,15 @@ from app.services import rproject
 from tests.conftest import sign_in
 from tests.test_api_analytics import _stata_bytes, _zip_bytes
 
+# Plain Rscript, not the sandbox launcher. This module is about the workspace
+# contract - read_dataset, write_dataset, what survives between runs - and that
+# is the same contract inside the sandbox or out of it. The launcher is only
+# built into the Docker image, so requiring it here would skip every one of
+# these tests on a developer's machine and in any CI leg without the image.
+# The confinement itself is tested by test_r_sandbox.py, which needs the real
+# launcher and a kernel that can enforce it.
 pytestmark = pytest.mark.skipif(
-    not rproject.binary(), reason="R is not installed on this machine"
+    not shutil.which("Rscript"), reason="R is not installed on this machine"
 )
 
 
@@ -27,7 +36,11 @@ def r_on(monkeypatch):
     """R is off by default; these tests are about what happens when it is on."""
     settings = get_settings()
     monkeypatch.setattr(settings, "r_scripts_enabled", True)
+    monkeypatch.setattr(settings, "r_binary", "Rscript")
+    monkeypatch.setattr(settings, "r_sandbox_required", False)
+    monkeypatch.setattr(rproject, "_sandbox_check", None)
     yield
+    rproject._sandbox_check = None
 
 
 @pytest.fixture

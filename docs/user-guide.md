@@ -382,23 +382,37 @@ went wrong without running it again.
 
 #### What this is and is not
 
-Running R here is running a program on the server. It can read what the server
-can read and reach what the server can reach. The timeout and the memory limit
-stop a script that runs away; nothing stops one written to do harm, and there
-is no list of forbidden functions, because a list like that over a language
-with `eval(parse(text=))` would only be a promise nobody can keep.
+A script runs inside a sandbox. The kernel confines it to **this project's
+workspace and nothing else**: the datasets it asked for, the files it wrote,
+its own installed packages. Another project's files are not merely hidden from
+the interface, they are unreadable. Networking is removed, so a script cannot
+call out, and neither can anything it starts. The runtime - R itself, its
+libraries, the standard tools - is readable but cannot be changed.
 
-The workspace persisting widens that on purpose: files one script leaves are
-readable by the next script anyone runs in the same project. A project is the
-trust boundary, and the people who can run R in one are the people who could
-already read everything in it.
+That is a real boundary, and it is worth being exact about what it is not.
+
+- It does **not** make arbitrary R safe to offer to strangers. A script can
+  still use the whole machine's processor and memory up to the limits below,
+  and read everything its own project holds.
+- It is **not** a promise about the code itself. There is no list of forbidden
+  functions, because a list like that over a language with `eval(parse(text=))`
+  would only be a promise nobody can keep. The confinement is the kernel's, not
+  a reading of what you wrote.
+- It needs a kernel that can enforce it - Linux 5.13 or newer, with Landlock
+  reachable. Where it cannot be enforced the platform **refuses to run R** and
+  says so, rather than quietly running it unconfined. An administrator can
+  check with `surveyhq-check-r-sandbox` before turning R on.
 
 So it is **off until an administrator turns it on**, with
 `R_SCRIPTS_ENABLED=true`, and only a manager of the project or an administrator
-can reach it. Turn it on where the people who can open the console are people
-you would trust with a shell on that server. `R_TIMEOUT_SECONDS` (60 by
-default) and `R_MEMORY_MB` (2048) bound one run, and every script that runs is
-written to the audit log with the account that ran it and the code it ran.
+can reach it. `R_TIMEOUT_SECONDS` (60 by default) and `R_MEMORY_MB` (2048)
+bound one run, and every script that runs is written to the audit log with the
+account that ran it and the code it ran.
+
+The workspace persisting is deliberate and unchanged: files one script leaves
+are readable by the next script anyone runs **in the same project**. A project
+is the trust boundary, and the people who can run R in one are the people who
+could already read everything in it.
 
 ## Explore
 

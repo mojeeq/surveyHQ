@@ -109,7 +109,16 @@ class Settings(BaseSettings):
     # otherwise would be worse than saying so. Turn it on where the people who
     # can run R in a project are the people you would trust with a shell.
     r_scripts_enabled: bool = False
-    r_binary: str = "Rscript"
+    # The sandbox launcher, not Rscript. It applies Landlock and seccomp and
+    # then execs /usr/bin/Rscript, so pointing this at a bare Rscript is the
+    # difference between a confined script and an unconfined one - which is why
+    # the platform probes what it is given rather than trusting the name.
+    r_binary: str = "surveyhq-r-sandbox"
+    # Whether an unconfined R is refused. On by default: a host that cannot
+    # enforce the sandbox loses R rather than quietly running scripts with the
+    # server's own reach. Set false only having read what that allows - a
+    # project's script can then read every other project's files on disk.
+    r_sandbox_required: bool = True
     r_timeout_seconds: int = 60
     r_memory_mb: int = 2048
 

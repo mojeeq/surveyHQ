@@ -46,6 +46,8 @@ Everything lives in `.env`. Values worth attention:
 | `WEB_PORT` | Host port for the web interface. Default 8080. |
 | `MAX_UPLOAD_MB` | The upload ceiling, and the only one: nginx no longer enforces a second. An upload over it is refused with a message naming the size and the limit, before the body is transferred. It also bounds how far a zip may expand once opened - twenty times this - so an archive built to exhaust memory is refused rather than unpacked. |
 | `SIGNUP_ENABLED` | Whether anyone reaching the sign-in page may create their own account. **Off by default** - see below before turning it on. |
+| `R_SCRIPTS_ENABLED` | Whether R may be run over a project. Off by default. |
+| `R_SANDBOX_REQUIRED` | Whether unconfined R is refused. On by default; see below. |
 | `RATE_LIMIT_ENABLED` | Caps sign-in attempts and requests to shared dashboards. Leave it on. Turn it off only if every visitor reaches you from one address, as behind some corporate proxies, where they would share one budget. |
 | `SYNC_TICK_MINUTES` | How often the scheduler checks for due imports. A connection set to import at a time of day cannot be honoured more precisely than this. |
 | `MONITOR_TICK_MINUTES` | How often indicators, alerts and checks are evaluated. |
@@ -64,17 +66,23 @@ unless you say otherwise, and it is worth understanding why before you change
 that.
 
 A self-service account is a **manager**. A manager may create a project, and
-becomes that project's manager. A project's manager may **run R in it** - which
-is a program on this server, with this server's permissions. So on a deployment
-with `R_SCRIPTS_ENABLED=true`, opening sign-up hands the ability to run code on
-the machine to anyone who can load the page. Even with R off, a stranger can
-still create an account and take up space and background work.
+becomes that project's manager. A project's manager may **run R in it**, which
+is a program on this server. With the sandbox enforcing, that program is
+confined to the stranger's own new project - it cannot read your surveys - but
+it is still their code on your processor and your disk. Where the sandbox
+cannot be enforced, or has been turned off with `R_SANDBOX_REQUIRED=false`, it
+is worse than that: opening sign-up then hands read of every survey on the
+server to anyone who can load the page. Even with R off entirely, a stranger
+can create an account and take up space.
 
 Turn it on where **at least one** of these is true:
 
 - the sign-in page is not reachable from the public internet - a VPN, an office
   network, or an IP allow-list in front of nginx;
 - `R_SCRIPTS_ENABLED` is off and you accept strangers holding empty accounts.
+
+Never turn both this and `R_SANDBOX_REQUIRED=false` on where the sign-in page
+is public. That pair is the one combination that gives a stranger your data.
 
 Otherwise leave it off and create accounts yourself under **Administration →
 Add user**, which is what a survey office usually wants anyway: the people who
@@ -87,41 +95,48 @@ path, and the sign-in page does not offer the button.
 
 R itself is already in the image, so enabling it is one setting rather than a
 server to build. It is **off by default**, because running an R script is
-running a program with the server's own permissions - read
-[the user guide](user-guide.md#what-this-is-and-is-not) before you turn it on.
+running a program on this machine, sandboxed or not - read
+[the user guide](user-guide.md#what-this-is-and-is-not) for what the sandbox
+does and does not cover before you turn it on.
 
-`.env` is **not** enough on its own. Compose reads `.env` to substitute
-`${...}` into `docker-compose.yml`, and the API container is handed only the
-variables that file names - so a line in `.env` that nothing substitutes never
-reaches the container. Put the settings in an override file beside the compose
-file instead:
-
-```yaml
-# docker-compose.override.yml
-services:
-  api:
-    environment:
-      R_SCRIPTS_ENABLED: "true"
-      R_TIMEOUT_SECONDS: "60"
-      R_MEMORY_MB: "2048"
-  worker:
-    environment:
-      R_SCRIPTS_ENABLED: "true"
-      R_TIMEOUT_SECONDS: "60"
-      R_MEMORY_MB: "2048"
-```
-
-Compose reads `docker-compose.override.yml` automatically, so nothing else
-changes:
+**Check the server can confine it first.** A script runs inside a Landlock and
+seccomp sandbox, and where the kernel cannot enforce that, the platform refuses
+to run R rather than running it unconfined. One command says which you have:
 
 ```bash
+docker compose exec api surveyhq-check-r-sandbox
+```
+
+It reports the kernel, whether the launcher is in the image, and whether the
+kernel will actually apply it. Landlock needs **Linux 5.13 or newer** - Ubuntu
+22.04 (5.15) and 24.04 (6.8) both qualify - and the `landlock_*` syscalls have
+to reach the kernel, which Docker's default seccomp profile permits.
+
+Then set it in `.env`:
+
+```bash
+R_SCRIPTS_ENABLED=true
 docker compose up -d api worker
 docker compose exec api printenv R_SCRIPTS_ENABLED   # should print: true
 ```
 
-The worker needs it too, or a script set to re-run after an import will not run
-there. `R_TIMEOUT_SECONDS` and `R_MEMORY_MB` bound one run; both have the
-defaults shown and can be left out.
+The worker needs it too, which `docker-compose.yml` handles - both services
+share one environment block. `R_TIMEOUT_SECONDS` (60) and `R_MEMORY_MB` (2048)
+bound one run.
+
+**If the check says the sandbox cannot be enforced**, the interface will say so
+too and R will stay unavailable. The way round it is deliberate and worth
+understanding before you use it:
+
+```bash
+R_SANDBOX_REQUIRED=false
+```
+
+That runs scripts unconfined, which is what the platform did before the sandbox
+existed: any project's script can then read every other project's data files on
+the server, and reach anything the server can reach. Use it only where everyone
+who can run R in any project is someone you would trust with a shell on that
+machine.
 
 ## Putting it behind HTTPS
 

@@ -70,6 +70,26 @@ jobs:
         if: matrix.database == 'sqlite'
         run: Rscript --version
 
+      # The sandbox tests assert that R is *denied* things, and an assertion
+      # like that passes for the wrong reason when R never started. Building
+      # the launcher here is what makes them run rather than skip.
+      - name: Build the R sandbox launcher
+        if: matrix.database == 'sqlite'
+        run: |
+          sudo apt-get install -y --no-install-recommends libseccomp-dev
+          cc -O2 -Wall -Wextra -Werror sandbox/r-sandbox.c -lseccomp \
+            -o /tmp/surveyhq-r-sandbox
+          sudo install -m 0755 /tmp/surveyhq-r-sandbox /usr/local/bin/surveyhq-r-sandbox
+
+      # And that the kernel will actually enforce it. If this fails the
+      # confinement is untested, which is worth failing the build over rather
+      # than discovering as a skip nobody reads.
+      - name: Check the sandbox can confine
+        if: matrix.database == 'sqlite'
+        run: |
+          surveyhq-r-sandbox --surveyhq-sandbox-probe
+          surveyhq-r-sandbox --surveyhq-sandbox-selftest
+
       - name: Lint
         run: ruff check app tests
 
@@ -197,9 +217,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      # Every shell script in the repository, not one directory of them: the
+      # sandbox check ships in the image and lives beside the sandbox, and was
+      # going unchecked because the glob did not reach it.
       - name: Check syntax
-        run: for f in scripts/*.sh; do bash -n "$f"; done
+        run: for f in scripts/*.sh backend/sandbox/*.sh; do bash -n "$f"; done
       - name: Shellcheck
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-          shellcheck --severity=warning scripts/*.sh
+          shellcheck --severity=warning scripts/*.sh backend/sandbox/*.sh
