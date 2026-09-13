@@ -78,12 +78,16 @@ export default function ChartCard({
     return <EmptyState icon="◌" title="No data" description="This query returned no rows." />
   }
 
-  // A KPI is a mean of a 0/1 variable. Multiplying that mean by 100 is the
-  // percentage coded 1, and the query engine applies the selected survey weight
-  // before this renderer ever sees the value. With a grouping there is one row
-  // per group, so the same component naturally becomes one KPI card per sex,
-  // province, age band, or other dimension.
+  // New KPI specs query one weighted share for every valid category. The final
+  // dimension is the KPI category itself; any earlier dimensions are the
+  // requested groups. Query-engine shares use the grand total as denominator,
+  // so re-normalising the category shares inside each group gives the correct
+  // within-group weighted percentage without a second statistical engine.
+  //
+  // Older KPI specs stored a weighted mean of a 0/1 variable. Keep rendering
+  // those too so a saved card does not break before somebody edits and saves it.
   if (chartType === 'kpi' && view === 'chart') {
+    const kpiDisplay = display as (BuildOptions & { kpiTarget?: string; kpiVariable?: string }) | undefined
     const dimensionIndexes = result.columns
       .map((column, index) => (column.type === 'dimension' ? index : -1))
       .filter((index) => index >= 0)
@@ -91,9 +95,72 @@ export default function ChartCard({
     if (measureIndex < 0) {
       return <EmptyState icon="◌" title="No measure" description="This KPI has no value to display." />
     }
+
+    const categoryIndex = result.columns.findIndex((column) => column.name === '__kpi_category')
+    const isCategoryKpi = categoryIndex >= 0
+
+    if (isCategoryKpi) {
+      const groupIndexes = dimensionIndexes.filter((index) => index !== categoryIndex)
+      const target = String(kpiDisplay?.kpiTarget ?? '1')
+      const groups = new Map<
+        string,
+        { values: unknown[]; total: number; selected: number }
+      >()
+
+      for (const row of result.rows) {
+        const values = groupIndexes.map((index) => row[index])
+        const key = JSON.stringify(values)
+        const entry = groups.get(key) ?? { values, total: 0, selected: 0 }
+        const share = Number(row[measureIndex])
+        if (Number.isFinite(share)) {
+          entry.total += share
+          if (formatCell(row[categoryIndex]) === target) entry.selected += share
+        }
+        groups.set(key, entry)
+      }
+
+      const cards = [...groups.values()]
+      return (
+        <div className={`flex flex-col ${fill ? 'h-full min-h-0' : ''}`}>
+          {showToggle && <ViewToggle view={view} onChange={setView} />}
+          <div
+            className={`grid gap-3 ${cards.length > 1 ? 'sm:grid-cols-2 xl:grid-cols-3' : ''} ${
+              fill ? 'min-h-0 flex-1 auto-rows-fr' : ''
+            }`}
+          >
+            {cards.map((entry, cardIndex) => {
+              const percentage = entry.total ? (entry.selected / entry.total) * 100 : 0
+              const group = entry.values.map(formatCell).filter(Boolean).join(' · ')
+              const selectable = Boolean(onSelect && groupIndexes.length && entry.values[0] != null)
+              return (
+                <div
+                  key={cardIndex}
+                  className={`flex min-h-32 flex-col justify-center rounded-card border border-ink-200 bg-white p-5 dark:border-dark-300 dark:bg-dark-100 ${
+                    selectable ? 'cursor-pointer hover:border-brand-400' : ''
+                  }`}
+                  onClick={selectable ? () => onSelect?.(String(entry.values[0])) : undefined}
+                >
+                  <div className="text-4xl font-semibold tabular-nums tracking-tight text-ink-900 dark:text-dark-900">
+                    {`${formatNumber(percentage, display?.decimals ?? 1)}%`}
+                  </div>
+                  <div className="mt-2 text-sm font-medium text-ink-600 dark:text-dark-600">
+                    {group || target}
+                  </div>
+                  {group && (
+                    <div className="mt-1 text-xs text-ink-400 dark:text-dark-500">
+                      {target}
+                    </div>
+                  )}
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )
+    }
+
     const firstDimension = dimensionIndexes[0]
     const measure = result.columns[measureIndex]
-
     return (
       <div className={`flex flex-col ${fill ? 'h-full min-h-0' : ''}`}>
         {showToggle && <ViewToggle view={view} onChange={setView} />}
@@ -116,11 +183,7 @@ export default function ChartCard({
                 className={`flex min-h-32 flex-col justify-center rounded-card border border-ink-200 bg-white p-5 dark:border-dark-300 dark:bg-dark-100 ${
                   selectable ? 'cursor-pointer hover:border-brand-400' : ''
                 }`}
-                onClick={
-                  selectable
-                    ? () => onSelect?.(String(row[firstDimension]))
-                    : undefined
-                }
+                onClick={selectable ? () => onSelect?.(String(row[firstDimension])) : undefined}
               >
                 <div className="text-4xl font-semibold tabular-nums tracking-tight text-ink-900 dark:text-dark-900">
                   {Number.isFinite(percentage)
