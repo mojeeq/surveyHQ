@@ -43,6 +43,16 @@ class Settings(BaseSettings):
     # Read it through cors_origin_list, never directly.
     cors_origins: str = "http://localhost:5173"
 
+    # Whether anyone who can reach the sign-in page may create their own
+    # account. Off by default, and deliberately so: a self-service account is a
+    # manager, a manager may create a project, and a manager of a project may
+    # run R in it - which is a program on this server with this server's
+    # permissions. Open registration therefore hands arbitrary code execution
+    # to the internet on any deployment that has R enabled, and read of every
+    # survey on disk to one that has not. Turn it on for a workspace whose
+    # sign-in page is not public, or once R is off.
+    signup_enabled: bool = False
+
     # Bootstrap admin
     first_admin_email: str = "admin@example.com"
     first_admin_password: str = "changeme"

@@ -2,6 +2,57 @@
 
 from __future__ import annotations
 
+import pytest
+
+from app.core.config import settings
+
+
+@pytest.fixture(autouse=True)
+def signup_open():
+    """Open sign-up for this module.
+
+    It ships off, so every test here would otherwise be testing the 404. The
+    one test that wants the default asks for it explicitly, below.
+    """
+    settings.signup_enabled = True
+    try:
+        yield
+    finally:
+        settings.signup_enabled = False
+
+
+def test_signup_is_off_until_a_deployment_turns_it_on(client):
+    """The default, and the reason this whole module needs a fixture.
+
+    404 rather than 403: a deployment with sign-up off should look exactly like
+    one built without the feature.
+    """
+    settings.signup_enabled = False
+    response = client.post(
+        "/api/v1/auth/signup",
+        json={
+            "username": "uninvited",
+            "email": "uninvited@example.com",
+            "full_name": "Uninvited",
+            "password": "personal-password-123",
+        },
+    )
+    assert response.status_code == 404, response.text
+    # And nothing was created on the way to refusing.
+    login = client.post(
+        "/api/v1/auth/login",
+        json={"identifier": "uninvited", "password": "personal-password-123"},
+    )
+    assert login.status_code == 401, login.text
+
+
+def test_the_sign_in_page_is_told_whether_to_offer_sign_up(client):
+    """The form has no session, so /public/site is where it can ask."""
+    settings.signup_enabled = False
+    assert client.get("/api/v1/public/site").json()["signup_enabled"] is False
+    settings.signup_enabled = True
+    assert client.get("/api/v1/public/site").json()["signup_enabled"] is True
+
 
 def _signup(
     client,

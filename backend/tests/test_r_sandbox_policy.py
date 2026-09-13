@@ -7,7 +7,6 @@ covered by test_r_sandbox.py, which skips where Landlock cannot be enforced.
 
 from __future__ import annotations
 
-import os
 import shutil
 import stat
 import subprocess
