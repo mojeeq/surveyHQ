@@ -333,3 +333,194 @@ def test_a_viewer_cannot_run_r(client, auth_headers, project):
     reader = sign_in(client, email, password)
     refused = run(client, reader, project["id"], 'cat("hello")')
     assert refused.status_code in (403, 404)
+
+
+# --- what a plain write.csv() does -----------------------------------------
+#
+# write_dataset() is the explicit way in and it names the dataset itself. The
+# other way is the one somebody coming from RStudio writes without thinking,
+# and it used to leave a file in the working directory and nothing else.
+
+
+def test_a_plain_write_csv_becomes_a_dataset(client, auth_headers, project):
+    done = run(
+        client,
+        auth_headers,
+        project["id"],
+        """
+        h <- read_dataset("Household")
+        write.csv(h[h$hh_size > 3, ], "large-households.csv", row.names = FALSE)
+        """,
+    )
+    assert done.status_code == 200, done.text
+    written = done.json()["written"]
+    assert [item["name"] for item in written] == ["large-households"]
+    assert written[0]["rows"] == 2
+
+    # A dataset of this project like any other, not merely a row somewhere.
+    listed = client.get(
+        f"/api/v1/datasets?project_id={project['id']}", headers=auth_headers
+    ).json()
+    rows = listed["items"] if isinstance(listed, dict) else listed
+    assert "large-households" in [d["name"] for d in rows]
+
+
+def test_a_data_file_in_a_subdirectory_is_adopted_too(client, auth_headers, project):
+    done = run(
+        client,
+        auth_headers,
+        project["id"],
+        """
+        dir.create("clean", showWarnings = FALSE)
+        write.csv(read_dataset("Person"), "clean/people.csv", row.names = FALSE)
+        """,
+    )
+    assert done.status_code == 200, done.text
+    assert [item["name"] for item in done.json()["written"]] == ["people"]
+
+
+def test_writing_the_same_file_twice_replaces_the_dataset(client, auth_headers, project):
+    first = run(
+        client,
+        auth_headers,
+        project["id"],
+        'write.csv(read_dataset("Household"), "snapshot.csv", row.names = FALSE)',
+    )
+    assert first.status_code == 200, first.text
+    second = run(
+        client,
+        auth_headers,
+        project["id"],
+        'write.csv(read_dataset("Person"), "snapshot.csv", row.names = FALSE)',
+    )
+    assert second.status_code == 200, second.text
+    assert second.json()["written"][0]["rows"] == 4
+
+    rows = client.get(
+        f"/api/v1/datasets?project_id={project['id']}", headers=auth_headers
+    ).json()
+    rows = rows["items"] if isinstance(rows, dict) else rows
+    assert [d["name"] for d in rows].count("snapshot") == 1
+
+
+def test_a_file_from_an_earlier_run_is_not_adopted_again(client, auth_headers, project):
+    """The workspace survives, so every run would otherwise re-save everything."""
+    run(
+        client,
+        auth_headers,
+        project["id"],
+        'write.csv(read_dataset("Household"), "once.csv", row.names = FALSE)',
+    )
+    again = run(client, auth_headers, project["id"], 'cat("nothing to do")')
+    assert again.status_code == 200, again.text
+    assert again.json()["written"] == []
+
+
+def test_a_text_file_is_left_alone(client, auth_headers, project):
+    """A script writing a log wrote a log, not a dataset."""
+    done = run(client, auth_headers, project["id"], 'writeLines("done", "run.log.txt")')
+    assert done.status_code == 200, done.text
+    assert done.json()["written"] == []
+
+
+def test_a_csv_that_is_not_a_table_stays_a_file(client, auth_headers, project):
+    """Unreadable as data is a file, not a failed run."""
+    done = run(client, auth_headers, project["id"], 'writeLines("", "empty.csv")')
+    assert done.status_code == 200, done.text
+    assert done.json()["written"] == []
+    files = client.get(
+        f"/api/v1/projects/{project['id']}/workspace", headers=auth_headers
+    ).json()["files"]
+    assert "empty.csv" in [f["path"] for f in files]
+
+
+# --- the environment pane ---------------------------------------------------
+
+
+def test_the_run_reports_what_it_left_in_the_environment(client, auth_headers, project):
+    done = run(
+        client,
+        auth_headers,
+        project["id"],
+        """
+        h <- read_dataset("Household")
+        total <- sum(h$hh_size)
+        tidy <- function(frame, drop = TRUE) frame
+        """,
+    )
+    assert done.status_code == 200, done.text
+    objects = {item["name"]: item for item in done.json()["environment"]}
+    assert set(objects) == {"h", "total", "tidy"}
+
+    assert objects["h"]["kind"] == "data"
+    assert objects["h"]["shape"] == "3 obs. of 4 variables"
+    assert "province" in objects["h"]["preview"]
+
+    assert objects["total"]["kind"] == "value"
+    assert objects["total"]["preview"] == "13"
+
+    # The signature, which is what the pane shows for a function.
+    assert objects["tidy"]["kind"] == "function"
+    assert objects["tidy"]["preview"] == "function (frame, drop = TRUE)"
+
+
+def test_the_environment_hides_the_workspace_s_own_vocabulary(
+    client, auth_headers, project
+):
+    """`datasets` and the two functions are the platform's, not the script's."""
+    done = run(client, auth_headers, project["id"], "x <- 1")
+    assert [item["name"] for item in done.json()["environment"]] == ["x"]
+
+
+def test_the_environment_survives_a_reload(client, auth_headers, project):
+    """Read from the workspace, so the pane is not empty after a refresh."""
+    run(client, auth_headers, project["id"], "kept <- c('a', 'b', 'c')")
+    body = client.get(
+        f"/api/v1/projects/{project['id']}/workspace", headers=auth_headers
+    ).json()
+    objects = {item["name"]: item for item in body["environment"]}
+    assert objects["kept"]["shape"] == "length 3"
+    assert objects["kept"]["preview"] == "a b c"
+
+
+def test_a_failed_run_leaves_no_environment(client, auth_headers, project):
+    run(client, auth_headers, project["id"], "kept <- 1")
+    broken = run(client, auth_headers, project["id"], 'stop("no")')
+    assert broken.status_code == 422, broken.text
+    body = client.get(
+        f"/api/v1/projects/{project['id']}/workspace", headers=auth_headers
+    ).json()
+    assert body["environment"] == []
+
+
+def test_the_workspace_listing_shows_the_project_s_datasets(
+    client, auth_headers, project
+):
+    """The datasets are part of the working directory picture, not apart from it."""
+    body = client.get(
+        f"/api/v1/projects/{project['id']}/workspace", headers=auth_headers
+    ).json()
+    named = {d["name"]: d for d in body["datasets"]}
+    assert set(named) == {"Household", "Person"}
+    assert named["Person"]["rows"] == 4
+    assert named["Person"]["path"] == f"{rproject.DATA_DIR}/{named['Person']['slug']}.csv"
+
+
+def test_a_file_that_became_a_dataset_says_so(client, auth_headers, project):
+    run(
+        client,
+        auth_headers,
+        project["id"],
+        """
+        write.csv(read_dataset("Household"), "adults.csv", row.names = FALSE)
+        writeLines("note", "adults.txt")
+        """,
+    )
+    files = {
+        f["path"]: f
+        for f in client.get(
+            f"/api/v1/projects/{project['id']}/workspace", headers=auth_headers
+        ).json()["files"]
+    }
+    assert files["adults.csv"]["dataset"] is True
+    assert files["adults.txt"]["dataset"] is False
