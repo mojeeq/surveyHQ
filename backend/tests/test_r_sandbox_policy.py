@@ -128,6 +128,53 @@ def test_the_confinement_can_be_given_up_deliberately(tmp_path, monkeypatch):
     assert rproject.available() is True
 
 
+def test_the_opt_out_runs_r_rather_than_the_launcher(monkeypatch):
+    """Giving up the sandbox must not leave the launcher as the executable.
+
+    The host that sets R_SANDBOX_REQUIRED=false is the host whose kernel
+    cannot enforce Landlock, and the launcher exits rather than run there. So
+    an opt-out that still resolved to the launcher would be an opt-out of
+    running R at all - which is what it was, until this test.
+    """
+    settings = get_settings()
+    settings.r_scripts_enabled = True
+    settings.r_binary = rproject.SANDBOX_BINARY  # the default
+    settings.r_sandbox_required = False
+    asked: list[str] = []
+
+    def which(name):
+        asked.append(name)
+        return f"/usr/bin/{name}"
+
+    monkeypatch.setattr(shutil, "which", which)
+    assert rproject.binary() == "/usr/bin/Rscript"
+    assert asked == ["Rscript"], "the launcher must not be what gets run"
+
+
+def test_an_explicit_r_binary_is_still_honoured_when_opting_out(monkeypatch):
+    """Only the default is swapped; a named binary stays named."""
+    settings = get_settings()
+    settings.r_scripts_enabled = True
+    settings.r_binary = "/opt/R/bin/Rscript"
+    settings.r_sandbox_required = False
+    monkeypatch.setattr(shutil, "which", lambda name: name)
+    assert rproject.binary() == "/opt/R/bin/Rscript"
+
+
+def test_the_launcher_denies_truncate_below_landlock_abi_3(tmp_path):
+    """ABI 1 and 2 do not mediate truncate(2); seccomp has to stand in.
+
+    Linux 5.13 to 6.1 - which includes the 5.15 on Ubuntu 22.04 - has no
+    LANDLOCK_ACCESS_FS_TRUNCATE, so a path-based truncate() would reach files
+    the sandbox never allowed opening. Checked by reading the source rather
+    than by running it, since the branch only fires on an old kernel.
+    """
+    source = (Path(__file__).resolve().parents[1] / "sandbox" / "r-sandbox.c").read_text()
+    assert 'if (abi < 3) {' in source
+    assert 'deny_syscall(ctx, "truncate", denied);' in source
+    assert "install_syscall_sandbox(int abi)" in source
+
+
 def test_the_launcher_source_builds_and_answers_its_probe(tmp_path):
     """The C in backend/sandbox compiles clean and identifies itself.
 

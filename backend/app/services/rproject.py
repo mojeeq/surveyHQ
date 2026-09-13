@@ -106,9 +106,19 @@ class ProjectRError(RError):
 # -- where R is, and whether it may be used ---------------------------------
 
 def binary() -> str | None:
-    """Where Rscript is, if it is anywhere."""
+    """What R is actually started through, if it is anywhere.
+
+    Normally the sandbox launcher. With the sandbox given up deliberately it
+    has to be something else: the launcher installs Landlock or exits, so a
+    host that turned R_SANDBOX_REQUIRED off because its kernel cannot enforce
+    Landlock would otherwise be handed the one program guaranteed to fail
+    there - an opt-out that opts out of running R at all. Only the default is
+    swapped, so R_BINARY still names whatever it names.
+    """
     settings = get_settings()
     named = (settings.r_binary or "Rscript").strip()
+    if not settings.r_sandbox_required and named == SANDBOX_BINARY:
+        named = "Rscript"
     return shutil.which(named)
 
 
@@ -204,9 +214,10 @@ def unavailable_reason() -> str:
             "r-base-core, or the r-base package for your system) and restart."
         )
     if not settings.r_sandbox_required:
-        # Deliberately unconfined. Said plainly rather than left to be
-        # discovered: this is the arrangement where a project's script can read
-        # every other project's files.
+        # Deliberately unconfined, and running through plain Rscript by now -
+        # see binary(). Said plainly rather than left to be discovered: this is
+        # the arrangement where a project's script can read every other
+        # project's files.
         return ""
     ok, why = sandbox_check(executable)
     return "" if ok else why
