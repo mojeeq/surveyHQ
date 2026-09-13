@@ -61,7 +61,7 @@ static void add_path_rule(int ruleset_fd, const char *path, uint64_t access,
     close(fd);
 }
 
-static void install_filesystem_sandbox(const char *workspace) {
+static int install_filesystem_sandbox(const char *workspace) {
     int abi = landlock_create(NULL, 0, LANDLOCK_CREATE_RULESET_VERSION);
     if (abi < 1) {
         die("Landlock is unavailable; refusing to run arbitrary R code");
@@ -130,6 +130,7 @@ static void install_filesystem_sandbox(const char *workspace) {
         die("could not enforce Landlock rules");
     }
     close(ruleset_fd);
+    return abi;
 }
 
 /* Can this kernel actually confine us?
@@ -159,7 +160,8 @@ static int selftest(void) {
                 strerror(errno));
         return 1;
     }
-    printf("landlock-abi=%d rscript=ok\n", abi);
+    printf("landlock-abi=%d%s rscript=ok\n", abi,
+           abi < 3 ? " (truncate denied by seccomp; ABI 3 mediates it)" : "");
     return 0;
 }
 
@@ -174,7 +176,17 @@ static void deny_syscall(scmp_filter_ctx ctx, const char *name, uint32_t action)
     }
 }
 
-static void install_syscall_sandbox(void) {
+/* Landlock ABI 3 (Linux 6.2) is the first that mediates truncation. Below it,
+ * LANDLOCK_ACCESS_FS_TRUNCATE does not exist and truncate(2) is not covered by
+ * any right we can ask for - so on 5.13 to 6.1, which includes the 5.15 Ubuntu
+ * 22.04 ships, a script could call truncate() on a path outside the workspace
+ * and empty a file it was never allowed to open. Landlock's own documentation
+ * lists truncate(2), ftruncate(2) and open(O_TRUNC) together under that right;
+ * the latter two need a writable descriptor, which opening already gates
+ * through WRITE_FILE, so the one that escapes on an old ABI is the path form.
+ * Denying that syscall outright closes it without costing anything R needs.
+ */
+static void install_syscall_sandbox(int abi) {
     scmp_filter_ctx ctx = seccomp_init(SCMP_ACT_ALLOW);
     if (ctx == NULL) {
         errno = ENOMEM;
@@ -198,6 +210,10 @@ static void install_syscall_sandbox(void) {
     };
     for (size_t i = 0; i < sizeof(blocked) / sizeof(blocked[0]); i++) {
         deny_syscall(ctx, blocked[i], denied);
+    }
+
+    if (abi < 3) {
+        deny_syscall(ctx, "truncate", denied);
     }
 
     /* Modern glibc can use clone3 for process creation. Returning ENOSYS makes
@@ -300,8 +316,8 @@ int main(int argc, char **argv) {
 
     umask(0077);
     prepare_environment(workspace);
-    install_filesystem_sandbox(workspace);
-    install_syscall_sandbox();
+    int abi = install_filesystem_sandbox(workspace);
+    install_syscall_sandbox(abi);
 
     /* Preserve the caller's Rscript arguments exactly. argv[0] only affects
        process display; the executable path is fixed and cannot be supplied by
