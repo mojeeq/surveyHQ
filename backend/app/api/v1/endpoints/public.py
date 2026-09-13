@@ -18,6 +18,7 @@ from app.api.v1.endpoints.dashboards import (
     restrict_to_visible,
     visible_variables,
 )
+from app.core.config import settings
 from app.core.rate_limit import enforce
 from app.core.security import (
     create_access_token,
@@ -58,23 +59,30 @@ def resolve_host(request: Request, db: DbSession) -> dict[str, Any]:
     URL alone whether it is the platform or somebody's results page. It asks
     here once, before deciding what to render.
 
+    It carries whether sign-up is open, because the sign-in page has to know
+    and has nobody to ask: /system/info needs a session, and this is the one
+    call the app already makes before it has one. Saying so costs nothing -
+    the form itself would say the same to anyone who pressed the button.
+
     Only a hostname explicitly assigned to a shared dashboard matches. The Host
     header is a request header like any other - it is looked up, never trusted.
     """
+    site = {"signup_enabled": settings.signup_enabled}
     host = (request.headers.get("host") or "").split(":")[0].strip().lower()
     if not host:
-        return {"dashboard": None}
+        return {"dashboard": None, **site}
     dashboard = db.scalar(
         select(Dashboard).where(
             Dashboard.public_hostname == host, Dashboard.is_public.is_(True)
         )
     )
     if dashboard is None or not dashboard.public_token:
-        return {"dashboard": None}
+        return {"dashboard": None, **site}
     # The token is handed over because this host already grants what the token
     # grants: the same read-only dashboard, to anybody who reaches it.
     return {
         "dashboard": {"token": dashboard.public_token, "name": dashboard.name},
+        **site,
     }
 
 

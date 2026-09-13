@@ -68,7 +68,19 @@ def signup(payload: SignupRequest, db: DbSession, request: Request) -> Token:
     A self-service account is a manager so it can create projects, but it is
     restricted to project memberships. That gives each person their own private
     SurveyHQ workspace by default while still allowing deliberate collaboration.
+
+    Off unless the deployment turns it on. That manager may create a project,
+    and a project's manager may run R in it - a program with this server's own
+    permissions - so an open sign-up form is an open door to the machine. A
+    deployment that wants self-service accounts says so; one that has not
+    thought about it is not opted in by upgrading.
     """
+    if not settings.signup_enabled:
+        # 404 rather than 403: a deployment with sign-up off should be
+        # indistinguishable from one built without the feature. FastAPI's own
+        # wording, so the reply matches every other unrouted path exactly.
+        raise HTTPException(status_code=404, detail="Not Found")
+
     address = client_ip(request) or "unknown"
     enforce(
         f"signup:ip:{address}",

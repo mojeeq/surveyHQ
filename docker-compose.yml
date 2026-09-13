@@ -21,6 +21,12 @@ x-backend-env: &backend-env
   ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
   CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
   RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+  # Whether anyone reaching the sign-in page may create an account. Off
+  # unless a deployment says otherwise: a self-service account is a manager,
+  # and a project's manager may run R in it. Named here rather than left to
+  # .env alone - compose uses .env only to substitute ${...} into this file,
+  # so a variable this file does not name never reaches the container.
+  SIGNUP_ENABLED: ${SIGNUP_ENABLED:-false}
   FIRST_ADMIN_EMAIL: ${FIRST_ADMIN_EMAIL:-admin@example.com}
   FIRST_ADMIN_PASSWORD: ${FIRST_ADMIN_PASSWORD:?FIRST_ADMIN_PASSWORD must be set in .env}
   FIRST_ADMIN_NAME: ${FIRST_ADMIN_NAME:-Administrator}
