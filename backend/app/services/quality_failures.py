@@ -40,10 +40,8 @@ def _scoped_source(ctx: DatasetContext, rule: QualityRule) -> tuple[str, list[An
     return sql, list(builder.params)
 
 
-def _simple_failure_sql(
-    scoped_sql: str, condition: str, *, suffix: str = ""
-) -> str:
-    return f"WITH scoped AS ({scoped_sql}) SELECT * FROM scoped WHERE {condition}{suffix}"
+def _simple_failure_sql(scoped_sql: str, condition: str) -> str:
+    return f"WITH scoped AS ({scoped_sql}) SELECT * FROM scoped WHERE {condition}"
 
 
 def _outlier_bounds(
@@ -75,18 +73,20 @@ def _outlier_bounds(
     return float(q1) - factor * iqr, float(q3) + factor * iqr
 
 
-def _failure_sql(
-    ctx: DatasetContext, rule: QualityRule
-) -> tuple[str, list[Any]]:
+def _failure_sql(ctx: DatasetContext, rule: QualityRule) -> tuple[str, list[Any]]:
     config = rule.config or {}
     scoped_sql, scope_params = _scoped_source(ctx, rule)
     check = rule.check_type
 
     if check == CheckType.missing_rate:
         col = quote_ident(ctx.require(str(config.get("variable"))).name)
-        return _simple_failure_sql(
-            scoped_sql, f"{col} IS NULL OR CAST({col} AS VARCHAR) = ''"
-        ), scope_params
+        return (
+            _simple_failure_sql(
+                scoped_sql,
+                f"{col} IS NULL OR CAST({col} AS VARCHAR) = ''",
+            ),
+            scope_params,
+        )
 
     if check == CheckType.value_range:
         col = quote_ident(ctx.require(str(config.get("variable"))).name)
@@ -124,7 +124,14 @@ def _failure_sql(
         left = quote_ident(ctx.require(str(config.get("variable"))).name)
         right = quote_ident(ctx.require(str(config.get("other_variable"))).name)
         operator = str(config.get("operator", "lte"))
-        symbols = {"lt": "<", "lte": "<=", "gt": ">", "gte": ">=", "eq": "=", "ne": "!="}
+        symbols = {
+            "lt": "<",
+            "lte": "<=",
+            "gt": ">",
+            "gte": ">=",
+            "eq": "=",
+            "ne": "!=",
+        }
         if operator not in symbols:
             raise QueryError(f"Unsupported consistency operator '{operator}'.")
         condition = (
@@ -139,11 +146,18 @@ def _failure_sql(
         factor = float(config.get("factor", 1.5))
         bounds = _outlier_bounds(scoped_sql, scope_params, col, method, factor)
         if bounds is None:
-            return f"WITH scoped AS ({scoped_sql}) SELECT * FROM scoped WHERE FALSE", scope_params
+            return (
+                f"WITH scoped AS ({scoped_sql}) SELECT * FROM scoped WHERE FALSE",
+                scope_params,
+            )
         low, high = bounds
-        return _simple_failure_sql(
-            scoped_sql, f"{col} IS NOT NULL AND ({col} < ? OR {col} > ?)"
-        ), [*scope_params, low, high]
+        return (
+            _simple_failure_sql(
+                scoped_sql,
+                f"{col} IS NOT NULL AND ({col} < ? OR {col} > ?)",
+            ),
+            [*scope_params, low, high],
+        )
 
     if check == CheckType.duplicates:
         variables = config.get("variables") or (
@@ -176,7 +190,10 @@ def _failure_sql(
             )
             distinct = int(rows[0][0]) if rows else 0
             if distinct > 1:
-                return f"WITH scoped AS ({scoped_sql}) SELECT * FROM scoped WHERE FALSE", scope_params
+                return (
+                    f"WITH scoped AS ({scoped_sql}) SELECT * FROM scoped WHERE FALSE",
+                    scope_params,
+                )
             return f"WITH scoped AS ({scoped_sql}) SELECT * FROM scoped", scope_params
 
         group_col = quote_ident(ctx.require(str(group_by)).name)
@@ -187,7 +204,8 @@ def _failure_sql(
             f"FROM scoped WHERE {group_col} IS NOT NULL GROUP BY {group_col} "
             f"HAVING COUNT(*) >= ? AND COUNT(DISTINCT {col}) = 1) "
             f"SELECT scoped.*, bad_groups.constant_group_size FROM scoped "
-            f"JOIN bad_groups ON scoped.{group_col} IS NOT DISTINCT FROM bad_groups.__quality_group"
+            f"JOIN bad_groups ON scoped.{group_col} "
+            f"IS NOT DISTINCT FROM bad_groups.__quality_group"
         )
         return sql, [*scope_params, minimum]
 
@@ -210,7 +228,10 @@ def failed_records(
     sql, params = _failure_sql(ctx, rule)
     _, count_rows = run_sql(f"SELECT COUNT(*) FROM ({sql}) failures", params)
     total = int(count_rows[0][0]) if count_rows else 0
-    columns, rows = run_sql(f"SELECT * FROM ({sql}) failures LIMIT ? OFFSET ?", [*params, limit, offset])
+    columns, rows = run_sql(
+        f"SELECT * FROM ({sql}) failures LIMIT ? OFFSET ?",
+        [*params, limit, offset],
+    )
     return FailureRows(
         columns=columns,
         rows=[list(row) for row in rows],
