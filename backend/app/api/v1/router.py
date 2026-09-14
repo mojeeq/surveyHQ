@@ -13,6 +13,7 @@ from app.api.v1.endpoints import (
     monitoring,
     projects,
     public,
+    quality_reports,
     relationships,
     system,
     users,
@@ -34,5 +35,6 @@ api_router.include_router(geography.router, prefix="/boundaries", tags=["boundar
 api_router.include_router(chart_library.router, prefix="/dashboards", tags=["dashboards"])
 api_router.include_router(dashboards.router, prefix="/dashboards", tags=["dashboards"])
 api_router.include_router(monitoring.router, prefix="/monitoring", tags=["monitoring"])
+api_router.include_router(quality_reports.router, prefix="/monitoring", tags=["monitoring"])
 api_router.include_router(system.router, prefix="/system", tags=["system"])
 api_router.include_router(public.router, prefix="/public", tags=["public"])

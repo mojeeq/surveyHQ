@@ -1,11 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
-import { api } from '@/lib/api'
+import { api, downloadFile } from '@/lib/api'
 import ProjectFilter from '@/components/ProjectFilter'
 import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
-import { formatNumber, relativeTime, titleCase } from '@/lib/format'
+import { formatCell, formatNumber, relativeTime, titleCase } from '@/lib/format'
 import type {
   CheckType,
   Dataset,
@@ -70,6 +70,14 @@ const CHECKS: { value: CheckType; label: string; description: string }[] = [
   },
 ]
 
+type FailurePreview = {
+  columns: string[]
+  rows: unknown[][]
+  total: number
+  offset: number
+  truncated: boolean
+}
+
 export default function Quality() {
   const [params, setParams] = useSearchParams()
   const { can } = useAuth()
@@ -77,6 +85,7 @@ export default function Quality() {
   const queryClient = useQueryClient()
   const [creating, setCreating] = useState(false)
   const [editing, setEditing] = useState<QualityRule | null>(null)
+  const [viewing, setViewing] = useState<QualityRule | null>(null)
 
   const datasets = useQuery({
     queryKey: ['datasets', 'ready'],
@@ -92,6 +101,7 @@ export default function Quality() {
   const chosen = params.get('dataset')
   const datasetId =
     chosen && inProject.some((d) => d.id === chosen) ? chosen : (inProject[0]?.id ?? '')
+  const selectedDataset = inProject.find((dataset) => dataset.id === datasetId)
 
   const rules = useQuery({
     queryKey: ['quality-rules', datasetId],
@@ -184,6 +194,21 @@ export default function Quality() {
                 </option>
               ))}
             </select>
+            {can('analyst') && Boolean(rules.data?.length) && (
+              <button
+                className="btn-secondary"
+                onClick={() =>
+                  downloadFile(
+                    `/monitoring/datasets/${datasetId}/quality/export`,
+                    undefined,
+                    `${selectedDataset?.name || 'dataset'}_quality.xlsx`,
+                    'GET',
+                  ).catch((error: Error) => toast.push(error.message, 'error'))
+                }
+              >
+                Export quality workbook
+              </button>
+            )}
             <button
               className="btn-secondary"
               onClick={() => runAll.mutate()}
@@ -303,7 +328,27 @@ export default function Quality() {
                       </>
                     )}
                   </div>
-                  <div className="flex gap-1">
+                  <div className="flex flex-wrap gap-1">
+                    {can('analyst') && Boolean(result?.failed_rows) && (
+                      <button className="btn-secondary btn-sm" onClick={() => setViewing(rule)}>
+                        View failed records
+                      </button>
+                    )}
+                    {can('analyst') && Boolean(result?.failed_rows) && (
+                      <button
+                        className="btn-secondary btn-sm"
+                        onClick={() =>
+                          downloadFile(
+                            `/monitoring/quality-rules/${rule.id}/failures/export?format=xlsx`,
+                            undefined,
+                            `${rule.name}_failures.xlsx`,
+                            'GET',
+                          ).catch((error: Error) => toast.push(error.message, 'error'))
+                        }
+                      >
+                        Excel
+                      </button>
+                    )}
                     <button
                       className="btn-secondary btn-sm"
                       onClick={() => runOne.mutate(rule.id)}
@@ -334,6 +379,7 @@ export default function Quality() {
         </div>
       )}
 
+      {viewing && <FailuresModal rule={viewing} onClose={() => setViewing(null)} />}
       {creating && <CheckModal datasetId={datasetId} onClose={() => setCreating(false)} />}
       {editing && (
         <CheckModal
@@ -357,6 +403,94 @@ function SeverityBadge({ severity }: { severity: Severity }) {
     <Badge tone={map[severity].tone} icon={map[severity].icon}>
       {severity}
     </Badge>
+  )
+}
+
+function FailuresModal({ rule, onClose }: { rule: QualityRule; onClose: () => void }) {
+  const toast = useToast()
+  const failures = useQuery({
+    queryKey: ['quality-failures', rule.id],
+    queryFn: () =>
+      api.get<FailurePreview>(`/monitoring/quality-rules/${rule.id}/failures?limit=200`),
+  })
+
+  return (
+    <Modal
+      open
+      wide
+      onClose={onClose}
+      title={`Failed records: ${rule.name}`}
+      footer={
+        <>
+          <button
+            className="btn-secondary"
+            onClick={() =>
+              downloadFile(
+                `/monitoring/quality-rules/${rule.id}/failures/export?format=csv`,
+                undefined,
+                `${rule.name}_failures.csv`,
+                'GET',
+              ).catch((error: Error) => toast.push(error.message, 'error'))
+            }
+          >
+            CSV
+          </button>
+          <button
+            className="btn-secondary"
+            onClick={() =>
+              downloadFile(
+                `/monitoring/quality-rules/${rule.id}/failures/export?format=xlsx`,
+                undefined,
+                `${rule.name}_failures.xlsx`,
+                'GET',
+              ).catch((error: Error) => toast.push(error.message, 'error'))
+            }
+          >
+            Excel
+          </button>
+          <button className="btn-primary" onClick={onClose}>
+            Close
+          </button>
+        </>
+      }
+    >
+      {failures.isLoading ? (
+        <Loading label="Finding failed records" />
+      ) : failures.error ? (
+        <ErrorNote error={failures.error} />
+      ) : !failures.data?.rows.length ? (
+        <EmptyState icon="✓" title="No failed records" description="This rule currently finds no matching rows." />
+      ) : (
+        <>
+          <p className="mb-3 text-sm text-ink-500">
+            Showing {formatNumber(failures.data.rows.length)} of{' '}
+            {formatNumber(failures.data.total)} matching records.
+            {rule.check_type === 'duplicates' &&
+              ' Duplicate checks show every row in each duplicate group so the copies can be compared.'}
+          </p>
+          <div className="max-h-[60vh] overflow-auto rounded-card border border-ink-200">
+            <table className="table-base">
+              <thead className="sticky top-0">
+                <tr>
+                  {failures.data.columns.map((column) => (
+                    <th key={column}>{column}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {failures.data.rows.map((row, rowIndex) => (
+                  <tr key={rowIndex}>
+                    {row.map((value, cellIndex) => (
+                      <td key={cellIndex}>{formatCell(value)}</td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </Modal>
   )
 }
 
