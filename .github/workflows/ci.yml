@@ -117,8 +117,10 @@ jobs:
       - name: Install dependencies
         run: npm ci --no-audit --no-fund
 
+      # Through npm rather than npx: the prelint hook builds the in-app
+      # help from docs/, and the typecheck needs it to exist.
       - name: Typecheck
-        run: npx tsc --noEmit
+        run: npm run lint
 
       - name: Build
         run: npm run build

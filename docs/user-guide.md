@@ -1,5 +1,12 @@
 # User guide
 
+## Finding your way
+
+**Help**, in the sidebar under System, holds this guide and the rest of the
+documentation inside the platform: searchable across every document, and needing
+no internet. It is built from these same files on every release, so what it says
+is what the version you are running does.
+
 ## Roles
 
 | Role | Can do |

@@ -25,6 +25,9 @@ const Monitoring = lazy(() => import('@/pages/Monitoring'))
 const Quality = lazy(() => import('@/pages/Quality'))
 const Alerts = lazy(() => import('@/pages/Alerts'))
 const Admin = lazy(() => import('@/pages/Admin'))
+// The documentation is the whole of docs/ rendered into the bundle, so it
+// is a chunk of its own that only a reader who opens Help ever downloads.
+const Help = lazy(() => import('@/pages/Help'))
 const SharedDashboard = lazy(() => import('@/pages/SharedDashboard'))
 
 function RouteLoading() {
@@ -110,6 +113,8 @@ export default function App() {
           <Route path="monitoring" element={<Monitoring />} />
           <Route path="quality" element={<Quality />} />
           <Route path="alerts" element={<Alerts />} />
+          <Route path="help" element={<Help />} />
+          <Route path="help/:docId" element={<Help />} />
           <Route
             path="admin"
             element={
