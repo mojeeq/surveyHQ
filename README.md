@@ -322,6 +322,7 @@ in [docs/deployment.md](docs/deployment.md).
 | [docs/deployment.md](docs/deployment.md) | Production install, TLS, backups, upgrades, troubleshooting |
 | [docs/survey-solutions.md](docs/survey-solutions.md) | Connecting, importing, scheduling, common errors |
 | [docs/user-guide.md](docs/user-guide.md) | Projects, getting data in, deriving variables, analysing, building dashboards, setting up monitoring |
+| [docs/gis-manual.md](docs/gis-manual.md) | Boundary layers, maps, and checking a record was collected where it says it was |
 | [docs/api.md](docs/api.md) | REST API and API keys, with examples |
 | [docs/architecture.md](docs/architecture.md) | How the pieces work and why |
 
