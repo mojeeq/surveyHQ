@@ -749,6 +749,8 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
       {editingStyle && (
         <AppearanceModal
           dashboardId={id}
+          name={dashboard.data!.name}
+          description={dashboard.data!.description ?? ''}
           appearance={appearance}
           widgets={allWidgets}
           onClose={() => setEditingStyle(false)}
