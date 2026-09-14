@@ -29,7 +29,11 @@ COPY --from=build /repo/frontend/dist /usr/share/nginx/html
 
 EXPOSE 80
 
+# 127.0.0.1 rather than localhost. Inside the container localhost resolves to
+# ::1 first, nginx above listens on IPv4 only, and busybox wget does not fall
+# back to the second address - so this reported "connection refused" on a
+# container that was serving every request put to it. It had never passed.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD wget -q --spider http://localhost/ || exit 1
+    CMD wget -q --spider http://127.0.0.1/ || exit 1
 
 CMD ["nginx", "-g", "daemon off;"]

@@ -195,6 +195,16 @@ services:
       ["celery", "-A", "app.workers.celery_app.celery_app", "beat",
        "--loglevel=info", "--schedule=/tmp/celerybeat-schedule"]
     environment: *backend-env
+    # The scheduler is built from the API image and so inherits its health
+    # check, which curls /health on port 8000. Beat serves no HTTP, so that
+    # check can never pass and the container reported unhealthy for its whole
+    # life while scheduling perfectly well. There is no meaningful probe to
+    # put in its place either: beat answers no port, and `celery inspect ping`
+    # - which the two workers below use - addresses workers, not schedulers.
+    # A process that dies takes the container with it and `restart` handles
+    # that, so reporting nothing is honest where reporting red was not.
+    healthcheck:
+      disable: true
     volumes:
       - survey-data:/data
     depends_on:

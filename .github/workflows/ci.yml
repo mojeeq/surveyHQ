@@ -167,6 +167,30 @@ jobs:
           echo "the API never became healthy"
           exit 1
 
+      # Starting is not the same as being well. Two health checks in this
+      # stack were wrong for months - the web one asked localhost, which
+      # resolves to ::1 while nginx listens on IPv4 only, and the scheduler
+      # inherited the API image's HTTP check while serving no HTTP. Both
+      # containers ran perfectly and reported unhealthy for their whole lives,
+      # and nothing here noticed, because nothing here looked.
+      - name: No container reports unhealthy
+        run: |
+          health() {
+            docker inspect -f \
+              '{{.Name}} {{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' \
+              $(docker compose ps -q)
+          }
+          for _ in $(seq 1 40); do
+            health | grep -qw starting || break
+            sleep 3
+          done
+          health
+          if health | grep -qw unhealthy; then
+            echo "::error::a container is reporting unhealthy"
+            health | grep -w unhealthy
+            exit 1
+          fi
+
       # Proves more than a health probe: the schema was created, the bootstrap
       # administrator exists, nginx proxies POSTs to the API, and the first
       # sign-in leads somewhere.
