@@ -353,6 +353,19 @@ for (const entry of MANIFEST) {
   });
 }
 
+// One document absent is a documentation state and is tolerated above. All of
+// them absent is a broken build: it means docs/ never reached this script, for
+// instance because a Docker build context does not include it. Without this
+// the build would succeed and ship a Help page with nothing in it, which is
+// the worst of the outcomes because nobody finds out until a user looks.
+if (documents.length === 0) {
+  console.error(
+    `help: no documentation was found in ${DOCS}. The build cannot continue, ` +
+      "because a Help page with nothing in it would ship without complaint.",
+  );
+  process.exit(1);
+}
+
 mkdirSync(dirname(OUT), { recursive: true });
 writeFileSync(
   OUT,

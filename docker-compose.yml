@@ -205,8 +205,12 @@ services:
 
   web:
     build:
-      context: ./frontend
-      dockerfile: Dockerfile
+      # The repository root rather than ./frontend. The bundle now carries the
+      # in-app help, which scripts/build-help.mjs renders from docs/, and both
+      # of those sit above the frontend directory - so a context of ./frontend
+      # cannot see them and the image build fails on the missing script.
+      context: .
+      dockerfile: frontend/Dockerfile
     restart: unless-stopped
     ports:
       - "${WEB_PORT:-8080}:80"
