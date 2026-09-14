@@ -6,6 +6,7 @@ import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { formatBytes, formatNumber, relativeTime } from '@/lib/format'
 import type { ArchiveImport, Dataset, Job, Page, Project } from '@/lib/types'
+import ImportReview, { type Review } from '@/components/ImportReview'
 import BoundaryLibrary from '@/components/BoundaryLibrary'
 import ProjectPicker from '@/components/ProjectPicker'
 import {
@@ -428,7 +429,7 @@ function StatusBadge({ status }: { status: Dataset['status'] }) {
 // wrong either way only changes which word the button shows.
 const BACKGROUND_BYTES = 48 * 1024 * 1024
 
-function isJob(body: Dataset | ArchiveImport | Job): body is Job {
+function isJob(body: Dataset | ArchiveImport | Job | Review): body is Job {
   return 'job_type' in body
 }
 
@@ -437,7 +438,7 @@ function isJob(body: Dataset | ArchiveImport | Job): body is Job {
  *  The worker records the same report the request used to return, so the modal
  *  that shows what an archive did does not need to know which path ran it.
  */
-async function waitForImport(job: Job): Promise<Dataset | ArchiveImport> {
+async function waitForImport(job: Job): Promise<Dataset | ArchiveImport | Review> {
   const deadline = Date.now() + 2 * 60 * 60 * 1000
   for (;;) {
     if (job.status === 'success') return job.result as unknown as ArchiveImport
@@ -486,6 +487,7 @@ function UploadModal({
   })
   const [error, setError] = useState('')
   const [result, setResult] = useState<ArchiveImport | null>(null)
+  const [review, setReview] = useState<Review | null>(null)
 
   // The modal is kept mounted, so a fresh open from another section has to
   // move the selection rather than keep the last one.
@@ -528,14 +530,16 @@ function UploadModal({
     form.append('combine_all', String(combineAll))
     form.append('project_id', projectId)
     form.append('mode', mode)
+    form.append('review', 'true')
     try {
-      let body = await api.upload<Dataset | ArchiveImport | Job>('/datasets/upload', form)
+      let body = await api.upload<Dataset | ArchiveImport | Job | Review>('/datasets/upload', form)
       if (isJob(body)) {
         // Too big to read inside the request, so the worker has it and this
         // watches the job it left behind.
         setStage('importing')
         body = await waitForImport(body)
       }
+      if ("review" in body && body.review) { setReview(body as Review); return }
       queryClient.invalidateQueries({ queryKey: ['datasets'] })
       queryClient.invalidateQueries({ queryKey: ['projects'] })
 
@@ -547,7 +551,7 @@ function UploadModal({
         return
       }
       toast.push(
-        `Imported ${formatNumber(body.row_count)} rows and ${body.column_count} variables`,
+        `Imported ${formatNumber((body as Dataset).row_count)} rows and ${(body as Dataset).column_count} variables`,
         'success',
       )
       setName('')
@@ -584,6 +588,12 @@ function UploadModal({
     )
   }
 
+  if (review) return <ImportReview review={review} onClose={() => setReview(null)} onAccepted={(body) => {
+    setReview(null); setResult(body)
+    queryClient.invalidateQueries({ queryKey: ['datasets'] })
+    queryClient.invalidateQueries({ queryKey: ['projects'] })
+  }} />
+
   return (
     <Modal
       open={open}
@@ -600,7 +610,7 @@ function UploadModal({
               ? 'Uploading\u2026'
               : stage === 'importing'
                 ? 'Importing\u2026'
-                : 'Upload and import'}
+                : 'Upload and review'}
           </button>
         </>
       }

@@ -12,6 +12,8 @@
 import { useState, type ReactNode } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { waitForJob } from '@/lib/jobs'
+import type { Job } from '@/lib/types'
 import { relativeTime } from '@/lib/format'
 import { useToast } from '@/hooks/useToast'
 import CodeEditor, { CodeSnippet } from '@/components/CodeEditor'
@@ -122,7 +124,7 @@ export default function ProjectRWorkspace({
   }
 
   const runConsole = useMutation({
-    mutationFn: () => api.post<RunResult>(`/projects/${projectId}/run`, { code }),
+    mutationFn: async () => waitForJob<RunResult>(await api.post<Job>(`/projects/${projectId}/queue-run`, { code })),
     onSuccess: settled,
     onError: (error: Error) => {
       setResult(null)
@@ -131,8 +133,8 @@ export default function ProjectRWorkspace({
   })
 
   const runSaved = useMutation({
-    mutationFn: (script: ProjectScript) =>
-      api.post<RunResult>(`/projects/${projectId}/scripts/${script.id}/run`),
+    mutationFn: async (script: ProjectScript) =>
+      waitForJob<RunResult>(await api.post<Job>(`/projects/${projectId}/queue-run`, { code: script.code, script_id: script.id })),
     onSuccess: settled,
     onError: (error: Error) => {
       setResult(null)
@@ -209,7 +211,7 @@ export default function ProjectRWorkspace({
                 disabled={!code.trim() || runConsole.isPending}
                 onClick={() => runConsole.mutate()}
               >
-                {runConsole.isPending ? 'Running...' : 'Run'}
+                {runConsole.isPending ? 'Queued / running…' : 'Run'}
               </button>
             </div>
           }

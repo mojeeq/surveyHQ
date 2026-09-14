@@ -11,6 +11,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pandas as pd
 
@@ -90,7 +91,7 @@ def ingest_file_fast(
         return original(source, destination_dir)
 
     destination_dir.mkdir(parents=True, exist_ok=True)
-    parquet_path = destination_dir / "data.parquet"
+    parquet_path = destination_dir / f"data-{uuid4().hex}.parquet"
     try:
         columnar.delimited_to_parquet(source, parquet_path)
         metas = build_metadata_from_parquet_fast(parquet_path, {}, {})
@@ -183,19 +184,20 @@ def append_frame_fast(
         kept_value_labels.setdefault(key, value)
     warnings.extend(dataset_service._recoded_warnings(kept_value_labels, value_labels))
 
+    destination = existing_path.with_name(f"data-{uuid4().hex}.parquet")
     columnar.append_frame_to_parquet(
         existing_path,
         frame,
-        existing_path,
+        destination,
         source_column=dataset_service.SOURCE_COLUMN,
         existing_source_value=dataset.source_ref or "original upload",
     )
-    metas = build_metadata_from_parquet_fast(existing_path, kept_labels, kept_value_labels)
+    metas = build_metadata_from_parquet_fast(destination, kept_labels, kept_value_labels)
     result = IngestResult(
-        parquet_path=existing_path,
+        parquet_path=destination,
         row_count=before + len(frame),
         column_count=len(metas),
-        file_size=existing_path.stat().st_size,
+        file_size=destination.stat().st_size,
         variables=metas,
         warnings=warnings,
     )
@@ -236,7 +238,7 @@ def run_merge_fast(
 
     left_names = {v.name for v in left.variables}
     prefix = derivation.get("prefix", "")
-    destination = dataset_service.dataset_directory(target.id) / "data.parquet"
+    destination = dataset_service.dataset_directory(target.id) / f"data-{uuid4().hex}.parquet"
     row_count, output_names = columnar.copy_join_to_parquet(
         left_path=left.storage_path,
         right_path=right.storage_path,

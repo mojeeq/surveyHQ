@@ -77,6 +77,7 @@ def create_dataset_record(
     tags: list[str] | None = None,
     created_by: str | None = None,
     project_id: str | None = None,
+    dataset_id: str | None = None,
 ) -> Dataset:
     dataset = Dataset(
         name=name,
@@ -90,6 +91,8 @@ def create_dataset_record(
         project_id=project_id,
         status=DatasetStatus.pending,
     )
+    if dataset_id is not None:
+        dataset.id = dataset_id
     db.add(dataset)
     db.flush()
     return dataset
@@ -101,6 +104,8 @@ def load_file_into_dataset(db: Session, dataset: Dataset, file_path: Path) -> Da
     Safe to call repeatedly: a refresh replaces the data in place and bumps the
     version, so saved charts keep working as long as variable names are stable.
     """
+    previous_status = dataset.status
+    had_data = dataset_is_queryable(dataset)
     dataset.status = DatasetStatus.processing
     dataset.error = ""
     db.flush()
@@ -109,12 +114,12 @@ def load_file_into_dataset(db: Session, dataset: Dataset, file_path: Path) -> Da
     try:
         result = ingest_file(file_path, directory)
     except IngestError as exc:
-        dataset.status = DatasetStatus.failed
+        dataset.status = previous_status if had_data else DatasetStatus.failed
         dataset.error = str(exc)
         db.flush()
         raise
     except Exception as exc:  # noqa: BLE001 - surface unexpected reader failures
-        dataset.status = DatasetStatus.failed
+        dataset.status = previous_status if had_data else DatasetStatus.failed
         dataset.error = f"Unexpected error while reading the file: {exc}"
         db.flush()
         raise IngestError(dataset.error) from exc
@@ -128,6 +133,10 @@ def _apply_ingest(db: Session, dataset: Dataset, result: IngestResult) -> Datase
     Shared by every route data arrives on so that variables, counts, detected
     monitoring fields and status are recorded identically each time.
     """
+    from app.services.dataset_versions import remember_version
+
+    remember_version(dataset)
+
     # Replace variable metadata wholesale; the parquet file is the source of
     # truth. Deleted by statement rather than through dataset.variables: when
     # two archives are appended in one transaction, the collection still holds

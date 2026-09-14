@@ -104,6 +104,18 @@ services:
       retries: 5
     networks: [surveyhq]
 
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.cli", "init-db"]
+    environment: *backend-env
+    volumes:
+      - survey-data:/data
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [surveyhq]
+
   api:
     build:
       context: ./backend
@@ -115,6 +127,7 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
     # Bound to localhost so the API is reached through nginx, not directly.
     ports:
       - "127.0.0.1:${API_PORT:-8000}:8000"
@@ -138,6 +151,7 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.workers.celery_app.celery_app inspect ping -d celery@$$HOSTNAME || exit 1"]
       interval: 60s
@@ -162,6 +176,7 @@ services:
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.workers.celery_app.celery_app inspect ping -d celery@$$HOSTNAME || exit 1"]
       interval: 60s
@@ -184,6 +199,7 @@ services:
       - survey-data:/data
     depends_on:
       redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
       postgres: { condition: service_healthy }
     networks: [surveyhq]
 

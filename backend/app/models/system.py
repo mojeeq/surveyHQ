@@ -25,6 +25,7 @@ class JobType(str, enum.Enum):
     export = "export"
     monitor = "monitor"
     quality = "quality"
+    rscript = "rscript"
 
 
 class Job(UUIDMixin, TimestampMixin, Base):

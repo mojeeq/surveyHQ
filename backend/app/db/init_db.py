@@ -214,11 +214,8 @@ def create_first_admin() -> None:
 def initialise() -> None:
     settings.validate_security_settings()
     settings.ensure_directories()
-    create_tables()
-    ensure_columns()
-    # Backfill before indexes so an upgraded database receives canonical unique
-    # values before the new unique username index is created.
-    ensure_usernames()
-    ensure_indexes()
-    ensure_enum_values()
+    from app.db.migrations import require_current, upgrade
+    if settings.environment.lower() in {"test", "testing"}:
+        upgrade()
+    require_current()
     create_first_admin()

@@ -1,38 +1,39 @@
 #!/usr/bin/env bash
-# Backs up the Postgres database and every stored dataset into ./backups.
-
+# Capture a consistent database and data volume; any failure fails the backup.
 set -euo pipefail
+umask 077
 cd "$(dirname "$0")/.."
-
 BACKUP_DIR="${BACKUP_DIR:-backups}"
 STAMP="$(date +%Y-%m-%d-%H%M%S)"
 WORK="$(mktemp -d)"
-trap 'rm -rf "$WORK"' EXIT
-
+writers=()
+cleanup() {
+    result=$?
+    if ((${#writers[@]})); then docker compose start "${writers[@]}" || result=1; fi
+    rm -rf "$WORK"
+    exit "$result"
+}
+trap cleanup EXIT
 mkdir -p "$BACKUP_DIR"
-
 # shellcheck disable=SC1091
 [[ -f .env ]] && source .env
 DB_USER="${POSTGRES_USER:-surveyhq}"
 DB_NAME="${POSTGRES_DB:-surveyhq}"
-
-echo "==> Dumping the database"
-docker compose exec -T postgres pg_dump -U "$DB_USER" -d "$DB_NAME" --clean --if-exists \
-    > "$WORK/database.sql"
-
-echo "==> Copying stored datasets"
-docker compose run --rm --no-deps -v "$WORK:/backup" api \
-    tar czf /backup/data.tar.gz -C /data . 2>/dev/null || {
-        echo "    (no dataset files yet)"
-        tar czf "$WORK/data.tar.gz" -T /dev/null
-    }
-
-cp .env "$WORK/env.backup" 2>/dev/null || true
-
+running="$(docker compose ps --services --filter status=running)"
+mapfile -t writers < <(printf '%s\n' "$running" | grep -E '^(api|worker|worker-monitoring|beat)$' || true)
+if ((${#writers[@]})); then docker compose stop "${writers[@]}"; fi
+echo "Dumping database"
+docker compose exec -T postgres pg_dump -U "$DB_USER" -d "$DB_NAME" --clean --if-exists > "$WORK/database.sql"
+echo "Copying data volume"
+# Stream to the host: the non-root image never needs access to mktemp's 0700 directory.
+docker compose run --rm -T --no-deps api tar czf - -C /data . > "$WORK/data.tar.gz"
+tar tzf "$WORK/data.tar.gz" > /dev/null
+[[ -s "$WORK/database.sql" ]] || { echo "Empty database dump" >&2; exit 1; }
+cp .env "$WORK/env.backup"
+(cd "$WORK" && sha256sum database.sql data.tar.gz env.backup > SHA256SUMS)
 ARCHIVE="$BACKUP_DIR/surveyhq-$STAMP.tar.gz"
-tar czf "$ARCHIVE" -C "$WORK" .
-echo "==> Wrote $ARCHIVE ($(du -h "$ARCHIVE" | cut -f1))"
-
-# Keep the 14 most recent backups
-ls -1t "$BACKUP_DIR"/surveyhq-*.tar.gz 2>/dev/null | tail -n +15 | xargs -r rm --
-echo "Done."
+tar czf "$ARCHIVE.partial" -C "$WORK" .
+mv "$ARCHIVE.partial" "$ARCHIVE"
+echo "Wrote $ARCHIVE"
+# Retention runs only after all files and checksums were captured successfully.
+ls -1t "$BACKUP_DIR"/surveyhq-*.tar.gz | tail -n +15 | xargs -r rm --
