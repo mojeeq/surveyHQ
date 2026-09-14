@@ -16,7 +16,9 @@ def installation(tmp_path):
     (tmp_path / "scripts").mkdir()
     for name in ("backup.sh", "restore.sh"):
         shutil.copy(root / "scripts" / name, tmp_path / "scripts" / name)
-    (tmp_path / ".env").write_text("ENCRYPTION_KEY=test-key\n")
+    (tmp_path / ".env").write_text(
+        "ENCRYPTION_KEY=test-key\nEMAIL_FROM=SurveyHQ <noreply@example.org>\n"
+    )
     (tmp_path / "volume").mkdir()
     (tmp_path / "volume" / "household.csv").write_text("id,value\n1,42\n")
     (tmp_path / "bin").mkdir()
@@ -27,8 +29,8 @@ root=pathlib.Path(os.environ['TEST_INSTALL'])
 args=sys.argv[1:]
 with (root/'commands').open('a') as log: log.write(' '.join(args)+'\\n')
 if 'ps' in args: print('api\\nworker\\nworker-monitoring\\nbeat')
-elif 'pg_dump' in args: print('-- known database dump')
-elif 'psql' in args:
+elif any('pg_dump' in arg for arg in args): print('-- known database dump')
+elif any('psql' in arg for arg in args):
     (root/'restored.sql').write_bytes(sys.stdin.buffer.read())
     if os.environ.get('FAIL_RESTORE'): sys.exit(1)
 elif 'tar' in args:
@@ -38,7 +40,8 @@ elif 'sh' in args:
     shutil.rmtree(root/'volume'); (root/'volume').mkdir()
     sys.exit(subprocess.run(['tar','xzf','-','-C',str(root/'volume')]).returncode)
 elif 'python' in args and '-c' in args:
-    print('test-key')
+    environ = {**os.environ, 'ENCRYPTION_KEY': os.environ.get('TEST_ENCRYPTION_KEY', 'test-key')}
+    sys.exit(subprocess.run([sys.executable, '-c', args[args.index('-c') + 1]], env=environ).returncode)
 """)
     docker.chmod(0o755)
     return tmp_path, {
@@ -88,3 +91,15 @@ def test_backup_restore_roundtrip_and_sql_failure(installation):
     assert "ON_ERROR_STOP=1 --single-transaction" in commands
     assert "start api" not in commands
     assert "Restore complete" not in result.stdout
+
+
+def test_restore_refuses_a_different_encryption_key_before_stopping_writers(installation):
+    root, _ = installation
+    result = run(installation, "backup.sh")
+    assert result.returncode == 0, result.stderr
+    backup = next((root / "backups").glob("*.tar.gz"))
+    (root / "commands").write_text("")
+    result = run(installation, "restore.sh", backup, TEST_ENCRYPTION_KEY="different-key")
+    assert result.returncode != 0
+    assert "ENCRYPTION_KEY differs" in result.stderr
+    assert "stop api" not in (root / "commands").read_text()

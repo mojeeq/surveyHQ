@@ -15,15 +15,11 @@ cleanup() {
 }
 trap cleanup EXIT
 mkdir -p "$BACKUP_DIR"
-# shellcheck disable=SC1091
-[[ -f .env ]] && source .env
-DB_USER="${POSTGRES_USER:-surveyhq}"
-DB_NAME="${POSTGRES_DB:-surveyhq}"
 running="$(docker compose ps --services --filter status=running)"
 mapfile -t writers < <(printf '%s\n' "$running" | grep -E '^(api|worker|worker-monitoring|beat)$' || true)
 if ((${#writers[@]})); then docker compose stop "${writers[@]}"; fi
 echo "Dumping database"
-docker compose exec -T postgres pg_dump -U "$DB_USER" -d "$DB_NAME" --clean --if-exists > "$WORK/database.sql"
+docker compose exec -T postgres sh -c 'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --clean --if-exists' > "$WORK/database.sql"
 echo "Copying data volume"
 # Stream to the host: the non-root image never needs access to mktemp's 0700 directory.
 docker compose run --rm -T --no-deps api tar czf - -C /data . > "$WORK/data.tar.gz"
