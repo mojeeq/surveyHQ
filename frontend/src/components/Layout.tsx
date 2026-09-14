@@ -131,15 +131,23 @@ function SidebarNav({ admin = false, onNavigate }: { admin?: boolean; onNavigate
             </div>
           </section>
         ))}
-        {admin && (
-          <section>
-            <p className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600">System</p>
-            <NavLink to="/admin" onClick={onNavigate} className={({ isActive }) => navRow(isActive)}>
-              <AppIcon name="admin" size={19} glow={false} className="shrink-0" />
-              Administration
+        <section>
+          <p className="mb-1.5 px-3 text-[10px] font-semibold uppercase tracking-[0.14em] text-slate-600">System</p>
+          <div className="space-y-1">
+            {/* Help is here for everybody, above Administration, because it is
+                the one entry a reader who is lost will look for by name. */}
+            <NavLink to="/help" onClick={onNavigate} className={({ isActive }) => navRow(isActive)}>
+              <AppIcon name="help" size={19} glow={false} className="shrink-0" />
+              <span className="truncate">Help</span>
             </NavLink>
-          </section>
-        )}
+            {admin && (
+              <NavLink to="/admin" onClick={onNavigate} className={({ isActive }) => navRow(isActive)}>
+                <AppIcon name="admin" size={19} glow={false} className="shrink-0" />
+                <span className="truncate">Administration</span>
+              </NavLink>
+            )}
+          </div>
+        </section>
       </div>
     </nav>
   )
