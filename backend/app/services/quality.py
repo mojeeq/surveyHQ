@@ -178,20 +178,30 @@ def _check_duplicates(ctx: DatasetContext, config: dict, total: int) -> CheckOut
     if not variables:
         raise QueryError("A duplicate check needs at least one variable.")
     columns = ", ".join(quote_ident(ctx.require(str(v)).name) for v in variables)
-    sql = (
-        f"SELECT COUNT(*) FROM (SELECT {columns}, COUNT(*) AS n "
-        f"FROM read_parquet({_quote_path(ctx.parquet_path)}) GROUP BY {columns} "
-        f"HAVING COUNT(*) > 1) t"
-    )
-    _, rows = run_sql(sql)
-    duplicate_groups = int(rows[0][0]) if rows else 0
 
-    detail_sql = (
-        f"SELECT {columns}, COUNT(*) AS n FROM read_parquet({_quote_path(ctx.parquet_path)}) "
-        f"GROUP BY {columns} HAVING COUNT(*) > 1 ORDER BY n DESC LIMIT 20"
+    # Duplicate rules used to be the one quality check that ignored the rule's
+    # filters, because they built their own GROUP BY query instead of going
+    # through _count_where(). Build the grouped population from the same scope
+    # as every other check so, for example, "duplicates among completed
+    # interviews" really means completed interviews only.
+    scope_where, scope_params = _scope_sql()
+    where_sql = f" WHERE {scope_where}" if scope_where else ""
+    grouped_sql = (
+        f"SELECT {columns}, COUNT(*) AS n FROM read_parquet({_quote_path(ctx.parquet_path)})"
+        f"{where_sql} GROUP BY {columns} HAVING COUNT(*) > 1"
     )
-    detail_columns, detail_rows = run_sql(detail_sql)
-    extra_rows = sum(int(r[-1]) - 1 for r in detail_rows)
+
+    # Count every duplicate group and every extra row before taking a small
+    # preview. The old implementation summed n-1 from only the first 20 groups,
+    # so a dataset with many duplicate keys could report a much smaller failure
+    # count than it actually contained.
+    stats_sql = f"SELECT COUNT(*), COALESCE(SUM(n - 1), 0) FROM ({grouped_sql}) t"
+    _, rows = run_sql(stats_sql, scope_params)
+    duplicate_groups = int(rows[0][0]) if rows else 0
+    extra_rows = int(rows[0][1]) if rows else 0
+
+    detail_sql = f"{grouped_sql} ORDER BY n DESC LIMIT 20"
+    detail_columns, detail_rows = run_sql(detail_sql, scope_params)
 
     return CheckOutcome(
         passed=duplicate_groups == 0,
