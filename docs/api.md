@@ -55,6 +55,9 @@ GET    /auth/api-keys                     your keys, without their secrets
 POST   /auth/api-keys                     create one; the secret is shown once
 DELETE /auth/api-keys/{id}                revoke one
 GET    /users                             every account                  [admin]
+GET    /users/directory                   who there is to add to a project, for
+                                          the member picker. 403 where
+                                          self-service sign-up is on
 GET    /users/roles                       the roles, for a picker
 POST   /users                             create an account              [admin]
 PATCH  /users/{id}                        role, name, password, whether they

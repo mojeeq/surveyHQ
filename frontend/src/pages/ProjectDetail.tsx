@@ -285,7 +285,7 @@ function Members({
     <Card
       className="mt-4"
       title="Members"
-      subtitle="Project managers can add an existing SurveyHQ user by username."
+      subtitle="Project managers can add anyone with an account on this server."
       actions={
         canManage && (
           <button className="btn-primary btn-sm" onClick={() => setAdding(true)}>
@@ -298,7 +298,7 @@ function Members({
         <EmptyState
           icon="◍"
           title="No members"
-          description="Add another SurveyHQ user by username to collaborate on this project."
+          description="Add someone with a SurveyHQ account to collaborate on this project."
         />
       ) : (
         <ul className="divide-y divide-ink-100">
@@ -345,6 +345,7 @@ function Members({
       {adding && (
         <AddMemberModal
           projectId={projectId}
+          members={members}
           onClose={() => setAdding(false)}
           onAdded={() => {
             toast.push('Member added', 'success')
@@ -357,29 +358,79 @@ function Members({
   )
 }
 
+interface DirectoryEntry {
+  id: string
+  username: string
+  full_name: string
+  email: string
+}
+
+/**
+ * Choosing who to add.
+ *
+ * This used to be one box asking for an exact username, which worked while
+ * anybody could sign themselves up and had picked one. With self-service
+ * sign-up off, an administrator creates every account and the username is
+ * derived from the email address and shown nowhere at all - so the box was
+ * asking for something nobody, the administrator included, could look up.
+ *
+ * So the ordinary case is a list of the people on this server. The username
+ * box is still here for the deployments that do allow sign-up, where the
+ * server will not hand out a list of accounts it did not create.
+ */
 function AddMemberModal({
   projectId,
+  members,
   onClose,
   onAdded,
 }: {
   projectId: string
+  members: ProjectMember[]
   onClose: () => void
   onAdded: () => void
 }) {
   const toast = useToast()
+  const [search, setSearch] = useState('')
+  const [chosen, setChosen] = useState<DirectoryEntry | null>(null)
   const [username, setUsername] = useState('')
   const [role, setRole] = useState<Role>('viewer')
 
+  const directory = useQuery({
+    queryKey: ['user-directory'],
+    queryFn: () => api.get<DirectoryEntry[]>('/users/directory'),
+    // A server that allows sign-up answers 403 on purpose. That is the answer,
+    // not a failure to reach it, so there is nothing to retry.
+    retry: false,
+    staleTime: 60_000,
+  })
+
+  const byUsername = directory.isError
+  const already = new Set(members.map((member) => member.user_id))
+
   const add = useMutation({
     mutationFn: async () => {
-      const account = await api.get<{ id: string; username: string; full_name: string }>(
-        `/users/lookup/${encodeURIComponent(username.trim().toLowerCase())}`,
-      )
-      return api.put(`/projects/${projectId}/members`, { user_id: account.id, role })
+      if (byUsername) {
+        const account = await api.get<{ id: string }>(
+          `/users/lookup/${encodeURIComponent(username.trim().toLowerCase())}`,
+        )
+        return api.put(`/projects/${projectId}/members`, { user_id: account.id, role })
+      }
+      return api.put(`/projects/${projectId}/members`, { user_id: chosen?.id, role })
     },
     onSuccess: onAdded,
     onError: (error: Error) => toast.push(error.message, 'error'),
   })
+
+  const term = search.trim().toLowerCase()
+  const people = (directory.data ?? []).filter(
+    (person) =>
+      !term ||
+      person.full_name.toLowerCase().includes(term) ||
+      person.email.toLowerCase().includes(term) ||
+      person.username.toLowerCase().includes(term),
+  )
+
+  const ready = byUsername ? username.trim().length >= 3 : chosen !== null
 
   return (
     <Modal
@@ -394,26 +445,97 @@ function AddMemberModal({
           <button
             className="btn-primary"
             onClick={() => add.mutate()}
-            disabled={username.trim().length < 3 || add.isPending}
+            disabled={!ready || add.isPending}
           >
             {add.isPending ? 'Adding…' : 'Add member'}
           </button>
         </>
       }
     >
-      <Field
-        label="Username"
-        hint="Enter the exact SurveyHQ username. The person must already have an account."
-      >
-        <input
-          className="input"
-          value={username}
-          onChange={(event) => setUsername(event.target.value)}
-          placeholder="mosese"
-          autoComplete="off"
-          autoFocus
-        />
-      </Field>
+      {byUsername ? (
+        <Field
+          label="Username"
+          hint="Enter the exact SurveyHQ username. The person must already have an account."
+        >
+          <input
+            className="input"
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
+            placeholder="mosese"
+            autoComplete="off"
+            autoFocus
+          />
+        </Field>
+      ) : (
+        <Field label="Who">
+          <input
+            className="input"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search by name or email address"
+            autoComplete="off"
+            autoFocus
+          />
+          {/* Under the input rather than in the Field's hint, which renders
+              after the children and would put this below a tall list, reading
+              as a note about nothing. */}
+          <p className="mt-1.5 text-xs text-ink-400">
+            Everyone with an account on this server
+          </p>
+          <div className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-ink-100">
+            {directory.isLoading ? (
+              <Loading />
+            ) : !people.length ? (
+              <p className="p-3 text-sm text-ink-400">
+                {directory.data?.length
+                  ? 'Nobody here matches that.'
+                  : 'There is nobody else on this server yet. An administrator creates accounts under Administration.'}
+              </p>
+            ) : (
+              <ul className="divide-y divide-ink-100">
+                {people.map((person) => {
+                  const member = already.has(person.id)
+                  const picked = chosen?.id === person.id
+                  return (
+                    <li key={person.id}>
+                      <button
+                        type="button"
+                        disabled={member}
+                        onClick={() => setChosen(person)}
+                        className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left ${
+                          member
+                            ? 'cursor-not-allowed opacity-50'
+                            : picked
+                              ? 'bg-brand-50'
+                              : 'hover:bg-ink-50'
+                        }`}
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-medium text-ink-800">
+                            {person.full_name || person.email}
+                          </span>
+                          {person.full_name && (
+                            <span className="block truncate text-xs text-ink-400">
+                              {person.email}
+                            </span>
+                          )}
+                        </span>
+                        {member ? (
+                          <span className="shrink-0 text-xs text-ink-400">already a member</span>
+                        ) : picked ? (
+                          <span className="shrink-0 text-xs font-semibold text-brand-700">
+                            selected
+                          </span>
+                        ) : null}
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </div>
+        </Field>
+      )}
       <Field
         label="Role on this project"
         hint={PROJECT_ROLES.find((r) => r.value === role)?.description}
