@@ -225,13 +225,15 @@ def _check_outliers(ctx: DatasetContext, config: dict, total: int) -> CheckOutco
     col = quote_ident(info.name)
     method = str(config.get("method", "iqr"))
     factor = float(config.get("factor", 1.5))
+    scope_where, scope_params = _scope_sql()
+    where_sql = f" WHERE {scope_where}" if scope_where else ""
 
     if method == "zscore":
         stats_sql = (
             f"SELECT AVG({col}), STDDEV_SAMP({col}) "
-            f"FROM read_parquet({_quote_path(ctx.parquet_path)})"
+            f"FROM read_parquet({_quote_path(ctx.parquet_path)}){where_sql}"
         )
-        _, rows = run_sql(stats_sql)
+        _, rows = run_sql(stats_sql, scope_params)
         mean, std = (rows[0] if rows else (None, None))
         if mean is None or not std:
             return CheckOutcome(True, 0, total, "Not enough variation to detect outliers.", {})
@@ -239,9 +241,9 @@ def _check_outliers(ctx: DatasetContext, config: dict, total: int) -> CheckOutco
     else:
         stats_sql = (
             f"SELECT QUANTILE_CONT({col}, 0.25), QUANTILE_CONT({col}, 0.75) "
-            f"FROM read_parquet({_quote_path(ctx.parquet_path)})"
+            f"FROM read_parquet({_quote_path(ctx.parquet_path)}){where_sql}"
         )
-        _, rows = run_sql(stats_sql)
+        _, rows = run_sql(stats_sql, scope_params)
         q1, q3 = (rows[0] if rows else (None, None))
         if q1 is None or q3 is None:
             return CheckOutcome(True, 0, total, "Not enough data to detect outliers.", {})
@@ -342,11 +344,15 @@ def _check_constant(ctx: DatasetContext, config: dict, total: int) -> CheckOutco
     variable = config.get("variable")
     group_by = config.get("group_variable")
     col = quote_ident(ctx.require(str(variable)).name)
+    scope_where, scope_params = _scope_sql()
+    where_sql = f" WHERE {scope_where}" if scope_where else ""
+
     if not group_by:
         sql = (
             f"SELECT COUNT(DISTINCT {col}) FROM read_parquet({_quote_path(ctx.parquet_path)})"
+            f"{where_sql}"
         )
-        _, rows = run_sql(sql)
+        _, rows = run_sql(sql, scope_params)
         distinct = int(rows[0][0]) if rows else 0
         return CheckOutcome(
             passed=distinct > 1,
@@ -358,20 +364,28 @@ def _check_constant(ctx: DatasetContext, config: dict, total: int) -> CheckOutco
 
     group_col = quote_ident(ctx.require(str(group_by)).name)
     min_records = int(config.get("min_records", 5))
-    sql = (
+    clauses = [f"{group_col} IS NOT NULL"]
+    if scope_where:
+        clauses.insert(0, f"({scope_where})")
+    grouped_sql = (
         f"SELECT {group_col}, COUNT(*) AS n, COUNT(DISTINCT {col}) AS distinct_values "
         f"FROM read_parquet({_quote_path(ctx.parquet_path)}) "
-        f"WHERE {group_col} IS NOT NULL GROUP BY 1 HAVING COUNT(*) >= {min_records} "
-        f"AND COUNT(DISTINCT {col}) = 1 ORDER BY n DESC LIMIT 50"
+        f"WHERE {' AND '.join(clauses)} GROUP BY 1 HAVING COUNT(*) >= {min_records} "
+        f"AND COUNT(DISTINCT {col}) = 1"
     )
-    columns, rows = run_sql(sql)
-    affected = sum(int(r[1]) for r in rows)
+    _, totals = run_sql(
+        f"SELECT COUNT(*), COALESCE(SUM(n), 0) FROM ({grouped_sql}) groups",
+        scope_params,
+    )
+    group_count = int(totals[0][0]) if totals else 0
+    affected = int(totals[0][1]) if totals else 0
+    columns, rows = run_sql(f"{grouped_sql} ORDER BY n DESC LIMIT 50", scope_params)
     return CheckOutcome(
-        passed=len(rows) == 0,
+        passed=group_count == 0,
         failed_rows=affected,
         total_rows=total,
         message=(
-            f"{len(rows)} group(s) of {group_by} recorded a single constant value for "
+            f"{group_count} group(s) of {group_by} recorded a single constant value for "
             f"{variable} across all their interviews."
         ),
         details={
