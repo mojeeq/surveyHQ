@@ -271,6 +271,193 @@ Naming is publishing. The interface says so at the point of naming, and:
 - names live under the configured domain only, and the platform's own hostname
   and a list of reserved labels (`www`, `api`, `admin`, …) cannot be taken.
 
+## Behind Cloudflare, and beside another application
+
+Two arrangements that are common enough to write down, and that both have a
+trap in them.
+
+### Cloudflare: leave the cloud grey
+
+If your DNS is at Cloudflare, each record has a **Proxy status**, and new
+records default to **Proxied** (the orange cloud). For SurveyHQ, turn it off:
+set the record to **DNS only**, the grey cloud.
+
+Two of Cloudflare's limits collide with exactly what this platform does:
+
+| Proxied through Cloudflare | What SurveyHQ needs |
+|---|---|
+| **100 MB** maximum request body on the free plan | `MAX_UPLOAD_MB` is 512, and the bundled nginx sets `client_max_body_size 0` deliberately |
+| **~100 seconds** to first response, then a 524, not adjustable below Enterprise | the bundled nginx allows 600s, and 3600s on the upload route, because a Survey Solutions import can hold a request open for minutes |
+
+A proxied census upload fails at 100 MB. A long import fails at 100 seconds.
+Both are the core job, so terminate TLS on your own server and let Cloudflare
+do DNS, which is the part you actually need.
+
+It is moot for named dashboards anyway: **wildcard records cannot be proxied**
+below Enterprise, so `*.example.org` is DNS-only regardless.
+
+**Check which you have.** From anywhere:
+
+```bash
+getent ahosts surveyhq.example.org | sort -u
+```
+
+Your server's address, and nothing else. An address beginning `104.`,
+`172.67.` or `2606:4700` is Cloudflare answering, which means the cloud is
+still orange. Note the last one: a machine that prefers IPv6 shows you a
+Cloudflare address in a form that looks nothing like the documented ranges,
+and `2606:4700:3033::6815:1cd1` embeds `104.21.28.209` in its last four
+groups.
+
+While the records are grey, Cloudflare's **SSL/TLS mode** and **Always Use
+HTTPS** settings do not apply to your traffic. Ignore them.
+
+### Certificates when port 80 is not yours
+
+The DNS-01 challenge proves control by writing a TXT record, so it needs no
+inbound port at all, and it is the only way to get a wildcard. With DNS at
+Cloudflare:
+
+```bash
+sudo apt install -y certbot python3-certbot-dns-cloudflare
+printf 'dns_cloudflare_api_token = YOUR_TOKEN\n' | sudo tee /etc/letsencrypt/cloudflare.ini
+sudo chmod 600 /etc/letsencrypt/cloudflare.ini
+
+sudo certbot certonly --dns-cloudflare \
+  --dns-cloudflare-credentials /etc/letsencrypt/cloudflare.ini \
+  --dns-cloudflare-propagation-seconds 30 \
+  -d surveyhq.example.org -d '*.surveyhq.example.org' \
+  --deploy-hook "systemctl reload nginx"
+```
+
+The token is an **API Token** scoped to the one zone (Cloudflare dashboard,
+My Profile, API Tokens, the **Edit zone DNS** template), not the Global API
+Key, which is a different credential with a different configuration key.
+
+Confirm the credential before spending a certbot attempt, because Let's
+Encrypt rate-limits failures:
+
+```bash
+curl -s -H "Authorization: Bearer YOUR_TOKEN" \
+  https://api.cloudflare.com/client/v4/user/tokens/verify
+```
+
+`"status":"active"` means go. Then check the certificate covers both names:
+
+```bash
+sudo openssl x509 -in /etc/letsencrypt/live/surveyhq.example.org/fullchain.pem \
+  -noout -subject -ext subjectAltName
+```
+
+Unlike some providers, Cloudflare holds several TXT records at once, so the
+bare name and the wildcard are issued together in one command.
+
+### A `.app`, `.dev` or `.page` domain
+
+These top-level domains are on the **HSTS preload list in their entirety**.
+Browsers refuse plain HTTP to anything under them, permanently and with no
+click-through. Three consequences:
+
+- You cannot stand the site up on HTTP and add TLS afterwards. Until the
+  certificate is live the site does not load at all.
+- A self-signed certificate will not do, even temporarily.
+- A browser that has seen a certificate failure on the name caches it
+  stubbornly. Test in a private window.
+
+Nothing to configure - just get the certificate working first, and expect no
+feedback from a browser until you have.
+
+### Sharing a server with another application
+
+Where something else already owns 80 and 443 - ODK Central is the common one
+in this line of work - do not install a second reverse proxy. Two of them
+competing for 443 is a bad afternoon. Add SurveyHQ to the one already there.
+
+Find out what has the ports:
+
+```bash
+sudo ss -ltnp | grep -E ':(80|443)\s'
+docker ps --format '{{.Names}}\t{{.Image}}\t{{.Ports}}' | grep -E ':80->|:443->'
+```
+
+For an nginx that includes `/etc/nginx/conf.d/*.conf` - which ODK Central's
+does - **add a file rather than editing theirs**. Their configuration is
+rendered from a template at container start and an upgrade replaces it;
+a file of your own beside it survives both. With Compose, mount it and the
+certificates through a `docker-compose.override.yml`, which Compose reads
+automatically and an upgrade of their `docker-compose.yml` leaves alone:
+
+```yaml
+services:
+  nginx:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - /etc/letsencrypt:/etc/surveyhq-ssl:ro
+      - ./files/nginx/surveyhq.conf:/etc/nginx/conf.d/surveyhq.conf:ro
+```
+
+`host.docker.internal` is there because the two stacks are usually on
+different Docker networks, so the proxy reaches SurveyHQ through the host
+rather than by container name. That means `WEB_PORT` has to stay published.
+
+The block itself must be at least as generous as the bundled nginx, or the
+front proxy becomes the ceiling instead of the application:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name surveyhq.example.org *.surveyhq.example.org;
+
+    ssl_certificate     /etc/surveyhq-ssl/live/surveyhq.example.org/fullchain.pem;
+    ssl_certificate_key /etc/surveyhq-ssl/live/surveyhq.example.org/privkey.pem;
+
+    client_max_body_size 0;
+    proxy_read_timeout 600s;
+    proxy_send_timeout 600s;
+    proxy_request_buffering off;
+
+    location / {
+        proxy_pass http://host.docker.internal:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
+
+**Validate it in a throwaway container before it can reach the live proxy.**
+A typo here takes down whatever else that server is running:
+
+```bash
+docker run --rm \
+  -v $PWD/files/nginx/surveyhq.conf:/etc/nginx/conf.d/surveyhq.conf:ro \
+  -v /etc/letsencrypt:/etc/surveyhq-ssl:ro \
+  nginx:alpine nginx -t
+```
+
+Only once that says `test is successful`, bring the proxy up. Keep the revert
+to hand: delete the override file and recreate.
+
+### Before you restart somebody else's stack
+
+A container started weeks ago is running on the environment as it was then.
+If its `.env` has been edited since, the damage only appears at the next
+restart - and then it is yours, whatever actually caused it. Check first:
+
+```bash
+comm -13 \
+  <(grep -oE '^[A-Z_]+=' .env | sort -u) \
+  <(grep -oE '^[A-Z_]+=' .env.template | sort -u)
+```
+
+Anything listed is a setting the template expects and the live file no longer
+has. That prints key names only, so it is safe to paste into a ticket. The
+same applies to this platform: a variable missing from `.env` does not fail,
+it silently takes the default in `docker-compose.yml`, so keep a copy of a
+known-good file.
+
 ## Firewall
 
 ```bash
