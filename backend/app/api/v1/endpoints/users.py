@@ -1,4 +1,4 @@
-"""User administration and exact username lookup for project sharing."""
+"""User administration, and finding the person to add to a project."""
 
 from __future__ import annotations
 
@@ -6,9 +6,16 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import func, select
 
 from app.api.deps import CurrentUser, DbSession, RequireAdmin
+from app.core.config import settings
 from app.core.security import hash_password
 from app.models import Role, User
-from app.schemas.auth import UserCreate, UserLookup, UserOut, UserUpdate
+from app.schemas.auth import (
+    UserCreate,
+    UserDirectoryEntry,
+    UserLookup,
+    UserOut,
+    UserUpdate,
+)
 from app.schemas.common import Message, Page
 from app.services.accounts import (
     next_available_username,
@@ -62,6 +69,54 @@ def lookup_user(username: str, db: DbSession, _: CurrentUser) -> UserLookup:
     if user is None or not user.username:
         raise HTTPException(status_code=404, detail="No active user has that username")
     return UserLookup(id=user.id, username=user.username, full_name=user.full_name)
+
+
+@router.get("/directory", response_model=list[UserDirectoryEntry])
+def directory(
+    db: DbSession, _: CurrentUser, search: str = "", limit: int = 200
+) -> list[UserDirectoryEntry]:
+    """Who there is to add to a project.
+
+    The exact-username lookup below exists so that adding a member does not
+    hand out the installation's user list. That was the right trade when
+    anybody could sign themselves up: the list would have held strangers.
+
+    With self-service sign-up off - the default - it is not. Every account was
+    created by an administrator of this installation, so the people here are
+    colleagues, and the list is the same one the administrator already has. A
+    username, meanwhile, is derived from an email address and shown nowhere, so
+    asking a project manager to type one exactly was asking for something they
+    could not find out.
+
+    So this answers only while sign-up is off. Turn sign-up on and it closes,
+    because then the accounts are no longer all somebody's colleagues.
+    """
+    if settings.signup_enabled:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "This server lets people create their own accounts, so it does "
+                "not hand out a list of them. Add a member by their exact "
+                "username instead."
+            ),
+        )
+
+    statement = select(User).where(User.is_active.is_(True))
+    if search.strip():
+        pattern = f"%{search.strip().lower()}%"
+        statement = statement.where(
+            func.lower(User.email).like(pattern)
+            | func.lower(User.full_name).like(pattern)
+            | func.lower(User.username).like(pattern)
+        )
+    # By name, and by address for the accounts that have no name yet, so the
+    # list reads in the order somebody would look down it.
+    people = db.scalars(
+        statement.order_by(func.lower(func.coalesce(User.full_name, "")), User.email).limit(
+            max(1, min(limit, 500))
+        )
+    ).all()
+    return [UserDirectoryEntry.model_validate(person) for person in people]
 
 
 @router.post("", response_model=UserOut, status_code=201)

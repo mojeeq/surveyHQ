@@ -41,8 +41,10 @@ This is the point of projects, and it takes two steps:
 1. **Administration → Add user**. Set their role, then tick **Limit to assigned
    projects**. This hides the shared area from them; without it they would still
    see everything not in a project.
-2. **Projects → (the project) → Members → Add member**. Choose their role on
-   this project.
+2. **Projects → (the project) → Members → Add member**. Pick them from the
+   list of people with an account here, and choose their role on this project.
+   On a server that lets people create their own accounts there is no list, so
+   the dialog asks for their exact username instead.
 
 They now see that project and nothing else - not in listings, and not by typing
 a URL or calling the API directly. A dataset outside their reach answers "not

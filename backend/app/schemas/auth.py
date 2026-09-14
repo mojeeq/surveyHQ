@@ -97,6 +97,22 @@ class UserLookup(BaseModel):
     full_name: str = ""
 
 
+class UserDirectoryEntry(BaseModel):
+    """One person a project manager can choose as a member.
+
+    The email is here because a name is not an identifier: two people called
+    Mary in a statistics office are told apart by their address and by nothing
+    else, and picking the wrong one hands a stranger a project.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    username: str = ""
+    full_name: str = ""
+    email: str
+
+
 class PasswordChange(BaseModel):
     current_password: str
     new_password: str = Field(min_length=8, max_length=128)

@@ -103,13 +103,13 @@ export default function Login() {
           </h1>
           <p className="mt-5 max-w-lg text-base leading-7 text-slate-400">
             Every account starts with a private workspace. Create survey and census projects,
-            analyse data, publish dashboards, and share a project with another SurveyHQ user
-            simply by adding their username.
+            analyse data, publish dashboards, and share a project with a colleague by
+            adding them as a member.
           </p>
           <div className="mt-8 grid grid-cols-3 gap-3">
             {[
               ['Create', 'Your own private projects'],
-              ['Collaborate', 'Add members by username'],
+              ['Collaborate', 'Add colleagues as members'],
               ['Publish', 'Dashboards and shared views'],
             ].map(([title, text]) => (
               <div key={title} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
