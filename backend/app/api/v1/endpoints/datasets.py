@@ -135,13 +135,10 @@ def _queue_import(
     mode: str,
     labels: list[str],
     version_column: str,
+    review: bool = False,
 ) -> Job:
     """Hand a large upload to the worker and answer with the job watching it."""
-    title = (
-        f"Import {filenames[0]}"
-        if len(filenames) == 1
-        else f"Import {len(filenames)} archives"
-    )
+    title = f"Import {filenames[0]}" if len(filenames) == 1 else f"Import {len(filenames)} archives"
     job = Job(
         job_type=JobType.ingest,
         status=JobStatus.queued,
@@ -157,6 +154,7 @@ def _queue_import(
             "labels": labels,
             "version_column": version_column,
             "bytes": written,
+            "review": review,
         },
         created_by=user.id,
     )
@@ -220,6 +218,7 @@ async def upload_dataset(
     mode: Annotated[str, Form()] = "replace",
     labels: Annotated[str, Form()] = "",
     version_column: Annotated[str, Form()] = "",
+    review: Annotated[bool, Form()] = False,
 ) -> DatasetDetail | ArchiveImportOut | JobOut:
     """Upload a data file, or an export archive, and ingest it immediately.
 
@@ -276,9 +275,7 @@ async def upload_dataset(
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail="labels must be a JSON list") from exc
     if stamps and len(stamps) != len(uploads):
-        raise HTTPException(
-            status_code=422, detail="Give a label for every file, or none at all"
-        )
+        raise HTTPException(status_code=422, detail="Give a label for every file, or none at all")
     stamp_column = version_column.strip()
     if stamp_column and not stamps:
         raise HTTPException(
@@ -290,14 +287,10 @@ async def upload_dataset(
     suffix = suffixes[0]
 
     if project_id and not can_edit(db, user, project_id, Role.manager):
-        raise HTTPException(
-            status_code=404, detail="Project not found"
-        )
+        raise HTTPException(status_code=404, detail="Project not found")
 
     if mode not in ("replace", "append"):
-        raise HTTPException(
-            status_code=422, detail="mode must be 'replace' or 'append'"
-        )
+        raise HTTPException(status_code=422, detail="mode must be 'replace' or 'append'")
 
     max_bytes = settings.max_upload_mb * 1024 * 1024
     # Refused from the declared length, before a byte of it is stored. The old
@@ -353,8 +346,7 @@ async def upload_dataset(
                         raise HTTPException(
                             status_code=413,
                             detail=(
-                                f"This upload exceeds the {settings.max_upload_mb} MB "
-                                "limit"
+                                f"This upload exceeds the {settings.max_upload_mb} MB " "limit"
                             ),
                         )
                     handle.write(chunk)
@@ -367,7 +359,7 @@ async def upload_dataset(
         for item in uploads:
             await item.close()
 
-    if written > INLINE_IMPORT_LIMIT:
+    if review or written > INLINE_IMPORT_LIMIT:
         return _queue_import(
             db,
             user=user,
@@ -381,6 +373,7 @@ async def upload_dataset(
             mode=mode,
             labels=stamps,
             version_column=stamp_column,
+            review=review,
         )
 
     try:
@@ -418,9 +411,7 @@ async def upload_dataset(
     rebuilt = rebuild_dependents(db, outcome.replaced_ids if archive else [])
     if rebuilt:
         names = [d.name for d in (db.get(Dataset, i) for i in rebuilt) if d]
-        outcome.warnings.append(
-            "Rebuilt from the new data: " + ", ".join(sorted(names))
-        )
+        outcome.warnings.append("Rebuilt from the new data: " + ", ".join(sorted(names)))
     # A variable somebody derived in R is not in the export that just landed,
     # so the project's own scripts are run again over the new data. Failures
     # come back as notes rather than raising: an import that worked is not a
@@ -497,9 +488,7 @@ def update_dataset(
 
 
 @router.post("/delete", response_model=Message)
-def delete_datasets(
-    payload: BulkDeleteRequest, db: DbSession, user: RequireManager
-) -> Message:
+def delete_datasets(payload: BulkDeleteRequest, db: DbSession, user: RequireManager) -> Message:
     """Delete several datasets at once, or a whole project's worth.
 
     A survey export produces eight datasets in one upload, most of them roster
@@ -545,7 +534,8 @@ def delete_datasets(
     )
     db.commit()
     return Message(
-        detail=f"Deleted {len(names)} dataset(s): " + ", ".join(names[:5])
+        detail=f"Deleted {len(names)} dataset(s): "
+        + ", ".join(names[:5])
         + ("…" if len(names) > 5 else "")
     )
 
@@ -583,7 +573,7 @@ async def replace_dataset_data(
         raise HTTPException(status_code=400, detail=f"Unsupported format '{suffix}'")
 
     settings.ensure_directories()
-    upload_path = settings.uploads_path / f"{dataset.id}-replace{suffix}"
+    upload_path = settings.uploads_path / f"{dataset.id}-{uuid4().hex}-replace{suffix}"
     with open(upload_path, "wb") as handle:
         shutil.copyfileobj(file.file, handle)
     await file.close()
@@ -596,9 +586,7 @@ async def replace_dataset_data(
     finally:
         upload_path.unlink(missing_ok=True)
 
-    record(
-        db, user=user, action="replace_dataset", entity_type="dataset", entity_id=dataset.id
-    )
+    record(db, user=user, action="replace_dataset", entity_type="dataset", entity_id=dataset.id)
     db.commit()
     db.refresh(dataset)
     return DatasetDetail.model_validate(dataset)
@@ -619,7 +607,7 @@ async def append_to_dataset(
         raise HTTPException(status_code=400, detail=f"Unsupported format '{suffix}'")
 
     settings.ensure_directories()
-    upload_path = settings.uploads_path / f"{dataset.id}-append{suffix}"
+    upload_path = settings.uploads_path / f"{dataset.id}-{uuid4().hex}-append{suffix}"
     with open(upload_path, "wb") as handle:
         shutil.copyfileobj(file.file, handle)
     await file.close()
@@ -836,3 +824,73 @@ def variable_values(
 def all_tags(dataset_id: str, db: DbSession, user: CurrentUser) -> list[str]:
     dataset = get_dataset(dataset_id, db, user)
     return list(dataset.tags or [])
+
+
+@router.post("/reviews/{job_id}/accept")
+def accept_import_review(job_id: str, db: DbSession, user: RequireManager):
+    from app.services.import_review import accept
+
+    job = db.scalar(select(Job).where(Job.id == job_id).with_for_update())
+    if job is None or (job.created_by != user.id and not user.has_role(Role.admin)):
+        raise HTTPException(status_code=404, detail="Import review not found")
+    try:
+        result = accept(db, job, user)
+        record(db, user=user, action="accept_import", entity_type="job", entity_id=job.id)
+        db.commit()
+        return result
+    except IngestError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/{dataset_id}/versions")
+def dataset_versions(dataset_id: str, db: DbSession, user: CurrentUser):
+    from app.services.dataset_versions import list_versions
+
+    dataset = get_dataset(dataset_id, db, user)
+    return [
+        {"version": s["version"], "rows": s["row_count"], "columns": s["column_count"]}
+        for s in list_versions(dataset)
+    ]
+
+
+@router.post("/{dataset_id}/versions/{version}/restore", response_model=DatasetDetail)
+def restore_dataset_version(dataset_id: str, version: int, db: DbSession, user: RequireManager):
+    from app.services.dataset_versions import as_ingest, list_versions
+    from app.services.datasets import _apply_ingest
+
+    dataset = get_dataset(dataset_id, db, user)
+    if not can_edit(db, user, dataset.project_id, Role.manager):
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    snapshot = next((s for s in list_versions(dataset) if s["version"] == version), None)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Version not found")
+    _apply_ingest(db, dataset, as_ingest(snapshot))
+    rebuild_dependents(db, [dataset.id])
+    record(
+        db,
+        user=user,
+        action="restore_dataset_version",
+        entity_type="dataset",
+        entity_id=dataset.id,
+        detail={"version": version},
+    )
+    db.commit()
+    return DatasetDetail.model_validate(dataset)
+
+
+@router.delete("/reviews/{job_id}", response_model=Message)
+def discard_import_review(job_id: str, db: DbSession, user: RequireManager):
+    job = db.scalar(select(Job).where(Job.id == job_id).with_for_update())
+    if job is None or (job.created_by != user.id and not user.has_role(Role.admin)):
+        raise HTTPException(status_code=404, detail="Import review not found")
+    if job.status != JobStatus.success or not job.result.get("review"):
+        raise HTTPException(status_code=409, detail="This import is not awaiting review")
+    for item in job.params.get("candidates", []):
+        path = Path(item["snapshot"]["parquet_path"])
+        if path.is_relative_to(settings.datasets_path):
+            path.unlink(missing_ok=True)
+    job.params = {k: v for k, v in job.params.items() if k != "candidates"}
+    job.status = JobStatus.cancelled
+    db.commit()
+    return Message(detail="Import discarded")

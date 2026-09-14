@@ -89,6 +89,8 @@ class Dataset(UUIDMixin, TimestampMixin, Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
+    __mapper_args__ = {"version_id_col": version, "version_id_generator": False}
+
     variables: Mapped[list[Variable]] = relationship(
         back_populates="dataset",
         cascade="all, delete-orphan",

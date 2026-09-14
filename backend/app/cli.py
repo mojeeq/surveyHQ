@@ -19,6 +19,8 @@ def gen_encryption_key() -> None:
 
 
 def init_database() -> None:
+    from app.db.migrations import upgrade
+    upgrade()
     initialise()
     print("Database initialised.")
 
@@ -68,7 +70,14 @@ def reset_password() -> None:
         print(f"Password reset for {email}.")
 
 
+def migrate() -> None:
+    from app.db.migrations import upgrade
+    upgrade()
+    print("Database migrated.")
+
+
 COMMANDS = {
+    "migrate": migrate,
     "gen-encryption-key": gen_encryption_key,
     "init-db": init_database,
     "create-admin": create_admin,

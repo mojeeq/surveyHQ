@@ -14,6 +14,7 @@ import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import numpy as np
 import pandas as pd
@@ -528,7 +529,7 @@ def ingest_frame(
     metas = build_metadata(frame, variable_labels, value_labels)
 
     destination_dir.mkdir(parents=True, exist_ok=True)
-    parquet_path = destination_dir / "data.parquet"
+    parquet_path = destination_dir / f"data-{uuid4().hex}.parquet"
     try:
         frame.to_parquet(parquet_path, index=False, engine="pyarrow", compression="zstd")
     except Exception as exc:  # noqa: BLE001 - retry with everything stringified
@@ -687,7 +688,7 @@ def _stream_stata(path: Path, destination_dir: Path, warnings: list[str]) -> Ing
     import pyreadstat
 
     destination_dir.mkdir(parents=True, exist_ok=True)
-    parquet_path = destination_dir / "data.parquet"
+    parquet_path = destination_dir / f"data-{uuid4().hex}.parquet"
 
     _, meta = pyreadstat.read_dta(str(path), metadataonly=True)
     variable_labels = dict(meta.column_names_to_labels or {})

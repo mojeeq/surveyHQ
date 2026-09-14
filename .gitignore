@@ -46,3 +46,6 @@ logs/
 
 # TypeScript incremental build state - a build artifact, not source
 frontend/tsconfig.tsbuildinfo
+
+frontend/playwright-report/
+frontend/test-results/

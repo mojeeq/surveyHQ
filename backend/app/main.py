@@ -13,6 +13,7 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
 from sqlalchemy import text
 from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm.exc import StaleDataError
 
 from app import __version__
 from app.core.config import settings
@@ -37,16 +38,7 @@ logger = get_logger(__name__)
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     logger.info("Starting %s %s (%s)", settings.project_name, __version__, settings.environment)
-    for attempt in range(1, 31):
-        try:
-            initialise()
-            break
-        except SQLAlchemyError as exc:
-            # Postgres may still be accepting connections when the API starts
-            logger.warning("Database not ready (attempt %s/30): %s", attempt, exc)
-            time.sleep(2)
-    else:
-        logger.error("Could not reach the database; starting in a degraded state")
+    initialise()
     yield
     logger.info("Shutting down")
 
@@ -128,9 +120,7 @@ async def handle_suso_error(request: Request, exc: SurveySolutionsError) -> JSON
 
 
 @app.exception_handler(RequestValidationError)
-async def handle_validation_error(
-    request: Request, exc: RequestValidationError
-) -> JSONResponse:
+async def handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
     """Return validation problems in a shape the UI can show next to fields."""
     errors = [
         {
@@ -162,3 +152,22 @@ def health() -> dict[str, object]:
         "version": __version__,
         "database": "ok" if database_ok else "unreachable",
     }
+
+
+@app.exception_handler(StaleDataError)
+async def concurrent_dataset_update(request: Request, exc: StaleDataError):
+    return JSONResponse(
+        status_code=409,
+        content={
+            "detail": ("This dataset changed during your update. Reload and retry; "
+                       "the previous version is retained.")
+        },
+    )
+
+
+from app.services.operation_lock import OperationBusy  # noqa: E402
+
+
+@app.exception_handler(OperationBusy)
+async def busy_operation(request: Request, exc: OperationBusy):
+    return JSONResponse(status_code=409, content={"detail": str(exc)})

@@ -79,6 +79,13 @@ class Measure(BaseModel):
 
     @model_validator(mode="after")
     def _check_variable(self) -> Measure:
+        if self.weight and self.agg not in {
+            Aggregation.count, Aggregation.share, Aggregation.sum, Aggregation.mean
+        }:
+            raise ValueError(
+                f"Survey weights are not supported for {self.agg.value}. "
+                "Choose an unweighted calculation or use R for weighted distribution statistics."
+            )
         needs_variable = {
             Aggregation.sum,
             Aggregation.mean,

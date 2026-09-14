@@ -47,7 +47,8 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
-COPY pyproject.toml .
+COPY pyproject.toml alembic.ini ./
+COPY migrations ./migrations
 
 # Run as a non-root user; /data is a mounted volume so it needs to be writable.
 RUN useradd --create-home --uid 10001 surveyhq \

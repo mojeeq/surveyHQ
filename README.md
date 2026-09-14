@@ -144,15 +144,11 @@ Nothing else is needed - the installer adds Docker if it is missing.
 
 ### 1. Get the code onto the server
 
-The repository is private, so the server needs to authenticate. The simplest way
-is a GitHub personal access token with `repo` scope
-([create one here](https://github.com/settings/tokens)):
+Clone the repository onto your server:
 
 ```bash
 sudo apt update && sudo apt install -y git
 git clone https://github.com/mojeeq/surveyHQ.git surveyhq
-# Username: mojeeq
-# Password: paste the personal access token (not your GitHub password)
 cd surveyhq
 ```
 
@@ -202,6 +198,9 @@ docker compose run --rm api python -m app.cli gen-encryption-key   # ENCRYPTION_
 you lose it, saved server credentials cannot be decrypted and must be re-entered.
 
 ---
+
+See [the reliability upgrade guide](docs/reliability-upgrade.md) for database
+migrations, import review, retained dataset versions and backup compatibility.
 
 ## Day-to-day operation
 
@@ -304,8 +303,8 @@ More in [docs/architecture.md](docs/architecture.md).
 - Running R is running a program on the server, so it is off unless an
   administrator sets `R_SCRIPTS_ENABLED`, reachable only by a manager of the
   project, bounded by a timeout and a memory cap, and every run is recorded in
-  the audit log with the code it ran. It is not a sandbox, and the
-  documentation says so rather than implying otherwise.
+  the audit log with the code it ran. Landlock and seccomp enforce project
+  confinement by default; see the deployment guide for kernel requirements.
 - Embedded HTML renders in a sandboxed frame with no access to the page around
   it, and uploaded dashboard backgrounds are identified from their bytes rather
   than their name or content type (SVG is refused: it can carry script).

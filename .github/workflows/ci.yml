@@ -91,7 +91,7 @@ jobs:
           surveyhq-r-sandbox --surveyhq-sandbox-selftest
 
       - name: Lint
-        run: ruff check app tests
+        run: ruff check app tests migrations
 
       - name: Test
         env:
@@ -201,6 +201,41 @@ jobs:
 
       - name: The worker is running
         run: docker compose ps --services --filter status=running | grep -qx worker
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install browser tests
+        working-directory: frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Upload through anonymous sharing in a real browser
+        working-directory: frontend
+        run: npm run test:e2e
+
+      - name: Back up and restore the populated stack
+        run: |
+          ./scripts/backup.sh
+          archive=$(ls -1t backups/surveyhq-*.tar.gz | head -n 1)
+          printf 'restore\n' | ./scripts/restore.sh "$archive"
+          token=$(curl --retry 20 --retry-connrefused --retry-all-errors --retry-delay 2 -fsS \
+            -X POST http://localhost:8080/api/v1/auth/login -H 'Content-Type: application/json' \
+            -d '{"email":"ci@example.org","password":"ci-password-67890"}' \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+          curl -fsS http://localhost:8080/api/v1/datasets -H "Authorization: Bearer $token" \
+            | python3 -c 'import json,sys; data=json.load(sys.stdin); assert any(d["row_count"] == 60 for d in data["items"]), data'
+
+      - name: Browser traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-results
+          path: frontend/test-results/
 
       - name: Container status and logs on failure
         if: failure()

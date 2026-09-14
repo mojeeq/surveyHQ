@@ -151,6 +151,8 @@ class SQLBuilder:
         agg = measure.agg
         weight_col = None
         if measure.weight:
+            if agg not in (Aggregation.count, Aggregation.share, Aggregation.sum, Aggregation.mean):
+                raise QueryError(f"Survey weights are not supported for {agg.value}")
             weight_info = self.ctx.require(measure.weight)
             if not weight_info.is_numeric:
                 raise QueryError(f"Weight '{measure.weight}' must be a numeric variable")
@@ -792,7 +794,7 @@ def _chi_square(
         "statistic": round(statistic, 4),
         "dof": dof,
         "cramers_v": round(
-            math.sqrt(statistic / (grand_total * min(len(row_totals), len(column_totals) - 1)))
+            math.sqrt(statistic / (grand_total * min(len(row_totals) - 1, len(column_totals) - 1)))
             if grand_total and min(len(row_totals), len(column_totals)) > 1
             else 0.0,
             4,

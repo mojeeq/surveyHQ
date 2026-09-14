@@ -84,7 +84,8 @@ def create_project(payload: ProjectIn, db: DbSession, user: RequireManager) -> P
         action="project.create",
         entity_type="project",
         entity_id=project.id,
-        detail={"name": project.name})
+        detail={"name": project.name},
+    )
     return _to_detail(project, db, user)
 
 
@@ -145,14 +146,10 @@ def delete_project(
         # Deleted through the ORM rather than by statement, so the cascades
         # declared on the relationships run and nothing is left orphaned.
         datasets = list(db.scalars(select(Dataset).where(Dataset.project_id == project_id)))
-        dashboards = list(
-            db.scalars(select(Dashboard).where(Dashboard.project_id == project_id))
-        )
+        dashboards = list(db.scalars(select(Dashboard).where(Dashboard.project_id == project_id)))
         relationships = list(
             db.scalars(
-                select(DatasetRelationship).where(
-                    DatasetRelationship.project_id == project_id
-                )
+                select(DatasetRelationship).where(DatasetRelationship.project_id == project_id)
             )
         )
         for relationship in relationships:
@@ -168,14 +165,10 @@ def delete_project(
         # the two databases this runs on.
         ids = [dataset.id for dataset in datasets]
         if ids:
-            indicators = list(
-                db.scalars(select(Indicator).where(Indicator.dataset_id.in_(ids)))
-            )
+            indicators = list(db.scalars(select(Indicator).where(Indicator.dataset_id.in_(ids))))
             for indicator in indicators:
                 db.delete(indicator)  # its snapshots go with it
-            rules = list(
-                db.scalars(select(AlertRule).where(AlertRule.dataset_id.in_(ids)))
-            )
+            rules = list(db.scalars(select(AlertRule).where(AlertRule.dataset_id.in_(ids))))
             for rule in rules:
                 db.delete(rule)  # and the alerts it raised
             for quality_rule in db.scalars(
@@ -210,9 +203,7 @@ def delete_project(
     # pointing at a project that no longer exists - visible to nobody but an
     # administrator. Doing it explicitly works the same either way.
     for model in (Dataset, Dashboard, DatasetRelationship, Connection):
-        db.execute(
-            update(model).where(model.project_id == project_id).values(project_id=None)
-        )
+        db.execute(update(model).where(model.project_id == project_id).values(project_id=None))
     db.delete(project)
     db.commit()
     record(
@@ -275,9 +266,7 @@ def upsert_member(
 
 
 @router.delete("/{project_id}/members/{user_id}", response_model=Message)
-def remove_member(
-    project_id: str, user_id: str, db: DbSession, user: CurrentUser
-) -> Message:
+def remove_member(project_id: str, user_id: str, db: DbSession, user: CurrentUser) -> Message:
     _editable_project(project_id, db, user, Role.manager)
     membership = db.scalar(
         select(ProjectMember).where(
@@ -294,7 +283,7 @@ def remove_member(
         action="project.member.remove",
         entity_type="project",
         entity_id=project_id,
-        detail={"user_id": user_id}
+        detail={"user_id": user_id},
     )
     return Message(detail="Member removed")
 
@@ -330,9 +319,7 @@ def project_tools(project_id: str, db: DbSession, user: CurrentUser) -> dict[str
 
 
 @router.get("/{project_id}/scripts", response_model=list[ProjectScriptOut])
-def list_scripts(
-    project_id: str, db: DbSession, user: CurrentUser
-) -> list[ProjectScript]:
+def list_scripts(project_id: str, db: DbSession, user: CurrentUser) -> list[ProjectScript]:
     _visible_project(project_id, db, user)
     return list(
         db.scalars(
@@ -343,17 +330,13 @@ def list_scripts(
     )
 
 
-@router.post(
-    "/{project_id}/scripts", response_model=ProjectScriptOut, status_code=201
-)
+@router.post("/{project_id}/scripts", response_model=ProjectScriptOut, status_code=201)
 def create_script(
     project_id: str, payload: ProjectScriptIn, db: DbSession, user: RequireManager
 ) -> ProjectScript:
     project = _editable_project(project_id, db, user, Role.manager)
     highest = db.scalar(
-        select(func.max(ProjectScript.display_order)).where(
-            ProjectScript.project_id == project.id
-        )
+        select(func.max(ProjectScript.display_order)).where(ProjectScript.project_id == project.id)
     )
     script = ProjectScript(
         project_id=project.id,
@@ -370,9 +353,7 @@ def create_script(
     return script
 
 
-@router.patch(
-    "/{project_id}/scripts/{script_id}", response_model=ProjectScriptOut
-)
+@router.patch("/{project_id}/scripts/{script_id}", response_model=ProjectScriptOut)
 def update_script(
     project_id: str,
     script_id: str,
@@ -399,9 +380,7 @@ def update_script(
 
 
 @router.delete("/{project_id}/scripts/{script_id}", response_model=Message)
-def delete_script(
-    project_id: str, script_id: str, db: DbSession, user: RequireManager
-) -> Message:
+def delete_script(project_id: str, script_id: str, db: DbSession, user: RequireManager) -> Message:
     project = _editable_project(project_id, db, user, Role.manager)
     script = _project_script(db, project, script_id)
     name = script.name
@@ -464,9 +443,7 @@ def run_console(
 
 
 @router.get("/{project_id}/workspace", response_model=dict)
-def list_workspace(
-    project_id: str, db: DbSession, user: RequireManager
-) -> dict[str, Any]:
+def list_workspace(project_id: str, db: DbSession, user: RequireManager) -> dict[str, Any]:
     """What is in the project's working directory, which survives between runs.
 
     Three things, because a working directory is all three. The datasets are
@@ -517,15 +494,16 @@ def list_workspace(
 
 
 @router.delete("/{project_id}/workspace", response_model=Message)
-def clear_workspace(
-    project_id: str, db: DbSession, user: RequireManager
-) -> Message:
+def clear_workspace(project_id: str, db: DbSession, user: RequireManager) -> Message:
     """Empty the working directory, packages and saved objects included.
 
     The datasets are not touched: they live in the platform, and the workspace
     is only the scratch space around them.
     """
     project = _editable_project(project_id, db, user, Role.manager)
+    from app.services.operation_lock import acquire
+
+    acquire(db, f"project-r:{project.id}")
     rproject.forget(project.id)
     return Message(detail="The workspace is empty. The project's datasets are untouched.")
 
@@ -611,9 +589,7 @@ def _visible_project(project_id: str, db: DbSession, user: User) -> Project:
     return project
 
 
-def _editable_project(
-    project_id: str, db: DbSession, user: User, minimum: Role
-) -> Project:
+def _editable_project(project_id: str, db: DbSession, user: User, minimum: Role) -> Project:
     project = _visible_project(project_id, db, user)
     if not can_edit(db, user, project_id, minimum):
         raise HTTPException(
@@ -623,9 +599,7 @@ def _editable_project(
     return project
 
 
-def _check_move(
-    db: DbSession, user: User, current: str | None, target: str | None
-) -> None:
+def _check_move(db: DbSession, user: User, current: str | None, target: str | None) -> None:
     """Moving needs manager rights on both sides.
 
     Requiring it on the source too stops a project manager from pulling a
@@ -684,8 +658,15 @@ def _to_out(project: Project, db: DbSession, user: User) -> ProjectOut:
         **{
             field: getattr(project, field)
             for field in (
-                "id", "name", "slug", "description", "status",
-                "starts_on", "ends_on", "created_at", "updated_at",
+                "id",
+                "name",
+                "slug",
+                "description",
+                "status",
+                "starts_on",
+                "ends_on",
+                "created_at",
+                "updated_at",
             )
         },
         dataset_count=datasets,
@@ -700,3 +681,36 @@ def _to_detail(project: Project, db: DbSession, user: User) -> ProjectDetail:
         **_to_out(project, db, user).model_dump(),
         members=_members(project.id, db),
     )
+
+
+@router.post("/{project_id}/queue-run", status_code=202)
+def queue_r_run(project_id: str, payload: RunScriptIn, db: DbSession, user: RequireManager):
+    from app.models import Job, JobStatus, JobType
+    from app.schemas.monitoring import JobOut
+    from app.workers.tasks import run_project_r
+
+    project = _editable_project(project_id, db, user, Role.manager)
+    reason = rproject.unavailable_reason()
+    if reason:
+        raise HTTPException(status_code=422, detail=reason)
+    if payload.script_id:
+        _project_script(db, project, payload.script_id)
+    if not payload.code.strip():
+        raise HTTPException(status_code=422, detail="Enter some R code")
+    job = Job(
+        job_type=JobType.rscript,
+        status=JobStatus.queued,
+        title=f"Run R: {project.name}",
+        created_by=user.id,
+        params={"project_id": project.id, "code": payload.code, "script_id": payload.script_id},
+    )
+    db.add(job)
+    db.commit()
+    try:
+        result = run_project_r.delay(job.id)
+        job.celery_task_id = result.id
+    except Exception:
+        job.status = JobStatus.failed
+        job.error = "Could not reach the background worker. Check Redis and the worker."
+    db.commit()
+    return JobOut.model_validate(job)

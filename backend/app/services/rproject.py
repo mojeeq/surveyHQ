@@ -42,16 +42,12 @@ What the script leaves in R's global environment is listed too, which is what
 the Environment pane is drawn from. Every run is a new R session, so that is a
 record of what the last run made rather than something the next run can reach.
 
-WHAT THIS IS NOT
-================
-This is not a sandbox. An R script is a program, and a program can read files
-the server can read, open sockets the server can open, and call system(). There
-is no blocklist of dangerous calls, because a blocklist over a language with
-eval(parse(text=)) would only be a promise nobody can keep. The containment -
-a wall-clock timeout, an
-address-space cap, a working directory of its own - stops a runaway script, not
-a hostile one. It is off unless an administrator turns it on, and only a
-manager of the project can reach it.
+EXECUTION AND CONFINEMENT
+=========================
+The default launcher confines R with Landlock and seccomp, plus a timeout and
+memory limit. Enabling unconfined execution is an explicit deployment override.
+A project lock serialises runs until their database transaction ends, preserving
+the persistent workspace. Each run retains its code, inputs and result separately.
 
 The workspace persisting is a deliberate widening of that: files a script
 leaves are readable by the next script anyone runs in the same project. A
@@ -68,8 +64,9 @@ import re
 import resource
 import shutil
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
+from uuid import uuid4
 
 import pandas as pd
 from sqlalchemy import select
@@ -132,6 +129,7 @@ class ProjectRError(RError):
 
 
 # -- where R is, and whether it may be used ---------------------------------
+
 
 def binary() -> str | None:
     """What R is actually started through, if it is anywhere.
@@ -298,7 +296,6 @@ def _trim(out: str, err: str) -> str:
     return text[:MAX_LOG] + f"\n... and {len(text) - MAX_LOG:,} more characters"
 
 
-
 @dataclass
 class ProjectRResult:
     """What one run did."""
@@ -367,7 +364,7 @@ def sync_inputs(db: Session, project_id: str) -> list[Dataset]:
     return ready
 
 
-def run(
+def _run(
     db: Session,
     project: Project,
     code: str,
@@ -530,10 +527,7 @@ def _catalogue(ready: list[Dataset]) -> str:
     "base R is the floor" is the promise the whole feature is built on.
     """
     rows = pd.DataFrame(
-        [
-            {"name": d.name, "slug": d.slug, "rows": int(d.row_count or 0)}
-            for d in ready
-        ],
+        [{"name": d.name, "slug": d.slug, "rows": int(d.row_count or 0)} for d in ready],
         columns=["name", "slug", "rows"],
     )
     return rows.to_csv(index=False)
@@ -553,24 +547,24 @@ _READER = (
     " row <- datasets[datasets$name == which | datasets$slug == which, , drop = FALSE];"
     " if (nrow(row) == 0) stop(sprintf("
     "\"There is no dataset called '%s' in this project. Try one of: %s\","
-    " which, paste(datasets$name, collapse = \", \")));"
-    " utils::read.csv(file.path(.susodash_data, paste0(row$slug[1], \".csv\")),"
+    ' which, paste(datasets$name, collapse = ", ")));'
+    ' utils::read.csv(file.path(.susodash_data, paste0(row$slug[1], ".csv")),'
     " stringsAsFactors = FALSE, check.names = FALSE,"
-    " na.strings = c(\"NA\", \"\")) }"
+    ' na.strings = c("NA", "")) }'
 )
 
 _WRITER = (
     "write_dataset <- function(frame, name) {"
-    " if (!is.data.frame(frame)) stop(\"write_dataset() takes a data frame\");"
+    ' if (!is.data.frame(frame)) stop("write_dataset() takes a data frame");'
     " if (!is.character(name) || length(name) != 1 || !nzchar(name))"
-    " stop(\"write_dataset() needs a name to save under\");"
-    " safe <- gsub(\"^-+|-+$\", \"\", gsub(\"[^A-Za-z0-9]+\", \"-\", name));"
+    ' stop("write_dataset() needs a name to save under");'
+    ' safe <- gsub("^-+|-+$", "", gsub("[^A-Za-z0-9]+", "-", name));'
     " if (!nzchar(safe)) stop("
-    "\"write_dataset() needs a name with some letters or digits in it\");"
-    " utils::write.csv(frame, file.path(.susodash_out, paste0(safe, \".csv\")),"
-    " row.names = FALSE, na = \"\");"
+    '"write_dataset() needs a name with some letters or digits in it");'
+    ' utils::write.csv(frame, file.path(.susodash_out, paste0(safe, ".csv")),'
+    ' row.names = FALSE, na = "");'
     " .susodash_written[[length(.susodash_written) + 1]] <<-"
-    " sprintf('{\"name\":\"%s\",\"file\":\"%s.csv\"}',"
+    ' sprintf(\'{"name":"%s","file":"%s.csv"}\','
     " gsub('\"', \"'\", name), safe);"
     " invisible(frame) }"
 )
@@ -824,9 +818,7 @@ def _save(
     _apply_ingest(
         db,
         dataset,
-        ingest_frame(
-            frame, variable_labels, value_labels, dataset_directory(dataset.id), []
-        ),
+        ingest_frame(frame, variable_labels, value_labels, dataset_directory(dataset.id), []),
     )
     return {"name": name, "id": dataset.id, "rows": int(len(frame))}
 
@@ -882,3 +874,34 @@ def is_plumbing(relative: Path) -> bool:
         MANIFEST,
         ENVIRONMENT,
     )
+
+
+def run(
+    db: Session, project: Project, code: str, *, created_by: str | None = None
+) -> ProjectRResult:
+    """Serialise the persistent workspace and retain a separate record of each run."""
+    from app.services.operation_lock import acquire
+
+    acquire(db, f"project-r:{project.id}")
+    run_id = uuid4().hex
+    directory = get_settings().storage_path / "r-runs" / project.id / run_id
+    directory.mkdir(parents=True)
+    (directory / "script.R").write_text(code, encoding="utf-8")
+    state = {
+        "id": run_id,
+        "status": "running",
+        "started_at": utcnow().isoformat(),
+        "created_by": created_by,
+        "inputs": {d.id: d.version for d in project_datasets(db, project.id)},
+    }
+    (directory / "run.json").write_text(json.dumps(state), encoding="utf-8")
+    try:
+        result = _run(db, project, code, created_by=created_by)
+        state.update(status="success", result=asdict(result))
+        return result
+    except Exception as exc:
+        state.update(status="failed", error=str(exc))
+        raise
+    finally:
+        state["finished_at"] = utcnow().isoformat()
+        (directory / "run.json").write_text(json.dumps(state), encoding="utf-8")

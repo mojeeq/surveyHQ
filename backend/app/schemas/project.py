@@ -111,6 +111,7 @@ class RunScriptIn(BaseModel):
     """Code typed into the console and run without being saved."""
 
     code: str = Field(min_length=1, max_length=200_000)
+    script_id: str | None = None
 
 
 class AssignProjectIn(BaseModel):

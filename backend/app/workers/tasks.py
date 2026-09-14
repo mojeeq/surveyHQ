@@ -282,9 +282,7 @@ def plan_version_imports(
         # nothing at all.
         wanted.extend(every or [choice])
 
-    ordered = sorted(
-        dict.fromkeys(wanted), key=lambda i: (i.split("$")[0], versions.get(i, 0))
-    )
+    ordered = sorted(dict.fromkeys(wanted), key=lambda i: (i.split("$")[0], versions.get(i, 0)))
     seen: set[str] = set()
     plan: list[tuple[str, str]] = []
     for identity in ordered:
@@ -412,9 +410,7 @@ def refresh_all_indicators() -> dict[str, Any]:
     refreshed = 0
     triggered = 0
     with session_scope() as db:
-        indicators = db.scalars(
-            select(Indicator).where(Indicator.is_active.is_(True))
-        ).all()
+        indicators = db.scalars(select(Indicator).where(Indicator.is_active.is_(True))).all()
         for indicator in indicators:
             try:
                 refresh_indicator(db, indicator)
@@ -479,17 +475,20 @@ def run_upload_import(self: Any, job_id: str) -> dict[str, Any]:
     version_column = str(params.get("version_column") or "")
     archive = bool(upload_paths) and upload_paths[0].suffix.lower() == ".zip"
     summary: dict[str, Any] = {}
+    review = bool(params.get("review"))
+    candidates = []
 
     try:
         if not upload_paths or not all(path.is_file() for path in upload_paths):
             raise IngestError("The uploaded file is no longer on the server.")
         with session_scope() as db:
+            from app.services.import_review import baseline, prepare
+
+            before = baseline(db, params.get("project_id") or None) if review else {}
             if archive:
                 outcome = ArchiveImport()
                 mode = str(params.get("mode") or "replace")
-                for index, (path, one) in enumerate(
-                    zip(upload_paths, filenames, strict=True)
-                ):
+                for index, (path, one) in enumerate(zip(upload_paths, filenames, strict=True)):
                     step = load_archive_as_datasets(
                         db,
                         archive_path=path,
@@ -504,27 +503,24 @@ def run_upload_import(self: Any, job_id: str) -> dict[str, Any]:
                         stamp=(version_column, labels[index]) if version_column else None,
                     )
                     outcome = merge_imports(outcome, step)
-                rebuilt = rebuild_dependents(db, outcome.replaced_ids)
+                rebuilt = [] if review else rebuild_dependents(db, outcome.replaced_ids)
                 db.flush()
                 warnings = list(outcome.warnings)
                 # A variable somebody derived is not in the export that just
                 # landed, so the project's own scripts are run again over it.
                 warnings.extend(
-                    rproject.run_on_import(
+                    []
+                    if review
+                    else rproject.run_on_import(
                         db, str(params.get("project_id") or "") or None, created_by
                     )
                 )
                 if rebuilt:
-                    names = [
-                        d.name for d in (db.get(Dataset, i) for i in rebuilt) if d
-                    ]
-                    warnings.append(
-                        "Rebuilt from the new data: " + ", ".join(sorted(names))
-                    )
+                    names = [d.name for d in (db.get(Dataset, i) for i in rebuilt) if d]
+                    warnings.append("Rebuilt from the new data: " + ", ".join(sorted(names)))
                 summary = {
                     "datasets": [
-                        {"id": d.id, "name": d.name, "rows": d.row_count}
-                        for d in outcome.datasets
+                        {"id": d.id, "name": d.name, "rows": d.row_count} for d in outcome.datasets
                     ],
                     "created": outcome.created,
                     "replaced": outcome.replaced,
@@ -532,11 +528,7 @@ def run_upload_import(self: Any, job_id: str) -> dict[str, Any]:
                     "skipped": outcome.skipped,
                     "warnings": sorted(
                         set(warnings)
-                        | {
-                            w
-                            for d in outcome.datasets
-                            for w in (d.meta or {}).get("warnings", [])
-                        }
+                        | {w for d in outcome.datasets for w in (d.meta or {}).get("warnings", [])}
                     ),
                     "rows": outcome.rows,
                 }
@@ -557,6 +549,20 @@ def run_upload_import(self: Any, job_id: str) -> dict[str, Any]:
                     "rows": dataset.row_count,
                     "columns": dataset.column_count,
                 }
+            if review:
+                candidates, changes = prepare(
+                    db, outcome.datasets if archive else [dataset], before
+                )
+                # A single-file upload allocated a pending row before queuing;
+                # retain its identity and expected version on acceptance.
+                summary = {
+                    "review": True,
+                    "job_id": job_id,
+                    "changes": changes,
+                    "datasets": [],
+                    "warnings": summary.get("warnings", []),
+                }
+                db.rollback()
     except (IngestError, OSError, MemoryError) as exc:
         logger.error("Upload import job %s failed: %s", job_id, exc)
         with session_scope() as db:
@@ -574,6 +580,8 @@ def run_upload_import(self: Any, job_id: str) -> dict[str, Any]:
     with session_scope() as db:
         job = db.get(Job, job_id)
         if job:
+            if review:
+                job.params = {**job.params, "candidates": candidates}
             job.status = JobStatus.success
             job.finished_at = utcnow()
             job.progress = 100.0
@@ -633,3 +641,63 @@ def prune_history() -> dict[str, int]:
 
     logger.info("Pruned old records: %s", removed)
     return removed
+
+
+@celery_app.task(name="app.workers.tasks.run_project_r", bind=True, max_retries=120)
+def run_project_r(self: Any, job_id: str) -> dict[str, Any]:
+    from dataclasses import asdict
+
+    from app.models import Project, ProjectScript, Role, User
+    from app.services.audit import record
+    from app.services.operation_lock import OperationBusy
+    from app.services.projects import can_edit
+
+    with session_scope() as db:
+        job = db.get(Job, job_id)
+        if job is None or job.status in (JobStatus.success, JobStatus.cancelled):
+            return {}
+        params, user_id = dict(job.params), job.created_by
+        job.status, job.started_at = JobStatus.running, utcnow()
+    try:
+        with session_scope() as db:
+            user = db.get(User, user_id)
+            project = db.get(Project, params["project_id"])
+            if (
+                not user
+                or not user.is_active
+                or not project
+                or not can_edit(db, user, project.id, Role.manager)
+            ):
+                raise ValueError("Project access is no longer available")
+            outcome = rproject.run(db, project, params["code"], created_by=user_id)
+            script = (
+                db.get(ProjectScript, params.get("script_id")) if params.get("script_id") else None
+            )
+            if script and script.project_id == project.id and script.code == params["code"]:
+                script.last_run_at, script.last_ok = utcnow(), True
+                script.last_output = outcome.output or outcome.message
+            record(
+                db,
+                user=user,
+                action="project.run_queued",
+                entity_type="project",
+                entity_id=project.id,
+                detail={"job_id": job_id, "code": params["code"]},
+            )
+            job = db.get(Job, job_id)
+            job.status, job.result = JobStatus.success, asdict(outcome)
+            job.finished_at, job.progress = utcnow(), 100
+            return job.result
+    except OperationBusy as exc:
+        if self.request.retries < self.max_retries:
+            with session_scope() as db:
+                db.get(Job, job_id).status = JobStatus.queued
+            raise self.retry(exc=exc, countdown=5) from exc
+        failure = str(exc)
+    except Exception as exc:
+        failure = str(exc)
+    with session_scope() as db:
+        job = db.get(Job, job_id)
+        job.status, job.error = JobStatus.failed, failure
+        job.finished_at, job.progress = utcnow(), 100
+    return {"error": failure}

@@ -9,6 +9,7 @@ import { useToast } from '@/hooks/useToast'
 import ChartCard from '@/components/ChartCard'
 import DataTable from '@/components/DataTable'
 import AssignProject from '@/components/AssignProject'
+import DatasetVersions from '@/components/DatasetVersions'
 import {
   Badge,
   Card,
@@ -164,6 +165,7 @@ export default function DatasetDetail() {
         </Card>
       )}
 
+      {can('manager') && <DatasetVersions datasetId={id} version={data.version} />}
       <Tabs<TabId>
         tabs={[
           { id: 'variables', label: 'Variables', count: variables.length },
