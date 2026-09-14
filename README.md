@@ -1,6 +1,6 @@
 <img src="frontend/public/logo.svg" width="56" alt="">
 
-# susoDash
+# surveyHq
 
 A self-hosted platform for monitoring survey/census data collection. Connect it to a
 Survey Solutions server or upload Stata, SPSS, CSV or Excel files, then
