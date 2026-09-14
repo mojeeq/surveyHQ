@@ -11,16 +11,21 @@ from fastapi import APIRouter, HTTPException, Query, Response
 from sqlalchemy import select
 
 from app.api.deps import DbSession, RequireAnalyst, get_ready_dataset
-from app.models import QualityResult, QualityRule
+from app.models import Dataset, QualityResult, QualityRule
 from app.services.audit import record
 from app.services.quality_failures import FailureRows, failed_records
+from app.services.query_engine import QueryError
 
 router = APIRouter()
 
 MAX_EXPORT_ROWS = 50_000
 
 
-def _rule(rule_id: str, db: DbSession, user: RequireAnalyst) -> tuple[QualityRule, Any]:
+def _rule(
+    rule_id: str,
+    db: DbSession,
+    user: RequireAnalyst,
+) -> tuple[QualityRule, Dataset]:
     rule = db.get(QualityRule, rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="Quality rule not found")
@@ -77,7 +82,7 @@ def quality_failures(
     rule, dataset = _rule(rule_id, db, user)
     try:
         rows = failed_records(dataset, rule, limit=limit, offset=offset)
-    except (ValueError, KeyError) as exc:
+    except (QueryError, ValueError, KeyError) as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return _payload(rows, offset)
 
@@ -91,7 +96,10 @@ def export_quality_failures(
 ) -> Response:
     """Download the records implicated by one quality rule."""
     rule, dataset = _rule(rule_id, db, user)
-    rows = failed_records(dataset, rule, limit=MAX_EXPORT_ROWS)
+    try:
+        rows = failed_records(dataset, rule, limit=MAX_EXPORT_ROWS)
+    except (QueryError, ValueError, KeyError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     frame = pd.DataFrame(rows.rows, columns=rows.columns)
     stem = _safe_filename(f"{dataset.name}_{rule.name}_failures")
 
@@ -151,7 +159,10 @@ def export_quality_workbook(
         ).all()
     )
     if not rules:
-        raise HTTPException(status_code=409, detail="This dataset has no quality rules to export")
+        raise HTTPException(
+            status_code=409,
+            detail="This dataset has no quality rules to export",
+        )
 
     buffer = io.BytesIO()
     summary_rows: list[dict[str, Any]] = []
@@ -166,13 +177,17 @@ def export_quality_workbook(
                 frame = pd.DataFrame(rows.rows, columns=rows.columns)
                 issue_rows = rows.total
                 truncated = rows.truncated
-            except Exception as exc:  # one broken rule should not lose the whole workbook
+            except Exception as exc:  # noqa: BLE001 - keep other rule sheets exportable
                 frame = pd.DataFrame({"error": [str(exc)]})
                 issue_rows = 0
                 truncated = False
                 error = str(exc)
 
-            frame.to_excel(writer, sheet_name=_safe_sheet(rule.name, used_sheets), index=False)
+            frame.to_excel(
+                writer,
+                sheet_name=_safe_sheet(rule.name, used_sheets),
+                index=False,
+            )
             summary_rows.append(
                 {
                     "rule": rule.name,
@@ -184,7 +199,7 @@ def export_quality_workbook(
                     "failure_rate": latest.failure_rate if latest else None,
                     "matching_issue_rows": issue_rows,
                     "export_truncated": truncated,
-                    "last_run": latest.run_at if latest else None,
+                    "last_run": latest.run_at.isoformat() if latest else None,
                     "message": latest.message if latest else "Not run yet",
                     "export_error": error,
                 }
