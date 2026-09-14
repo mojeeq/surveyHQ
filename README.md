@@ -317,6 +317,10 @@ in [docs/deployment.md](docs/deployment.md).
 
 ## Documentation
 
+Everything below is also served inside the platform, at **Help** in the sidebar.
+`scripts/build-help.mjs` renders `docs/` into the frontend bundle on every build,
+so the in-app help is the same text as this table and cannot drift from it.
+
 | Document | What it covers |
 |---|---|
 | [docs/deployment.md](docs/deployment.md) | Production install, TLS, backups, upgrades, troubleshooting |

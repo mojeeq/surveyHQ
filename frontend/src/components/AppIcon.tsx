@@ -27,6 +27,7 @@ export type AppIconName =
   | 'quality'
   | 'alerts'
   | 'admin'
+  | 'help'
 
 /**
  * The glyph inside each tile, on a 24x24 grid with the tile at 2..22.
@@ -130,6 +131,15 @@ function glyph(name: AppIconName, fill: string, shadow: string) {
         <g fill={fill}>
           <path d="M10.6 5.6h2.8l-.5 8.6h-1.8Z" />
           <circle cx="12" cy="17.3" r="1.75" />
+        </g>
+      )
+    case 'help':
+      // A question mark, drawn as a filled shape for the same reason as the
+      // rest: a stroked one goes grey at sidebar size.
+      return (
+        <g fill={fill}>
+          <path d="M12 4.6c-2.5 0-4.3 1.5-4.6 3.8h2.6c.2-1 .9-1.6 2-1.6 1.1 0 1.9.7 1.9 1.6 0 .8-.4 1.3-1.4 2-1.3.9-1.9 1.7-1.9 3.1v.6h2.5v-.4c0-.9.3-1.3 1.4-2.1 1.3-.9 2-1.8 2-3.2 0-2.2-1.9-3.8-4.5-3.8Z" />
+          <circle cx="12" cy="17.5" r="1.6" />
         </g>
       )
     case 'admin':

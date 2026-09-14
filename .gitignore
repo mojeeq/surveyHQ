@@ -49,3 +49,8 @@ frontend/tsconfig.tsbuildinfo
 
 frontend/playwright-report/
 frontend/test-results/
+
+# Built from docs/ by scripts/build-help.mjs on dev, build and lint.
+# Generated rather than committed so the in-app help cannot drift from
+# the documentation it is made of.
+frontend/src/help/content.generated.ts

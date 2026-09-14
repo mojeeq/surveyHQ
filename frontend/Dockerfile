@@ -1,12 +1,22 @@
 # ---- Build the static bundle ----
 FROM node:22-alpine AS build
 
-WORKDIR /app
+# The repository layout is kept inside the image rather than flattened, because
+# the build reaches above the frontend directory: `npm run build` renders the
+# documentation in docs/ into the in-app help through ../scripts/build-help.mjs,
+# and that relative path has to still be true here. The build context is the
+# repository root; see the web service in docker-compose.yml.
+WORKDIR /repo/frontend
 
-COPY package.json package-lock.json* ./
+COPY frontend/package.json frontend/package-lock.json* ./
 RUN npm ci --no-audit --no-fund
 
-COPY . .
+# Above the frontend, and copied before the application source so that editing
+# a component does not re-copy the documentation.
+COPY docs /repo/docs
+COPY scripts/build-help.mjs /repo/scripts/build-help.mjs
+
+COPY frontend/ ./
 RUN npm run build
 
 # ---- Serve it, and proxy the API ----
@@ -14,8 +24,8 @@ RUN npm run build
 FROM nginx:1.27.5-alpine
 
 RUN rm /etc/nginx/conf.d/default.conf
-COPY nginx.conf /etc/nginx/conf.d/surveyhq.conf
-COPY --from=build /app/dist /usr/share/nginx/html
+COPY frontend/nginx.conf /etc/nginx/conf.d/surveyhq.conf
+COPY --from=build /repo/frontend/dist /usr/share/nginx/html
 
 EXPOSE 80
 

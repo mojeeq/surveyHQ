@@ -8,7 +8,9 @@
 **/.ruff_cache
 data
 storage
-docs
+# docs/ is NOT ignored: it is the source of the in-app help, which
+# scripts/build-help.mjs renders into the frontend bundle during the image
+# build. Ignoring it here fails that build rather than shrinking it.
 *.md
 !README.md
 .env
