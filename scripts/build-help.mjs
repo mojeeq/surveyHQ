@@ -30,10 +30,13 @@ const OUT = join(ROOT, "frontend", "src", "help", "content.generated.ts");
 /**
  * What the Help page offers, in the order it offers it.
  *
- * `audience: "admin"` keeps a document out of the list for everyone else. That
- * is tidiness rather than secrecy - there is nothing secret in them - but a
+ * Every document, to everybody. The deployment and architecture notes were at
+ * one point kept back from all but an administrator, on the grounds that a
  * viewer looking for how to read a dashboard should not have to walk past TLS
- * certificates and Postgres tuning to find it.
+ * certificates to find it. That was solving the wrong problem: none of it is
+ * secret, all of it is in the public repository, and an analyst who wants to
+ * know how the platform stores a dataset should be able to read how. Putting
+ * the everyday documents first is what the ordering is for.
  */
 const MANIFEST = [
   {
@@ -41,7 +44,6 @@ const MANIFEST = [
     file: "user-guide.md",
     title: "User guide",
     summary: "Projects, importing data, analysing, dashboards and monitoring.",
-    audience: "everyone",
   },
   {
     id: "gis",
@@ -49,35 +51,30 @@ const MANIFEST = [
     title: "Boundaries and maps",
     summary:
       "The enumeration-area frame, and checking a record was collected where it says.",
-    audience: "everyone",
   },
   {
     id: "survey-solutions",
     file: "survey-solutions.md",
     title: "Survey Solutions",
     summary: "Connecting a server, importing, scheduling, and the errors it gives.",
-    audience: "everyone",
   },
   {
     id: "api",
     file: "api.md",
     title: "API reference",
     summary: "Every endpoint, with examples, for scripting against the platform.",
-    audience: "everyone",
   },
   {
     id: "deployment",
     file: "deployment.md",
     title: "Deployment",
     summary: "Installing, TLS, backups, upgrades and troubleshooting the server.",
-    audience: "admin",
   },
   {
     id: "architecture",
     file: "architecture.md",
     title: "How it works",
     summary: "The pieces the platform is built from, and why they were chosen.",
-    audience: "admin",
   },
 ];
 
@@ -349,7 +346,6 @@ for (const entry of MANIFEST) {
     id: entry.id,
     title: entry.title,
     summary: entry.summary,
-    audience: entry.audience,
     source: entry.file,
     html,
     headings,
@@ -379,7 +375,6 @@ export interface HelpDocument {
   id: string
   title: string
   summary: string
-  audience: 'everyone' | 'admin'
   source: string
   html: string
   headings: HelpHeading[]

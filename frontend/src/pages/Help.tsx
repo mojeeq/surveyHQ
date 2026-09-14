@@ -12,7 +12,6 @@
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useParams } from 'react-router-dom'
-import { useAuth } from '@/hooks/useAuth'
 import { PageHeader } from '@/components/ui'
 import { HELP_DOCUMENTS, type HelpDocument } from '@/help/content.generated'
 import '@/help/help.css'
@@ -55,17 +54,12 @@ export default function Help() {
   const { docId } = useParams()
   const navigate = useNavigate()
   const location = useLocation()
-  const { can } = useAuth()
   const [query, setQuery] = useState('')
   const body = useRef<HTMLDivElement>(null)
 
-  // Server documents are listed for administrators only. Not secrecy - there
-  // is nothing secret in them - but somebody looking for how to read a
-  // dashboard should not walk past TLS and Postgres tuning to find it.
-  const documents = useMemo(
-    () => HELP_DOCUMENTS.filter((doc) => doc.audience !== 'admin' || can('admin')),
-    [can],
-  )
+  // Every document, to every reader. Ordering does the work that hiding was
+  // doing: the everyday guides come first.
+  const documents = HELP_DOCUMENTS
 
   const current = documents.find((doc) => doc.id === docId) ?? documents[0]
   const term = query.trim().toLowerCase()
