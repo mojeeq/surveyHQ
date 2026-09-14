@@ -10,7 +10,8 @@ COPY . .
 RUN npm run build
 
 # ---- Serve it, and proxy the API ----
-FROM nginx:1.27-alpine
+# Dynamic upstream DNS requires nginx 1.27.3 or newer.
+FROM nginx:1.27.5-alpine
 
 RUN rm /etc/nginx/conf.d/default.conf
 COPY nginx.conf /etc/nginx/conf.d/surveyhq.conf
