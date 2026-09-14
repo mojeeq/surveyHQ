@@ -712,6 +712,9 @@ widget.
 
 ### Boundaries
 
+> The GIS component has a manual of its own: [The GIS component](gis-manual.md)
+> covers preparing the file, the area check, limits and troubleshooting in full.
+
 **Datasets → Boundaries → Add boundaries** takes the frame fieldwork is
 organised into - enumeration areas, districts, villages - as GeoJSON, a
 GeoPackage (`.gpkg`), or a shapefile zipped together with its `.dbf` and
