@@ -13,7 +13,7 @@ test("upload, review, chart, dashboard and anonymous sharing", async ({
   await page
     .getByLabel("Password", { exact: true })
     .fill(process.env.E2E_PASSWORD || "ci-password-67890");
-  await page.locator('button[type="submit"]').click();
+  await page.locator("form").getByRole("button", { name: "Sign in", exact: true }).click();
   await expect(page).not.toHaveURL(/login/);
   await page.goto("/datasets");
   await page.getByRole("button", { name: "Upload data", exact: true }).click();
