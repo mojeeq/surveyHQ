@@ -247,3 +247,42 @@ def test_database_rollback_never_changes_the_active_file(client, auth_headers, t
         assert dataset.storage_path == committed_path
         assert dataset.row_count == 2
         assert not (dataset.meta or {}).get("retained_versions")
+
+
+def test_review_refuses_dataset_moved_to_another_project(client, auth_headers, monkeypatch):
+    first_project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Before move"}
+    ).json()["id"]
+    second_project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "After move"}
+    ).json()["id"]
+    first, _ = review(client, auth_headers, monkeypatch, first_project, "id,value\n1,10\n")
+    ident = client.post(f"/api/v1/datasets/reviews/{first}/accept", headers=auth_headers).json()[
+        "datasets"
+    ][0]["id"]
+    staged, _ = review(client, auth_headers, monkeypatch, first_project, "id,value\n2,20\n")
+    with SessionLocal() as db:
+        db.get(Dataset, ident).project_id = second_project
+        db.commit()
+    response = client.post(f"/api/v1/datasets/reviews/{staged}/accept", headers=auth_headers)
+    assert response.status_code == 409
+
+
+def test_migration_enum_column_has_no_stale_create_type_listener():
+    import sqlalchemy as sa
+    from sqlalchemy.dialects.postgresql import ENUM
+
+    from app.db.legacy_migration import enum_column
+
+    statements = []
+    engine = sa.create_mock_engine(
+        "postgresql://",
+        lambda sql, *args, **kwargs: statements.append(str(sql.compile(dialect=engine.dialect))),
+    )
+    old = sa.Column("role", sa.Enum("viewer", "admin", name="test_role"), nullable=False)
+    column = enum_column(old, ENUM("viewer", "admin", name="test_role", create_type=False))
+    table = sa.Table("example", sa.MetaData(), column)
+    table.create(engine, checkfirst=False)
+    assert len(statements) == 1
+    assert "CREATE TABLE" in statements[0]
+    assert not any("CREATE TYPE" in sql for sql in statements)

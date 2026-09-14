@@ -11,7 +11,8 @@ from sqlalchemy.dialects.postgresql import ENUM
 
 def adopt_table(name, *elements, **kwargs):
     bind = op.get_bind()
-    for column in elements:
+    elements = list(elements)
+    for index, column in enumerate(elements):
         if not isinstance(column, sa.Column) or not isinstance(column.type, sa.Enum):
             continue
         if bind.dialect.name == "postgresql":
@@ -25,7 +26,10 @@ def adopt_table(name, *elements, **kwargs):
                             f'ALTER TYPE "{kind.name}" ADD VALUE IF NOT EXISTS :value'
                         ).bindparams(value=label)
                     )
-            column.type = kind
+            # The original generic Enum registered table-creation listeners
+            # when Column was constructed. Replacing .type leaves those listeners
+            # behind, so use a fresh Column attached only to create_type=False.
+            elements[index] = enum_column(column, kind)
     inspector = sa.inspect(bind)
     if name not in inspector.get_table_names():
         op.create_table(name, *elements, **kwargs)
@@ -75,3 +79,14 @@ def adopt_index(name, table, columns, **kwargs):
     }
     if name not in names:
         op.create_index(name, table, columns, **kwargs)
+
+
+def enum_column(column, kind):
+    return sa.Column(
+        column.name,
+        kind,
+        nullable=column.nullable,
+        server_default=column.server_default,
+        primary_key=column.primary_key,
+        comment=column.comment,
+    )

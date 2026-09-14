@@ -63,6 +63,7 @@ def prepare(db, datasets, before):
             {
                 "id": dataset.id,
                 "expected_version": old.get("version"),
+                "expected_variables": old.get("variables", []),
                 "snapshot": snapshot,
                 "name": dataset.name,
                 "description": dataset.description,
@@ -90,12 +91,22 @@ def accept(db, job, user):
             raise IngestError("Project access is no longer available")
         target = db.scalar(select(Dataset).where(Dataset.id == item["id"]).with_for_update())
         if item["expected_version"] is not None:
-            if target is None or target.version != item["expected_version"]:
+            if (
+                target is None
+                or target.version != item["expected_version"]
+                or target.project_id != item["project_id"]
+                or describe(target)["variables"] != item["expected_variables"]
+            ):
                 raise IngestError(
                     "Data changed after this review. Upload again to review the current changes."
                 )
-        elif target is not None:
-            raise IngestError("A dataset was created after this review. Upload again.")
+        else:
+            from app.services.datasets import ARCHIVE_MEMBER_KEY, find_archive_sibling
+
+            key = item["meta"].get(ARCHIVE_MEMBER_KEY)
+            sibling = find_archive_sibling(db, key, item["project_id"]) if key else None
+            if target is not None or sibling is not None:
+                raise IngestError("A dataset was created after this review. Upload again.")
         targets.append(target)
     published = []
     for item, target in zip(candidates, targets, strict=True):
