@@ -369,11 +369,24 @@ function BandFields({
 
 export default function AppearanceModal({
   dashboardId,
+  name,
+  description,
   appearance,
   widgets,
   onClose,
 }: {
   dashboardId: string
+  /**
+   * The dashboard's own name and subtitle.
+   *
+   * They are here because this is the dialog the title itself opens, and a
+   * dialog you reach by clicking a title should let you change that title.
+   * Without them it offered the title's size, font and colour and no way to
+   * write it, so a dashboard could be named once, when it was created, and
+   * never again - the API has always accepted the change.
+   */
+  name: string
+  description: string
   appearance: Appearance
   /** Every widget, so a change of column count can carry them with it. */
   widgets: Widget[]
@@ -383,6 +396,8 @@ export default function AppearanceModal({
   const queryClient = useQueryClient()
   const fileInput = useRef<HTMLInputElement>(null)
   const logoInput = useRef<HTMLInputElement>(null)
+  const [title, setTitle] = useState(name)
+  const [subtitle, setSubtitle] = useState(description)
   const [draft, setDraft] = useState<Appearance>({
     background_fit: 'cover',
     fade: 0,
@@ -395,20 +410,30 @@ export default function AppearanceModal({
 
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ['dashboard', dashboardId] })
+    // The listing carries the name as well, and a rename that shows on the
+    // board but not in the list it was renamed from reads as a failed save.
+    queryClient.invalidateQueries({ queryKey: ['dashboards'] })
   }
 
   const save = useMutation({
     mutationFn: (next: Appearance) => {
+      // Sent only when they actually changed, so saving a colour does not
+      // rewrite the name with itself in the audit log.
+      const named: { name?: string; description?: string } = {}
+      if (title.trim() !== name) named.name = title.trim()
+      if (subtitle !== description) named.description = subtitle
+
       const before = Number(appearance.columns) || 12
       const after = Number(next.columns) || 12
       if (before === after) {
-        return api.patch(`/dashboards/${dashboardId}`, { appearance: next })
+        return api.patch(`/dashboards/${dashboardId}`, { ...named, appearance: next })
       }
       // Widget positions are in columns, not pixels, so changing the count
       // without moving them would halve every widget on the way to 24 and
       // overflow every one on the way back. Scaled, they stay where they look.
       const scale = after / before
       return api.patch(`/dashboards/${dashboardId}`, {
+        ...named,
         appearance: next,
         widgets: widgets.map((widget) => {
           const layout = widget.layout ?? {}
@@ -506,19 +531,52 @@ export default function AppearanceModal({
     <Modal
       open
       onClose={onClose}
-      title="Dashboard appearance"
+      title="Dashboard title and appearance"
       footer={
         <>
           <button className="btn-secondary" onClick={onClose}>
             Cancel
           </button>
-          <button className="btn-primary" onClick={() => save.mutate(draft)}>
-            Save
+          <button
+            className="btn-primary"
+            // A dashboard with no name cannot be found again in a list of
+            // dashboards, so an empty one is refused rather than saved.
+            disabled={!title.trim() || save.isPending}
+            onClick={() => save.mutate(draft)}
+          >
+            {save.isPending ? 'Saving…' : 'Save'}
           </button>
         </>
       }
     >
       <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-ink-500">
+        Title
+      </p>
+
+      <Field label="Dashboard name" hint="What it is called here and in every listing.">
+        <input
+          className="input"
+          value={title}
+          maxLength={200}
+          onChange={(event) => setTitle(event.target.value)}
+          placeholder="Vanuatu Labour Force Survey"
+        />
+      </Field>
+
+      <Field
+        label="Subtitle"
+        hint="Optional, shown under the name. Hidden by the switch further down."
+      >
+        <input
+          className="input"
+          value={subtitle}
+          maxLength={500}
+          onChange={(event) => setSubtitle(event.target.value)}
+          placeholder="Round 1 fieldwork, February 2026"
+        />
+      </Field>
+
+      <p className="mb-3 mt-6 text-xs font-semibold uppercase tracking-wide text-ink-500">
         Ready-made looks
       </p>
 
