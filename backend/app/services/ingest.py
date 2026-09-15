@@ -88,7 +88,9 @@ GEOPOINT_MIN_SHARE = 0.9
 # coordinate on paper and nonsense on a map.
 GEOPOINT_MIN_DECIMALS = 4
 
-_NUM = r"[-+]?\d+(?:\.\d+)?"
+# The exponent is here because an exporter serialising a float in full writes
+# one: POINT(1.683273e2 -1.77333e1) is a location like any other.
+_NUM = r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?"
 # One separator between the numbers, not merely a gap somewhere: without that,
 # any text holding two numbers reads as a location. "10.0.0.1" is the one that
 # matters, because a column of addresses would otherwise take over the map.
@@ -98,9 +100,17 @@ _SEP = r"(?:\s*[,;]\s*|\s+)"
 _BARE_PAIR = re.compile(rf"^({_NUM}){_SEP}({_NUM})(?:{_SEP}{_NUM}){{0,2}}$")
 _WKT_POINT = re.compile(r"^point\s*z?\s*m?\s*\(([^)]*)\)$", re.IGNORECASE)
 _DECIMALS = re.compile(r"\d+\.(\d+)")
+_EXPONENT = re.compile(r"\d[eE][-+]?\d")
 
 
 def _in_range(latitude: float, longitude: float) -> tuple[float, float] | None:
+    # A NaN fails every comparison rather than failing the range check, so it
+    # has to be ruled out on its own. JSON carries one in two ways - a bare NaN,
+    # which Python's decoder accepts, and the string "NaN" - and either would
+    # otherwise count as a reading that parsed, which is evidence for splitting
+    # a column that holds no coordinates at all.
+    if not math.isfinite(latitude) or not math.isfinite(longitude):
+        return None
     if abs(latitude) > 90 or abs(longitude) > 180:
         return None
     return latitude, longitude
@@ -163,6 +173,11 @@ def _reads_like_a_reading(text: str) -> bool:
     separates a location from a pair of measurements is precision.
     """
     if text.startswith("{") or _WKT_POINT.match(text):
+        return True
+    # Scientific notation is a machine writing a float out in full, which is the
+    # same evidence the decimal places below are there to look for. Nobody
+    # writes a height down that way.
+    if _EXPONENT.search(text):
         return True
     return max((len(found) for found in _DECIMALS.findall(text)), default=0) >= (
         GEOPOINT_MIN_DECIMALS

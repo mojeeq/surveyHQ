@@ -210,7 +210,8 @@ Four things worth knowing:
   less than any handheld gives. That is what separates a reading from a pair of
   measurements - a height and a weight are a legal coordinate on paper and
   nonsense on a map. WKT and GeoJSON are notations nothing else is written in,
-  so they need no such evidence.
+  and scientific notation is a machine writing a float out in full
+  (`1.683273e2`), so neither needs that evidence.
 - **A later round lands in the same columns.** Appending a file onto a dataset
   that already holds split coordinates produces them for the new rows too, even
   when that round is too small or too sparse to have been recognised on its

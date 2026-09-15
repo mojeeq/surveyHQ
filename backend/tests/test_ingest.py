@@ -414,3 +414,50 @@ def test_unreadable_values_at_the_top_of_a_column_do_not_hide_it(tmp_path):
     assert "gps__latitude" in by_name
     # The three that could not be read have no coordinates, not a zero pair.
     assert by_name["gps__latitude"].n_missing == 3
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        # Python's JSON decoder accepts a bare NaN, and a NaN fails every
+        # comparison rather than failing the range check.
+        '{"type": "Point", "coordinates": [NaN, 1.0]}',
+        '{"type": "Point", "coordinates": ["NaN", 1.0]}',
+        '{"type": "Point", "coordinates": [1.0, NaN]}',
+        '{"type": "Point", "coordinates": [Infinity, 1.0]}',
+    ],
+)
+def test_a_coordinate_that_is_not_a_number_is_not_a_location(value):
+    """It would otherwise count as a value that parsed, which is evidence."""
+    from app.services.ingest import parse_geopoint
+
+    assert parse_geopoint(value) is None
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("POINT(1.683273e2 -1.77333e1)", (-17.7333, 168.3273)),
+        ("-1.77333e1 1.683273e2", (-17.7333, 168.3273)),
+        ("-17.7333 1.683273e2", (-17.7333, 168.3273)),
+    ],
+)
+def test_a_float_written_out_in_full_is_still_a_location(value, expected):
+    """An exporter serialising a double writes an exponent, not a decimal."""
+    from app.services.ingest import parse_geopoint
+
+    parsed = parse_geopoint(value)
+    assert parsed is not None
+    assert parsed[0] == pytest.approx(expected[0])
+    assert parsed[1] == pytest.approx(expected[1])
+
+
+def test_a_column_written_in_scientific_notation_is_split(tmp_path):
+    from app.services.ingest import ingest_frame
+
+    frame = pd.DataFrame(
+        {"gps": [f"-1.7733{n}e1 1.68327{n}e2" for n in range(1, 8)]}
+    )
+    result = ingest_frame(frame, {}, {}, tmp_path / "out")
+    names = [v.name for v in result.variables]
+    assert "gps__latitude" in names and "gps__longitude" in names
