@@ -1,6 +1,6 @@
 # Deployment
 
-Production notes for running susoDash on an Ubuntu server.
+Production notes for running SurveyHQ on an Ubuntu server.
 
 ## Requirements
 
@@ -233,7 +233,7 @@ needs an API token for wherever your DNS is hosted. Caddy is the least work:
     acme_dns cloudflare {env.CLOUDFLARE_API_TOKEN}
 }
 
-susodash.example.org, *.dash.example.org {
+surveyhq.example.org, *.dash.example.org {
     reverse_proxy localhost:8080
     request_body {
         max_size 2GB
@@ -241,7 +241,7 @@ susodash.example.org, *.dash.example.org {
 }
 ```
 
-Both names go to the same place. susoDash decides from the `Host` header
+Both names go to the same place. SurveyHQ decides from the `Host` header
 whether a request is the platform or one of its published dashboards, so no
 per-dashboard configuration is ever needed. If you use nginx instead, the same
 applies: keep `server_name` covering `*.dash.example.org`, pass `Host` through

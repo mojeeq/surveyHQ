@@ -545,7 +545,7 @@ makes a number that size a map rather than a freeze.
 
 ## The look of it
 
-The interface is **susoDash**: its own mark - a point becoming a distribution,
+The interface is **SurveyHQ**: its own mark - a point becoming a distribution,
 which is what the platform does to an export - on a palette that follows
 Redash's own theme values - `#2196f3` primary, `#edecec`
 page, `#e8e8e8` borders, `#595959` text on `#333` headings, 13px system font,

@@ -137,7 +137,7 @@ class SurveySolutionsClient:
             verify=verify_ssl,
             timeout=timeout or DEFAULT_TIMEOUT,
             follow_redirects=True,
-            headers={"Accept": "application/json", "User-Agent": "susoDash/1.0"},
+            headers={"Accept": "application/json", "User-Agent": "SurveyHQ/1.0"},
             # Checked per request rather than once on base_url, because
             # follow_redirects is on: a server that answered with a redirect to
             # 169.254.169.254 would otherwise be followed there with the
@@ -373,7 +373,7 @@ class SurveySolutionsClient:
             verify=self.verify_ssl,
             timeout=self._client.timeout,
             follow_redirects=True,
-            headers={"Accept": "*/*", "User-Agent": "susoDash/1.0"},
+            headers={"Accept": "*/*", "User-Agent": "SurveyHQ/1.0"},
             event_hooks={"request": [_refuse_unsafe_address]},
         ) as anonymous:
             return anonymous.get(url)

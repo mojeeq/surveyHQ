@@ -16,7 +16,7 @@ from app.services.hostnames import HostnameError, base_domain, label_of, normali
 @pytest.fixture(autouse=True)
 def configured(monkeypatch):
     monkeypatch.setattr(settings, "dashboard_domain", "dash.example.org")
-    monkeypatch.setattr(settings, "public_url", "https://susodash.example.org")
+    monkeypatch.setattr(settings, "public_url", "https://surveyhq.example.org")
 
 
 @pytest.mark.parametrize(

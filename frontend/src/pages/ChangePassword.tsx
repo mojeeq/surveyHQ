@@ -52,9 +52,7 @@ export default function ChangePassword() {
       <div className="w-full max-w-md">
         <div className="mb-6 flex items-center gap-2">
           <img src="/logo.svg" alt="" className="h-9 w-9" />
-          <span className="text-lg font-semibold text-ink-900">
-            suso<span className="font-normal text-ink-500">Dash</span>
-          </span>
+          <span className="text-lg font-semibold text-ink-900">SurveyHQ</span>
         </div>
 
         <form onSubmit={submit} className="card p-6">

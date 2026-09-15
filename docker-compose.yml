@@ -12,7 +12,7 @@ name: surveyhq
 
 x-backend-env: &backend-env
   ENVIRONMENT: ${ENVIRONMENT:-production}
-  PROJECT_NAME: ${PROJECT_NAME:-susoDash}
+  PROJECT_NAME: ${PROJECT_NAME:-SurveyHQ}
   PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
   DASHBOARD_DOMAIN: ${DASHBOARD_DOMAIN:-}
   LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -59,7 +59,7 @@ x-backend-env: &backend-env
   SMTP_USER: ${SMTP_USER:-}
   SMTP_PASSWORD: ${SMTP_PASSWORD:-}
   SMTP_TLS: ${SMTP_TLS:-true}
-  SMTP_FROM: ${SMTP_FROM:-susoDash <no-reply@example.org>}
+  SMTP_FROM: ${SMTP_FROM:-SurveyHQ <no-reply@example.org>}
   SYNC_TICK_MINUTES: ${SYNC_TICK_MINUTES:-5}
   MONITOR_TICK_MINUTES: ${MONITOR_TICK_MINUTES:-15}
   # Columnar analytics tuning. DUCKDB_THREADS=0 chooses a conservative value

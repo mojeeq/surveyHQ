@@ -7,7 +7,7 @@ Survey Solutions server or upload Stata, SPSS, CSV or Excel files, then
 tabulate, chart, and watch field work through dashboards, indicators, alerts and
 automated quality checks.
 
-susoDash serves as a functional prototype, illustrating the mechanics of real-time automated monitoring using a robust data pipeline model.
+SurveyHQ serves as a functional prototype, illustrating the mechanics of real-time automated monitoring using a robust data pipeline model.
 
 Built for a survey that is still in the field: a new export replaces the data
 in place, so relationships, charts, indicators, quality rules and dashboards
@@ -224,7 +224,7 @@ make help              # everything else
 
 1. On your Survey Solutions server, create an **API user** and give it access to
    the workspace holding your survey.
-2. In susoDash go to **Connections → Add connection** and enter the server URL
+2. In SurveyHQ go to **Connections → Add connection** and enter the server URL
    (the site root, e.g. `https://demo.mysurvey.solutions`), the workspace name
    (usually `primary`), and the API user's credentials. Pick the project the
    imports should land in.
