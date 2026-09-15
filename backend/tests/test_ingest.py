@@ -180,3 +180,160 @@ def test_a_gps_column_is_found_and_a_date_is_not_mistaken_for_one():
     )
     assert detected["latitude"] == "GPS_4__Latitude"
     assert detected["longitude"] == "GPS_4__Longitude"
+
+
+# --- a GPS question that arrived as one column ------------------------------
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        # ODK Central: latitude, longitude, altitude, accuracy in one field.
+        ("-17.7333 168.3273 42.0 5.0", (-17.7333, 168.3273)),
+        ("-17.7333 168.3273", (-17.7333, 168.3273)),
+        ("-17.7333,168.3273", (-17.7333, 168.3273)),
+        ("-17.7333, 168.3273", (-17.7333, 168.3273)),
+        ("  -17.7333;168.3273  ", (-17.7333, 168.3273)),
+        # WKT and GeoJSON are longitude first by specification.
+        ("POINT(168.3273 -17.7333)", (-17.7333, 168.3273)),
+        ("POINT Z (168.3273 -17.7333 42.0)", (-17.7333, 168.3273)),
+        ('{"type": "Point", "coordinates": [168.3273, -17.7333]}', (-17.7333, 168.3273)),
+        # A bare pair written longitude first: 168 cannot be a latitude.
+        ("168.3273 -17.7333", (-17.7333, 168.3273)),
+    ],
+)
+def test_one_field_holding_both_coordinates_is_read(value, expected):
+    from app.services.ingest import parse_geopoint
+
+    parsed = parse_geopoint(value)
+    assert parsed is not None
+    assert parsed[0] == pytest.approx(expected[0])
+    assert parsed[1] == pytest.approx(expected[1])
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        None,
+        "",
+        "   ",
+        "not a location",
+        "-17.7333",                     # one number is not a point
+        "-117.7333 268.3273",           # neither can be a latitude
+        "91.5 190.2",                   # out of range both ways
+        '{"type": "LineString", "coordinates": [[1.0, 2.0], [3.0, 4.0]]}',
+        "{not json",
+    ],
+)
+def test_what_is_not_a_location_is_not_read_as_one(value):
+    from app.services.ingest import parse_geopoint
+
+    assert parse_geopoint(value) is None
+
+
+def test_a_combined_gps_column_becomes_two_numeric_columns(tmp_path):
+    """The map offers numeric variables, so text holding a point is unreachable."""
+    from app.services.ingest import detect_monitoring_fields, ingest_frame
+
+    frame = pd.DataFrame(
+        {
+            "interview__key": [f"K{i}" for i in range(6)],
+            "gps": [
+                "-17.7333 168.3273 42.0 5.0",
+                "-17.7401 168.3150 38.5 4.0",
+                "-17.7288 168.3402 51.2 6.0",
+                "-17.7355 168.3199 44.1 5.5",
+                None,
+                "-17.7290 168.3311 40.0 4.5",
+            ],
+        }
+    )
+    result = ingest_frame(frame, {"gps": "Location of dwelling"}, {}, tmp_path / "out")
+
+    by_name = {v.name: v for v in result.variables}
+    assert by_name["gps__latitude"].var_type == "numeric"
+    assert by_name["gps__longitude"].var_type == "numeric"
+    # The original column is kept: it is still what the enumerator recorded.
+    assert "gps" in by_name
+    # A row without a reading has no coordinates rather than a zero pair, so
+    # the missing-GPS check counts it and the map does not plot the Atlantic.
+    assert by_name["gps__latitude"].n_missing == 1
+
+    stored = pd.read_parquet(result.parquet_path)
+    assert stored["gps__latitude"].iloc[0] == pytest.approx(-17.7333)
+    assert stored["gps__longitude"].iloc[0] == pytest.approx(168.3273)
+
+    # Named so the platform finds them without anybody configuring a thing.
+    detected = detect_monitoring_fields(result.variables)
+    assert detected["latitude"] == "gps__latitude"
+    assert detected["longitude"] == "gps__longitude"
+
+    assert any("gps__latitude" in w for w in result.warnings)
+
+
+def test_a_column_of_whole_number_pairs_is_left_alone(tmp_path):
+    """A score and a rank are a valid coordinate on paper and nonsense on a map."""
+    from app.services.ingest import ingest_frame
+
+    frame = pd.DataFrame(
+        {
+            "ranking": ["3 7", "1 4", "5 2", "8 1", "2 9", "6 3"],
+        }
+    )
+    result = ingest_frame(frame, {}, {}, tmp_path / "out")
+    assert [v.name for v in result.variables] == ["ranking"]
+
+
+def test_a_mostly_unparseable_column_is_left_alone(tmp_path):
+    """A column where a third of the values look like points is something else."""
+    from app.services.ingest import ingest_frame
+
+    frame = pd.DataFrame(
+        {
+            "notes": [
+                "-17.7333 168.3273",
+                "-17.7401 168.3150",
+                "respondent not at home",
+                "call back on Tuesday",
+                "refused",
+                "moved to another village",
+            ],
+        }
+    )
+    result = ingest_frame(frame, {}, {}, tmp_path / "out")
+    assert [v.name for v in result.variables] == ["notes"]
+
+
+def test_separate_coordinate_columns_are_not_disturbed(tmp_path):
+    """A Survey Solutions export already has two columns and needs no splitting."""
+    from app.services.ingest import ingest_frame
+
+    frame = pd.DataFrame(
+        {
+            "GPS__Latitude": [-17.7333, -17.7401, -17.7288],
+            "GPS__Longitude": [168.3273, 168.3150, 168.3402],
+        }
+    )
+    result = ingest_frame(frame, {}, {}, tmp_path / "out")
+    assert [v.name for v in result.variables] == ["GPS__Latitude", "GPS__Longitude"]
+    assert result.warnings == []
+
+
+def test_a_chunked_read_splits_every_chunk_the_same_way():
+    """A column split in one chunk and not the next gives the file two schemas.
+
+    The streaming reader decides off the first chunk, so a later chunk in which
+    nothing parses still has to come out with the same columns.
+    """
+    from app.services.ingest import add_geopoint_columns, geopoint_columns
+
+    first = pd.DataFrame(
+        {"gps": [f"-17.73{n} 168.32{n} 42.0 5.0" for n in range(30, 36)]}
+    )
+    columns = geopoint_columns(first)
+    assert columns == ["gps"]
+
+    later = pd.DataFrame({"gps": [None, "no fix", None, "no fix", None, None]})
+    add_geopoint_columns(later, columns, {})
+    assert list(later.columns) == ["gps", "gps__latitude", "gps__longitude"]
+    assert later["gps__latitude"].isna().all()

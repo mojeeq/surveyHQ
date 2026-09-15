@@ -42,6 +42,38 @@ import {
 } from "@/components/dashboard/shared";
 import { Field, Loading, Modal } from "@/components/ui";
 
+/** Whether this dataset looks like it has a GPS reading the map cannot offer.
+ *
+ * The Latitude and Longitude lists hold numeric variables only. A reading that
+ * arrived as one column of text - "lat lon altitude accuracy" out of ODK, say -
+ * is therefore in the dataset and not in the list, which reads as the platform
+ * having lost it. Import splits such a column now, so the answer is to import
+ * the file again; this says so where the empty list is.
+ */
+function looksLikeAnUnsplitGps(
+  variables: { name: string; var_type: string }[],
+): boolean {
+  const words = (name: string) => name.toLowerCase().split(/[^a-z0-9]+/);
+  const hasCoordinate = variables.some(
+    (v) =>
+      v.var_type === "numeric" &&
+      words(v.name).some((w) => w === "latitude" || w === "lat"),
+  );
+  if (hasCoordinate) return false;
+  return variables.some(
+    (v) =>
+      v.var_type !== "numeric" &&
+      words(v.name).some((w) =>
+        ["gps", "geopoint", "gpspoint", "location", "coordinates", "latlon"].includes(w),
+      ),
+  );
+}
+
+const UNSPLIT_GPS_HINT =
+  "No numeric coordinate in this dataset. If the reading is one column of " +
+  "text, like \"-17.7333 168.3273 42.0 5.0\", import the file again: it is " +
+  "then split into __latitude and __longitude columns that appear here.";
+
 export function AddWidgetModal({
   dashboardId,
   projectId,
@@ -411,6 +443,12 @@ export function AddWidgetModal({
                   </select>
                 </Field>
               </div>
+
+              {looksLikeAnUnsplitGps(chosenDataset.data.variables ?? []) && (
+                <p className="-mt-2 mb-3 text-xs text-slate-500">
+                  {UNSPLIT_GPS_HINT}
+                </p>
+              )}
 
               <Field
                 label="What each pin counts"
@@ -1167,6 +1205,11 @@ export function EditWidgetModal({
               </select>
             </Field>
           </div>
+          {looksLikeAnUnsplitGps(mapDataset.data?.variables ?? []) && (
+            <p className="-mt-2 mb-3 text-xs text-slate-500">
+              {UNSPLIT_GPS_HINT}
+            </p>
+          )}
           <Field label="What each pin counts">
             <div className="flex gap-2">
               <select
