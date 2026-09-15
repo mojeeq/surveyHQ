@@ -159,10 +159,12 @@ say what happens next:
 `-17.7333,168.3273`, and a database extract can hold WKT or GeoJSON. All of
 those arrive as text, which a map cannot use, so a column named `gps` gains
 `gps__latitude` and `gps__longitude` beside it as numbers. The original stays as
-it was, and the import notes say which columns were split. A dataset imported
-before this existed gains the columns the next time the file is read. The
-details, including how the order is worked out, are in
-[the GIS manual](gis-manual.md#4-putting-a-map-on-a-dashboard).
+it was, and the import notes say which columns were split. Appending a later
+round produces the same columns for the new rows, so the newest fieldwork is
+never the part the map leaves out. A dataset imported before this existed gains
+the columns the next time the file is read. The details, including how the
+order is worked out and what stops an ordinary pair of numbers being taken for
+a location, are in [the GIS manual](gis-manual.md#4-putting-a-map-on-a-dashboard).
 
 ### A questionnaire that changed mid-fieldwork
 

@@ -337,3 +337,127 @@ def test_a_chunked_read_splits_every_chunk_the_same_way():
     add_geopoint_columns(later, columns, {})
     assert list(later.columns) == ["gps", "gps__latitude", "gps__longitude"]
     assert later["gps__latitude"].isna().all()
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        # Two numbers in a string is not a location. A column of addresses
+        # would otherwise be picked as the dataset's coordinates.
+        "10.0.0.1",
+        "192.168.1.1",
+        "version 1.5 of 2.3",
+        "-17.7333 / 168.3273",
+        "lat -17.7333 lon 168.3273",
+        # More numbers than a reading has.
+        "1.1 2.2 3.3 4.4 5.5",
+    ],
+)
+def test_text_that_merely_contains_two_numbers_is_not_a_location(value):
+    from app.services.ingest import parse_geopoint
+
+    assert parse_geopoint(value) is None
+
+
+def test_a_column_of_addresses_is_not_taken_for_coordinates(tmp_path):
+    """"10.0.0.1" holds two numbers in range and a decimal point."""
+    from app.services.ingest import ingest_frame
+
+    frame = pd.DataFrame(
+        {"server": [f"10.0.0.{n}" for n in range(1, 9)]},
+    )
+    result = ingest_frame(frame, {}, {}, tmp_path / "out")
+    assert [v.name for v in result.variables] == ["server"]
+
+
+def test_a_pair_of_measurements_is_not_taken_for_coordinates(tmp_path):
+    """A height and a weight are a legal coordinate and nonsense on a map.
+
+    Syntax cannot tell them apart - both are two numbers with a separator - so
+    precision does: a device reading is good to metres and carries the decimals
+    to prove it, and a measurement written down by hand does not.
+    """
+    from app.services.ingest import ingest_frame
+
+    frame = pd.DataFrame(
+        {
+            "height_weight": [
+                "1.75 68.5",
+                "1.62 55.0",
+                "1.80 74.2",
+                "1.58 49.8",
+                "1.71 63.1",
+                "1.69 58.4",
+            ]
+        }
+    )
+    result = ingest_frame(frame, {}, {}, tmp_path / "out")
+    assert [v.name for v in result.variables] == ["height_weight"]
+
+
+def test_unreadable_values_at_the_top_of_a_column_do_not_hide_it(tmp_path):
+    """Whether a column is coordinates cannot depend on how the rows are sorted.
+
+    A round that opens with a few devices that never got a fix is still a
+    column of coordinates, and the share threshold is what should decide.
+    """
+    from app.services.ingest import ingest_frame
+
+    frame = pd.DataFrame(
+        {
+            "gps": ["no fix", "no fix", "no fix"]
+            + [f"-17.73{n} 168.32{n} 42.0 5.0" for n in range(1000, 1060)]
+        }
+    )
+    result = ingest_frame(frame, {}, {}, tmp_path / "out")
+    by_name = {v.name: v for v in result.variables}
+    assert "gps__latitude" in by_name
+    # The three that could not be read have no coordinates, not a zero pair.
+    assert by_name["gps__latitude"].n_missing == 3
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        # Python's JSON decoder accepts a bare NaN, and a NaN fails every
+        # comparison rather than failing the range check.
+        '{"type": "Point", "coordinates": [NaN, 1.0]}',
+        '{"type": "Point", "coordinates": ["NaN", 1.0]}',
+        '{"type": "Point", "coordinates": [1.0, NaN]}',
+        '{"type": "Point", "coordinates": [Infinity, 1.0]}',
+    ],
+)
+def test_a_coordinate_that_is_not_a_number_is_not_a_location(value):
+    """It would otherwise count as a value that parsed, which is evidence."""
+    from app.services.ingest import parse_geopoint
+
+    assert parse_geopoint(value) is None
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("POINT(1.683273e2 -1.77333e1)", (-17.7333, 168.3273)),
+        ("-1.77333e1 1.683273e2", (-17.7333, 168.3273)),
+        ("-17.7333 1.683273e2", (-17.7333, 168.3273)),
+    ],
+)
+def test_a_float_written_out_in_full_is_still_a_location(value, expected):
+    """An exporter serialising a double writes an exponent, not a decimal."""
+    from app.services.ingest import parse_geopoint
+
+    parsed = parse_geopoint(value)
+    assert parsed is not None
+    assert parsed[0] == pytest.approx(expected[0])
+    assert parsed[1] == pytest.approx(expected[1])
+
+
+def test_a_column_written_in_scientific_notation_is_split(tmp_path):
+    from app.services.ingest import ingest_frame
+
+    frame = pd.DataFrame(
+        {"gps": [f"-1.7733{n}e1 1.68327{n}e2" for n in range(1, 8)]}
+    )
+    result = ingest_frame(frame, {}, {}, tmp_path / "out")
+    names = [v.name for v in result.variables]
+    assert "gps__latitude" in names and "gps__longitude" in names

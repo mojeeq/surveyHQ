@@ -12,6 +12,7 @@ import datetime as dt
 import json
 import math
 import re
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -81,9 +82,38 @@ GEOPOINT_SAMPLE = 500
 # Nearly all of them have to parse. A column where a third of the values are
 # coordinates is a column of something else that sometimes looks like one.
 GEOPOINT_MIN_SHARE = 0.9
+# A device reading is precise to a few metres, so it carries decimals and plenty
+# of them: 4 places is about 11 metres, and every handheld gives more. Without
+# this a pair of ordinary measurements - a height and a weight, say - is a legal
+# coordinate on paper and nonsense on a map.
+GEOPOINT_MIN_DECIMALS = 4
 
-_WKT_POINT = re.compile(r"^\s*point\s*z?\s*m?\s*\(([^)]*)\)\s*$", re.IGNORECASE)
-_NUMBER = re.compile(r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
+# The exponent is here because an exporter serialising a float in full writes
+# one: POINT(1.683273e2 -1.77333e1) is a location like any other.
+_NUM = r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?"
+# One separator between the numbers, not merely a gap somewhere: without that,
+# any text holding two numbers reads as a location. "10.0.0.1" is the one that
+# matters, because a column of addresses would otherwise take over the map.
+_SEP = r"(?:\s*[,;]\s*|\s+)"
+# Two numbers, then up to two more: ODK writes latitude, longitude, altitude
+# and accuracy into the field together.
+_BARE_PAIR = re.compile(rf"^({_NUM}){_SEP}({_NUM})(?:{_SEP}{_NUM}){{0,2}}$")
+_WKT_POINT = re.compile(r"^point\s*z?\s*m?\s*\(([^)]*)\)$", re.IGNORECASE)
+_DECIMALS = re.compile(r"\d+\.(\d+)")
+_EXPONENT = re.compile(r"\d[eE][-+]?\d")
+
+
+def _in_range(latitude: float, longitude: float) -> tuple[float, float] | None:
+    # A NaN fails every comparison rather than failing the range check, so it
+    # has to be ruled out on its own. JSON carries one in two ways - a bare NaN,
+    # which Python's decoder accepts, and the string "NaN" - and either would
+    # otherwise count as a reading that parsed, which is evidence for splitting
+    # a column that holds no coordinates at all.
+    if not math.isfinite(latitude) or not math.isfinite(longitude):
+        return None
+    if abs(latitude) > 90 or abs(longitude) > 180:
+        return None
+    return latitude, longitude
 
 
 def parse_geopoint(value: Any) -> tuple[float, float] | None:
@@ -100,36 +130,58 @@ def parse_geopoint(value: Any) -> tuple[float, float] | None:
     if not text:
         return None
 
-    lon_first = False
-    wkt = _WKT_POINT.match(text)
-    if wkt:
-        text, lon_first = wkt.group(1), True
-    elif text.startswith("{"):
+    if text.startswith("{"):
         try:
             payload = json.loads(text)
         except ValueError:
             return None
         if not isinstance(payload, dict) or str(payload.get("type", "")).lower() != "point":
             return None
-        coordinates = payload.get("coordinates") or []
+        coordinates = payload.get("coordinates")
         if not isinstance(coordinates, list) or len(coordinates) < 2:
             return None
-        text, lon_first = f"{coordinates[0]} {coordinates[1]}", True
+        try:
+            longitude, latitude = float(coordinates[0]), float(coordinates[1])
+        except (TypeError, ValueError):
+            return None
+        return _in_range(latitude, longitude)
 
-    numbers = [float(found) for found in _NUMBER.findall(text)[:2]]
-    if len(numbers) < 2:
+    wkt = _WKT_POINT.match(text)
+    if wkt:
+        inner = _BARE_PAIR.match(wkt.group(1).strip())
+        if not inner:
+            return None
+        return _in_range(float(inner.group(2)), float(inner.group(1)))
+
+    pair = _BARE_PAIR.match(text)
+    if not pair:
         return None
-    latitude, longitude = (numbers[1], numbers[0]) if lon_first else (numbers[0], numbers[1])
-
+    latitude, longitude = float(pair.group(1)), float(pair.group(2))
     # A first value past 90 cannot be a latitude, so a bare pair written the
     # other way round is read the other way round rather than plotted in the
     # wrong ocean.
-    if not lon_first and abs(latitude) > 90 and abs(longitude) <= 90:
+    if abs(latitude) > 90 and abs(longitude) <= 90:
         latitude, longitude = longitude, latitude
+    return _in_range(latitude, longitude)
 
-    if abs(latitude) > 90 or abs(longitude) > 180:
-        return None
-    return latitude, longitude
+
+def _reads_like_a_reading(text: str) -> bool:
+    """Whether one value is evidence of coordinates rather than two numbers.
+
+    WKT and GeoJSON are notations nothing else is written in, so they speak for
+    themselves. A bare pair is only ever two numbers with a separator, and what
+    separates a location from a pair of measurements is precision.
+    """
+    if text.startswith("{") or _WKT_POINT.match(text):
+        return True
+    # Scientific notation is a machine writing a float out in full, which is the
+    # same evidence the decimal places below are there to look for. Nobody
+    # writes a height down that way.
+    if _EXPONENT.search(text):
+        return True
+    return max((len(found) for found in _DECIMALS.findall(text)), default=0) >= (
+        GEOPOINT_MIN_DECIMALS
+    )
 
 
 def geopoint_columns(frame: pd.DataFrame) -> list[str]:
@@ -145,31 +197,64 @@ def geopoint_columns(frame: pd.DataFrame) -> list[str]:
         series = frame[column]
         if not pd.api.types.is_object_dtype(series):
             continue
-        if (
-            f"{column}{GEOPOINT_LAT_SUFFIX}" in frame.columns
-            or f"{column}{GEOPOINT_LON_SUFFIX}" in frame.columns
-        ):
+        if _already_split(frame.columns, column):
             continue
 
         values = series.dropna()
         if len(values) < 5:
             continue
-        # A wide survey is mostly text columns and none of them is a location.
-        # Three values settle almost all of them, so the sample below is only
-        # ever parsed for a column that could plausibly be coordinates.
-        if not any(parse_geopoint(value) is not None for value in values.head(3)):
-            continue
         sample = values.head(GEOPOINT_SAMPLE)
-        parsed = [parse_geopoint(value) for value in sample]
-        if sum(one is not None for one in parsed) < GEOPOINT_MIN_SHARE * len(sample):
-            continue
-        # A reading off a device carries decimals. Without this, a column of
-        # small whole-number pairs - a score out of ten and a rank, say - is a
-        # valid coordinate on paper and nonsense on a map.
-        if sum("." in str(value) for value in sample) < len(sample) / 2:
+        needed = GEOPOINT_MIN_SHARE * len(sample)
+        may_fail = len(sample) - needed
+        failed = 0
+        readings = 0
+        for value in sample:
+            text = str(value).strip()
+            if parse_geopoint(text) is None:
+                failed += 1
+                # A wide survey is mostly text columns and not one of them is a
+                # location, so stop as soon as the threshold is out of reach: a
+                # column of "yes" and "no" costs a few dozen parses rather than
+                # the whole sample. Counting failures rather than looking only
+                # at the first few values keeps the order of the rows out of it,
+                # so a round that opens with a handful of unreadable readings is
+                # still recognised.
+                if failed > may_fail:
+                    break
+                continue
+            if _reads_like_a_reading(text):
+                readings += 1
+        if failed > may_fail or readings < needed:
             continue
         found.append(column)
     return found
+
+
+def _already_split(columns: Iterable[str], column: str) -> bool:
+    names = set(columns)
+    return (
+        f"{column}{GEOPOINT_LAT_SUFFIX}" in names
+        or f"{column}{GEOPOINT_LON_SUFFIX}" in names
+    )
+
+
+def stored_geopoint_columns(stored: Iterable[str], incoming: Iterable[str]) -> list[str]:
+    """Which incoming columns the stored data already holds coordinates for.
+
+    An append has to produce exactly the columns the dataset already has. The
+    incoming batch is a few hundred rows and can fail the evidence test the
+    first import passed - a round in which most readings are missing, say - and
+    a batch that produces no coordinates leaves those interviews off the map
+    with nothing to say why.
+    """
+    incoming_names = set(incoming)
+    return [
+        source
+        for column in stored
+        if column.endswith(GEOPOINT_LAT_SUFFIX)
+        and (source := column[: -len(GEOPOINT_LAT_SUFFIX)]) in incoming_names
+        and not _already_split(incoming_names, source)
+    ]
 
 
 def add_geopoint_columns(
