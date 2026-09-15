@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from decimal import Decimal
+
 import pytest
 
 from app.schemas.query import (
@@ -316,7 +318,9 @@ def test_a_numeric_column_read_as_a_code_set_still_compares_as_a_number(stored):
     )
     assert age.is_numeric is False, "it is a code set to the analyst"
     assert age.holds_numbers is True, "and a number to the database"
-    assert _one(age, FilterOperator.gt, "15") == [15.0]
+    (bound,) = _one(age, FilterOperator.gt, "15")
+    assert bound == 15
+    assert not isinstance(bound, str), "bound as a number, not as text"
 
 
 def test_a_column_that_holds_text_is_left_alone():
@@ -360,3 +364,85 @@ def test_every_comparison_binds_the_number(ctx):
     assert _one(age, FilterOperator.between, ["15", "64"]) == [15.0, 64.0]
     assert _one(age, FilterOperator.in_, ["15", "16"]) == [15.0, 16.0]
     assert _one(age, FilterOperator.lte, "64") == [64.0]
+
+
+# --- and bound in the column's own family -----------------------------------
+#
+# Reading the value as a number is the first half. Binding it in the family the
+# column is stored in is the second: a value that goes through `float` on its
+# way to a wide integer or a long decimal arrives as a near neighbour, and a
+# near neighbour does not fail - it matches the wrong rows.
+
+
+def test_a_wide_integer_keeps_every_digit():
+    """2**53 + 1, the first whole number a double cannot hold.
+
+    As a float it becomes 9007199254740992.0, which is a different household.
+    """
+    household = VariableInfo(
+        name="hh_id", var_type="categorical", storage_type="BIGINT"
+    )
+    (bound,) = _one(household, FilterOperator.eq, "9007199254740993")
+    assert bound == 9007199254740993
+    assert float(bound) != bound or isinstance(bound, int)
+    assert str(bound) == "9007199254740993", "not 9007199254740992"
+
+
+def test_a_long_decimal_keeps_every_digit():
+    """A decimal with more significant digits than a double carries."""
+    amount = VariableInfo(
+        name="amount", var_type="numeric", storage_type="DECIMAL(38,10)"
+    )
+    (bound,) = _one(amount, FilterOperator.eq, "1234567890123456.1234567891")
+    assert bound == Decimal("1234567890123456.1234567891")
+    assert str(bound) == "1234567890123456.1234567891"
+
+
+def test_a_fraction_against_a_column_of_whole_numbers_is_not_truncated():
+    """"age >= 2.5" has to stay 2.5.
+
+    Rounding it down to 2 would let every 2 through, which is the same class of
+    silent mismatch the other way round.
+    """
+    age = VariableInfo(name="age", var_type="categorical", storage_type="int64")
+    (bound,) = _one(age, FilterOperator.gte, "2.5")
+    assert bound == Decimal("2.5")
+
+
+def test_a_float_column_is_still_bound_as_a_float():
+    """Nothing is gained by making every filter carry a Decimal."""
+    height = VariableInfo(name="height", var_type="numeric", storage_type="DOUBLE")
+    (bound,) = _one(height, FilterOperator.gt, "1.75")
+    assert isinstance(bound, float)
+
+
+def test_a_value_that_is_not_a_number_is_left_as_it_came():
+    """Bound unchanged, so the query either copes or says so.
+
+    Turning it into a 0 would be the worst of the three: a filter that runs and
+    answers the wrong question.
+    """
+    age = VariableInfo(name="age", var_type="numeric", storage_type="BIGINT")
+    assert _one(age, FilterOperator.eq, "unknown") == ["unknown"]
+    assert _one(age, FilterOperator.eq, None) == [None]
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [
+        ("BIGINT", "integer"),
+        ("int64", "integer"),
+        ("HUGEINT", "integer"),
+        ("uint8", "integer"),
+        ("DECIMAL(18,3)", "decimal"),
+        ("NUMERIC", "decimal"),
+        ("DOUBLE", "float"),
+        ("float64", "float"),
+        ("REAL", "float"),
+        ("VARCHAR", ""),
+        ("BOOLEAN", ""),
+        ("TIMESTAMP", ""),
+    ],
+)
+def test_the_storage_families(stored, expected):
+    assert VariableInfo(name="v", storage_type=stored).number_kind == expected
