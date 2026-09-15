@@ -1,4 +1,4 @@
-# susoDash operations. Run `make help` for the list.
+# SurveyHQ operations. Run `make help` for the list.
 
 COMPOSE := docker compose
 DEV     := docker compose -f docker-compose.yml -f docker-compose.dev.yml
@@ -32,7 +32,7 @@ setup: ## Create .env from the template and generate secrets
 .PHONY: up
 up: ## Build and start the whole stack
 	$(COMPOSE) up -d --build
-	@echo "susoDash is starting on http://localhost:$${WEB_PORT:-8080}"
+	@echo "SurveyHQ is starting on http://localhost:$${WEB_PORT:-8080}"
 
 .PHONY: down
 down: ## Stop the stack (data is kept)
