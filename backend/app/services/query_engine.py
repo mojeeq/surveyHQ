@@ -55,10 +55,43 @@ class VariableInfo:
     value_labels: dict[str, str] = field(default_factory=dict)
     # Stata tagged missings present on this variable, e.g. [".a", ".b"]
     missing_tags: list[str] = field(default_factory=list)
+    # How the column is stored, as the ingest that wrote it named the type.
+    # Two vocabularies reach this, because two ingest paths write it: a pandas
+    # dtype ("float64", "object") for a file read whole, and a DuckDB type
+    # ("DOUBLE", "VARCHAR") for one read through Parquet.
+    storage_type: str = ""
 
     @property
     def is_numeric(self) -> bool:
+        """Whether this behaves as a quantity: what to measure, how to summarise.
+
+        An analytical judgement, not a fact about the file. A column of whole
+        numbers carrying value labels is stored as a number and read as a code
+        set, and this says code set.
+        """
         return self.var_type in ("numeric", "boolean")
+
+    @property
+    def holds_numbers(self) -> bool:
+        """Whether the stored column is a number, whatever kind of variable it is.
+
+        The other question entirely, and the one a filter has to ask. A value
+        compared against a DOUBLE column has to be bound as a number; bound as
+        text, DuckDB refuses the comparison outright rather than guessing which
+        side to convert, and the whole query fails.
+        """
+        kind = self.storage_type.lower()
+        if not kind:
+            # Written by an ingest old enough not to have recorded it. The
+            # analytical type is the best that is left, which is what this
+            # decision used on its own before.
+            return self.is_numeric
+        if "datetime" in kind or "timestamp" in kind or "date" in kind:
+            return False
+        return any(
+            token in kind
+            for token in ("int", "float", "double", "decimal", "numeric", "real")
+        )
 
     @property
     def is_datetime(self) -> bool:
@@ -82,6 +115,7 @@ class DatasetContext:
                 var_type=getattr(v.var_type, "value", str(v.var_type)),
                 value_labels=v.value_labels or {},
                 missing_tags=list(v.missing_tags or []),
+                storage_type=str(getattr(v, "storage_type", "") or ""),
             )
             for v in dataset.variables
         }
@@ -282,7 +316,20 @@ class SQLBuilder:
 
     @staticmethod
     def _coerce(info: VariableInfo, value: Any) -> Any:
-        if value is None or not info.is_numeric:
+        """A filter value in the type the stored column will compare against.
+
+        Decided by what the column holds rather than by what kind of variable
+        it is. Those are different questions, and asking the second one here is
+        what made "age over 15" fail on a census: age is stored as a number and
+        classified as a code set, because it carries labels for "don't know"
+        and "refused" - so the 15 stayed a string and DuckDB refused to compare
+        it with a DOUBLE.
+
+        A column that genuinely holds text is left alone, which is the other
+        half of the same rule: an identifier stored as "007" has to go on
+        matching "007" rather than becoming 7.
+        """
+        if value is None or not info.holds_numbers:
             return value
         if isinstance(value, bool):
             return value
