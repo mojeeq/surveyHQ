@@ -689,6 +689,17 @@ def add_widget(
     dashboard_id: str, payload: WidgetIn, db: DbSession, user: RequireAnalyst
 ) -> DashboardDetail:
     dashboard = _get_dashboard(dashboard_id, db, user)
+    page = payload.page
+    if payload.group_id:
+        # The same invariant the patch above keeps, and for the same reason: a
+        # widget naming a group that does not exist is in a box nothing draws,
+        # and one naming a group on another page puts that page's frame around
+        # a widget that is not there. An API client creating a widget can break
+        # either just as easily as one moving a widget can.
+        group = _find_group(dashboard, payload.group_id)
+        if group is None:
+            raise HTTPException(status_code=422, detail="That group does not exist")
+        page = int(group.get("page", 0))
     widget = Widget(
         dashboard_id=dashboard.id,
         title=payload.title,
@@ -697,9 +708,9 @@ def add_widget(
         indicator_id=payload.indicator_id,
         dataset_id=payload.dataset_id,
         config=payload.config,
-        layout=payload.layout or _next_layout(dashboard, payload.page),
+        layout=payload.layout or _next_layout(dashboard, page),
         position=payload.position or len(dashboard.widgets),
-        page=payload.page,
+        page=page,
         group_id=payload.group_id,
     )
     db.add(widget)

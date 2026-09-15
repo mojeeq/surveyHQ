@@ -854,7 +854,12 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         onRemove={(index) => removePage.mutate(index)}
       />
 
-      {!widgets.length ? (
+      {/* `widgets` leaves out a folded group's members, so it is empty on a
+          page whose every widget is folded away - and the empty state would
+          then replace the grid holding the bars, taking with it the only
+          control that opens them again. What makes a page empty is having
+          nothing on it, not having nothing showing. */}
+      {!onThisPage.length && !groups.length ? (
         <Card>
           <EmptyState
             icon="▦"
