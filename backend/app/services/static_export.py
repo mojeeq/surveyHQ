@@ -498,6 +498,7 @@ def build_payload(
             "title": widget.title or "",
             "type": widget.widget_type.value,
             "page": page,
+            "group_id": widget.group_id or "",
             "layout": widget.layout or {},
             # A widget's styling lives among its config, which also holds its
             # query: only the part that says how it looks is carried over.
@@ -544,6 +545,23 @@ def build_payload(
         "theme": dashboard.theme or "default",
         "appearance": dashboard.appearance or {},
         "pages": pages,
+        # The frames and their names. A group says what a handful of widgets
+        # are for, so a file that dropped them would read as a looser board
+        # than the one it was exported from.
+        "groups": [
+            {
+                "id": str(group.get("id") or ""),
+                "name": str(group.get("name") or ""),
+                "page": int(group.get("page") or 0),
+                "collapsed": bool(group.get("collapsed")),
+                "color": str(group.get("color") or ""),
+                "x": int(group.get("x") or 0),
+                "y": int(group.get("y") or 0),
+                "w": int(group.get("w") or 6),
+            }
+            for group in (dashboard.groups or [])
+            if isinstance(group, dict) and group.get("id")
+        ],
         "filters": controls,
         "widgets": widgets,
     }

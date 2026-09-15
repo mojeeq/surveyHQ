@@ -75,6 +75,7 @@ class WidgetIn(BaseModel):
     layout: dict[str, Any] = Field(default_factory=dict)
     position: int = 0
     page: int = 0
+    group_id: str = ""
 
 
 class WidgetOut(BaseModel):
@@ -91,6 +92,7 @@ class WidgetOut(BaseModel):
     layout: dict[str, Any] = Field(default_factory=dict)
     position: int = 0
     page: int = 0
+    group_id: str = ""
 
 
 class WidgetPatch(BaseModel):
@@ -107,6 +109,7 @@ class WidgetPatch(BaseModel):
 
     title: str | None = None
     page: int | None = None
+    group_id: str | None = None
     layout: dict[str, Any] | None = None
     config: dict[str, Any] | None = None
     chart_id: str | None = None
@@ -121,6 +124,7 @@ class DashboardCreate(BaseModel):
     refresh_interval_seconds: int = 0
     project_id: str | None = None
     pages: list[dict[str, Any]] = Field(default_factory=list)
+    groups: list[dict[str, Any]] = Field(default_factory=list)
     theme: str = "default"
     appearance: dict[str, Any] = Field(default_factory=dict)
     drilldown: list[dict[str, Any]] = Field(default_factory=list)
@@ -132,6 +136,7 @@ class DashboardUpdate(BaseModel):
     filters: list[dict[str, Any]] | None = None
     refresh_interval_seconds: int | None = None
     pages: list[dict[str, Any]] | None = None
+    groups: list[dict[str, Any]] | None = None
     theme: str | None = None
     appearance: dict[str, Any] | None = None
     drilldown: list[dict[str, Any]] | None = None
@@ -149,6 +154,9 @@ class DashboardOut(BaseModel):
     filters: list[dict[str, Any]] = Field(default_factory=list)
     project_id: str | None = None
     pages: list[dict[str, Any]] = Field(default_factory=list)
+    # Named boxes behind the widgets that belong to them:
+    # [{"id": "g1", "name": "Fieldwork", "page": 0, "collapsed": false}]
+    groups: list[dict[str, Any]] = Field(default_factory=list)
     theme: str = "default"
     appearance: dict[str, Any] = Field(default_factory=dict)
     # The hierarchy the board drills through, outermost first:

@@ -179,6 +179,17 @@ class Dashboard(UUIDMixin, TimestampMixin, Base):
     # without one it is NOT NULL with nothing to fill in, and the upgrade has to
     # skip it - which start-up reports as an error rather than silently ignoring.
     pages: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
+    # Named boxes drawn behind the widgets that belong to them, e.g.
+    # [{"id": "g1", "name": "Fieldwork", "page": 0, "collapsed": false}].
+    # A page says which board you are on; a group says what a handful of
+    # widgets on it are for, and lets them be moved and folded away together.
+    #
+    # The list lives here rather than in a table of its own for the same
+    # reason pages do: a group is three fields, nothing queries it, and every
+    # read of it already has the dashboard row in hand. Membership is the one
+    # thing that is not here - a widget names its group rather than a group
+    # listing its widgets - so deleting a widget cannot leave a dangling id.
+    groups: Mapped[list] = mapped_column(JSON, default=list, server_default=text("'[]'"))
     # Which categorical ordering the charts on this dashboard use. The orders
     # live in the frontend, which is what draws them; the server only remembers
     # the choice, so adding one needs no migration.
@@ -253,6 +264,14 @@ class Widget(UUIDMixin, TimestampMixin, Base):
     # Index into Dashboard.pages. Zero is the first page, and the page every
     # widget that predates this feature is already on.
     page: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))
+    # The id of the group in Dashboard.groups this widget belongs to, or "" for
+    # one that belongs to no group. An id rather than an index into the list,
+    # which is what page is: a page is only ever appended to or moved as a
+    # whole, while a group in the middle can be deleted, and every widget after
+    # it would then point at its neighbour.
+    group_id: Mapped[str] = mapped_column(
+        String(64), default="", server_default=text("''")
+    )
 
     dashboard: Mapped[Dashboard] = relationship(back_populates="widgets")
 

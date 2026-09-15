@@ -427,8 +427,42 @@ export interface Widget {
   config: Record<string, unknown>
   /** Index into Dashboard.pages; 0 is the first page. */
   page: number
+  /** Id of the WidgetGroup this belongs to, or "" for none. */
+  group_id: string
   layout: { x?: number; y?: number; w?: number; h?: number }
   position: number
+}
+
+/**
+ * A named box drawn behind the widgets that belong to it.
+ *
+ * The title bar is a grid item like any other, so dragging, resizing and
+ * collision are react-grid-layout's rather than a second implementation of
+ * them. The frame is then drawn from the bar and its members together, which
+ * is why the group stores no width or height of its own for the box: there is
+ * no second copy of the geometry to fall out of step with the widgets.
+ *
+ * Moving the group is moving the bar and applying the same shift to every
+ * member. Collapsing it is leaving the members out of the layout, so the
+ * board closes up around a bar that is still there to open again.
+ */
+export interface WidgetGroup {
+  id: string
+  name: string
+  /** Index into Dashboard.pages, the same way a widget names its page. */
+  page: number
+  /** Folded down to its title bar. Saved, so a board opens as it was left. */
+  collapsed?: boolean
+  /** Frame and title colour. Empty means the dashboard's own ink. */
+  color?: string
+  /**
+   * Where the title bar sits, in grid units. It is a grid item like any
+   * other, which is what lets react-grid-layout drag and resize it; the frame
+   * around the group is then drawn from the bar and its members together.
+   */
+  x: number
+  y: number
+  w: number
 }
 
 export interface Appearance {
@@ -503,6 +537,8 @@ export interface Dashboard {
   project_id: string | null
   /** Named pages; empty means the dashboard is a single unnamed page. */
   pages: { name: string }[]
+  /** Named boxes behind the widgets that belong to them. */
+  groups: WidgetGroup[]
   /** Which categorical ordering its charts use; see CHART_THEMES. */
   theme: string
   /** How the board is dressed: background colour, image, fit and fade. */

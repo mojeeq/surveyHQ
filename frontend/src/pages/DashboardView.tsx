@@ -34,7 +34,8 @@ Dashboard,
 DrillLevel,
 DrillStep,
 Widget,
-WidgetComment
+WidgetComment,
+WidgetGroup
 } from '@/lib/types'
 
 import AssignProject from '@/components/AssignProject'
@@ -72,6 +73,15 @@ usePageGround
 import { canDescend,CrossFilter,DrillDownModal,drilledLevel,DrillTrail,FilterControlsModal,levelLabel,SavedViews,withCrossFilter,withDrillPath } from '@/components/dashboard/filters'
 import { PageTabs } from '@/components/dashboard/PageTabs'
 import { appearanceOf,CANVAS_PADDING,cardStyle,COLUMNS,ROW_HEIGHT,styleOf,widgetTone } from '@/components/dashboard/shared'
+import {
+  boxOf,
+  GROUP_BAR_ROWS,
+  GroupBar,
+  GroupFrames,
+  groupItemId,
+  isGroupItem,
+  groupIdOf,
+} from '@/components/dashboard/WidgetGroups'
 import { PublicLinkBar,SharePasswordPrompt } from '@/components/dashboard/sharing'
 import { AddWidgetModal,EditWidgetModal } from '@/components/dashboard/WidgetEditor'
 import { WidgetFrame } from '@/components/dashboard/WidgetFrame'
@@ -246,6 +256,10 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
           layout: widget.layout,
           position: widget.position,
           page: widget.page ?? 0,
+          // Sent back with the rest of it. This PATCH replaces the whole
+          // widget list, so a field left out is a field cleared - and leaving
+          // this one out emptied every group the moment anything was dragged.
+          group_id: widget.group_id ?? '',
         })),
       }),
     onSuccess: () => {
@@ -292,6 +306,30 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
     onError: (error: Error) => toast.push(error.message, 'error'),
   })
 
+  const saveGroups = useMutation({
+    mutationFn: (groups: WidgetGroup[]) => api.patch(`/dashboards/${id}`, { groups }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['dashboard', id] }),
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  const groupWidget = useMutation({
+    mutationFn: ({
+      widgetId,
+      groupId,
+      layout,
+    }: {
+      widgetId: string
+      groupId: string
+      layout?: Widget['layout']
+    }) =>
+      api.patch(`/dashboards/${id}/widgets/${widgetId}`, {
+        group_id: groupId,
+        ...(layout ? { layout } : {}),
+      }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['dashboard', id] }),
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
   const movePage = useMutation({
     mutationFn: ({ from, to }: { from: number; to: number }) =>
       api.post(`/dashboards/${id}/pages/move`, { from, to }),
@@ -329,10 +367,50 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
     },
   })
 
+  const allGroups = useMemo(
+    () => (dashboard.data?.groups ?? []) as WidgetGroup[],
+    [dashboard.data],
+  )
+  /**
+   * Groups a reader has folded here, which is not the same as the saved state.
+   *
+   * Whoever builds the board decides what it opens as, and that is saved. A
+   * reader folding a group away to see past it is not editing anything and
+   * usually cannot: on a share link the save comes back 403, so the group
+   * would spring open again under an error message. Folding happens here
+   * first and is written down only by somebody who may write it down.
+   */
+  const [foldedHere, setFoldedHere] = useState<Record<string, boolean>>({})
+
+  /** Whether this reader may write the board, rather than only read it. */
+  const canEditBoard = !isPublic && can('analyst')
+
+  const groups = useMemo(
+    () =>
+      allGroups
+        .filter((group) => (group.page ?? 0) === page)
+        .map((group) => ({
+          ...group,
+          collapsed: foldedHere[group.id] ?? Boolean(group.collapsed),
+        })),
+    [allGroups, page, foldedHere],
+  )
+  const folded = useMemo(
+    () => new Set(groups.filter((group) => group.collapsed).map((group) => group.id)),
+    [groups],
+  )
+
   const allWidgets = dashboard.data?.widgets ?? []
-  const widgets = useMemo(
+  const onThisPage = useMemo(
     () => allWidgets.filter((widget) => (widget.page ?? 0) === page),
     [allWidgets, page],
+  )
+  // A folded group's widgets are left out of the board entirely rather than
+  // hidden in place: the point of folding one is the room it gives back, and a
+  // hidden widget still holding its rows gives none.
+  const widgets = useMemo(
+    () => onThisPage.filter((widget) => !folded.has(widget.group_id || '')),
+    [onThisPage, folded],
   )
 
   const appearance = appearanceOf(dashboard.data)
@@ -364,8 +442,8 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
     : onDarkGround
 
   const layout: Layout[] = useMemo(
-    () =>
-      widgets.map((widget, index) => ({
+    () => [
+      ...widgets.map((widget, index) => ({
         i: widget.id,
         x: Number(widget.layout?.x ?? (index % 2) * 6),
         y: Number(widget.layout?.y ?? Math.floor(index / 2) * 4),
@@ -374,7 +452,51 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         minW: 2,
         minH: 2,
       })),
-    [widgets],
+      // A group's title bar is a grid item like any other. That is what makes
+      // it draggable, resizable and something the widgets collide with,
+      // without any of those being written a second time here.
+      ...groups.map((group) => ({
+        i: groupItemId(group),
+        x: Number(group.x ?? 0),
+        y: Number(group.y ?? 0),
+        w: Number(group.w ?? 6),
+        h: GROUP_BAR_ROWS,
+        minW: 2,
+        minH: GROUP_BAR_ROWS,
+        maxH: GROUP_BAR_ROWS,
+      })),
+    ],
+    [widgets, groups],
+  )
+
+  /**
+   * Where everything was when a drag began, so a group can be shifted by a delta.
+   *
+   * Up here with the other hooks rather than beside the handler that uses it:
+   * below this point the component has already returned early for a board that
+   * is still loading, and a hook after a return is a hook React counts on one
+   * render and not the next. It cost a white screen and "rendered more hooks
+   * than during the previous render", which neither the typecheck nor the
+   * build has any way to see.
+   */
+  const before = useRef<Map<string, Layout>>(new Map())
+
+  /**
+   * Where the grid actually put things, which is not where they are stored.
+   *
+   * react-grid-layout packs its items upwards, so a widget saved at row 8 with
+   * nothing above it is drawn at row 6. A frame computed from the stored rows
+   * is then drawn below the bar it belongs to - which is exactly what it did
+   * until this was here. Only the frames use it; what is saved is still
+   * decided by a drag or a resize, so tracking this changes nothing about
+   * when the board is written.
+   */
+  const [placed, setPlaced] = useState<Layout[]>([])
+
+  const membersOf = useCallback(
+    (groupId: string) =>
+      onThisPage.filter((widget) => widget.group_id === groupId).map((w) => w.id),
+    [onThisPage],
   )
 
   if (dashboard.isLoading) return <Loading />
@@ -392,17 +514,145 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
     )
   if (dashboard.error) return <ErrorNote error={dashboard.error} retry={dashboard.refetch} />
 
-  const onLayoutChange = (next: Layout[]) => {
+  const onLayoutChange = (next: Layout[], shifts?: Map<string, Layout>) => {
     if (!editing) return
     // Every widget goes back, not just this page's: the PATCH replaces the whole
     // list, so omitting the other pages would delete them.
     const updated = allWidgets.map((widget) => {
-      const position = next.find((item) => item.i === widget.id)
+      const position = shifts?.get(widget.id) ?? next.find((item) => item.i === widget.id)
       return position
         ? { ...widget, layout: { x: position.x, y: position.y, w: position.w, h: position.h } }
         : widget
     })
     saveLayout.mutate(updated)
+  }
+
+  const rememberPositions = (current: Layout[]) => {
+    before.current = new Map(current.map((item) => [item.i, { ...item }]))
+  }
+
+  /**
+   * A bar and its widgets move as one.
+   *
+   * The grid moved the bar; every member is shifted by the same amount, from
+   * where it was when the drag started rather than from where the grid has
+   * just put it. Taking the live positions would add the bar's own shove to
+   * the shift and send the members twice as far.
+   */
+  const onItemDragStop = (next: Layout[], from: Layout, to: Layout) => {
+    if (!editing) return
+    if (!isGroupItem(to.i)) {
+      onLayoutChange(next)
+      return
+    }
+    const group = groups.find((one) => one.id === groupIdOf(to.i))
+    if (!group) return
+    const dx = to.x - from.x
+    const dy = to.y - from.y
+    const shifts = new Map<string, Layout>()
+    if (dx || dy) {
+      for (const memberId of membersOf(group.id)) {
+        const was = before.current.get(memberId)
+        if (!was) continue
+        shifts.set(memberId, {
+          ...was,
+          // Off the left edge or past the right one is a position the grid
+          // would silently correct on the next render, leaving what is stored
+          // and what is drawn disagreeing.
+          x: Math.max(0, Math.min(columns - was.w, was.x + dx)),
+          y: Math.max(0, was.y + dy),
+        })
+      }
+    }
+    saveGroups.mutate(
+      allGroups.map((one) =>
+        one.id === group.id ? { ...one, x: to.x, y: to.y, w: to.w } : one,
+      ),
+    )
+    onLayoutChange(next, shifts)
+  }
+
+  /** Resizing a bar sets how wide the frame is drawn; the widgets are its own. */
+  const onItemResizeStop = (next: Layout[], _from: Layout, to: Layout) => {
+    if (!editing) return
+    if (!isGroupItem(to.i)) {
+      onLayoutChange(next)
+      return
+    }
+    saveGroups.mutate(
+      allGroups.map((one) =>
+        one.id === groupIdOf(to.i) ? { ...one, x: to.x, y: to.y, w: to.w } : one,
+      ),
+    )
+  }
+
+  const addGroup = () => {
+    const name = prompt('Name this group')?.trim()
+    if (!name) return
+    // Below everything already on the page, so a new group never lands on top
+    // of a widget and pushes the board around as it arrives.
+    const below = layout.reduce((lowest, item) => Math.max(lowest, item.y + item.h), 0)
+    saveGroups.mutate([
+      ...allGroups,
+      { id: `g${Date.now().toString(36)}`, name, page, x: 0, y: below, w: Math.min(6, columns) },
+    ])
+  }
+
+  /**
+   * Where a widget goes when it joins a group.
+   *
+   * Membership on its own is only a label: the frame is the box around the bar
+   * and its members, so a widget that joins from the far side of the page
+   * stretches that box across everything in between and swallows widgets that
+   * are not in the group at all. Joining moves it under the bar, beside the
+   * last member if there is room inside the group's width and on a new row if
+   * there is not.
+   */
+  const spotInGroup = (group: WidgetGroup, widget: Widget) => {
+    const size = {
+      w: Number(widget.layout?.w ?? 6),
+      h: Number(widget.layout?.h ?? 4),
+    }
+    const top = Number(group.y ?? 0) + GROUP_BAR_ROWS
+    const members = onThisPage
+      .filter((one) => one.group_id === group.id && one.id !== widget.id)
+      .map((one) => boxOf(one, { x: group.x ?? 0, y: top, w: 6, h: 4 }))
+    if (!members.length) return { x: group.x ?? 0, y: top, ...size }
+
+    const bottom = Math.max(...members.map((one) => one.y + one.h))
+    const lastRow = members.filter((one) => one.y + one.h === bottom)
+    const right = Math.max(...lastRow.map((one) => one.x + one.w))
+    const rowTop = Math.min(...lastRow.map((one) => one.y))
+    return right + size.w <= (group.x ?? 0) + (group.w ?? 6)
+      ? { x: right, y: rowTop, ...size }
+      : { x: group.x ?? 0, y: bottom, ...size }
+  }
+
+  const putInGroup = (widget: Widget, groupId: string) => {
+    const group = groups.find((one) => one.id === groupId)
+    groupWidget.mutate({
+      widgetId: widget.id,
+      groupId,
+      // Leaving a group is only losing the label; the widget stays put.
+      layout: group ? spotInGroup(group, widget) : undefined,
+    })
+  }
+
+  const changeGroup = (groupId: string, change: Partial<WidgetGroup>) =>
+    saveGroups.mutate(
+      allGroups.map((one) => (one.id === groupId ? { ...one, ...change } : one)),
+    )
+
+  const toggleGroup = (group: WidgetGroup) => {
+    const next = !group.collapsed
+    setFoldedHere((current) => ({ ...current, [group.id]: next }))
+    // Saved by whoever may save it, so the board opens this way next time.
+    if (canEditBoard) changeGroup(group.id, { collapsed: next })
+  }
+
+  const removeGroup = (group: WidgetGroup) => {
+    if (!confirm(`Remove the group "${group.name}"? Its widgets stay on the page.`)) return
+    saveGroups.mutate(allGroups.filter((one) => one.id !== group.id))
   }
 
   return (
@@ -469,6 +719,11 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
                   <button className="btn-secondary" onClick={() => setAdding(true)}>
                     Add widget
                   </button>
+                  {editing && (
+                    <button className="btn-secondary" onClick={addGroup}>
+                      Add group
+                    </button>
+                  )}
                   <button
                     className={editing ? 'btn-primary' : 'btn-secondary'}
                     onClick={() => setEditing(!editing)}
@@ -627,6 +882,20 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
             rendered.isPlaceholderData ? 'opacity-60' : 'opacity-100'
           }`}
         >
+        <div className="relative">
+        <GroupFrames
+          groups={groups}
+          layout={placed.length ? placed : layout}
+          membersOf={membersOf}
+          grid={{
+            columns,
+            rowHeight,
+            canvasWidth,
+            margin: 16,
+            padding: CANVAS_PADDING,
+          }}
+          tone={onDarkGround ? 'rgb(226 232 240 / 0.6)' : undefined}
+        />
         <GridLayout
           className="layout"
           layout={layout}
@@ -641,10 +910,32 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
           containerPadding={[CANVAS_PADDING, CANVAS_PADDING]}
           isDraggable={editing && !isPublic}
           isResizable={editing && !isPublic}
-          onDragStop={onLayoutChange}
-          onResizeStop={onLayoutChange}
+          // Tracked for the frames only; saving is still a drag or a resize.
+          onLayoutChange={setPlaced}
+          onDragStart={rememberPositions}
+          onDragStop={onItemDragStop}
+          onResizeStop={onItemResizeStop}
           draggableHandle=".widget-handle"
         >
+          {groups.map((group) => (
+            <div
+              key={groupItemId(group)}
+              className="overflow-hidden rounded-control border border-dashed"
+              style={{
+                borderColor: group.color || 'rgb(148 163 184 / 0.8)',
+                backgroundColor: 'rgb(148 163 184 / 0.12)',
+              }}
+            >
+              <GroupBar
+                group={group}
+                count={membersOf(group.id).length}
+                editing={editing && !isPublic}
+                onRename={(name) => changeGroup(group.id, { name })}
+                onToggle={() => toggleGroup(group)}
+                onRemove={() => removeGroup(group)}
+              />
+            </div>
+          ))}
           {widgets.map((widget) => (
             <div
               key={widget.id}
@@ -674,6 +965,8 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
                 onComment={isPublic ? undefined : () => setCommenting(widget)}
                 pageNames={pageNames}
                 basePath={basePath}
+                groups={groups}
+                onGroup={(groupId) => putInGroup(widget, groupId)}
                 onMove={(toPage) => moveWidget.mutate({ widgetId: widget.id, page: toPage })}
                 onEdit={() => setEditingWidget(widget)}
                 onRemove={() => {
@@ -705,6 +998,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
             </div>
           ))}
         </GridLayout>
+        </div>
         </div>
       )}
       </div>
