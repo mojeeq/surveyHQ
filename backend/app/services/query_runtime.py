@@ -164,6 +164,10 @@ def install_query_runtime() -> None:
             return ready
 
         datasets._apply_ingest = apply_ingest_with_summary
+        # Kept under its own name, as the other replaced functions above are.
+        # Both appends have to behave the same way, and the pandas one is
+        # otherwise unreachable once this has run - including from a test.
+        datasets.append_frame_pandas = datasets.append_frame_into_dataset
         datasets.append_frame_into_dataset = fast_ingest.append_frame_fast
 
         # Derived merges now COPY their join result directly to Parquet instead
