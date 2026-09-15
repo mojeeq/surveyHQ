@@ -1904,3 +1904,44 @@ def test_the_date_column_can_be_named_when_the_guess_is_wrong(client, auth_heade
     line = next(iter(rendered["widgets"].values()))["datasets"][0]
     assert line["date_variable"] == "member_birth_date"
     assert line["hours_since_record"] > 100_000
+
+
+def test_filtering_a_labelled_numeric_variable(client, auth_headers, dataset_id):
+    """A code set is stored as a number, and a filter has to compare it as one.
+
+    "sex" is whole numbers with labels on them, so the platform classifies it
+    as categorical - and the classification used to decide how the filter value
+    was bound. The value stayed a string, and DuckDB refused to compare a
+    string with a number rather than guessing: "Binder Error: Cannot compare
+    values of type DOUBLE and type VARCHAR". The whole tabulation failed.
+
+    End to end on purpose: what broke was the storage type not reaching the
+    query engine, which no unit test of the compiler can see.
+    """
+    detail = client.get(f"/api/v1/datasets/{dataset_id}", headers=auth_headers).json()
+    sex = next(v for v in detail["variables"] if v["name"] == "sex")
+    assert sex["var_type"] == "categorical", "the classification this rests on"
+    assert sex["storage_type"], "and the storage type it now asks instead"
+
+    response = client.post(
+        "/api/v1/analytics/query",
+        headers=auth_headers,
+        json={
+            "dataset_id": dataset_id,
+            "spec": {
+                "dimensions": [{"variable": "region"}],
+                "measures": [{"agg": "count", "alias": "n"}],
+                "filters": {
+                    "op": "and",
+                    "conditions": [
+                        {"variable": "sex", "operator": "gt", "value": "1"}
+                    ],
+                },
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    # Everyone coded 2, and fewer than everybody.
+    total = sum(row[1] for row in body["rows"])
+    assert 0 < total < 200
