@@ -689,6 +689,17 @@ def add_widget(
     dashboard_id: str, payload: WidgetIn, db: DbSession, user: RequireAnalyst
 ) -> DashboardDetail:
     dashboard = _get_dashboard(dashboard_id, db, user)
+    page = payload.page
+    if payload.group_id:
+        # The same invariant the patch above keeps, and for the same reason: a
+        # widget naming a group that does not exist is in a box nothing draws,
+        # and one naming a group on another page puts that page's frame around
+        # a widget that is not there. An API client creating a widget can break
+        # either just as easily as one moving a widget can.
+        group = _find_group(dashboard, payload.group_id)
+        if group is None:
+            raise HTTPException(status_code=422, detail="That group does not exist")
+        page = _group_page(group)
     widget = Widget(
         dashboard_id=dashboard.id,
         title=payload.title,
@@ -697,9 +708,9 @@ def add_widget(
         indicator_id=payload.indicator_id,
         dataset_id=payload.dataset_id,
         config=payload.config,
-        layout=payload.layout or _next_layout(dashboard, payload.page),
+        layout=payload.layout or _next_layout(dashboard, page),
         position=payload.position or len(dashboard.widgets),
-        page=payload.page,
+        page=page,
         group_id=payload.group_id,
     )
     db.add(widget)
@@ -753,8 +764,8 @@ def update_widget(
         # A group is a box drawn on one page, so joining one from elsewhere
         # means going to that page. Leaving the widget behind would draw its
         # frame around a widget that is not there.
-        if int(group.get("page", 0)) != int(data.get("page", widget.page or 0)):
-            data["page"] = int(group.get("page", 0))
+        if _group_page(group) != int(data.get("page", widget.page or 0)):
+            data["page"] = _group_page(group)
             moving = True
     if moving and not data.get("group_id") and widget.group_id:
         # Carrying a group id onto another page would put the widget inside a
@@ -1553,7 +1564,7 @@ def delete_page(
     # The page is empty of widgets by the check above, so any group still on it
     # is an empty frame nobody can reach. It goes with the page.
     dashboard.groups = [
-        group for group in (dashboard.groups or []) if int(group.get("page", 0)) != index
+        group for group in (dashboard.groups or []) if _group_page(group) != index
     ]
     # Everything after the hole moves down one. Without this the widgets on
     # those pages would keep pointing at the position their page used to hold.
@@ -1593,8 +1604,21 @@ def _repaged(groups: list | None, where: Callable[[int], int]) -> list[dict]:
     page move looked like it worked and persisted nothing.
     """
     return [
-        {**group, "page": where(int(group.get("page", 0)))} for group in (groups or [])
+        {**group, "page": where(_group_page(group))} for group in (groups or [])
     ]
+
+
+def _group_page(group: dict) -> int:
+    """Which page a group is on, for a value that may be missing or null.
+
+    A group is a free-form dict, so a dashboard can be stored with one whose
+    page is null - and `.get("page", 0)` hands back that null rather than the
+    default, which is only used when the key is absent at all. int(None) then
+    answered 500 to a request that was perfectly reasonable. Everything else
+    that reads a group's page already treats null as the first page; this is
+    that, in the one place it was missing.
+    """
+    return int(group.get("page") or 0)
 
 
 def _find_group(dashboard: Dashboard, group_id: str) -> dict | None:

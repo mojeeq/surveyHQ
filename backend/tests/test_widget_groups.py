@@ -227,3 +227,67 @@ def test_the_exported_file_carries_the_groups(client, auth_headers, board):
     # And the membership, or the band would be drawn around nothing.
     inside = [w["title"] for w in payload["widgets"] if w.get("group_id") == "g1"]
     assert inside == ["Done so far"]
+
+
+def test_creating_a_widget_in_a_group_is_checked_too(client, auth_headers, board):
+    """The invariant is the group's, not one endpoint's.
+
+    An API client creating a widget can name a group that does not exist, or
+    one on another page, exactly as easily as one moving a widget can.
+    """
+    refused = client.post(
+        f"/api/v1/dashboards/{board['id']}/widgets",
+        headers=auth_headers,
+        json={"widget_type": "text", "title": "Nowhere", "config": {}, "group_id": "nope"},
+    )
+    assert refused.status_code == 422, refused.text
+
+    # A group on page 1 puts the new widget on page 1, whatever it asked for.
+    created = client.post(
+        f"/api/v1/dashboards/{board['id']}/widgets",
+        headers=auth_headers,
+        json={
+            "widget_type": "text",
+            "title": "Joined at birth",
+            "config": {},
+            "page": 0,
+            "group_id": "g2",
+        },
+    )
+    assert created.status_code == 201, created.text
+    made = _by_title(created.json())["Joined at birth"]
+    assert made["group_id"] == "g2"
+    assert made["page"] == 1
+
+
+def test_a_group_whose_page_is_null_is_the_first_page(client, auth_headers, board):
+    """A group is a free-form dict, so it can be stored with a null page.
+
+    `.get("page", 0)` hands back that null rather than the default, which is
+    only used when the key is absent. Everything else reading a group's page
+    already treats null as the first page, and int(None) answered 500.
+    """
+    stored = client.patch(
+        f"/api/v1/dashboards/{board['id']}",
+        headers=auth_headers,
+        json={"groups": [{"id": "gnull", "name": "Unpaged", "page": None}]},
+    )
+    assert stored.status_code == 200, stored.text
+
+    joined = client.patch(
+        f"/api/v1/dashboards/{board['id']}/widgets/{_widget(board, 'Refusals')}",
+        headers=auth_headers,
+        json={"group_id": "gnull"},
+    )
+    assert joined.status_code == 200, joined.text
+    moved = _by_title(joined.json())["Refusals"]
+    assert moved["group_id"] == "gnull"
+    assert moved["page"] == 0
+
+    created = client.post(
+        f"/api/v1/dashboards/{board['id']}/widgets",
+        headers=auth_headers,
+        json={"widget_type": "text", "title": "Born unpaged", "config": {}, "group_id": "gnull"},
+    )
+    assert created.status_code == 201, created.text
+    assert _by_title(created.json())["Born unpaged"]["page"] == 0
