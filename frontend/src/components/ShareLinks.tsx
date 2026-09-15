@@ -243,7 +243,7 @@ export default function ShareLinks({
 /**
  * The dashboard as a file, for putting somewhere this platform is not.
  *
- * A link needs susoDash running and reachable. A ministry's own web host, a
+ * A link needs SurveyHQ running and reachable. A ministry's own web host, a
  * report's appendix, a laptop taken to a meeting on an island with no
  * connection - those need the board itself, and a picture of it loses the one
  * thing that makes it a dashboard, which is that the reader can narrow it.

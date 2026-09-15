@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build the susoDash user manual as a Word document.
+"""Build the SurveyHQ user manual as a Word document.
 
 The screenshots in docs/manual/ are captured from a running instance carrying
 a demonstration survey, so every picture in the manual is of the real thing
@@ -31,7 +31,7 @@ except ImportError:  # pragma: no cover - a build-time dependency
 
 ROOT = Path(__file__).resolve().parent.parent
 SHOTS = ROOT / "docs" / "manual"
-OUT = ROOT / "docs" / "susoDash-user-manual.docx"
+OUT = ROOT / "docs" / "SurveyHQ-user-manual.docx"
 
 INK = RGBColor(0x1A, 0x1A, 0x1A)
 MUTED = RGBColor(0x6B, 0x6B, 0x6B)
@@ -167,7 +167,7 @@ def footer(document: Document) -> None:
     for section in document.sections:
         paragraph = section.footer.paragraphs[0]
         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        run = paragraph.add_run("susoDash user manual    ")
+        run = paragraph.add_run("SurveyHQ user manual    ")
         run.font.size = Pt(8)
         run.font.color.rgb = MUTED
         field = paragraph.add_run()
@@ -190,7 +190,7 @@ def cover(document: Document) -> None:
         document.add_paragraph()
     title = document.add_paragraph()
     title.alignment = WD_ALIGN_PARAGRAPH.CENTER
-    run = title.add_run("susoDash")
+    run = title.add_run("SurveyHQ")
     run.font.size = Pt(46)
     run.font.bold = True
     run.font.color.rgb = BRAND
@@ -229,7 +229,7 @@ def contents(document: Document) -> None:
         "what the platform actually looks like.",
     )
     for number, name in [
-        ("1", "What susoDash is"),
+        ("1", "What SurveyHQ is"),
         ("2", "Signing in and finding your way around"),
         ("3", "Projects: who can see what"),
         ("4", "Getting data in"),
@@ -254,10 +254,10 @@ def contents(document: Document) -> None:
 
 
 def chapter_what(document: Document) -> None:
-    document.add_heading("1. What susoDash is", level=1)
+    document.add_heading("1. What SurveyHQ is", level=1)
     para(
         document,
-        "susoDash is a platform for watching a survey while it is still in the "
+        "SurveyHQ is a platform for watching a survey while it is still in the "
         "field. It takes the data your interviewers are collecting, and turns it "
         "into the things a survey manager needs during fieldwork: how many "
         "interviews are done and where, whether the numbers coming back look "

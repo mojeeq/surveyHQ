@@ -1,6 +1,6 @@
 # Manual screenshots
 
-The pictures in `docs/susoDash-user-manual.docx`. Every one is a screenshot of a
+The pictures in `docs/SurveyHQ-user-manual.docx`. Every one is a screenshot of a
 running instance carrying a demonstration labour force survey, rather than a
 mock-up, so they have to be re-captured whenever the interface changes.
 

@@ -20,7 +20,7 @@ class Settings(BaseSettings):
     )
 
     # General
-    project_name: str = "susoDash"
+    project_name: str = "SurveyHQ"
     environment: str = "production"
     public_url: str = "http://localhost:8080"
     # The domain shared dashboards are named under, e.g. "dash.example.org",
@@ -98,7 +98,7 @@ class Settings(BaseSettings):
     smtp_user: str = ""
     smtp_password: str = ""
     smtp_tls: bool = True
-    smtp_from: str = "susoDash <no-reply@example.com>"
+    smtp_from: str = "SurveyHQ <no-reply@example.com>"
 
     # R scripts over a dataset.
     #

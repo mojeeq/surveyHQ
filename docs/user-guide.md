@@ -944,7 +944,7 @@ and it exists so that a forwarded link is not a public one.
 
 ### Taking the dashboard away as a file
 
-A link needs susoDash running and reachable. **Share -> Download as a web page**
+A link needs SurveyHQ running and reachable. **Share -> Download as a web page**
 gives you the board itself: one HTML file, which you can put on any web host,
 attach to a report, or send to somebody who will open it from their own disk.
 

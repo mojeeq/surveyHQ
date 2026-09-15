@@ -1,6 +1,6 @@
 # Connecting to Survey Solutions
 
-Survey Solutions is the World Bank's CAPI system. susoDash talks to a
+Survey Solutions is the World Bank's CAPI system. SurveyHQ talks to a
 headquarters server through its REST API to list questionnaires, read interview
 summaries and run data exports.
 
@@ -49,7 +49,7 @@ can see; tick the ones you want and start the import.
 
 What happens next:
 
-1. susoDash asks the server to prepare an export job.
+1. SurveyHQ asks the server to prepare an export job.
 2. It polls until the server reports the job complete. Large surveys take
    minutes - this runs in the background, so you can close the page.
 3. It downloads the archive, keeps it, and unpacks the data files.
@@ -106,7 +106,7 @@ successors.
 
 ## Roster and multi-level data
 
-A Survey Solutions export contains one file per roster level, and susoDash
+A Survey Solutions export contains one file per roster level, and SurveyHQ
 imports all of them. The interview level is what field monitoring needs; the
 rosters are what analysis of people, plots or livestock needs.
 
@@ -116,7 +116,7 @@ merged into one for analysis. See the [user guide](user-guide.md#relating-and-me
 
 ## What gets recognised automatically
 
-After an import, susoDash looks for the standard Survey Solutions columns and
+After an import, SurveyHQ looks for the standard Survey Solutions columns and
 records what it finds:
 
 | Role | Columns it looks for |
@@ -163,13 +163,13 @@ certificate** on the connection - only on a network you trust.
 
 **"... is a link-local address" or "... points at this server itself"**
 The platform will not fetch a survey server from `127.0.0.1`, `localhost`, or
-the `169.254.x.x` range. The first two are susoDash's own container rather than
+the `169.254.x.x` range. The first two are SurveyHQ's own container rather than
 a Survey Solutions server, and the third is where cloud providers put the
 metadata service that hands out machine credentials to anything that asks - so
 a URL pointing there, whether mistyped or planted, is refused rather than
 followed. A server on your own network is fine: `10.x`, `192.168.x` and
 `172.16-31.x` are all allowed, because that is where Survey Solutions usually
-lives. Enter the address as it is reached from the susoDash host.
+lives. Enter the address as it is reached from the SurveyHQ host.
 
 **"Too many connection tests"**
 Testing a connection makes this server fetch a URL you chose, so it is capped at
@@ -191,7 +191,7 @@ connection.
 
 ## Reading interview status codes
 
-Stata exports store status as a number with a label attached. susoDash shows the
+Stata exports store status as a number with a label attached. SurveyHQ shows the
 label. The usual codes:
 
 | Code | Meaning |
