@@ -32,11 +32,13 @@ from app.services.ingest import (
     MISSING_TAG_SUFFIX,
     IngestError,
     IngestResult,
+    add_geopoint_columns,
     clean_columns,
     detect_monitoring_fields,
     ingest_file,
     ingest_frame,
     read_source,
+    stored_geopoint_columns,
 )
 
 logger = get_logger(__name__)
@@ -299,6 +301,16 @@ def append_frame_into_dataset(
     # as two separate columns: the old rows under one, the new rows under the
     # other, and both half empty.
     frame = clean_columns(frame)
+    # A dataset that already holds coordinates has to go on holding them for the
+    # rows arriving now. The incoming batch is small enough to fail the evidence
+    # test the first import passed, so what it produces is decided by what is
+    # stored rather than by this batch. Anything not yet split is left to
+    # ingest_frame below, which sees the whole dataset and can fill every row.
+    add_geopoint_columns(
+        frame,
+        stored_geopoint_columns(existing.columns, frame.columns),
+        variable_labels,
+    )
 
     if SOURCE_COLUMN not in existing.columns:
         # The dataset predates this column; label what is already there rather

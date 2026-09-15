@@ -149,7 +149,14 @@ def append_frame_fast(
 ) -> Any:
     """Append without ever reading the existing survey into pandas."""
     from app.services import datasets as dataset_service
-    from app.services.ingest import IngestError, IngestResult, clean_columns
+    from app.services.ingest import (
+        IngestError,
+        IngestResult,
+        add_geopoint_columns,
+        clean_columns,
+        geopoint_columns,
+        stored_geopoint_columns,
+    )
 
     if not dataset_service.dataset_is_queryable(dataset):
         raise IngestError(
@@ -160,6 +167,17 @@ def append_frame_fast(
     frame = clean_columns(frame)
     before = int(dataset.row_count or 0)
     existing_columns = {name for name, _ in columnar.parquet_columns(existing_path)}
+
+    # This path writes the incoming rows straight to Parquet and unions them
+    # onto the stored file by name, so a combined GPS column has to be split
+    # here or the appended interviews arrive with no coordinates at all. What
+    # the dataset already holds is produced whatever this batch looks like; a
+    # column not yet split is judged on the batch, and the new columns are
+    # reported as added variables, blank for the rows already stored.
+    carried = stored_geopoint_columns(existing_columns, frame.columns)
+    add_geopoint_columns(frame, carried, variable_labels)
+    add_geopoint_columns(frame, geopoint_columns(frame), variable_labels)
+
     incoming_columns = {str(name) for name in frame.columns}
 
     warnings = _duplicate_warnings(existing_path, frame)

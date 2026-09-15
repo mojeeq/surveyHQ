@@ -192,7 +192,7 @@ The original column is kept as it was. The two new ones are what you choose in
 also finds them by itself for field progress and for **Data quality > Missing
 GPS**. The import notes say which columns were split.
 
-Three things worth knowing:
+Four things worth knowing:
 
 - **An existing dataset does not gain the columns retrospectively.** The split
   happens when a file is read, so import the file again - or wait for the next
@@ -203,9 +203,19 @@ Three things worth knowing:
   whose first number is past 90 cannot be a latitude, so it is read the other
   way round rather than plotted in the wrong ocean.
 - **A column is split only when it really is coordinates.** At least nine in ten
-  sampled values have to parse as a point, and most have to carry decimals. A
-  column of small whole-number pairs - a score and a rank, say - is a legal
-  coordinate on paper and nonsense on a map, so it is left alone.
+  sampled values have to be written as a point, and two numbers somewhere in a
+  string does not count: `10.0.0.1` is an address, not a location, and a column
+  of them would otherwise be chosen as the dataset's coordinates. A bare pair
+  also has to carry at least four decimal places, which is about 11 metres and
+  less than any handheld gives. That is what separates a reading from a pair of
+  measurements - a height and a weight are a legal coordinate on paper and
+  nonsense on a map. WKT and GeoJSON are notations nothing else is written in,
+  so they need no such evidence.
+- **A later round lands in the same columns.** Appending a file onto a dataset
+  that already holds split coordinates produces them for the new rows too, even
+  when that round is too small or too sparse to have been recognised on its
+  own. Otherwise the newest fieldwork - the fieldwork anyone is watching a
+  dashboard for - would be exactly what the map left out.
 
 A value that does not parse leaves that row with no coordinates, which is what
 **Missing GPS** counts. It is not turned into `0, 0`.
