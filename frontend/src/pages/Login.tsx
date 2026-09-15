@@ -215,13 +215,19 @@ export default function Login() {
           </button>
 
           {/* Nothing to switch to on a server with sign-up off, and a link that
-              answers 404 is worse than no link. */}
+              answers 404 is worse than no link.
+
+              ink-600 and brand-700 rather than the lighter shades either would
+              normally take at this size: on the card's white background those
+              measure 4.54:1 and 4.60:1, and the lighter ones 3.36:1 and
+              3.68:1, under the 4.5:1 that normal-sized text needs. The dark
+              variants are already past it on the dark card. */}
           {signupOffered && (
-            <p className="mt-4 text-center text-xs text-ink-500 dark:text-dark-600">
+            <p className="mt-4 text-center text-xs text-ink-600 dark:text-dark-600">
               {showing === 'signup' ? 'Already have an account?' : 'No account yet?'}{' '}
               <button
                 type="button"
-                className="font-medium text-brand-600 hover:underline dark:text-brand-400"
+                className="font-medium text-brand-700 hover:underline dark:text-brand-400"
                 onClick={() => changeMode(showing === 'signup' ? 'signin' : 'signup')}
               >
                 {showing === 'signup' ? 'Sign in' : 'Create one'}
