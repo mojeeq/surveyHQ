@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass, field
+from decimal import Decimal
 from typing import Any
 
 import duckdb
@@ -55,10 +56,58 @@ class VariableInfo:
     value_labels: dict[str, str] = field(default_factory=dict)
     # Stata tagged missings present on this variable, e.g. [".a", ".b"]
     missing_tags: list[str] = field(default_factory=list)
+    # How the column is stored, as the ingest that wrote it named the type.
+    # Two vocabularies reach this, because two ingest paths write it: a pandas
+    # dtype ("float64", "object") for a file read whole, and a DuckDB type
+    # ("DOUBLE", "VARCHAR") for one read through Parquet.
+    storage_type: str = ""
 
     @property
     def is_numeric(self) -> bool:
+        """Whether this behaves as a quantity: what to measure, how to summarise.
+
+        An analytical judgement, not a fact about the file. A column of whole
+        numbers carrying value labels is stored as a number and read as a code
+        set, and this says code set.
+        """
         return self.var_type in ("numeric", "boolean")
+
+    @property
+    def number_kind(self) -> str:
+        """Which family of number the stored column is: integer, decimal, float.
+
+        Empty for a column that holds something else. The distinction matters
+        because a filter value is bound as a Python object and the binding has
+        to be exact: an integer wider than 2**53 or a decimal with more digits
+        than a double can carry comes back changed if it goes through `float`,
+        and then matches the wrong rows rather than failing.
+        """
+        kind = self.storage_type.lower()
+        if not kind:
+            # Written by an ingest old enough not to have recorded it. The
+            # analytical type is the best that is left, which is what this
+            # decision used on its own before.
+            return "float" if self.is_numeric else ""
+        if "datetime" in kind or "timestamp" in kind or "date" in kind:
+            return ""
+        if "int" in kind:
+            return "integer"
+        if "decimal" in kind or "numeric" in kind:
+            return "decimal"
+        if "float" in kind or "double" in kind or "real" in kind:
+            return "float"
+        return ""
+
+    @property
+    def holds_numbers(self) -> bool:
+        """Whether the stored column is a number, whatever kind of variable it is.
+
+        The other question entirely, and the one a filter has to ask. A value
+        compared against a DOUBLE column has to be bound as a number; bound as
+        text, DuckDB refuses the comparison outright rather than guessing which
+        side to convert, and the whole query fails.
+        """
+        return bool(self.number_kind)
 
     @property
     def is_datetime(self) -> bool:
@@ -82,6 +131,7 @@ class DatasetContext:
                 var_type=getattr(v.var_type, "value", str(v.var_type)),
                 value_labels=v.value_labels or {},
                 missing_tags=list(v.missing_tags or []),
+                storage_type=str(getattr(v, "storage_type", "") or ""),
             )
             for v in dataset.variables
         }
@@ -282,14 +332,44 @@ class SQLBuilder:
 
     @staticmethod
     def _coerce(info: VariableInfo, value: Any) -> Any:
-        if value is None or not info.is_numeric:
-            return value
-        if isinstance(value, bool):
+        """A filter value in the type the stored column will compare against.
+
+        Decided by what the column holds rather than by what kind of variable
+        it is. Those are different questions, and asking the second one here is
+        what made "age over 15" fail on a census: age is stored as a number and
+        classified as a code set, because it carries labels for "don't know"
+        and "refused" - so the 15 stayed a string and DuckDB refused to compare
+        it with a DOUBLE.
+
+        A column that genuinely holds text is left alone, which is the other
+        half of the same rule: an identifier stored as "007" has to go on
+        matching "007" rather than becoming 7.
+
+        The number is read exactly and bound in its own family. Going through
+        `float` would be enough for most survey data and wrong for the rest: a
+        household id past 2**53 and a decimal carrying more digits than a
+        double holds both come back as a near neighbour, and a near neighbour
+        does not fail - it quietly matches the wrong rows.
+        """
+        kind = info.number_kind
+        if value is None or not kind or isinstance(value, bool):
             return value
         try:
-            return float(value)
-        except (TypeError, ValueError):
+            exact = Decimal(str(value))
+        except (TypeError, ValueError, ArithmeticError):
+            # Not a number at all. Bound as it came, so the filter either does
+            # something sensible or says so, rather than turning into a 0.
             return value
+        if not exact.is_finite():
+            # NaN and the infinities have no exact form to preserve.
+            return float(exact)
+        if kind == "integer":
+            # "2.5" against a column of whole numbers is still a real
+            # comparison; it is only the whole ones that must stay whole.
+            return int(exact) if exact == exact.to_integral_value() else exact
+        if kind == "decimal":
+            return exact
+        return float(exact)
 
     # -- full statements ---------------------------------------------------
     def build_aggregate(self, spec: QuerySpec) -> tuple[str, list[Any]]:
