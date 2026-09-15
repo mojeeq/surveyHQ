@@ -170,6 +170,46 @@ map is ever briefly pointing at nothing.
 > map setting that is not on the **✎** panel afterwards, so changing it means
 > deleting the widget and adding it again.
 
+### If the GPS arrived as one column
+
+Not every export gives you two columns. ODK Central writes a whole reading into
+a single field - `-17.7333 168.3273 42.0 5.0`, being latitude, longitude,
+altitude and accuracy - a hand-assembled CSV often holds `-17.7333,168.3273`,
+and a database extract can hold `POINT(168.3273 -17.7333)` or a GeoJSON point.
+All of those arrive as text, and the **Latitude** and **Longitude** lists offer
+numeric variables only, so the reading was in the dataset and unreachable.
+
+**SurveyHQ splits such a column on import.** A column named `gps` holding any of
+those forms gains two numeric columns beside it:
+
+| Column | Holds |
+|---|---|
+| `gps__latitude` | The latitude, as a number |
+| `gps__longitude` | The longitude, as a number |
+
+The original column is kept as it was. The two new ones are what you choose in
+**Latitude** and **Longitude**, and because of how they are named the platform
+also finds them by itself for field progress and for **Data quality > Missing
+GPS**. The import notes say which columns were split.
+
+Three things worth knowing:
+
+- **An existing dataset does not gain the columns retrospectively.** The split
+  happens when a file is read, so import the file again - or wait for the next
+  sync on a connection - and the columns appear.
+- **The order is worked out, not assumed.** WKT and GeoJSON put longitude first
+  by specification and are read that way. A bare pair is read latitude first,
+  which is what ODK, Survey Solutions and every handheld write; and a bare pair
+  whose first number is past 90 cannot be a latitude, so it is read the other
+  way round rather than plotted in the wrong ocean.
+- **A column is split only when it really is coordinates.** At least nine in ten
+  sampled values have to parse as a point, and most have to carry decimals. A
+  column of small whole-number pairs - a score and a rank, say - is a legal
+  coordinate on paper and nonsense on a map, so it is left alone.
+
+A value that does not parse leaves that row with no coordinates, which is what
+**Missing GPS** counts. It is not turned into `0, 0`.
+
 Pins are **places, not rows**. The server groups by coordinate before it sends
 anything, so several interviews at one household are one pin carrying a number,
 rather than a pile of pins hiding each other. Clicking a pin tells you the
@@ -439,6 +479,7 @@ reading will still reach it for a large province.
 | Half the map is grey | The widget was resized. It corrects itself; if it does not, reload. |
 | "showing the busiest only" | More than 50,000 places. Filter the dashboard. |
 | Pins are one dot in the middle of the ocean | Latitude and longitude are the wrong way round. |
+| The GPS variable is not in the **Latitude** list | It holds both coordinates as text. Import the file again: the split gives it `__latitude` and `__longitude` columns. See [section 4](#4-putting-a-map-on-a-dashboard). |
 
 ---
 

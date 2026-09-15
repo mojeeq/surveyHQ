@@ -9,6 +9,7 @@ more useful showing "Female" than "2".
 from __future__ import annotations
 
 import datetime as dt
+import json
 import math
 import re
 from dataclasses import dataclass, field
@@ -59,6 +60,146 @@ class IngestResult:
     file_size: int
     variables: list[VariableMeta]
     warnings: list[str] = field(default_factory=list)
+
+
+# --- a GPS question that arrived as one column ------------------------------
+#
+# Survey Solutions exports a geopoint as four columns and the platform finds
+# them by name. Plenty of other exports do not: ODK writes "lat lon altitude
+# accuracy" into a single field, a CSV assembled by hand often holds "lat,lon",
+# and a database extract can hold WKT or GeoJSON. All of those arrive as text,
+# and a text column cannot be a map: the widget offers numeric variables only,
+# so the data was in the dataset and unreachable.
+#
+# Splitting happens here rather than in the map, so the map, the missing-GPS
+# quality check, field progress and R all see the same two numeric columns.
+
+GEOPOINT_LAT_SUFFIX = "__latitude"
+GEOPOINT_LON_SUFFIX = "__longitude"
+# Enough rows to be sure of a column's shape without reading a census twice.
+GEOPOINT_SAMPLE = 500
+# Nearly all of them have to parse. A column where a third of the values are
+# coordinates is a column of something else that sometimes looks like one.
+GEOPOINT_MIN_SHARE = 0.9
+
+_WKT_POINT = re.compile(r"^\s*point\s*z?\s*m?\s*\(([^)]*)\)\s*$", re.IGNORECASE)
+_NUMBER = re.compile(r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
+
+
+def parse_geopoint(value: Any) -> tuple[float, float] | None:
+    """Latitude and longitude out of one field holding both, or None.
+
+    The orders differ and are not guessable from the numbers alone, so each
+    notation is recognised rather than assumed: WKT and GeoJSON put longitude
+    first by specification, while a bare pair is latitude first - which is what
+    ODK, Survey Solutions and every handheld write.
+    """
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+
+    lon_first = False
+    wkt = _WKT_POINT.match(text)
+    if wkt:
+        text, lon_first = wkt.group(1), True
+    elif text.startswith("{"):
+        try:
+            payload = json.loads(text)
+        except ValueError:
+            return None
+        if not isinstance(payload, dict) or str(payload.get("type", "")).lower() != "point":
+            return None
+        coordinates = payload.get("coordinates") or []
+        if not isinstance(coordinates, list) or len(coordinates) < 2:
+            return None
+        text, lon_first = f"{coordinates[0]} {coordinates[1]}", True
+
+    numbers = [float(found) for found in _NUMBER.findall(text)[:2]]
+    if len(numbers) < 2:
+        return None
+    latitude, longitude = (numbers[1], numbers[0]) if lon_first else (numbers[0], numbers[1])
+
+    # A first value past 90 cannot be a latitude, so a bare pair written the
+    # other way round is read the other way round rather than plotted in the
+    # wrong ocean.
+    if not lon_first and abs(latitude) > 90 and abs(longitude) <= 90:
+        latitude, longitude = longitude, latitude
+
+    if abs(latitude) > 90 or abs(longitude) > 180:
+        return None
+    return latitude, longitude
+
+
+def geopoint_columns(frame: pd.DataFrame) -> list[str]:
+    """Which of a frame's columns hold a latitude and a longitude together.
+
+    Separate from the splitting itself so a file read in chunks can decide once,
+    off the first chunk, and then treat every chunk the same way. A column that
+    is split in one chunk and not the next produces two Parquet schemas and an
+    unreadable file.
+    """
+    found: list[str] = []
+    for column in list(frame.columns):
+        series = frame[column]
+        if not pd.api.types.is_object_dtype(series):
+            continue
+        if (
+            f"{column}{GEOPOINT_LAT_SUFFIX}" in frame.columns
+            or f"{column}{GEOPOINT_LON_SUFFIX}" in frame.columns
+        ):
+            continue
+
+        values = series.dropna()
+        if len(values) < 5:
+            continue
+        # A wide survey is mostly text columns and none of them is a location.
+        # Three values settle almost all of them, so the sample below is only
+        # ever parsed for a column that could plausibly be coordinates.
+        if not any(parse_geopoint(value) is not None for value in values.head(3)):
+            continue
+        sample = values.head(GEOPOINT_SAMPLE)
+        parsed = [parse_geopoint(value) for value in sample]
+        if sum(one is not None for one in parsed) < GEOPOINT_MIN_SHARE * len(sample):
+            continue
+        # A reading off a device carries decimals. Without this, a column of
+        # small whole-number pairs - a score out of ten and a rank, say - is a
+        # valid coordinate on paper and nonsense on a map.
+        if sum("." in str(value) for value in sample) < len(sample) / 2:
+            continue
+        found.append(column)
+    return found
+
+
+def add_geopoint_columns(
+    frame: pd.DataFrame, columns: list[str], variable_labels: dict[str, str]
+) -> None:
+    """Put a latitude and a longitude beside each of the named columns."""
+    for column in columns:
+        if column not in frame.columns:
+            continue
+        pairs = frame[column].map(parse_geopoint)
+        frame[f"{column}{GEOPOINT_LAT_SUFFIX}"] = pd.to_numeric(
+            pairs.map(lambda pair: pair[0] if pair else None), errors="coerce"
+        )
+        frame[f"{column}{GEOPOINT_LON_SUFFIX}"] = pd.to_numeric(
+            pairs.map(lambda pair: pair[1] if pair else None), errors="coerce"
+        )
+        label = variable_labels.get(column) or column
+        variable_labels.setdefault(f"{column}{GEOPOINT_LAT_SUFFIX}", f"{label} (latitude)")
+        variable_labels.setdefault(f"{column}{GEOPOINT_LON_SUFFIX}", f"{label} (longitude)")
+
+
+def split_geopoints(frame: pd.DataFrame, variable_labels: dict[str, str]) -> list[str]:
+    """Give every combined GPS column a latitude and a longitude beside it.
+
+    Named with the suffixes the platform already looks for, so a split column is
+    picked up as the dataset's location without anybody configuring it.
+    """
+    columns = geopoint_columns(frame)
+    add_geopoint_columns(frame, columns, variable_labels)
+    return columns
 
 
 def _clean_column_name(name: Any, index: int) -> str:
@@ -526,6 +667,14 @@ def ingest_frame(
         if len(types) > 1:
             frame[column] = series.astype(str).replace({"nan": None, "None": None})
 
+    # After the loop above, because a combined GPS column is exactly the kind
+    # of text column it leaves alone.
+    for column in split_geopoints(frame, variable_labels):
+        warnings.append(
+            f'Split the location in "{column}" into '
+            f'"{column}{GEOPOINT_LAT_SUFFIX}" and "{column}{GEOPOINT_LON_SUFFIX}".'
+        )
+
     metas = build_metadata(frame, variable_labels, value_labels)
 
     destination_dir.mkdir(parents=True, exist_ok=True)
@@ -701,6 +850,7 @@ def _stream_stata(path: Path, destination_dir: Path, warnings: list[str]) -> Ing
 
     chunk_rows = _chunk_rows(meta.number_columns or 0)
     date_columns: set[str] | None = None
+    geopoints: list[str] | None = None
     writer: pq.ParquetWriter | None = None
     rename_map: dict[str, str] = {}
     schema: pa.Schema | None = None
@@ -725,6 +875,13 @@ def _stream_stata(path: Path, destination_dir: Path, warnings: list[str]) -> Ing
                 date_columns = set(_coerce_datetime_columns(chunk))
             else:
                 _coerce_datetime_columns(chunk, only=date_columns)
+
+            # Decided off the first chunk and then applied to all of them: a
+            # column split in one chunk and not the next gives the file two
+            # schemas, and the second write fails against the first.
+            if geopoints is None:
+                geopoints = geopoint_columns(chunk)
+            add_geopoint_columns(chunk, geopoints, variable_labels)
 
             table = pa.Table.from_pandas(chunk, preserve_index=False)
             if writer is None:
@@ -752,6 +909,11 @@ def _stream_stata(path: Path, destination_dir: Path, warnings: list[str]) -> Ing
         f"Read in chunks of {chunk_rows:,} rows because the file is large; "
         f"statistics were computed from the stored data."
     )
+    for column in geopoints or []:
+        warnings.append(
+            f'Split the location in "{column}" into '
+            f'"{column}{GEOPOINT_LAT_SUFFIX}" and "{column}{GEOPOINT_LON_SUFFIX}".'
+        )
     return IngestResult(
         parquet_path=parquet_path,
         row_count=rows,

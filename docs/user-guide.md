@@ -154,6 +154,16 @@ say what happens next:
   so the rounds stay distinguishable. Appending a cumulative export counts the
   same interviews twice.
 
+**A GPS reading held in one column is split as it comes in.** ODK writes
+`-17.7333 168.3273 42.0 5.0` into a single field, a hand-made CSV often holds
+`-17.7333,168.3273`, and a database extract can hold WKT or GeoJSON. All of
+those arrive as text, which a map cannot use, so a column named `gps` gains
+`gps__latitude` and `gps__longitude` beside it as numbers. The original stays as
+it was, and the import notes say which columns were split. A dataset imported
+before this existed gains the columns the next time the file is read. The
+details, including how the order is worked out, are in
+[the GIS manual](gis-manual.md#4-putting-a-map-on-a-dashboard).
+
 ### A questionnaire that changed mid-fieldwork
 
 A form revised during collection exports as separate versions, each a zip
