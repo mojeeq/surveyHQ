@@ -10,7 +10,7 @@ import { copyableIn, copyChart, copyTable } from "@/lib/clipboard";
 
 import { useToast } from "@/hooks/useToast";
 
-import type { Widget } from "@/lib/types";
+import type { Widget, WidgetGroup } from "@/lib/types";
 
 import ChartCard from "@/components/ChartCard";
 
@@ -46,6 +46,8 @@ export function WidgetFrame({
   canEdit,
   theme,
   pageNames,
+  groups,
+  onGroup,
   basePath,
   onMove,
   onEdit,
@@ -70,6 +72,9 @@ export function WidgetFrame({
   theme: string;
   /** Every page on this dashboard, so a widget can be sent to another one. */
   pageNames: string[];
+  /** The groups on this widget's page, for the menu that puts it in one. */
+  groups?: WidgetGroup[];
+  onGroup?: (groupId: string) => void;
   onMove: (page: number) => void;
   onEdit: () => void;
   onRemove: () => void;
@@ -304,6 +309,21 @@ export function WidgetFrame({
                   checked: (widget.page ?? 0) === index,
                   onClick: () => onMove(index),
                 }))
+              : [],
+            // Which group it belongs to, in its own band. A widget in one is
+            // moved and folded with the rest of its group, so this is the one
+            // line that says what the box around it means.
+            canEdit && onGroup && (groups ?? []).length > 0
+              ? [
+                  ...(groups ?? []).map((group) => ({
+                    label: `Put in "${group.name}"`,
+                    checked: widget.group_id === group.id,
+                    onClick: () => onGroup(group.id),
+                  })),
+                  ...(widget.group_id
+                    ? [{ label: "Take out of its group", onClick: () => onGroup("") }]
+                    : []),
+                ]
               : [],
             canEdit
               ? [

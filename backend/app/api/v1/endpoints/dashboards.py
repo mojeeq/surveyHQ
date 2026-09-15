@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Annotated, Any
 
@@ -612,6 +613,7 @@ def create_dashboard(
         project_id=payload.project_id,
         theme=payload.theme,
         pages=payload.pages,
+        groups=payload.groups,
         appearance=payload.appearance,
         drilldown=payload.drilldown,
     )
@@ -642,6 +644,16 @@ def update_dashboard(
 
     if widgets is not None:
         _replace_widgets(db, dashboard, [WidgetIn.model_validate(w) for w in widgets])
+
+    if "groups" in data:
+        # Deleting a group is sending a list without it. A widget still naming
+        # it would be in a group that does not exist: invisible to every menu
+        # offering to move it out, and drawn inside no frame. It comes loose
+        # instead, which is what deleting the box around something means.
+        live = {str(group.get("id")) for group in (dashboard.groups or [])}
+        for widget in dashboard.widgets:
+            if widget.group_id and widget.group_id not in live:
+                widget.group_id = ""
 
     record(
         db,
@@ -688,6 +700,7 @@ def add_widget(
         layout=payload.layout or _next_layout(dashboard, payload.page),
         position=payload.position or len(dashboard.widgets),
         page=payload.page,
+        group_id=payload.group_id,
     )
     db.add(widget)
     db.commit()
@@ -733,6 +746,20 @@ def update_widget(
     moving = "page" in data and int(data["page"]) != (widget.page or 0)
     if moving and not 0 <= int(data["page"]) < max(len(dashboard.pages or []), 1):
         raise HTTPException(status_code=422, detail="That page does not exist")
+    if data.get("group_id"):
+        group = _find_group(dashboard, data["group_id"])
+        if group is None:
+            raise HTTPException(status_code=422, detail="That group does not exist")
+        # A group is a box drawn on one page, so joining one from elsewhere
+        # means going to that page. Leaving the widget behind would draw its
+        # frame around a widget that is not there.
+        if int(group.get("page", 0)) != int(data.get("page", widget.page or 0)):
+            data["page"] = int(group.get("page", 0))
+            moving = True
+    if moving and not data.get("group_id") and widget.group_id:
+        # Carrying a group id onto another page would put the widget inside a
+        # frame drawn on the page it just left.
+        data["group_id"] = ""
     for field, value in data.items():
         setattr(widget, field, value)
     if moving and "layout" not in data:
@@ -1523,11 +1550,19 @@ def delete_page(
 
     pages.pop(index)
     dashboard.pages = pages
+    # The page is empty of widgets by the check above, so any group still on it
+    # is an empty frame nobody can reach. It goes with the page.
+    dashboard.groups = [
+        group for group in (dashboard.groups or []) if int(group.get("page", 0)) != index
+    ]
     # Everything after the hole moves down one. Without this the widgets on
     # those pages would keep pointing at the position their page used to hold.
     for widget in dashboard.widgets:
         if (widget.page or 0) > index:
             widget.page = (widget.page or 0) - 1
+    dashboard.groups = _repaged(
+        dashboard.groups, lambda page: page - 1 if page > index else page
+    )
     db.commit()
     db.refresh(dashboard)
     return dashboard
@@ -1545,6 +1580,27 @@ def _renumber(dashboard: Dashboard, mapping: dict[int, int]) -> None:
         current = widget.page or 0
         if current in mapping:
             widget.page = mapping[current]
+    dashboard.groups = _repaged(dashboard.groups, lambda page: mapping.get(page, page))
+
+
+def _repaged(groups: list | None, where: Callable[[int], int]) -> list[dict]:
+    """The groups with each one's page put through `where`.
+
+    Every dict is rebuilt rather than edited. A JSON column is not change
+    tracked, so SQLAlchemy decides whether to write it by comparing the new
+    value against the loaded one - and editing the loaded dicts in place makes
+    those two the same object, which compares equal and is never written. The
+    page move looked like it worked and persisted nothing.
+    """
+    return [
+        {**group, "page": where(int(group.get("page", 0)))} for group in (groups or [])
+    ]
+
+
+def _find_group(dashboard: Dashboard, group_id: str) -> dict | None:
+    return next(
+        (g for g in (dashboard.groups or []) if str(g.get("id")) == group_id), None
+    )
 
 
 @router.put("/{dashboard_id}/hostname", response_model=DashboardOut)
@@ -1660,6 +1716,7 @@ def _replace_widgets(db: DbSession, dashboard: Dashboard, widgets: list[WidgetIn
         widget.layout = incoming.layout
         widget.position = position
         widget.page = incoming.page
+        widget.group_id = incoming.group_id
     for widget_id, widget in existing.items():
         if widget_id not in seen:
             db.delete(widget)

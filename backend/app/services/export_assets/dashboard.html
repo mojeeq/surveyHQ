@@ -40,6 +40,17 @@
   }
   .filters .clear { border: 0; background: none; color: var(--brand); font: inherit; font-size: 12px; cursor: pointer; }
   .grid { display: grid; grid-template-columns: repeat(12, 1fr); grid-auto-rows: 42px; gap: 14px; }
+  /* A group is a band here: this page flows its widgets rather than pinning
+     them to coordinates, so there is no rectangle to draw a frame around. */
+  .group {
+    border: 1px dashed var(--ink-200); border-radius: 10px;
+    padding: 10px 12px 14px; margin: 16px 0;
+  }
+  .group > summary {
+    cursor: pointer; font-size: 12px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 10px;
+  }
+  .group[open] > summary { margin-bottom: 12px; }
   .card {
     background: var(--surface); border: 1px solid var(--ink-200); border-radius: 10px;
     display: flex; flex-direction: column; overflow: hidden; min-width: 0;
@@ -753,11 +764,38 @@
       app.appendChild(bar)
     }
 
-    var grid = el('div', 'grid')
-    DATA.widgets.filter(function (widget) { return widget.page === page }).forEach(function (widget) {
-      grid.appendChild(card(widget))
+    // Groups are bands here rather than the boxes they are on the platform.
+    // This page flows its widgets rather than pinning them to coordinates, so
+    // there is no rectangle to draw a frame around - but the name still has to
+    // survive, because it is what says why these widgets are together. A
+    // folded group exports folded, and opens on a click like any summary.
+    var mine = DATA.widgets.filter(function (widget) { return widget.page === page })
+    var groups = (DATA.groups || []).filter(function (group) { return group.page === page })
+    var ungrouped = mine.filter(function (widget) {
+      return !widget.group_id || !groups.some(function (g) { return g.id === widget.group_id })
     })
-    app.appendChild(grid)
+
+    if (ungrouped.length) {
+      var loose = el('div', 'grid')
+      ungrouped.forEach(function (widget) { loose.appendChild(card(widget)) })
+      app.appendChild(loose)
+    }
+
+    groups.forEach(function (group) {
+      var members = mine.filter(function (widget) { return widget.group_id === group.id })
+      if (!members.length) return
+      var band = document.createElement('details')
+      band.className = 'group'
+      band.open = !group.collapsed
+      var name = document.createElement('summary')
+      name.textContent = group.name
+      if (group.color) { name.style.color = group.color; band.style.borderColor = group.color }
+      band.appendChild(name)
+      var inner = el('div', 'grid')
+      members.forEach(function (widget) { inner.appendChild(card(widget)) })
+      band.appendChild(inner)
+      app.appendChild(band)
+    })
 
     // The charts are built while their cards are still being assembled, so at
     // that moment the containers are not in the document and have no size. A

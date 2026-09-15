@@ -672,18 +672,57 @@ To build a dashboard:
 5. **Pages** - **+ Page** adds one; double-click a tab to rename it, and ◀ ▶
    move it earlier or later. A page takes its widgets with it, so reordering is
    safe. Each page lays out on its own and has its own filters.
-6. **Filters** - see below.
-7. **Appearance** - ready-made looks, the title band, the page ground, the
+6. **Add group** - a named box around a handful of widgets; see below. It is
+   offered while you are arranging, because that is when a board is being put
+   in order.
+7. **Filters** - see below.
+8. **Appearance** - ready-made looks, the title band, the page ground, the
    board's own background, the canvas and transparency; see below.
-8. **Colours** - the picker in the header sets which palette this dashboard's
+9. **Colours** - the picker in the header sets which palette this dashboard's
    charts use. The alternatives are the same hues in a different order, chosen
    for how far apart neighbouring series stay for colour-blind readers.
-9. **Share link** - generates a read-only public URL, copied to your clipboard.
-   Anyone with the link can view the dashboard without an account. Press again
-   to revoke it.
-10. **Give it a name** - where an administrator has configured a dashboard
+10. **Share link** - generates a read-only public URL, copied to your clipboard.
+    Anyone with the link can view the dashboard without an account. Press again
+    to revoke it.
+11. **Give it a name** - where an administrator has configured a dashboard
     domain, a shared dashboard can also answer on its own address, such as
     `labour-force.dash.example.org`. See below.
+
+### Grouping widgets
+
+A page answers "which board am I on". A group answers "what are these four
+tiles for" - and lets them be moved and folded away as the one thing they
+already were in the reader's head.
+
+**Move & resize → Add group**, and name it. A named box appears at the bottom
+of the page with its title bar on top.
+
+| To | Do this |
+|---|---|
+| Put a widget in it | The widget's **⋯** menu → **Put in "…"**. It moves under the group's bar, beside the last member if there is room and on a new row if not. |
+| Take one out | The same menu → **Take out of its group**. It stays where it is; only the label goes. |
+| Move the whole group | Drag its title bar. Every widget in it travels the same distance, so the arrangement inside is kept. |
+| Make the box wider | Drag the title bar's corner, the way you would resize a widget. |
+| Rename it | The **✎** on the title bar. |
+| Fold it away | The caret at the left of the title bar. |
+| Remove the group | The **✕** on the title bar. Its widgets stay on the page; only the box goes. |
+
+**Folding gives the room back.** A folded group's widgets leave the board
+rather than being hidden in place, so everything below closes up and the bar
+says how many are inside. Opening it again puts them back exactly where they
+were - folding never moves anything.
+
+**Readers see the groups too.** The names and boxes are part of how the board
+reads, so they appear on a share link, on a public dashboard and in the
+exported HTML file, where a group becomes a labelled band you can open and
+close. A reader may fold a group to see past it; that is theirs alone and
+changes nothing for anyone else. What the board opens as is whatever whoever
+built it left folded.
+
+**A group belongs to one page.** Putting a widget into a group on another page
+takes the widget to that page, because a box drawn on one page cannot be around
+a widget sitting on a different one. Moving a widget to another page takes it
+out of its group for the same reason.
 
 ### The widgets
 
