@@ -794,6 +794,17 @@
       var inner = el('div', 'grid')
       members.forEach(function (widget) { inner.appendChild(card(widget)) })
       band.appendChild(inner)
+      // A chart measures its box once, when it starts. Inside a band that was
+      // exported folded that box is nothing, and the one resize below runs
+      // while it is still nothing - so the chart stays blank after the band is
+      // opened, until the window itself happens to be resized. Measuring again
+      // on the way open is what makes a folded group worth exporting folded.
+      band.addEventListener('toggle', function () {
+        if (!band.open) return
+        drawn.forEach(function (instance) {
+          if (band.contains(instance.getDom())) instance.resize()
+        })
+      })
       app.appendChild(band)
     })
 
