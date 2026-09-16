@@ -57,7 +57,15 @@ export default function CrosstabTable({
   // floor is withheld, and the reader has to be told that rather than left to
   // read a blank as an absence.
   const hidden = (row: number, cell: number) => result.suppressed?.[row]?.[cell] ?? false
-  const withheldCells = (result.suppressed ?? []).some((row) => row.some(Boolean))
+  // A margin is withheld by arriving null, the same way a cell is. It happens:
+  // a one-way table's row total is its single cell, so publishing it would
+  // hand back exactly what the cell refused to say.
+  const margin = (total: number | null) => (total === null ? '*' : formatNumber(total))
+  const withheldCells =
+    (result.suppressed ?? []).some((row) => row.some(Boolean)) ||
+    (result.row_totals_suppressed ?? []).some(Boolean) ||
+    (result.column_totals_suppressed ?? []).some(Boolean) ||
+    (result.grand_total_suppressed ?? false)
   const withheldRows = result.rows_withheld ?? 0
 
   return (
@@ -123,7 +131,7 @@ export default function CrosstabTable({
                 )}
                 {showRowTotals && (
                   <td className="text-right font-semibold tabular-nums">
-                    {formatNumber(result.row_totals[rowIndex])}
+                    {margin(result.row_totals[rowIndex])}
                   </td>
                 )}
               </tr>
@@ -133,13 +141,11 @@ export default function CrosstabTable({
                 <td className="sticky left-0 bg-ink-50 dark:bg-dark-100">Total</td>
                 {result.column_totals.map((total, index) => (
                   <td key={index} className="text-right tabular-nums">
-                    {formatNumber(total)}
+                    {margin(total)}
                   </td>
                 ))}
                 {showRowTotals && (
-                  <td className="text-right tabular-nums">
-                    {formatNumber(result.grand_total)}
-                  </td>
+                  <td className="text-right tabular-nums">{margin(result.grand_total)}</td>
                 )}
               </tr>
             )}
@@ -177,7 +183,8 @@ export default function CrosstabTable({
             `${withheldRows} ${withheldRows === 1 ? 'category' : 'categories'} below that floor ${
               withheldRows === 1 ? 'is' : 'are'
             } not listed. `}
-          Totals cover every record, including the withheld ones.
+          Published totals cover every record, including the withheld ones; a
+          total that would give a withheld cell back is withheld too.
         </p>
       )}
 

@@ -572,9 +572,13 @@ clears the weight rather than carrying it along out of sight.
 resting on fewer records than the floor reads `*` instead of a number, and a
 note under the table says so. An empty cell still reads `-`: the two say
 different things, and a reader has to be able to tell "nobody was here" from
-"we are not telling you". Totals are the true ones, so a second cell in the
-same row or column is sometimes withheld as well - otherwise the first could be
-recovered by subtraction. See the deployment guide for how to set the floor.
+"we are not telling you".
+
+A published total is the true one, but a total can be withheld too: a row total
+of a single withheld cell is that cell. For the same reason a second cell in
+the same row or column sometimes goes as well, since the first could otherwise
+be recovered by subtraction. See the deployment guide for how to set the
+floor.
 
 A cross-tabulation is not capped at a readable size: up to 5,000 rows and 1,000
 columns come back, so tabulating by interview key or enumeration area gives you

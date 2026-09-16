@@ -493,6 +493,7 @@
     table.appendChild(thead)
     var tbody = document.createElement('tbody')
     var suffix = spec.percentages === 'none' ? '' : '%'
+    var margin = function (value) { return value === null ? '*' : num(value) }
     fixed.row_labels.forEach(function (label, i) {
       var line = document.createElement('tr')
       line.appendChild(el('td', '', label))
@@ -501,15 +502,17 @@
         var text = hidden ? '*' : value === null ? '-' : num(value) + suffix
         line.appendChild(el('td', 'n', text))
       })
-      if (rowTotals) line.appendChild(el('td', 'n total', num(fixed.row_totals[i])))
+      if (rowTotals) {
+        line.appendChild(el('td', 'n total', margin(fixed.row_totals[i])))
+      }
       tbody.appendChild(line)
     })
     if (totals && fixed.row_labels.length > 1) {
       var last = document.createElement('tr')
       last.className = 'total'
       last.appendChild(el('td', '', 'Total'))
-      fixed.column_totals.forEach(function (t) { last.appendChild(el('td', 'n', num(t))) })
-      if (rowTotals) last.appendChild(el('td', 'n', num(fixed.grand_total)))
+      fixed.column_totals.forEach(function (t) { last.appendChild(el('td', 'n', margin(t))) })
+      if (rowTotals) last.appendChild(el('td', 'n', margin(fixed.grand_total)))
       tbody.appendChild(last)
     }
     table.appendChild(tbody)
@@ -518,17 +521,15 @@
     var withheld = fixed.suppressed.some(function (row) {
       return row.some(function (cell) { return cell })
     })
-    if (withheld || fixed.rows_withheld > 0) {
-      var note = el('p', 'note')
-      note.textContent =
-        (withheld ? '* withheld to protect fewer than ' + fixed.threshold + ' records. ' : '') +
-        (fixed.rows_withheld > 0
-          ? fixed.rows_withheld + ' categor' + (fixed.rows_withheld === 1 ? 'y' : 'ies') +
-            ' below that floor are not listed. '
-          : '') +
-        'Totals cover every record, including the withheld ones. This table does not respond to the filters above.'
-      body.appendChild(note)
-    }
+    var note = el('p', 'note')
+    note.textContent =
+      (withheld ? '* withheld to protect fewer than ' + fixed.threshold + ' records. ' : '') +
+      (fixed.rows_withheld > 0
+        ? fixed.rows_withheld + ' categor' + (fixed.rows_withheld === 1 ? 'y' : 'ies') +
+          ' below that floor are not listed. '
+        : '') +
+      'Computed against the whole dataset, so this table does not respond to the filters above.'
+    body.appendChild(note)
   }
 
   function drawCrosstab(body, result, spec) {

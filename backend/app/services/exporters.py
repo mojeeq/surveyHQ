@@ -24,6 +24,16 @@ def query_result_to_csv(result: QueryResult) -> bytes:
 SUPPRESSED_MARK = "*"
 
 
+def _margin(totals: list[float | None], index: int) -> object:
+    """A withheld margin reads as one, not as an empty cell.
+
+    A one-way table's row total is its single cell, so a margin is withheld as
+    readily as a cell is and has to say so in the same way.
+    """
+    value = totals[index] if index < len(totals) else None
+    return SUPPRESSED_MARK if value is None else value
+
+
 def crosstab_to_csv(result: CrosstabResult) -> bytes:
     buffer = io.StringIO()
     writer = csv.writer(buffer)
@@ -47,8 +57,12 @@ def crosstab_to_csv(result: CrosstabResult) -> bytes:
             else ("" if v is None else v)
             for j, v in enumerate(result.values[index])
         ]
-        writer.writerow([label] + values + [result.row_totals[index]])
-    writer.writerow(["Total"] + result.column_totals + [result.grand_total])
+        writer.writerow([label] + values + [_margin(result.row_totals, index)])
+    writer.writerow(
+        ["Total"]
+        + [_margin(result.column_totals, j) for j in range(len(result.column_totals))]
+        + [SUPPRESSED_MARK if result.grand_total_suppressed else result.grand_total]
+    )
     return buffer.getvalue().encode("utf-8-sig")
 
 

@@ -787,6 +787,25 @@ def _suppression_mask(
     return mask
 
 
+def _contributing_columns(measure: Measure) -> list[str]:
+    """The columns a measure's SQL actually reads.
+
+    This decides which records count towards disclosure, so it has to match
+    `SQLBuilder.measure_expr` rather than the request's fields. A weighted
+    count is `SUM(weight)` and never mentions the variable, so requiring the
+    variable there would withhold a cell backed by hundreds of weighted
+    households because some optional question beside them went unanswered.
+
+    Everything else reads its variable, and reads the weight too when it has
+    one - `SUM(col * weight)` is null if either side is.
+    """
+    if measure.agg in (Aggregation.count, Aggregation.share):
+        if measure.weight:
+            return [measure.weight]
+        return [measure.variable] if measure.variable else []
+    return [name for name in (measure.variable, measure.weight) if name]
+
+
 def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabResult:
     """A table of one or two variables.
 
@@ -842,8 +861,27 @@ def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabR
     threshold = max(0, settings.disclosure_threshold)
     frequency: dict[tuple[Any, Any], float] = {}
     if threshold:
+        # Only the records that reach the statistic. Every aggregate ignores
+        # nulls, and a weighted one ignores a null weight as well, so a
+        # category of a hundred people with one reported wage shows that one
+        # person's wage - and counting the hundred would call it safe.
+        guards = _contributing_columns(measure)
+        counts_filters = (
+            FilterGroup(
+                op="and",
+                conditions=[
+                    Condition(variable=name, operator="is_not_null", value=None)
+                    for name in guards
+                ],
+                groups=[request.filters],
+            )
+            if guards
+            else request.filters
+        )
         counts_sql, counts_params = builder.build_aggregate(
-            spec.model_copy(update={"measures": [Measure(alias="__value")]})
+            spec.model_copy(
+                update={"measures": [Measure(alias="__value")], "filters": counts_filters}
+            )
         )
         _, counted = run_sql(counts_sql, counts_params)
         for record in counted:
@@ -924,15 +962,37 @@ def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabR
     # The totals are the true ones and stay published; that is exactly why a
     # withheld cell has to be protected from being recovered by subtracting
     # from them, which is what the secondary pass above does.
-    suppressed = (
-        _suppression_mask(
-            [[frequency.get((r, c), 0) for c in col_keys] for r in row_keys],
-            threshold,
+    # The margins are protected in the same pass as the cells, by being part of
+    # the same matrix.
+    #
+    # They have to be. A margin is a line sum, so it is recoverable arithmetic
+    # in both directions: a one-way table's row total is its single cell
+    # exactly, and a totals row is one equation over the column totals. Bolting
+    # a separate rule onto the margins would leave the next chain open, whereas
+    # an extra row and column mean every relationship a reader can subtract
+    # along is a line of one matrix, and the rule above already knows what to
+    # do with a line.
+    #
+    # It is also why the margins come last in the matrix and are the largest
+    # numbers in it: the pass prefers to withhold the smallest candidate, so a
+    # cell goes before a total does.
+    suppressed = [[False] * len(col_keys) for _ in row_keys]
+    row_totals_hidden = [False] * len(row_keys)
+    column_totals_hidden = [False] * len(col_keys)
+    grand_total_hidden = False
+    if threshold and row_keys and col_keys:
+        counts = [[frequency.get((r, c), 0) for c in col_keys] for r in row_keys]
+        extended = [line + [sum(line)] for line in counts]
+        extended.append(
+            [sum(counts[i][j] for i in range(len(row_keys))) for j in range(len(col_keys))]
+            + [sum(sum(line) for line in counts)]
         )
-        if threshold and row_keys and col_keys
-        else [[False] * len(col_keys) for _ in row_keys]
-    )
-    if threshold:
+        mask = _suppression_mask(extended, threshold)
+        suppressed = [line[: len(col_keys)] for line in mask[: len(row_keys)]]
+        row_totals_hidden = [line[len(col_keys)] for line in mask[: len(row_keys)]]
+        column_totals_hidden = mask[len(row_keys)][: len(col_keys)]
+        grand_total_hidden = mask[len(row_keys)][len(col_keys)]
+
         values = [
             [None if suppressed[i][j] else value for j, value in enumerate(row)]
             for i, row in enumerate(values)
@@ -987,14 +1047,22 @@ def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabR
         row_labels=[cell_label(row_info, k) for k in row_keys],
         column_labels=[cell_label(col_info, k) for k in col_keys],
         values=values,
-        row_totals=row_totals,
-        column_totals=column_totals,
-        grand_total=grand_total,
+        row_totals=[
+            None if row_totals_hidden[i] else total for i, total in enumerate(row_totals)
+        ],
+        column_totals=[
+            None if column_totals_hidden[j] else total
+            for j, total in enumerate(column_totals)
+        ],
+        grand_total=None if grand_total_hidden else grand_total,
         percentages=request.percentages,
         chi_square=chi_square,
         rows_omitted=rows_omitted,
         columns_omitted=columns_omitted,
         suppressed=suppressed,
+        row_totals_suppressed=row_totals_hidden,
+        column_totals_suppressed=column_totals_hidden,
+        grand_total_suppressed=grand_total_hidden,
         rows_withheld=rows_withheld,
         disclosure_threshold=threshold,
     )

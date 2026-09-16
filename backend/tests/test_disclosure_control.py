@@ -214,14 +214,66 @@ def test_a_lone_withheld_cell_takes_a_second_one_with_it(
     assert hidden(result)["Tafea"] == [True, True]
 
 
-def test_the_totals_are_the_true_ones(client, auth_headers, tiny, floor):
-    """Totals are published; cells are not. That is the whole shape of the
-    rule, and it is why the second cell above has to go."""
+def test_a_published_total_is_the_true_one(client, auth_headers, tiny, floor):
+    """Withholding a cell must not quietly change the arithmetic around it."""
     result = table(
         client, auth_headers, tiny, row_variable="province", column_variable="sex"
     )
     assert result["grand_total"] == 23
-    assert dict(zip(result["row_labels"], result["row_totals"], strict=True))["Tafea"] == 1
+    assert result["column_totals"] == [11, 12]
+
+
+def test_a_margin_that_would_give_a_cell_back_is_withheld_too(
+    client, auth_headers, tiny, floor
+):
+    """A margin is a line sum, so it is recoverable arithmetic in both
+    directions and has to be protected in the same pass as the cells.
+
+    Tafea is one household. Its row total is that household, so publishing it
+    beside two starred cells would say precisely what the stars refused to.
+    """
+    result = table(
+        client, auth_headers, tiny, row_variable="province", column_variable="sex"
+    )
+    margins = dict(zip(result["row_labels"], result["row_totals"], strict=True))
+    assert margins["Tafea"] is None
+    assert margins["Torba"] is None
+    # The large provinces keep theirs.
+    assert margins["Shefa"] == 10
+    assert dict(
+        zip(result["row_labels"], result["row_totals_suppressed"], strict=True)
+    )["Tafea"] is True
+
+
+def test_a_one_way_row_total_never_reprints_its_own_withheld_cell(
+    client, auth_headers, tiny, floor
+):
+    """The sharpest form of it: with one column the row total is the cell.
+
+    The table on screen does not draw a total column for a one-way table, so
+    this is invisible there - and was still in the response, the CSV and the
+    exported file.
+    """
+    result = table(client, auth_headers, tiny, row_variable="province")
+    margins = dict(zip(result["row_labels"], result["row_totals"], strict=True))
+    cell = dict(zip(result["row_labels"], result["values"], strict=True))
+    assert cell["Tafea"] == [None]
+    assert margins["Tafea"] is None, "the row total is the cell it just withheld"
+
+
+def test_the_grand_total_goes_when_it_is_the_last_thing_standing(
+    client, auth_headers, tiny, floor
+):
+    """A chain, not a single rule: withhold a row total and the grand total
+    minus the other row totals gives it back."""
+    result = table(client, auth_headers, tiny, row_variable="province")
+    published = [t for t in result["row_totals"] if t is not None]
+    # Two provinces published, two withheld. If the grand total were published
+    # the withheld pair would sum to a known remainder - which is survivable,
+    # because two unknowns and one equation have many answers. One unknown
+    # would not be.
+    assert len(published) == 2
+    assert sum(1 for t in result["row_totals"] if t is None) >= 2
 
 
 def test_a_withheld_table_reports_no_chi_square(client, auth_headers, tiny, floor):
@@ -274,6 +326,146 @@ def test_disclosure_is_judged_on_records_not_on_what_the_cell_shows(
     assert hidden(means)["Torba"] == [True, True]
 
 
+def test_only_the_records_that_reach_the_statistic_are_counted(
+    client, auth_headers, request, floor
+):
+    """Every aggregate ignores nulls, so counting rows is counting the wrong
+    thing.
+
+    A hundred people in a province and one reported wage: the mean of that
+    province is that one person's wage exactly. Judged on a hundred records it
+    looks safe, and the platform publishes the wage.
+    """
+    frame = pd.DataFrame(
+        {
+            "interview__key": [f"k{i}" for i in range(100)],
+            "province": ["Shefa"] * 100,
+            # One reported wage in the whole province.
+            "wage": [77777.0] + [None] * 99,
+            "wt": [1.0] * 100,
+        }
+    )
+    name = request.node.name[:40]
+    dataset = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                f"{name}.zip",
+                _zip_bytes({f"{name}.dta": _stata_bytes(frame)}),
+                "application/zip",
+            )
+        },
+    ).json()["datasets"][0]["id"]
+
+    means = table(
+        client,
+        auth_headers,
+        dataset,
+        row_variable="province",
+        measure={"agg": "mean", "variable": "wage"},
+    )
+    assert cells(means)["Shefa"] == [None], "one wage is one person's wage"
+    assert hidden(means)["Shefa"] == [True]
+
+    # Counting the province itself is safe: a hundred people are a hundred
+    # people, and the count discloses nobody.
+    counts = table(client, auth_headers, dataset, row_variable="province")
+    assert cells(counts)["Shefa"] == [100]
+    assert hidden(counts)["Shefa"] == [False]
+
+
+def test_a_null_weight_does_not_count_towards_a_weighted_cell(
+    client, auth_headers, request, floor
+):
+    """A weighted aggregate drops a row with no weight, so that row is not
+    behind the cell and must not be counted as protecting it."""
+    frame = pd.DataFrame(
+        {
+            "interview__key": [f"k{i}" for i in range(50)],
+            "province": ["Shefa"] * 50,
+            "wage": [100.0] * 50,
+            "wt": [12.5] + [None] * 49,
+        }
+    )
+    name = request.node.name[:40]
+    dataset = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                f"{name}.zip",
+                _zip_bytes({f"{name}.dta": _stata_bytes(frame)}),
+                "application/zip",
+            )
+        },
+    ).json()["datasets"][0]["id"]
+
+    weighted = table(
+        client,
+        auth_headers,
+        dataset,
+        row_variable="province",
+        measure={"agg": "count", "weight": "wt"},
+    )
+    assert hidden(weighted)["Shefa"] == [True], "one weighted household, not fifty"
+
+
+def test_a_weighted_count_is_not_withheld_over_a_variable_it_never_reads(
+    client, auth_headers, request, floor
+):
+    """Which records count is decided by the SQL, not by the request's fields.
+
+    A weighted count is SUM(weight) and never mentions the variable, so a
+    sparsely answered optional question carried alongside it must not withhold
+    a cell backed by fifty weighted households. Over-withholding is not the
+    safe direction to err in: it teaches readers that the stars mean nothing.
+    """
+    frame = pd.DataFrame(
+        {
+            "interview__key": [f"k{i}" for i in range(50)],
+            "province": ["Shefa"] * 50,
+            # An optional question almost nobody answered.
+            "wage": [100.0] + [None] * 49,
+            "wt": [12.5] * 50,
+        }
+    )
+    name = request.node.name[:40]
+    dataset = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                f"{name}.zip",
+                _zip_bytes({f"{name}.dta": _stata_bytes(frame)}),
+                "application/zip",
+            )
+        },
+    ).json()["datasets"][0]["id"]
+
+    counted = table(
+        client,
+        auth_headers,
+        dataset,
+        row_variable="province",
+        # `variable` is ignored by a weighted count, and the API accepts one.
+        measure={"agg": "count", "variable": "wage", "weight": "wt"},
+    )
+    assert hidden(counted)["Shefa"] == [False], "fifty weighted households"
+    assert cells(counted)["Shefa"] == [625]
+
+    # The mean of the same sparse variable still is withheld: that one reads
+    # the variable, and one answer is one person's answer.
+    means = table(
+        client,
+        auth_headers,
+        dataset,
+        row_variable="province",
+        measure={"agg": "mean", "variable": "wage", "weight": "wt"},
+    )
+    assert hidden(means)["Shefa"] == [True]
+
+
 def test_a_category_too_small_to_name_is_not_listed(client, auth_headers, tiny, floor):
     """A table with no cell values has no cell to blank.
 
@@ -311,9 +503,11 @@ def test_the_csv_marks_a_withheld_cell_rather_than_leaving_it_blank(
     assert response.status_code == 200, response.text
     body = response.content.decode("utf-8-sig")
     torba = next(line for line in body.splitlines() if line.startswith("Torba"))
-    assert torba.split(",")[1:3] == ["*", "*"]
-    # The row total is still the true one.
-    assert torba.split(",")[3] == "2.0"
+    # Cells and the row total alike: the total is two households, which is
+    # under the floor in its own right.
+    assert torba.split(",")[1:4] == ["*", "*", "*"]
+    shefa = next(line for line in body.splitlines() if line.startswith("Shefa"))
+    assert shefa.split(",")[1:4] == ["5.0", "5.0", "10.0"]
 
 
 # --- the standalone export --------------------------------------------------
@@ -395,14 +589,28 @@ def test_a_dashboard_with_no_floor_still_exports_a_filterable_cube(
     assert widget["cube"]["rows"], "the browser needs the cells to re-add"
 
 
-def test_the_file_says_a_withheld_table_cannot_be_narrowed(
-    client, auth_headers, tiny, floor
+def test_a_table_with_nothing_withheld_still_travels_fixed(
+    client, auth_headers, dataset_id, floor
 ):
-    """A reader who filters and sees nothing move deserves to know why."""
+    """Under a floor every cross-tabulation travels finished, not just a
+    starred one.
+
+    Filtering in the browser could cut a comfortably large cell down to a small
+    one, so the cube cannot travel even when the table as exported has nothing
+    to hide. Which means the widget stops answering the page's filters, and the
+    reader has to be told so whether or not anything is starred.
+
+    The note itself is built by the file's own script, so it is checked in a
+    browser rather than by searching the source - the template carries every
+    string it might print, so grepping the file proves nothing.
+    """
     html = dashboard_with(
-        client, auth_headers, tiny, {"row_variable": "province", "column_variable": "sex"}
+        client, auth_headers, dataset_id, {"row_variable": "region", "column_variable": "sex"}
     )
-    assert "does not respond to the filters above" in html
+    widget = _payload(html)["widgets"][0]
+    assert widget["crosstab"]["fixed"], "still fixed, with nothing withheld"
+    assert not any(any(row) for row in widget["crosstab"]["fixed"]["suppressed"])
+    assert widget["cube"]["rows"] == []
 
 
 def _payload(html: str) -> dict:
