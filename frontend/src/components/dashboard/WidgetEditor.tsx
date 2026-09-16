@@ -33,12 +33,11 @@ import {
   POINT_ICONS,
 } from "@/components/MapWidget";
 
-import { TITLE_FONTS } from "@/components/DashboardAppearance";
+import { FONTS, fontFor } from "@/lib/fonts";
 
 import {
   DEFAULT_TITLE_SIZE,
   panelDefault,
-  WIDGET_FONTS,
 } from "@/components/dashboard/shared";
 import { Field, Loading, Modal } from "@/components/ui";
 
@@ -902,12 +901,23 @@ export function EditWidgetModal({
           onChange={(event) =>
             set({ font_family: event.target.value || undefined })
           }
+          style={config.font_family ? { fontFamily: config.font_family } : undefined}
         >
-          {WIDGET_FONTS.map((font) => (
-            <option key={font.label} value={font.value}>
-              {font.label}
+          {FONTS.map((font) => (
+            <option
+              key={font.id}
+              value={font.stack}
+              style={font.stack ? { fontFamily: font.stack } : undefined}
+            >
+              {font.label} - {font.note}
             </option>
           ))}
+          {/* A stack from before the catalogue, or one set by hand. It renders
+              perfectly well, so the picker shows it as the current choice
+              instead of snapping back to the interface font and losing it. */}
+          {config.font_family && !fontFor(config.font_family) && (
+            <option value={config.font_family}>Current (set earlier)</option>
+          )}
         </select>
       </Field>
 
@@ -933,8 +943,12 @@ export function EditWidgetModal({
             set({ title_font: event.target.value || undefined })
           }
         >
-          {TITLE_FONTS.map((font) => (
-            <option key={font.label} value={font.value}>
+          {FONTS.map((font) => (
+            <option
+              key={font.id}
+              value={font.id}
+              style={font.stack ? { fontFamily: font.stack } : undefined}
+            >
               {font.label}
             </option>
           ))}

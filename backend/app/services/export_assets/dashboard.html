@@ -6,6 +6,10 @@
 <title>__TITLE__</title>
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
 <style>
+/* Any bundled font a widget on this board is set in, carried in the file as
+   base64 so the board reads the same on a laptop that has never met this
+   platform. Empty when the board uses none. */
+/*__FONTS__*/
   :root {
     --ink-900: #1c1b19; --ink-700: #44423e; --ink-500: #6f6c66;
     --ink-400: #8d8a83; --ink-200: #e3e1dc; --ink-100: #efedea; --ink-50: #f7f6f4;
@@ -14,7 +18,7 @@
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--canvas); color: var(--ink-900);
-    font: 14px/1.5 Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
   }
   .wrap { max-width: 1500px; margin: 0 auto; padding: 20px 16px 48px; }
   header.board h1 { margin: 0; font-size: 24px; font-weight: 600; }

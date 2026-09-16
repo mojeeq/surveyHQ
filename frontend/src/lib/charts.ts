@@ -107,8 +107,13 @@ const INK = {
   primary: '#0b0b0b',
 }
 
+// Charts asked for Inter for a long time while nothing loaded it, so every
+// chart silently drew in the next entry down. Inter is on the server now and
+// is one of the fonts a board can be set in, but a chart with no font of its
+// own should match the interface rather than pick a face - so the stack here
+// is the interface's own, and nothing else.
 const BASE_TEXT = {
-  fontFamily: 'Inter, system-ui, -apple-system, "Segoe UI", sans-serif',
+  fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif',
   fontSize: 12,
 }
 
