@@ -116,10 +116,16 @@ What it does:
 - **A zero is left alone.** Nobody is identified by an absence, and blanking it
   would only announce that somebody is being protected where nobody is. A
   withheld cell reads `*`; an empty one still reads `-`.
-- **Totals stay true**, which is why a second cell sometimes goes with the
-  first: one withheld cell beside a published row total is that total minus the
-  others, so the withholding would be decorative. The smallest neighbour goes
-  instead, since it costs the reader least.
+- **Cells are counted by what reaches the statistic**, not by how many rows are
+  in the category. Every aggregate ignores nulls and a weighted one ignores a
+  null weight, so a province of a hundred people with one reported wage has a
+  mean that is that one person's wage.
+- **A total is withheld on the same terms as a cell.** A margin is a line sum,
+  so it is recoverable arithmetic in both directions: a one-way table's row
+  total is its single cell exactly. Margins are protected in the same pass as
+  the cells, which is also why a second cell sometimes goes with the first -
+  one withheld cell beside a published row total is that total minus the
+  others. The smallest neighbour goes, since it costs the reader least.
 - **A category too small to publish is not listed at all** on a table set to
   list categories without cell values. There is no cell to blank, and naming
   the category still says those people exist and where they are.
@@ -129,7 +135,9 @@ What it does:
   it normally carries. The cube is the cell values, so exporting it under a
   floor would write the withheld numbers into a file nobody can withdraw. The
   cost is that a cross-tabulation in an exported file no longer responds to the
-  page's filters, and the file says so.
+  page's filters, and the file says so - on every exported table, not only the
+  ones with something starred, since filtering could have cut a large cell down
+  to a small one and that is why the cube cannot travel at all.
 
 This covers cross-tabulations, which is what a statistics office publishes.
 Charts and KPI tiles are not yet covered, so a bar chart of counts by

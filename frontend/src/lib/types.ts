@@ -287,9 +287,11 @@ export interface CrosstabResult {
   row_labels: string[]
   column_labels: string[]
   values: (number | null)[][]
-  row_totals: number[]
-  column_totals: number[]
-  grand_total: number
+  /** Null where a margin was withheld: a one-way table's row total is its
+   *  single cell, so a margin is as disclosive as a cell is. */
+  row_totals: (number | null)[]
+  column_totals: (number | null)[]
+  grand_total: number | null
   percentages: string
   chi_square: { statistic: number; dof: number; cramers_v: number } | null
   /** Categories the data had beyond what was returned, so a cut table says so. */
@@ -303,6 +305,10 @@ export interface CrosstabResult {
    * was here".
    */
   suppressed?: boolean[][]
+  /** The same for the margins, protected in the same pass as the cells. */
+  row_totals_suppressed?: boolean[]
+  column_totals_suppressed?: boolean[]
+  grand_total_suppressed?: boolean
   /** Categories too small to name at all, on a table with no cell values. */
   rows_withheld?: number
   /** The floor that was applied. Zero means disclosure control is off. */

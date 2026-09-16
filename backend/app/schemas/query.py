@@ -246,9 +246,12 @@ class CrosstabResult(BaseModel):
     row_labels: list[str]
     column_labels: list[str]
     values: list[list[float | None]]
-    row_totals: list[float]
-    column_totals: list[float]
-    grand_total: float
+    # Nullable because a margin can be withheld too. A one-way table's row
+    # total is its single cell exactly, so publishing it would hand back
+    # whatever the cell refused to say.
+    row_totals: list[float | None]
+    column_totals: list[float | None]
+    grand_total: float | None
     percentages: str = "none"
     chi_square: dict[str, Any] | None = None
     # How many categories the data actually had, when that is more than was
@@ -263,6 +266,11 @@ class CrosstabResult(BaseModel):
     # different statement from "nobody was here" - so the mask says which is
     # which. It is the same shape as `values`.
     suppressed: list[list[bool]] = Field(default_factory=list)
+    # The same for the margins, which are protected in the same pass because a
+    # line sum is recoverable arithmetic in both directions.
+    row_totals_suppressed: list[bool] = Field(default_factory=list)
+    column_totals_suppressed: list[bool] = Field(default_factory=list)
+    grand_total_suppressed: bool = False
     # Categories dropped entirely, which happens on a table with no cell values:
     # there is no cell to blank, so a category too small to publish cannot be
     # listed at all.
