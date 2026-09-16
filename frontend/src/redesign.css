@@ -137,6 +137,24 @@ textarea.input.input-xs {
   @apply min-h-8 px-2.5 py-1.5 text-xs;
 }
 
+/*
+ * The compact partner to `.btn-sm`, for a button standing in a row beside an
+ * `.input-sm` rather than at the foot of a form.
+ *
+ * `.btn-sm` is four pixels taller than `.input-sm`, and in a row of centred
+ * items the tallest one sets the height. The filter bar grew from 42 to 46
+ * pixels the moment a filter was chosen, because that is when its Clear button
+ * appears - so picking a value nudged every widget on the dashboard down.
+ *
+ * One class rather than two, unlike `.input-sm`: `.btn-ghost` and its siblings
+ * copy `.btn` in rather than carrying the class, so there is no `.btn` on the
+ * element to pair with. Same specificity as those, and later in the file, so
+ * it wins on order the way `.btn-sm` already does.
+ */
+.btn-xs {
+  @apply min-h-7 px-2 py-0 text-xs;
+}
+
 .icon-button {
   @apply inline-grid h-9 w-9 place-items-center rounded-lg border border-transparent text-slate-500
          transition-colors hover:bg-slate-100 hover:text-slate-950 focus:outline-none focus:ring-4

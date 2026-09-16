@@ -65,7 +65,7 @@ export default function DashboardFilters({
       ))}
       {Object.values(value).some(Boolean) && (
         <button
-          className="btn-ghost btn-sm text-ink-500"
+          className="btn-ghost btn-xs text-ink-500"
           style={labelColor ? { color: labelColor } : undefined}
           onClick={() => onChange({})}
         >
