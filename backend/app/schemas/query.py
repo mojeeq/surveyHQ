@@ -199,7 +199,11 @@ class CrosstabRequest(BaseModel):
     # around it.
     row_variable: str = ""
     column_variable: str = ""
-    measure: Measure = Field(default_factory=Measure)
+    # A table can also have no cell values at all: the categories of one
+    # variable listed down the page and nothing beside them. `None` asks for
+    # that, and an absent measure still means counting, so every table saved
+    # before this reads back exactly as it did.
+    measure: Measure | None = Field(default_factory=Measure)
     filters: FilterGroup = Field(default_factory=FilterGroup)
     percentages: Literal["none", "row", "column", "total"] = "none"
     include_totals: bool = True
@@ -216,6 +220,19 @@ class CrosstabRequest(BaseModel):
     def _needs_one_variable(self) -> CrosstabRequest:
         if not self.row_variable and not self.column_variable:
             raise ValueError("A tabulation needs a row variable, a column variable, or both")
+        if self.measure is None:
+            if self.row_variable and self.column_variable:
+                # Two variables crossed with nothing in the cells is a grid of
+                # blanks: the reader cannot tell which combinations occurred,
+                # so it is not a smaller table but an unreadable one.
+                raise ValueError(
+                    "A table with no cell values can only list one variable, "
+                    "so leave the rows or the columns empty"
+                )
+            # A percentage of nothing. Corrected rather than refused, because
+            # this is reachable by changing the cell values on a table that
+            # already had percentages set, and a 422 there is just a dead end.
+            self.percentages = "none"
         return self
 
 

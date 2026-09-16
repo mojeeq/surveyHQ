@@ -476,12 +476,17 @@
 
   /** A cross-tab rebuilt from its cells: the totals and shares are arithmetic. */
   function drawCrosstab(body, result, spec) {
+    // A table can be asked for with no cell values at all: the categories of
+    // the one variable it has and nothing beside them. There is nothing to
+    // total either, so the stand-in column and both total lines go.
+    var values = spec.show_values !== false
+    var totals = spec.include_totals && values
     var rows = [], columns = [], cells = {}
     result.rows.forEach(function (row) {
       var r = text(row[0]) || '(missing)'
       var c = result.columns.length > 2 ? (text(row[1]) || '(missing)') : spec.measure_label
       if (rows.indexOf(r) < 0) rows.push(r)
-      if (columns.indexOf(c) < 0) columns.push(c)
+      if (values && columns.indexOf(c) < 0) columns.push(c)
       cells[r + '||' + c] = (cells[r + '||' + c] || 0) + (Number(row[row.length - 1]) || 0)
     })
     rows.sort()
@@ -503,9 +508,9 @@
     var table = el('table', 'data')
     var thead = document.createElement('thead')
     var head = document.createElement('tr')
-    head.appendChild(el('th', '', spec.row_variable || ''))
+    head.appendChild(el('th', '', spec.row_variable || spec.column_variable || ''))
     columns.forEach(function (c) { head.appendChild(el('th', 'n', c)) })
-    if (spec.include_totals) head.appendChild(el('th', 'n', 'Total'))
+    if (totals) head.appendChild(el('th', 'n', 'Total'))
     thead.appendChild(head)
     table.appendChild(thead)
     var tbody = document.createElement('tbody')
@@ -515,10 +520,10 @@
       columns.forEach(function (c) {
         line.appendChild(el('td', 'n', show(cells[r + '||' + c] || 0, r, c)))
       })
-      if (spec.include_totals) line.appendChild(el('td', 'n total', num(rowTotal[r])))
+      if (totals) line.appendChild(el('td', 'n total', num(rowTotal[r])))
       tbody.appendChild(line)
     })
-    if (spec.include_totals) {
+    if (totals) {
       var last = document.createElement('tr')
       last.className = 'total'
       last.appendChild(el('td', '', 'Total'))

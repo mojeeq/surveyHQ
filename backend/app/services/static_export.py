@@ -278,9 +278,12 @@ def _crosstab_spec(request: CrosstabRequest) -> QuerySpec:
         dimensions.append(Dimension(variable=request.row_variable, alias="__row"))
     if request.column_variable:
         dimensions.append(Dimension(variable=request.column_variable, alias="__column"))
+    # A table with no cell values still counts, because counting is how it
+    # learns which categories are there. The file is told not to draw them.
+    measure = request.measure or Measure()
     return QuerySpec(
         dimensions=dimensions,
-        measures=[request.measure.model_copy(update={"alias": "__value"})],
+        measures=[measure.model_copy(update={"alias": "__value"})],
         filters=request.filters,
         use_labels=request.use_labels,
         limit=MAX_CUBE_ROWS + 1,
@@ -315,8 +318,11 @@ def _chart_widget(
                 "column_variable": request.column_variable,
                 "percentages": request.percentages,
                 "include_totals": request.include_totals,
+                "show_values": request.measure is not None,
                 "measure_label": (
-                    "Count"
+                    ""
+                    if request.measure is None
+                    else "Count"
                     if request.measure.agg == Aggregation.count
                     else f"{request.measure.agg.value} of {request.measure.variable}"
                 ),

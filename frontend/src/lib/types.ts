@@ -270,7 +270,8 @@ export interface MultiSelectGroup {
 export interface CrosstabRequest {
   row_variable: string
   column_variable: string
-  measure: Measure
+  /** null asks for a table with no cell values: the categories and nothing else. */
+  measure: Measure | null
   filters: FilterGroup
   percentages: 'none' | 'row' | 'column' | 'total'
   include_totals: boolean

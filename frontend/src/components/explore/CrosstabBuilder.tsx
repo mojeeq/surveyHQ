@@ -36,6 +36,16 @@ import {
   Spinner,
 } from "@/components/ui";
 
+/**
+ * The Cell values choice that means "no cell values at all".
+ *
+ * A sentinel rather than an aggregation, because there is no such aggregation:
+ * the request carries a null measure and the server answers with the
+ * categories and nothing beside them. Prefixed so it can never collide with an
+ * aggregation name.
+ */
+const NO_VALUES = "__no_values";
+
 export function CrosstabBuilder({
   datasetId,
   datasetName,
@@ -62,7 +72,7 @@ export function CrosstabBuilder({
   const [percentages, setPercentages] = useState<
     "none" | "row" | "column" | "total"
   >("none");
-  const [measure, setMeasure] = useState<Measure>({ agg: "count" });
+  const [measure, setMeasure] = useState<Measure | null>({ agg: "count" });
   const [filters, setFilters] = useState<FilterGroup>(emptyFilter());
   const [result, setResult] = useState<CrosstabResult | null>(null);
   const [saveOpen, setSaveOpen] = useState(false);
@@ -81,7 +91,9 @@ export function CrosstabBuilder({
     setRowVariable(saved.row_variable);
     setColumnVariable(saved.column_variable);
     setPercentages(saved.percentages ?? "none");
-    setMeasure(saved.measure ?? { agg: "count" });
+    // `??` would be wrong here: a saved table with no cell values carries a
+    // null measure, and a null that means "none" must not be read as "unset".
+    setMeasure(saved.measure === undefined ? { agg: "count" } : saved.measure);
     setFilters(saved.filters ?? emptyFilter());
   }, [editing]);
 
@@ -130,7 +142,14 @@ export function CrosstabBuilder({
             <select
               className="input py-1.5 text-xs"
               value={columnVariable}
-              onChange={(event) => setColumnVariable(event.target.value)}
+              onChange={(event) => {
+                const next = event.target.value;
+                setColumnVariable(next);
+                // Two variables crossed with nothing in the cells is a grid of
+                // blanks, so choosing a column brings the count back rather
+                // than leaving a request the server will refuse.
+                if (next && !measure) setMeasure({ agg: "count" });
+              }}
             >
               <option value="">No columns</option>
               {groupable.map((v) => (
@@ -143,8 +162,13 @@ export function CrosstabBuilder({
           <Field label="Cell values">
             <select
               className="input py-1.5 text-xs"
-              value={measure.agg}
+              value={measure ? measure.agg : NO_VALUES}
               onChange={(event) => {
+                if (event.target.value === NO_VALUES) {
+                  setMeasure(null);
+                  setPercentages("none");
+                  return;
+                }
                 const agg = event.target.value as Aggregation;
                 const needs = AGGREGATIONS.find(
                   (a) => a.value === agg,
@@ -152,6 +176,12 @@ export function CrosstabBuilder({
                 setMeasure({ agg, variable: needs ? numeric[0]?.name : null });
               }}
             >
+              {/* Only offered without a column variable: two variables crossed
+                  with nothing in the cells is a grid of blanks, and nothing
+                  can be read off it. */}
+              {!columnVariable && (
+                <option value={NO_VALUES}>None (just list the categories)</option>
+              )}
               {AGGREGATIONS.filter((a) => a.value !== "share").map((a) => (
                 <option key={a.value} value={a.value}>
                   {a.label}
@@ -159,7 +189,7 @@ export function CrosstabBuilder({
               ))}
             </select>
           </Field>
-          {AGGREGATIONS.find((a) => a.value === measure.agg)?.needsVariable && (
+          {measure && AGGREGATIONS.find((a) => a.value === measure.agg)?.needsVariable && (
             <Field label="Of variable">
               <select
                 className="input py-1.5 text-xs"
@@ -176,15 +206,26 @@ export function CrosstabBuilder({
               </select>
             </Field>
           )}
-          <Field label="Percentages">
+          <Field
+            label="Percentages"
+            hint={
+              measure
+                ? undefined
+                : "A table with no cell values has nothing to take a percentage of."
+            }
+          >
             <select
               className="input py-1.5 text-xs"
               value={percentages}
+              disabled={!measure}
               onChange={(event) =>
                 setPercentages(event.target.value as typeof percentages)
               }
             >
-              <option value="none">Counts only</option>
+              {/* "Counts only" was already a half-truth on a table of means.
+                  With no cell values at all it is simply wrong, and this is
+                  the option that turns percentages off either way. */}
+              <option value="none">None</option>
               <option value="row">Row percentages</option>
               <option value="column">Column percentages</option>
               <option value="total">Percent of total</option>
@@ -253,47 +294,52 @@ export function CrosstabBuilder({
           <>
             <CrosstabTable result={result} />
 
-            <div className="mt-5">
-              <ChartCard
-                showToggle={false}
-                chartType="stacked_bar"
-                height={340}
-                result={{
-                  columns: [
-                    {
-                      name: "row",
-                      label: result.row_variable,
-                      type: "dimension",
-                      data_type: "text",
-                    },
-                    {
-                      name: "col",
-                      label: result.column_variable,
-                      type: "dimension",
-                      data_type: "text",
-                    },
-                    {
-                      name: "value",
-                      label: "Value",
-                      type: "measure",
-                      data_type: "number",
-                    },
-                  ],
-                  rows: result.row_labels.flatMap((rowLabel, rowIndex) =>
-                    result.column_labels.map((columnLabel, columnIndex) => [
-                      rowLabel,
-                      columnLabel,
-                      result.values[rowIndex][columnIndex],
-                    ]),
-                  ),
-                  row_count:
-                    result.row_labels.length * result.column_labels.length,
-                  truncated: false,
-                  sql: "",
-                  duration_ms: 0,
-                }}
-              />
-            </div>
+            {/* A table with no cell values has nothing to plot: every bar
+                would be zero high. The list of categories is the whole
+                answer, so the chart goes rather than sitting there empty. */}
+            {result.column_labels.length > 0 && (
+              <div className="mt-5">
+                <ChartCard
+                  showToggle={false}
+                  chartType="stacked_bar"
+                  height={340}
+                  result={{
+                    columns: [
+                      {
+                        name: "row",
+                        label: result.row_variable,
+                        type: "dimension",
+                        data_type: "text",
+                      },
+                      {
+                        name: "col",
+                        label: result.column_variable,
+                        type: "dimension",
+                        data_type: "text",
+                      },
+                      {
+                        name: "value",
+                        label: "Value",
+                        type: "measure",
+                        data_type: "number",
+                      },
+                    ],
+                    rows: result.row_labels.flatMap((rowLabel, rowIndex) =>
+                      result.column_labels.map((columnLabel, columnIndex) => [
+                        rowLabel,
+                        columnLabel,
+                        result.values[rowIndex][columnIndex],
+                      ]),
+                    ),
+                    row_count:
+                      result.row_labels.length * result.column_labels.length,
+                    truncated: false,
+                    sql: "",
+                    duration_ms: 0,
+                  }}
+                />
+              </div>
+            )}
           </>
         )}
       </Card>

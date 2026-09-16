@@ -252,3 +252,58 @@ def test_another_users_dashboard_cannot_be_exported(client, auth_headers, board)
         headers=auth_headers,
     )
     assert missing.status_code == 404
+
+
+def test_a_table_with_no_cell_values_travels_as_a_table_with_no_cell_values(
+    client, auth_headers, board
+):
+    """The file draws its own tables, so it has to be told there is nothing
+    to draw in them.
+
+    Without the flag the browser falls back to the one-way behaviour and
+    prints a column of counts headed by the measure's name - which is the
+    column the board was set up not to have.
+    """
+    chart = client.post(
+        "/api/v1/dashboards/charts",
+        headers=auth_headers,
+        json={
+            "name": "Provinces",
+            "dataset_id": board["dataset_id"],
+            "chart_type": "crosstab",
+            "spec": {"crosstab": {"row_variable": "province", "measure": None}},
+        },
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{board['id']}/widgets",
+        headers=auth_headers,
+        json={"title": "Provinces", "widget_type": "chart", "chart_id": chart["id"]},
+    )
+    widget = widget_named(payload_of(export(client, auth_headers, board)), "Provinces")
+    assert widget["crosstab"]["show_values"] is False
+    assert widget["crosstab"]["measure_label"] == ""
+    # The counts are still carried, because that is how the file knows which
+    # categories survive a filter.
+    assert {row[0] for row in widget["cube"]["rows"]} == {"Shefa", "Sanma"}
+
+
+def test_a_counted_table_still_says_so(client, auth_headers, board):
+    """The flag must not turn every existing exported table into a list."""
+    chart = client.post(
+        "/api/v1/dashboards/charts",
+        headers=auth_headers,
+        json={
+            "name": "Counted",
+            "dataset_id": board["dataset_id"],
+            "chart_type": "crosstab",
+            "spec": {"crosstab": {"row_variable": "province"}},
+        },
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{board['id']}/widgets",
+        headers=auth_headers,
+        json={"title": "Counted", "widget_type": "chart", "chart_id": chart["id"]},
+    )
+    widget = widget_named(payload_of(export(client, auth_headers, board)), "Counted")
+    assert widget["crosstab"]["show_values"] is True
+    assert widget["crosstab"]["measure_label"] == "Count"
