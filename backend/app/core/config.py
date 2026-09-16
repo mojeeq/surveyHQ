@@ -83,6 +83,19 @@ class Settings(BaseSettings):
     duckdb_csv_above_mb: int = 32
     monitoring_precompute_enabled: bool = True
 
+    # Statistical disclosure control.
+    #
+    # A published table whose cell rests on two households can identify them.
+    # Every statistics office has a floor below which a cell is withheld, and
+    # it is a rule of the office rather than a preference of whoever is making
+    # the table - so it lives here, with the deployment, where a user cannot
+    # turn it off to get a prettier table.
+    #
+    # Zero is off, which is what every existing deployment gets. A census or
+    # labour force office publishing from this should set it: 5 is the common
+    # floor, 3 and 10 both occur.
+    disclosure_threshold: int = 0
+
     # Rate limiting. On by default; the switch exists so a test can run a
     # hundred logins without tripping it, and so an operator behind a proxy that
     # collapses every visitor onto one address can turn it off knowingly.

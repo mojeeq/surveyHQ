@@ -91,6 +91,50 @@ should be in it are known in advance.
 With sign-up off, `POST /auth/signup` answers **404**, the same as any unrouted
 path, and the sign-in page does not offer the button.
 
+### Withholding small cells
+
+A cross-tabulation cell that rests on two households can identify them, and a
+dashboard share link is public by design. Set the floor your office publishes
+under and the platform applies it to every cross-tabulation, everywhere one is
+shown:
+
+```
+DISCLOSURE_THRESHOLD=5
+```
+
+`0` is off, which is the default and what an existing deployment gets until
+somebody changes it. `5` is the usual floor in official statistics; `3` and
+`10` both occur. It is here rather than in the interface on purpose: a rule
+anybody can switch off to get a prettier table is not a rule.
+
+What it does:
+
+- **Cells are counted unweighted.** What a cell discloses is the number of
+  people behind it, not the number it estimates. A weighted cell reading 12,500
+  can rest on one household, and a mean of two incomes discloses those two
+  people whatever the mean is.
+- **A zero is left alone.** Nobody is identified by an absence, and blanking it
+  would only announce that somebody is being protected where nobody is. A
+  withheld cell reads `*`; an empty one still reads `-`.
+- **Totals stay true**, which is why a second cell sometimes goes with the
+  first: one withheld cell beside a published row total is that total minus the
+  others, so the withholding would be decorative. The smallest neighbour goes
+  instead, since it costs the reader least.
+- **A category too small to publish is not listed at all** on a table set to
+  list categories without cell values. There is no cell to blank, and naming
+  the category still says those people exist and where they are.
+- **No chi-square is reported** for a table with withheld cells, since it would
+  be a statistic computed over numbers the reader has been refused.
+- **A standalone HTML export carries the finished table** rather than the cube
+  it normally carries. The cube is the cell values, so exporting it under a
+  floor would write the withheld numbers into a file nobody can withdraw. The
+  cost is that a cross-tabulation in an exported file no longer responds to the
+  page's filters, and the file says so.
+
+This covers cross-tabulations, which is what a statistics office publishes.
+Charts and KPI tiles are not yet covered, so a bar chart of counts by
+enumeration area can still show a bar of two.
+
 ### Turning R on
 
 R itself is already in the image, so enabling it is one setting rather than a

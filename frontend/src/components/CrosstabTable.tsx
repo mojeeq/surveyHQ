@@ -53,6 +53,13 @@ export default function CrosstabTable({
   const showRowTotals = result.column_labels.length > 1
   const showColumnTotals = hasValues && result.row_labels.length > 1
 
+  // Disclosure control. A cell resting on fewer records than the office's
+  // floor is withheld, and the reader has to be told that rather than left to
+  // read a blank as an absence.
+  const hidden = (row: number, cell: number) => result.suppressed?.[row]?.[cell] ?? false
+  const withheldCells = (result.suppressed ?? []).some((row) => row.some(Boolean))
+  const withheldRows = result.rows_withheld ?? 0
+
   return (
     <div className={`flex flex-col ${fill ? 'h-full min-h-0' : ''}`}>
       <div
@@ -99,11 +106,21 @@ export default function CrosstabTable({
                 >
                   {label}
                 </td>
-                {result.values[rowIndex].map((value, cellIndex) => (
-                  <td key={cellIndex} className="text-right tabular-nums">
-                    {value === null ? '-' : `${formatNumber(value, digits, showing)}${suffix}`}
-                  </td>
-                ))}
+                {result.values[rowIndex].map((value, cellIndex) =>
+                  hidden(rowIndex, cellIndex) ? (
+                    <td
+                      key={cellIndex}
+                      className="text-right text-ink-500"
+                      title={`Withheld: fewer than ${result.disclosure_threshold} records`}
+                    >
+                      *
+                    </td>
+                  ) : (
+                    <td key={cellIndex} className="text-right tabular-nums">
+                      {value === null ? '-' : `${formatNumber(value, digits, showing)}${suffix}`}
+                    </td>
+                  ),
+                )}
                 {showRowTotals && (
                   <td className="text-right font-semibold tabular-nums">
                     {formatNumber(result.row_totals[rowIndex])}
@@ -145,6 +162,22 @@ export default function CrosstabTable({
             </>
           )}
           . The totals cover what is shown.
+        </p>
+      )}
+
+      {(withheldCells || withheldRows > 0) && (
+        // The totals are the true ones, which is why a withheld cell has to be
+        // protected from being read off them - and why saying so matters: a
+        // reader who adds the published cells and finds they fall short should
+        // know that is deliberate rather than a fault.
+        <p className="mt-3 text-xs text-ink-500 dark:text-dark-500">
+          {withheldCells &&
+            `* withheld to protect fewer than ${result.disclosure_threshold} records. `}
+          {withheldRows > 0 &&
+            `${withheldRows} ${withheldRows === 1 ? 'category' : 'categories'} below that floor ${
+              withheldRows === 1 ? 'is' : 'are'
+            } not listed. `}
+          Totals cover every record, including the withheld ones.
         </p>
       )}
 

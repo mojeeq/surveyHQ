@@ -18,6 +18,12 @@ def query_result_to_csv(result: QueryResult) -> bytes:
     return buffer.getvalue().encode("utf-8-sig")
 
 
+# What a withheld cell reads as. A CSV has nowhere to put a footnote, so the
+# mark has to carry the meaning on its own and match what the table on screen
+# and the exported page both show.
+SUPPRESSED_MARK = "*"
+
+
 def crosstab_to_csv(result: CrosstabResult) -> bytes:
     buffer = io.StringIO()
     writer = csv.writer(buffer)
@@ -31,7 +37,16 @@ def crosstab_to_csv(result: CrosstabResult) -> bytes:
         return buffer.getvalue().encode("utf-8-sig")
     writer.writerow([result.row_variable] + result.column_labels + ["Total"])
     for index, label in enumerate(result.row_labels):
-        values = ["" if v is None else v for v in result.values[index]]
+        hidden = result.suppressed[index] if index < len(result.suppressed) else []
+        values = [
+            # An empty cell and a withheld one are both blank in the result and
+            # must not both be blank in the file: one says nobody was here, the
+            # other says we are not telling you.
+            SUPPRESSED_MARK
+            if j < len(hidden) and hidden[j]
+            else ("" if v is None else v)
+            for j, v in enumerate(result.values[index])
+        ]
         writer.writerow([label] + values + [result.row_totals[index]])
     writer.writerow(["Total"] + result.column_totals + [result.grand_total])
     return buffer.getvalue().encode("utf-8-sig")
