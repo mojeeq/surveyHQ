@@ -250,7 +250,7 @@ export default function ChartCard({
                   {result.columns.map((column, index) => (
                     <th key={column.name} className="p-1">
                       <input
-                        className="input h-6 w-full min-w-16 px-1 py-0 text-xs font-normal"
+                        className="input input-xs w-full min-w-16 px-1 font-normal"
                         value={columnFilters[index] ?? ''}
                         placeholder={column.type === 'measure' ? '> 100' : 'contains…'}
                         aria-label={`Filter ${column.label || column.name}`}
