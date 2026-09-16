@@ -11,7 +11,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useToast } from '@/hooks/useToast'
 import type { Appearance, Widget } from '@/lib/types'
-import { Field, Modal } from '@/components/ui'
+import { Field, Modal, Section, useOpenSections } from '@/components/ui'
 import ColorPicker from '@/components/ColorPicker'
 import { FONTS, fontStack } from '@/lib/fonts'
 
@@ -496,6 +496,36 @@ export default function AppearanceModal({
     onError: (error: Error) => toast.push(error.message, 'error'),
   })
 
+  // Only the Title section starts open. The rest say what they hold on their
+  // closed row, which is what makes folding help rather than just hide.
+  const [open, toggle] = useOpenSections('appearance', ['title'])
+
+  /** A few words per section, for when it is closed. */
+  const summaries = {
+    title: [title.trim() || 'Untitled', subtitle.trim() ? 'with a subtitle' : '']
+      .filter(Boolean)
+      .join(', '),
+    header: [
+      draft.logo_image ? 'logo' : '',
+      draft.header_background ? 'title band' : '',
+      draft.title_font ? FONTS.find((f) => f.id === draft.title_font)?.label ?? '' : '',
+      draft.title_size ? `${draft.title_size}px` : '',
+      draft.title_align === 'center' ? 'centred' : '',
+      draft.hide_subtitle ? 'subtitle hidden' : '',
+    ]
+      .filter(Boolean)
+      .join(', '),
+    page: draft.page_background ? 'coloured ground' : '',
+    canvas: [
+      draft.background_image ? 'image' : '',
+      draft.background_color ? 'colour' : '',
+      draft.canvas_width ? `${draft.canvas_width}px wide` : '',
+      draft.columns && draft.columns !== 12 ? `${draft.columns} columns` : '',
+    ]
+      .filter(Boolean)
+      .join(', '),
+  }
+
   const color = draft.background_color ?? ''
 
   return (
@@ -520,9 +550,7 @@ export default function AppearanceModal({
         </>
       }
     >
-      <p className="mb-3 text-xs font-semibold uppercase tracking-wide text-ink-500">
-        Title
-      </p>
+      <Section title="Title" summary={summaries.title} open={open.has('title')} onToggle={(o) => toggle('title', o)}>
 
       <Field label="Dashboard name" hint="What it is called here and in every listing.">
         <input
@@ -547,9 +575,9 @@ export default function AppearanceModal({
         />
       </Field>
 
-      <p className="mb-3 mt-6 text-xs font-semibold uppercase tracking-wide text-ink-500">
-        Ready-made looks
-      </p>
+      </Section>
+
+      <Section title="Ready-made looks" open={open.has('looks')} onToggle={(o) => toggle('looks', o)}>
 
       <Field
         label="Start from one of these"
@@ -588,9 +616,9 @@ export default function AppearanceModal({
         </div>
       </Field>
 
-      <p className="mb-3 mt-5 border-t border-ink-200 pt-4 text-xs font-semibold uppercase tracking-wide text-ink-500">
-        Header
-      </p>
+      </Section>
+
+      <Section title="Header" summary={summaries.header} open={open.has('header')} onToggle={(o) => toggle('header', o)}>
 
       <BandFields
         label="Title band"
@@ -744,9 +772,9 @@ export default function AppearanceModal({
         Hide the description under the title
       </label>
 
-      <p className="mb-3 mt-5 border-t border-ink-200 pt-4 text-xs font-semibold uppercase tracking-wide text-ink-500">
-        Page
-      </p>
+      </Section>
+
+      <Section title="Page" summary={summaries.page} open={open.has('page')} onToggle={(o) => toggle('page', o)}>
 
       <BandFields
         label="Page ground"
@@ -764,9 +792,9 @@ export default function AppearanceModal({
         }
       />
 
-      <p className="mb-3 mt-5 border-t border-ink-200 pt-4 text-xs font-semibold uppercase tracking-wide text-ink-500">
-        Canvas
-      </p>
+      </Section>
+
+      <Section title="Canvas" summary={summaries.canvas} open={open.has('canvas')} onToggle={(o) => toggle('canvas', o)}>
 
       <Field
         label="Canvas width"
@@ -985,6 +1013,7 @@ export default function AppearanceModal({
           </Field>
         </>
       )}
+      </Section>
     </Modal>
   )
 }

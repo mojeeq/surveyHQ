@@ -1,6 +1,6 @@
 // Small presentational primitives shared across pages.
 
-import { type CSSProperties, type ReactNode, useEffect } from 'react'
+import { type CSSProperties, type ReactNode, useEffect, useState } from 'react'
 
 export function Spinner({ className = 'h-5 w-5' }: { className?: string }) {
   return (
@@ -199,6 +199,106 @@ export function Field({
       {error && <p className="mt-1 text-xs text-red-600">{error}</p>}
     </div>
   )
+}
+
+/**
+ * One foldable part of a long settings dialog.
+ *
+ * Folding on its own only hides things: a reader who cannot see a field also
+ * cannot see whether it is set, so they open every section in turn and are
+ * worse off than with one long list. `summary` is what stops that - a few words
+ * on the closed row saying what this section currently holds ("Harbour,
+ * centred, 34px"), so the one you want is the one you open.
+ *
+ * `<details>` rather than state and a click handler: the browser gives it
+ * keyboard operation, the right roles, and find-in-page that opens the section
+ * it lands in, none of which is worth writing again.
+ */
+export function Section({
+  title,
+  summary,
+  children,
+  open,
+  onToggle,
+}: {
+  title: string
+  /** What is set in here, for when it is closed. Empty means nothing is. */
+  summary?: string
+  children: ReactNode
+  open?: boolean
+  onToggle?: (open: boolean) => void
+}) {
+  // Uncontrolled unless a parent asks to drive it, so a dialog that does not
+  // care about remembering anything can use this with two props.
+  const [ownOpen, setOwnOpen] = useState(Boolean(open))
+  const isOpen = open ?? ownOpen
+
+  return (
+    <details
+      open={isOpen}
+      onToggle={(event) => {
+        const next = (event.currentTarget as HTMLDetailsElement).open
+        if (next === isOpen) return
+        setOwnOpen(next)
+        onToggle?.(next)
+      }}
+      className="border-b border-ink-200 last:border-b-0 dark:border-dark-200"
+    >
+      <summary className="flex cursor-pointer list-none items-center gap-2 py-3 text-xs font-semibold uppercase tracking-wide text-ink-500 hover:text-ink-700 dark:text-dark-500 dark:hover:text-dark-700">
+        <span
+          className={`shrink-0 text-[10px] leading-none transition-transform ${isOpen ? 'rotate-90' : ''}`}
+          aria-hidden
+        >
+          ▶
+        </span>
+        <span className="shrink-0">{title}</span>
+        {!isOpen && summary && (
+          <span className="min-w-0 flex-1 truncate text-right font-normal normal-case tracking-normal text-ink-400 dark:text-dark-400">
+            {summary}
+          </span>
+        )}
+      </summary>
+      <div className="pb-4">{children}</div>
+    </details>
+  )
+}
+
+/**
+ * Which sections of a dialog are open, kept between visits.
+ *
+ * Somebody who only ever changes the canvas should find the canvas open. The
+ * whole thing is wrapped because localStorage throws in a private window and
+ * a settings dialog that will not open is worse than one that forgets.
+ */
+export function useOpenSections(
+  key: string,
+  fallback: string[],
+): [Set<string>, (name: string, open: boolean) => void] {
+  const [open, setOpen] = useState<Set<string>>(() => {
+    try {
+      const stored = localStorage.getItem(`surveyhq.sections.${key}`)
+      if (stored) return new Set(JSON.parse(stored) as string[])
+    } catch {
+      /* private window, or nothing stored yet */
+    }
+    return new Set(fallback)
+  })
+
+  const toggle = (name: string, next: boolean) => {
+    setOpen((was) => {
+      const now = new Set(was)
+      if (next) now.add(name)
+      else now.delete(name)
+      try {
+        localStorage.setItem(`surveyhq.sections.${key}`, JSON.stringify([...now]))
+      } catch {
+        /* the dialog still works, it just will not remember */
+      }
+      return now
+    })
+  }
+
+  return [open, toggle]
 }
 
 export function PageHeader({
