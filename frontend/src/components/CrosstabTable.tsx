@@ -46,8 +46,12 @@ export default function CrosstabTable({
   const rowName = result.row_variable_label || result.row_variable
   const columnName = result.column_variable_label || result.column_variable
 
+  // A table asked for with no cell values has no value columns at all, so
+  // there is nothing for a total line to add up. Without this the footer
+  // printed the word Total against an otherwise empty row.
+  const hasValues = result.column_labels.length > 0
   const showRowTotals = result.column_labels.length > 1
-  const showColumnTotals = result.row_labels.length > 1
+  const showColumnTotals = hasValues && result.row_labels.length > 1
 
   return (
     <div className={`flex flex-col ${fill ? 'h-full min-h-0' : ''}`}>
@@ -131,10 +135,16 @@ export default function CrosstabTable({
         // is missing unless it says so here.
         <p className="mt-3 rounded-card border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
           Showing {formatNumber(result.row_labels.length)} of{' '}
-          {formatNumber(result.row_labels.length + (result.rows_omitted ?? 0))} rows and{' '}
-          {formatNumber(result.column_labels.length)} of{' '}
-          {formatNumber(result.column_labels.length + (result.columns_omitted ?? 0))} columns.
-          The totals cover what is shown.
+          {formatNumber(result.row_labels.length + (result.rows_omitted ?? 0))} rows
+          {hasValues && (
+            <>
+              {' '}
+              and {formatNumber(result.column_labels.length)} of{' '}
+              {formatNumber(result.column_labels.length + (result.columns_omitted ?? 0))}{' '}
+              columns
+            </>
+          )}
+          . The totals cover what is shown.
         </p>
       )}
 

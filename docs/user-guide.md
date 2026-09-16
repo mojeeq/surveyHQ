@@ -570,6 +570,19 @@ table. Percentages on a one-way table are shares of the total, since that is
 the only denominator it has, and there is no chi-square: there is no
 independence to test between a variable and nothing.
 
+**No cell values at all.** With Columns empty, Cell values offers **None (just
+list the categories)**, which gives the categories of the row variable down the
+page and nothing beside them - no counts, no totals, no chi-square. Useful when
+the list itself is the answer: which provinces reported, which enumerators
+appear in the data, what codes a variable actually uses. It saves and exports
+like any other table, and dashboard filters still narrow it, so a category with
+no rows left drops out of the list.
+
+Percentages are greyed out while Cell values is None, because there is nothing
+to take a percentage of, and the option is not offered once a column variable
+is chosen: two variables crossed with empty cells is a grid nothing can be read
+off.
+
 ### Tick all that apply
 
 A multiple-select question does not arrive as one variable. Survey Solutions

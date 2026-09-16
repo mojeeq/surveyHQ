@@ -729,6 +729,12 @@ def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabR
     as a single row or column named after the measure. That way everything
     downstream - the renderer, the export, the dashboard widget - needs to know
     nothing about it.
+
+    With no measure at all the stand-in side is dropped instead of printed, and
+    the table is the categories of the one variable it has: no counts, no
+    totals, no chi-square. The values still have to be queried to know which
+    categories occurred, so this is a question about what is shown rather than
+    about what is asked of the data.
     """
     row_info = ctx.require(request.row_variable) if request.row_variable else None
     col_info = ctx.require(request.column_variable) if request.column_variable else None
@@ -741,9 +747,12 @@ def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabR
     if col_info is not None:
         dimensions.append(Dimension(variable=request.column_variable, alias="__col"))
 
+    # With no measure the query still counts: that is how it learns which
+    # categories the data actually has. The counts are simply not shown.
+    measure = request.measure or Measure()
     spec = QuerySpec(
         dimensions=dimensions,
-        measures=[Measure(**{**request.measure.model_dump(), "alias": "__value"})],
+        measures=[Measure(**{**measure.model_dump(), "alias": "__value"})],
         filters=request.filters,
         limit=MAX_ROWS,
         use_labels=False,
@@ -762,7 +771,7 @@ def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabR
     else:
         triples = [(_ONE_WAY, c, v) for c, v in raw]
 
-    measure_name = _measure_label(request.measure)
+    measure_name = _measure_label(measure)
 
     def cell_label(info: Any, value: Any) -> str:
         if value is _ONE_WAY:
@@ -783,6 +792,15 @@ def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabR
 
     all_rows = _sorted_keys(row_keys, row_info)
     all_cols = _sorted_keys(col_keys, col_info)
+    if request.measure is None:
+        # The axis the table does not have carried a single column of counts.
+        # Nobody asked for those, so it goes rather than being printed empty,
+        # and an empty label list is what tells every renderer downstream that
+        # this table has no value columns.
+        if row_info is None:
+            all_rows = []
+        else:
+            all_cols = []
     row_keys = all_rows[: request.max_rows]
     col_keys = all_cols[: request.max_columns]
     rows_omitted = len(all_rows) - len(row_keys)

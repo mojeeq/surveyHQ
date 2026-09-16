@@ -21,6 +21,14 @@ def query_result_to_csv(result: QueryResult) -> bytes:
 def crosstab_to_csv(result: CrosstabResult) -> bytes:
     buffer = io.StringIO()
     writer = csv.writer(buffer)
+    if not result.column_labels:
+        # A table with no value columns: the categories and nothing else. The
+        # totals would be a column of zeroes and a row saying zero, which is
+        # not a smaller file so much as a wrong one.
+        writer.writerow([result.row_variable])
+        for label in result.row_labels:
+            writer.writerow([label])
+        return buffer.getvalue().encode("utf-8-sig")
     writer.writerow([result.row_variable] + result.column_labels + ["Total"])
     for index, label in enumerate(result.row_labels):
         values = ["" if v is None else v for v in result.values[index]]

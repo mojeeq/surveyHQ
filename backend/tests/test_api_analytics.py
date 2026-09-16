@@ -1945,3 +1945,162 @@ def test_filtering_a_labelled_numeric_variable(client, auth_headers, dataset_id)
     # Everyone coded 2, and fewer than everybody.
     total = sum(row[1] for row in body["rows"])
     assert 0 < total < 200
+
+
+# --- a table with no cell values -------------------------------------------
+#
+# The categories of one variable, listed, and nothing beside them. Asked for by
+# sending a null measure, which is not the same as sending no measure at all -
+# an absent one still means counting, so every table saved before this reads
+# back unchanged.
+
+
+def test_a_table_with_no_cell_values_lists_the_categories_and_nothing_else(
+    client, auth_headers, dataset_id
+):
+    response = client.post(
+        f"/api/v1/analytics/datasets/{dataset_id}/crosstab",
+        headers=auth_headers,
+        json={"row_variable": "region", "measure": None},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["row_labels"], "the categories are the whole point"
+    # No value columns, so no cells, no totals and nothing to test for
+    # independence against.
+    assert body["column_labels"] == []
+    assert body["values"] == [[] for _ in body["row_labels"]]
+    assert body["column_totals"] == []
+    assert body["grand_total"] == 0
+    assert body["chi_square"] is None
+
+
+def test_the_categories_are_the_same_ones_the_counted_table_has(
+    client, auth_headers, dataset_id
+):
+    """Dropping the counts must not drop or add a category.
+
+    The query still counts - that is how it learns which categories occurred -
+    so the only difference between the two tables is what is shown.
+    """
+
+    def labels(measure: object) -> list[str]:
+        response = client.post(
+            f"/api/v1/analytics/datasets/{dataset_id}/crosstab",
+            headers=auth_headers,
+            json={"row_variable": "region", "measure": measure},
+        )
+        assert response.status_code == 200, response.text
+        return response.json()["row_labels"]
+
+    assert labels(None) == labels({"agg": "count"})
+
+
+def test_an_absent_measure_still_means_counting(client, auth_headers, dataset_id):
+    """Only an explicit null asks for no values; leaving it out is a count."""
+    response = client.post(
+        f"/api/v1/analytics/datasets/{dataset_id}/crosstab",
+        headers=auth_headers,
+        json={"row_variable": "region"},
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["column_labels"] == ["Count"]
+    assert body["grand_total"] == 200
+
+
+def test_a_filter_still_narrows_a_table_with_no_cell_values(
+    client, auth_headers, dataset_id
+):
+    """The counts are hidden, not skipped, so a category with no rows left
+    must disappear rather than being listed with nothing beside it."""
+
+    def regions(conditions: list[dict[str, object]]) -> list[str]:
+        response = client.post(
+            f"/api/v1/analytics/datasets/{dataset_id}/crosstab",
+            headers=auth_headers,
+            json={
+                "row_variable": "region",
+                "measure": None,
+                "filters": {"op": "and", "conditions": conditions},
+            },
+        )
+        assert response.status_code == 200, response.text
+        return response.json()["row_labels"]
+
+    everything = regions([])
+    narrowed = regions(
+        [{"variable": "region", "operator": "eq", "value": everything[0]}]
+    )
+    assert narrowed == [everything[0]]
+    assert len(everything) > 1
+
+
+def test_no_cell_values_crossed_with_a_second_variable_is_refused(
+    client, auth_headers, dataset_id
+):
+    """A grid of blanks is not a smaller table, it is an unreadable one."""
+    response = client.post(
+        f"/api/v1/analytics/datasets/{dataset_id}/crosstab",
+        headers=auth_headers,
+        json={"row_variable": "region", "column_variable": "sex", "measure": None},
+    )
+    assert response.status_code == 422
+
+
+def test_percentages_asked_for_with_no_cell_values_are_dropped(
+    client, auth_headers, dataset_id
+):
+    """A percentage of nothing. Corrected rather than refused: this is
+    reachable by turning the cell values off on a table that already had
+    percentages set, and a 422 there is a dead end."""
+    response = client.post(
+        f"/api/v1/analytics/datasets/{dataset_id}/crosstab",
+        headers=auth_headers,
+        json={"row_variable": "region", "measure": None, "percentages": "total"},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["percentages"] == "none"
+
+
+def test_a_table_with_no_cell_values_saves_and_renders_as_a_widget(
+    client, auth_headers, dataset_id
+):
+    chart = client.post(
+        "/api/v1/dashboards/charts",
+        headers=auth_headers,
+        json={
+            "name": "Regions",
+            "dataset_id": dataset_id,
+            "chart_type": "crosstab",
+            "spec": {"crosstab": {"row_variable": "region", "measure": None}},
+        },
+    )
+    assert chart.status_code == 201, chart.text
+
+    rendered = client.post(
+        f"/api/v1/dashboards/charts/{chart.json()['id']}/data",
+        headers=auth_headers,
+        json={"op": "and", "conditions": []},
+    )
+    assert rendered.status_code == 200, rendered.text
+    assert rendered.json()["column_labels"] == []
+
+
+def test_the_csv_of_a_table_with_no_cell_values_is_one_column(
+    client, auth_headers, dataset_id
+):
+    """The totals would be a column of zeroes and a row saying zero, which is
+    not a smaller file so much as a wrong one."""
+    response = client.post(
+        f"/api/v1/analytics/datasets/{dataset_id}/crosstab/export",
+        headers=auth_headers,
+        json={"row_variable": "region", "measure": None},
+    )
+    assert response.status_code == 200, response.text
+    lines = [
+        line for line in response.content.decode("utf-8-sig").splitlines() if line
+    ]
+    assert lines[0] == "region"
+    assert all("," not in line for line in lines)
+    assert "Total" not in lines
