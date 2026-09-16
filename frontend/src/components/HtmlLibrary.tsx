@@ -68,7 +68,7 @@ export default function HtmlLibrary({
   return (
     <div className="mb-2 flex flex-wrap items-center gap-2">
       <select
-        className="input h-8 w-56 py-0 text-xs"
+        className="input input-sm w-56"
         aria-label="Load an embed from the library"
         value=""
         onChange={(event) => {
@@ -90,7 +90,7 @@ export default function HtmlLibrary({
       {saving ? (
         <>
           <input
-            className="input h-8 w-44 py-0 text-xs"
+            className="input input-sm w-44"
             placeholder="Name it"
             aria-label="Name for the saved embed"
             autoFocus

@@ -377,7 +377,7 @@ function LinkRow({
           Stops working after
           <input
             type="date"
-            className="input h-7 w-40 py-0 text-xs"
+            className="input input-sm w-40"
             value={dateInputValue(expiresAt)}
             onChange={(event) => onExpiry(endOfDay(event.target.value))}
           />

@@ -50,7 +50,7 @@ export default function DashboardFilters({
   // whole row wraps when there are more filters than fit.
   return (
     <div
-      className="mb-3 flex flex-wrap items-center gap-x-4 gap-y-2 rounded-card border border-ink-200 px-3 py-2"
+      className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-card border border-ink-200 px-2.5 py-1.5"
       style={{ backgroundColor: background || '#ffffff' }}
     >
       {controls.map((control) => (
@@ -114,7 +114,7 @@ function FilterControlInput({
         {name}
       </span>
       <select
-        className="input h-7 w-40 py-0 text-xs"
+        className="input input-sm w-36"
         aria-label={name}
         value={value}
         onChange={(event) => onChange(event.target.value)}

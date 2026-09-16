@@ -820,7 +820,7 @@ export function FilterChoice({
       </label>
       {picked && (
         <input
-          className="input h-7 w-36 shrink-0 py-0 text-xs"
+          className="input input-sm w-36 shrink-0"
           aria-label={`Label for the ${variable.name} filter`}
           title="What this filter is called on the dashboard"
           value={picked.label ?? ""}

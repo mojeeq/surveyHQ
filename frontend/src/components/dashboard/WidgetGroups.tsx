@@ -213,7 +213,7 @@ export function GroupBar({
       {naming ? (
         <input
           ref={field}
-          className="input h-6 min-w-0 flex-1 py-0 text-xs"
+          className="input input-xs min-w-0 flex-1"
           value={draft}
           onMouseDown={(event) => event.stopPropagation()}
           onTouchStart={(event) => event.stopPropagation()}

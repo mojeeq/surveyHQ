@@ -652,7 +652,7 @@ function IndicatorModal({
                     {option.label || key}
                   </span>
                   <input
-                    className="input h-8 w-28 py-0 text-sm"
+                    className="input input-sm w-28"
                     type="number"
                     placeholder={target || 'overall'}
                     aria-label={`Target for ${option.label || key}`}

@@ -52,6 +52,48 @@ h4 {
   box-shadow: none !important;
 }
 
+/*
+ * A control that is chrome rather than a field: a filter dropdown, an inline
+ * rename box, a small picker over a chart.
+ *
+ * Two class names rather than the height utilities already written on those
+ * elements, because those utilities cannot reach. Nothing in this stylesheet
+ * is inside a Tailwind layer, so `.input` above beats every utility - and it
+ * sets a min-height, which a `h-7` cannot undo in any case since height and
+ * min-height are different properties. Eight controls across the application
+ * asked to be small and every one of them came out forty pixels tall in
+ * fourteen-point text.
+ *
+ * `.input.input-sm` rather than `.input-sm` on its own: two classes outrank
+ * one, so this wins over `.input` wherever it lands in the file.
+ *
+ * Deliberately narrow. Putting `.input` into the components layer would have
+ * fixed these eight and also woken up the `text-xs` on fifty-four other
+ * inputs and the `py-1.5` on forty-two, restyling most of the application in
+ * a change that was asked to make one bar smaller.
+ */
+.input.input-sm {
+  @apply px-2 text-xs;
+  min-height: 1.75rem;
+  height: 1.75rem;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.input.input-xs {
+  @apply px-2 text-xs;
+  min-height: 1.5rem;
+  height: 1.5rem;
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+/* A box that is typed into rather than picked from grows with its rows. */
+textarea.input.input-sm,
+textarea.input.input-xs {
+  height: auto;
+}
+
 .btn {
   @apply min-h-9 rounded-lg px-3.5 py-2 text-[13px] font-semibold transition-all duration-150
          focus:outline-none focus:ring-4 focus:ring-offset-0;
