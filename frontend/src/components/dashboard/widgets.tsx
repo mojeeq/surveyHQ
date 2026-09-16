@@ -395,11 +395,21 @@ export function QualityWidget({
           board of them read as an emergency. What is left says what the list
           cannot: how many checks passed, and how many have never run.
 
+          Except on a chart, where there is no list to be redundant with. The
+          trend view draws history in the categorical palette and names no
+          state at all, so without this a panel of failing checks looks exactly
+          like a panel of passing ones. It reads as a count beside the others
+          rather than as an alarm.
+
           The row goes entirely when it has nothing to say, rather than sitting
-          there as an empty strip with a margin under it. A panel whose checks
-          all failed has neither badge. */}
-      {(payload.passing > 0 || payload.never_run > 0) && (
+          there as an empty strip with a margin under it. */}
+      {(charted && payload.failing > 0) ||
+      payload.passing > 0 ||
+      payload.never_run > 0 ? (
         <div className="mb-3 flex flex-wrap items-center gap-2">
+          {charted && payload.failing > 0 && (
+            <Badge tone="neutral">{payload.failing} failing</Badge>
+          )}
           {payload.passing > 0 && (
             <Badge tone="neutral">{payload.passing} passing</Badge>
           )}
@@ -407,7 +417,7 @@ export function QualityWidget({
             <Badge tone="warning">{payload.never_run} never run</Badge>
           )}
         </div>
-      )}
+      ) : null}
 
       {!payload.checks.length ? (
         <p className="text-ink-500">No active checks on {payload.name}.</p>
