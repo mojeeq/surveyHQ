@@ -1,6 +1,28 @@
 // Display helpers shared across pages.
 
 /**
+ * Text that is about to be put inside a string of HTML.
+ *
+ * Needed because two of the libraries here take HTML rather than text and give
+ * no way to ask for text: an ECharts tooltip `formatter` returns a string that
+ * is assigned as innerHTML, and a Leaflet tooltip does the same with a string
+ * `bindTooltip`. React escapes everything it renders, so anywhere else in this
+ * application a survey answer is already just characters - these two are the
+ * exceptions, and a value label reading `<img src=x onerror=...>` runs in them.
+ *
+ * Labels come from uploaded data: a Stata value label, a Survey Solutions
+ * export, a boundary file's feature properties, or whatever an interviewer
+ * typed into a free-text field.
+ */
+export function escapeHtml(value: unknown): string {
+  return String(value ?? '').replace(
+    /[&<>"']/g,
+    (character) =>
+      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!,
+  )
+}
+
+/**
  * A number for display, showing decimals only where the value has them.
  *
  * `digits` is a maximum, not a fixed width: a count of 153 reads "153", never

@@ -8,7 +8,7 @@
 
 import type { EChartsOption } from 'echarts'
 import type { ChartType, QueryResult } from './types'
-import { formatCell, formatNumber } from './format'
+import { escapeHtml, formatCell, formatNumber } from './format'
 
 /**
  * Categorical themes: the same eight validated hues in different fixed orders.
@@ -667,7 +667,9 @@ function buildOption(
           ...tooltipBase,
           trigger: 'item',
           formatter: (params: any) =>
-            `${params.marker} ${params.name}<br/><b>${formatNumber(params.value)}</b> (${params.percent}%)`,
+            `${params.marker} ${escapeHtml(params.name)}<br/><b>${formatNumber(
+              params.value,
+            )}</b> (${params.percent}%)`,
         },
         // Legend along the bottom: a side legend collides with the slice labels.
         legend: {
@@ -713,7 +715,7 @@ function buildOption(
           ...tooltipBase,
           trigger: 'item',
           formatter: (params: any) =>
-            `${params.marker} ${categories[params.dataIndex] ?? ''}<br/>` +
+            `${params.marker} ${escapeHtml(categories[params.dataIndex] ?? '')}<br/>` +
             `${formatNumber(params.value[0], 2)} / ${formatNumber(params.value[1], 2)}`,
         },
         // scale: true keeps the axes on the data's own range. Forcing zero on a
@@ -754,7 +756,8 @@ function buildOption(
           ...tooltipBase,
           trigger: 'item',
           formatter: (params: any) =>
-            `${categories[params.value[0]]} / ${series[params.value[1]]?.name}<br/>` +
+            `${escapeHtml(categories[params.value[0]])} / ` +
+            `${escapeHtml(series[params.value[1]]?.name)}<br/>` +
             `<b>${formatNumber(params.value[2])}</b>`,
         },
         xAxis: { type: 'category', data: categories, ...axisCommon(0) },
@@ -895,13 +898,13 @@ function buildOption(
             const rows = list
               .map(
                 (p: any) =>
-                  `${p.marker} ${p.seriesName}: <b>${formatNumber(
+                  `${p.marker} ${escapeHtml(p.seriesName)}: <b>${formatNumber(
                     magnitude(p.value),
                     options.decimals ?? 0,
                   )}</b>`,
               )
               .join('<br/>')
-            return `${list[0]?.axisValueLabel ?? ''}<br/>${rows}`
+            return `${escapeHtml(list[0]?.axisValueLabel ?? '')}<br/>${rows}`
           },
         },
         xAxis: {
@@ -1009,7 +1012,9 @@ function buildOption(
                 )}</b></span>`,
             )
             // Largest at the top, the way the box is drawn.
-            return `${params.marker} ${params.name}<br/>${[...rows].reverse().join('<br/>')}`
+            return `${params.marker} ${escapeHtml(params.name)}<br/>${[...rows]
+              .reverse()
+              .join('<br/>')}`
           },
         },
         xAxis: horizontal ? numberAxis : groupAxis,
@@ -1092,10 +1097,13 @@ function buildOption(
               .filter((p: any) => p.value !== null && p.value !== undefined)
               .map(
                 (p: any) =>
-                  `${p.marker} ${p.seriesName}: <b>${formatNumber(Number(p.value), 2)}</b>`,
+                  `${p.marker} ${escapeHtml(p.seriesName)}: <b>${formatNumber(
+                    Number(p.value),
+                    2,
+                  )}</b>`,
               )
               .join('<br/>')
-            const head = list[0]?.axisValueLabel ?? list[0]?.name ?? ''
+            const head = escapeHtml(list[0]?.axisValueLabel ?? list[0]?.name ?? '')
             return `${head}<br/>${rows}`
           },
         },
