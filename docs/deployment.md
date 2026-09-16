@@ -190,6 +190,46 @@ the server, and reach anything the server can reach. Use it only where everyone
 who can run R in any project is someone you would trust with a shell on that
 machine.
 
+## Security headers
+
+The bundled nginx sets these on every response, so a scanner pointed at a
+default install finds them already there:
+
+| Header | Value |
+| --- | --- |
+| `X-Content-Type-Options` | `nosniff` |
+| `X-Frame-Options` | `SAMEORIGIN` |
+| `Referrer-Policy` | `strict-origin-when-cross-origin` |
+| `Permissions-Policy` | camera, microphone, geolocation, payment and USB all denied |
+| `Content-Security-Policy` | see below |
+| `Strict-Transport-Security` | one year, subdomains included, **only over HTTPS** |
+
+HSTS is sent only when the request arrived over HTTPS, which the container
+learns from `X-Forwarded-Proto`. A browser ignores the header on a plain
+connection anyway, and a deployment that is deliberately HTTP-only on an
+internal network should not start advertising a policy it cannot keep the
+moment somebody puts TLS in front of it. If you terminate TLS yourself, pass
+that header through; the reverse proxy examples below already do.
+
+### What the content policy does and does not cover
+
+It blocks an injected `<base>` tag, a plugin, a form posting somewhere else,
+and the page being framed by another site. Map tiles are allowed from the three
+hosts the basemaps use and nowhere else.
+
+**It does not restrict `script-src`, and that is deliberate.** An iframe's
+`srcdoc` document inherits the policy of the page that made it, and so do
+`data:` and `blob:` frames. So any `script-src` that blocks inline code also
+silences the HTML embed widget, whose whole purpose is to run markup a
+dashboard author pasted in. Making that widget work under a real `script-src`
+means serving its markup from its own response with its own headers, which is a
+change to the feature rather than to this file.
+
+So do not read the presence of a CSP here as the thing that stops a survey
+answer becoming script on the page. What stops that is escaping the values
+before they reach a chart or map tooltip, which the application does. The
+policy is defence in depth behind it.
+
 ## Putting it behind HTTPS
 
 The stack serves plain HTTP on `WEB_PORT`, bound for a reverse proxy in front.
