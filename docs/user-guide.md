@@ -959,6 +959,12 @@ average of averages is not an average unless every group happens to be the same
 size, and quietly returning one would be worse than not exporting it at all.
 The page tabs work too, and each page keeps its own controls.
 
+**It looks like your board.** The page ground, the board's own colour or
+background image, the masthead, the logo, the title's size, colour and
+typeface, the tab band, the filter bar and the widget transparency all travel
+with it. Any bundled typeface the board is set in is carried inside the file
+as well, so it reads in that face on a laptop that has never met the platform.
+
 What the copy does not do:
 
 - **Clicking a mark does not filter it.** The dropdowns are the filters.
@@ -978,6 +984,9 @@ What the copy does not do:
   when the file was made.
 - **Boundary outlines are left out of the map.** A national frame is megabytes
   of coordinates and would dwarf the rest of the file.
+- **A background image over 3 MB is left behind**, and the board's background
+  colour is used on its own. The file is meant to be emailed, and an image is
+  a third larger again once it is carried inside one.
 
 The file says at its foot when it was made. Nothing in it goes back to the
 platform, so the numbers are the numbers of that moment: export it again when

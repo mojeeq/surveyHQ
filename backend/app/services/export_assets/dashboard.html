@@ -91,6 +91,11 @@
   .leafmap { width: 100%; height: 100%; min-height: 180px; border-radius: 6px; }
   .embed { width: 100%; height: 100%; border: 0; }
   footer.board { margin-top: 26px; color: var(--ink-400); font-size: 11px; }
+  /* How this particular board is dressed: its ground, masthead, title, tabs,
+     filter bar and card opacity, written server-side from the same appearance
+     the platform draws it with. Last in the sheet so it wins on its own
+     specificity rather than by shouting. Empty for an undressed board. */
+/*__LOOK__*/
   @media (max-width: 780px) {
     .grid { display: block; }
     .card { margin-bottom: 14px; height: 320px; }
@@ -720,9 +725,24 @@
     drawn = []
     app.innerHTML = ''
 
+    var look = DATA.look || {}
     var header = el('header', 'board')
-    header.appendChild(el('h1', '', DATA.name))
-    if (DATA.description) header.appendChild(el('p', '', DATA.description))
+    // A logo sits beside the title rather than above it, which is where the
+    // platform puts it and what a ministry's letterhead looks like.
+    if (look.logo) {
+      var brand = el('div', 'brand')
+      var mark = document.createElement('img')
+      mark.src = look.logo
+      mark.alt = ''
+      brand.appendChild(mark)
+      brand.appendChild(el('h1', '', DATA.name))
+      header.appendChild(brand)
+    } else {
+      header.appendChild(el('h1', '', DATA.name))
+    }
+    if (DATA.description && !look.hide_subtitle) {
+      header.appendChild(el('p', '', DATA.description))
+    }
     app.appendChild(header)
 
     if (DATA.pages.length > 1) {

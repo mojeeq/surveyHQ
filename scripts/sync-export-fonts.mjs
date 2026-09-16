@@ -18,9 +18,10 @@
  */
 
 import { createHash } from "node:crypto";
-import { mkdirSync, copyFileSync, writeFileSync, readFileSync, rmSync, existsSync } from "node:fs";
+import { mkdirSync, copyFileSync, writeFileSync, readFileSync, rmSync, existsSync, unlinkSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { build } from "../frontend/node_modules/esbuild/lib/main.js";
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), "..");
 const MODULES = join(ROOT, "frontend", "node_modules");
@@ -33,7 +34,7 @@ const OUT = join(ROOT, "backend", "app", "services", "export_assets", "fonts");
  * `weight` is the range a variable file covers; a static face gets its single
  * weight. Both go straight into the generated @font-face.
  */
-const FONTS = [
+const FILES = [
   {
     family: "Inter Variable",
     pkg: "@fontsource-variable/inter",
@@ -105,7 +106,7 @@ mkdirSync(OUT, { recursive: true });
 const manifest = [];
 let bytes = 0;
 
-for (const font of FONTS) {
+for (const font of FILES) {
   for (const file of font.files) {
     const from = join(MODULES, font.pkg, "files", file);
     if (!existsSync(from)) {
@@ -126,7 +127,38 @@ for (const font of FONTS) {
 }
 
 writeFileSync(join(OUT, "fonts.json"), `${JSON.stringify(manifest, null, 2)}\n`);
+
+/*
+ * The catalogue itself, so the backend can turn a stored font id into a stack.
+ *
+ * A dashboard title stores an id ("source-serif"); a widget stores the stack.
+ * The export has to resolve the first, and the mapping lives in TypeScript. It
+ * is compiled and imported rather than read with a regular expression, because
+ * a regular expression over source is a thing that works until someone adds a
+ * line break.
+ */
+const compiled = join(OUT, ".catalogue.mjs");
+await build({
+  entryPoints: [join(ROOT, "frontend", "src", "lib", "fonts.ts")],
+  outfile: compiled,
+  bundle: true,
+  format: "esm",
+  platform: "neutral",
+  logLevel: "error",
+});
+const { FONTS } = await import(pathToFileURL(compiled).href);
+unlinkSync(compiled);
+
+writeFileSync(
+  join(OUT, "catalogue.json"),
+  `${JSON.stringify(
+    FONTS.map(({ id, label, stack, kind, family }) => ({ id, label, stack, kind, family })),
+    null,
+    2,
+  )}\n`,
+);
 console.log(
   `export fonts: ${manifest.length} file(s), ${(bytes / 1024).toFixed(0)} KB, ` +
-    `${new Set(FONTS.map((f) => f.family)).size} families`,
+    `${new Set(FILES.map((f) => f.family)).size} bundled families, ` +
+    `${FONTS.length} catalogue entries`,
 );
