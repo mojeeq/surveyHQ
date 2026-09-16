@@ -389,17 +389,35 @@ export function QualityWidget({
       className="flex h-full flex-col [&_.chip]:text-[0.8em]"
       style={{ fontSize: `${display?.fontSize ?? DEFAULT_PANEL_TEXT}px` }}
     >
-      <div className="mb-3 flex flex-wrap items-center gap-2">
-        <Badge tone={payload.failing ? "danger" : "success"}>
-          {payload.failing ? `${payload.failing} failing` : "All passing"}
-        </Badge>
-        {payload.passing > 0 && (
-          <Badge tone="neutral">{payload.passing} passing</Badge>
-        )}
-        {payload.never_run > 0 && (
-          <Badge tone="warning">{payload.never_run} never run</Badge>
-        )}
-      </div>
+      {/* No "N failing" count. The list underneath is the failing checks,
+          named and numbered, so the badge was a label for something already on
+          the screen - and a red pill at the top of every quality panel made a
+          board of them read as an emergency. What is left says what the list
+          cannot: how many checks passed, and how many have never run.
+
+          Except on a chart, where there is no list to be redundant with. The
+          trend view draws history in the categorical palette and names no
+          state at all, so without this a panel of failing checks looks exactly
+          like a panel of passing ones. It reads as a count beside the others
+          rather than as an alarm.
+
+          The row goes entirely when it has nothing to say, rather than sitting
+          there as an empty strip with a margin under it. */}
+      {(charted && payload.failing > 0) ||
+      payload.passing > 0 ||
+      payload.never_run > 0 ? (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          {charted && payload.failing > 0 && (
+            <Badge tone="neutral">{payload.failing} failing</Badge>
+          )}
+          {payload.passing > 0 && (
+            <Badge tone="neutral">{payload.passing} passing</Badge>
+          )}
+          {payload.never_run > 0 && (
+            <Badge tone="warning">{payload.never_run} never run</Badge>
+          )}
+        </div>
+      ) : null}
 
       {!payload.checks.length ? (
         <p className="text-ink-500">No active checks on {payload.name}.</p>
@@ -452,10 +470,10 @@ export function QualityWidget({
           {failing.map((check: any) => (
             <li
               key={check.id}
-              className="aero-pane aero-pane-danger px-3 py-2 pl-4 text-red-600"
+              className="aero-pane border-ink-200 bg-white px-3 py-2 dark:border-dark-300 dark:bg-dark-100"
             >
               <div className="flex items-start justify-between gap-2">
-                <p className="min-w-0 font-medium text-red-900 dark:text-red-200">
+                <p className="min-w-0 font-medium text-ink-900 dark:text-dark-900">
                   {check.name}
                 </p>
                 {/* The number the check turns on, where the eye lands after
@@ -463,7 +481,7 @@ export function QualityWidget({
                     out of the middle of a sentence is slower than reading it
                     off the right-hand edge of every box in the column. */}
                 {check.failure_rate > 0 && (
-                  <span className="chip shrink-0 border-red-300/70 bg-red-100 tabular-nums text-red-800 dark:border-red-500/40 dark:bg-red-500/15 dark:text-red-200">
+                  <span className="chip shrink-0 border-ink-200 bg-ink-100 tabular-nums text-ink-700 dark:border-dark-300 dark:bg-dark-200 dark:text-dark-700">
                     {(check.failure_rate * 100).toFixed(
                       check.failure_rate < 0.01 ? 2 : 0,
                     )}
@@ -471,11 +489,11 @@ export function QualityWidget({
                   </span>
                 )}
               </div>
-              <p className="mt-0.5 text-[0.87em] text-red-800/90 dark:text-red-200/80">
+              <p className="mt-0.5 text-[0.87em] text-ink-600 dark:text-dark-700">
                 {check.message}
               </p>
               {payload.filtered && check.total_rows > 0 && (
-                <p className="mt-0.5 text-[0.8em] text-red-700/90 dark:text-red-200/70">
+                <p className="mt-0.5 text-[0.8em] text-ink-500 dark:text-dark-600">
                   {formatNumber(check.failed_rows)} of{" "}
                   {formatNumber(check.total_rows)} rows in view
                 </p>
