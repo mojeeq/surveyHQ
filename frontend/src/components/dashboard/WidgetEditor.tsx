@@ -39,7 +39,7 @@ import {
   DEFAULT_TITLE_SIZE,
   panelDefault,
 } from "@/components/dashboard/shared";
-import { Field, Loading, Modal } from "@/components/ui";
+import { Field, Loading, Modal, Section, useOpenSections } from "@/components/ui";
 
 /** Whether this dataset looks like it has a GPS reading the map cannot offer.
  *
@@ -49,6 +49,18 @@ import { Field, Loading, Modal } from "@/components/ui";
  * having lost it. Import splits such a column now, so the answer is to import
  * the file again; this says so where the empty list is.
  */
+/** The widget kinds, for the picker and for naming one in a folded section. */
+const WIDGET_KINDS: { value: string; label: string }[] = [
+  { value: "chart", label: "Saved chart or cross-tab" },
+  { value: "indicator", label: "Indicator tile" },
+  { value: "quality", label: "Data quality panel" },
+  { value: "text", label: "Text note" },
+  { value: "countdown", label: "Countdown to a date" },
+  { value: "map", label: "Map of interview locations" },
+  { value: "html", label: "Embedded HTML" },
+  { value: "freshness", label: "How recent the data is" },
+];
+
 function looksLikeAnUnsplitGps(
   variables: { name: string; var_type: string }[],
 ): boolean {
@@ -273,14 +285,11 @@ export function AddWidgetModal({
           value={kind}
           onChange={(event) => setKind(event.target.value as typeof kind)}
         >
-          <option value="chart">Saved chart or cross-tab</option>
-          <option value="indicator">Indicator tile</option>
-          <option value="quality">Data quality panel</option>
-          <option value="text">Text note</option>
-          <option value="countdown">Countdown to a date</option>
-          <option value="map">Map of interview locations</option>
-          <option value="html">Embedded HTML</option>
-          <option value="freshness">How recent the data is</option>
+          {WIDGET_KINDS.map((one) => (
+            <option key={one.value} value={one.value}>
+              {one.label}
+            </option>
+          ))}
         </select>
       </Field>
 
@@ -687,6 +696,42 @@ export function EditWidgetModal({
   const set = (patch: Record<string, any>) =>
     setConfig({ ...config, ...patch });
 
+  // What it shows is open to begin with, because that is what somebody opening
+  // a widget usually came to change. The other two say what they hold on their
+  // closed row, so nothing has to be opened to be found.
+  const [open, toggle] = useOpenSections("widget", ["content"]);
+
+  /** A few words per section, for when it is closed. */
+  const summaries = {
+    basics: [
+      title.trim() || "Untitled",
+      `page ${(pageNames[page] ?? page + 1).toString()}`,
+      config.caption ? "captioned" : "",
+    ]
+      .filter(Boolean)
+      .join(", "),
+    content: WIDGET_KINDS.find((k) => k.value === kind)?.label ?? String(kind),
+    boundaries: [
+      config.boundary_id ? "a layer" : "none chosen",
+      config.boundary_label ? "labelled" : "",
+      config.area_variable ? "area checked" : "",
+    ]
+      .filter(Boolean)
+      .join(", "),
+    look: [
+      config.background ? "colour" : "",
+      config.opacity !== undefined
+        ? `${Math.round(config.opacity * 100)}% opaque`
+        : "",
+      config.font_family ? fontFor(config.font_family)?.label ?? "own font" : "",
+      config.title_font ? FONTS.find((f) => f.id === config.title_font)?.label ?? "" : "",
+      config.title_size ? `${config.title_size}px title` : "",
+      config.series_color ? "chart colour" : "",
+    ]
+      .filter(Boolean)
+      .join(", "),
+  };
+
   const charts = useQuery({
     queryKey: ["charts", projectId],
     queryFn: () =>
@@ -791,6 +836,7 @@ export function EditWidgetModal({
         </>
       }
     >
+      <Section title="Basics" summary={summaries.basics} open={open.has('basics')} onToggle={(o) => toggle('basics', o)}>
       <div className="grid gap-x-4 sm:grid-cols-2">
         <Field label="Title">
           <input
@@ -848,6 +894,555 @@ export function EditWidgetModal({
           }
         />
       </Field>
+      </Section>
+
+      <Section title="What it shows" summary={summaries.content} open={open.has('content')} onToggle={(o) => toggle('content', o)}>
+      {kind === "chart" && (
+        <Field label="Chart">
+          <select
+            className="input"
+            value={chartId}
+            onChange={(event) => setChartId(event.target.value)}
+          >
+            {charts.data?.map((chart) => (
+              <option key={chart.id} value={chart.id}>
+                {chart.name} (
+                {chart.chart_type === "crosstab"
+                  ? "cross-tab"
+                  : chart.chart_type}
+                )
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+
+      {kind === "indicator" && (
+        <>
+          <Field label="Indicator">
+            <select
+              className="input"
+              value={indicatorId}
+              onChange={(event) => setIndicatorId(event.target.value)}
+            >
+              {indicators.data?.map((indicator) => (
+                <option key={indicator.id} value={indicator.id}>
+                  {indicator.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <label className="mb-4 flex items-center gap-2 text-sm text-ink-700">
+            <input
+              type="checkbox"
+              checked={Boolean(config.show_breakdown)}
+              onChange={(event) =>
+                set({ show_breakdown: event.target.checked })
+              }
+            />
+            Show the breakdown chart under the number
+          </label>
+          <label className="mb-4 flex items-center gap-2 text-sm text-ink-700">
+            <input
+              type="checkbox"
+              checked={Boolean(config.show_trend)}
+              onChange={(event) => set({ show_trend: event.target.checked })}
+            />
+            Draw a trend line from the stored runs
+          </label>
+        </>
+      )}
+
+      {(kind === "quality" || kind === "map") && (
+        <Field label="Dataset">
+          <select
+            className="input"
+            value={datasetId}
+            onChange={(event) => setDatasetId(event.target.value)}
+          >
+            <option value="">Choose a dataset…</option>
+            {datasets.data?.items.map((dataset) => (
+              <option key={dataset.id} value={dataset.id}>
+                {dataset.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+
+      {kind === "quality" && (
+        <Field
+          label="Show it as"
+          hint="A panel of findings reads at a desk; a chart reads from across a room, and a line says whether it is getting better."
+        >
+          <select
+            className="input"
+            value={String(config.quality_view ?? "list")}
+            onChange={(event) => set({ quality_view: event.target.value })}
+          >
+            <option value="list">The findings, listed</option>
+            <option value="rate">Bar chart: share of rows failing</option>
+            <option value="rows">Bar chart: how many rows flagged</option>
+            <option value="trend">Line chart: failure rate over time</option>
+          </select>
+        </Field>
+      )}
+
+      {kind === "map" && (
+        <>
+          <div className="grid gap-x-4 sm:grid-cols-2">
+            <Field label="Latitude">
+              <select
+                className="input"
+                value={config.latitude ?? ""}
+                onChange={(event) => set({ latitude: event.target.value })}
+              >
+                <option value="">Choose…</option>
+                {numericVariables.map((v) => (
+                  <option key={v.name} value={v.name}>
+                    {v.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+            <Field label="Longitude">
+              <select
+                className="input"
+                value={config.longitude ?? ""}
+                onChange={(event) => set({ longitude: event.target.value })}
+              >
+                <option value="">Choose…</option>
+                {numericVariables.map((v) => (
+                  <option key={v.name} value={v.name}>
+                    {v.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          {looksLikeAnUnsplitGps(mapDataset.data?.variables ?? []) && (
+            <p className="-mt-2 mb-3 text-xs text-slate-500">
+              {UNSPLIT_GPS_HINT}
+            </p>
+          )}
+          <Field label="What each pin counts">
+            <div className="flex gap-2">
+              <select
+                className="input w-56"
+                value={config.measure_agg ?? "count"}
+                onChange={(event) => set({ measure_agg: event.target.value })}
+              >
+                <option value="count">How many records</option>
+                <option value="sum">Total of</option>
+                <option value="mean">Average of</option>
+                <option value="max">Highest</option>
+                <option value="min">Lowest</option>
+              </select>
+              {(config.measure_agg ?? "count") !== "count" && (
+                <select
+                  className="input"
+                  value={config.measure_variable ?? ""}
+                  onChange={(event) =>
+                    set({ measure_variable: event.target.value })
+                  }
+                >
+                  <option value="">Choose a variable…</option>
+                  {numericVariables.map((v) => (
+                    <option key={v.name} value={v.name}>
+                      {v.name}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          </Field>
+        </>
+      )}
+
+      {kind === "text" && (
+        <Field label="Text">
+          <textarea
+            className="input"
+            rows={4}
+            value={config.content ?? ""}
+            onChange={(event) => set({ content: event.target.value })}
+          />
+        </Field>
+      )}
+
+      {kind === "html" && (
+        <Field label="HTML" hint="Rendered in a sandboxed frame.">
+          <HtmlLibrary
+            html={config.html ?? ""}
+            projectId={projectId}
+            onLoad={(next) => set({ html: next })}
+          />
+          <textarea
+            className="input font-mono text-xs"
+            rows={8}
+            value={config.html ?? ""}
+            onChange={(event) => set({ html: event.target.value })}
+          />
+        </Field>
+      )}
+
+      {kind === "countdown" && (
+        <>
+          <Field label="Counting down to">
+            <input
+              type="datetime-local"
+              className="input"
+              value={toLocalInput(config.target)}
+              onChange={(event) =>
+                set({
+                  target: event.target.value
+                    ? new Date(event.target.value).toISOString()
+                    : "",
+                })
+              }
+            />
+          </Field>
+          <Field label="Caption">
+            <input
+              className="input"
+              value={config.label ?? ""}
+              onChange={(event) => set({ label: event.target.value })}
+            />
+          </Field>
+          <Field label="When it runs out">
+            <input
+              className="input"
+              value={config.expired_text ?? ""}
+              placeholder="Time is up"
+              onChange={(event) => set({ expired_text: event.target.value })}
+            />
+          </Field>
+        </>
+      )}
+
+      {kind === "freshness" && (
+        <FreshnessFields
+          datasets={datasets.data?.items ?? []}
+          config={config}
+          onChange={set}
+        />
+      )}
+      </Section>
+
+      {/* Only a map has any, and a section with nothing in it is a row that
+          asks to be opened and then says nothing. */}
+      {kind === "map" && (
+      <Section title="Boundaries" summary={summaries.boundaries} open={open.has('bounds')} onToggle={(o) => toggle('bounds', o)}>
+        <>
+          <Field
+            label="Boundaries"
+            hint="Enumeration areas, districts or villages, drawn under the pins."
+          >
+            <select
+              className="input"
+              aria-label="Boundary layer"
+              value={config.boundary_id ?? ""}
+              onChange={(event) =>
+                // Changing layer drops the two attributes chosen from the old
+                // one: they are its column names, and carrying them over would
+                // silently check against a property the new layer has not got.
+                set({
+                  boundary_id: event.target.value || undefined,
+                  boundary_key: undefined,
+                  boundary_label: undefined,
+                })
+              }
+            >
+              <option value="">None</option>
+              {boundaries.data?.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name} ({item.feature_count} areas)
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          {config.boundary_id && (
+            <>
+              <Field
+                label="Write on each area"
+                hint="Which attribute names it on the map."
+              >
+                <select
+                  className="input"
+                  aria-label="Boundary label attribute"
+                  value={config.boundary_label ?? ""}
+                  onChange={(event) =>
+                    set({ boundary_label: event.target.value || undefined })
+                  }
+                >
+                  <option value="">Nothing</option>
+                  {boundaryProperties.map((name) => (
+                    <option key={name} value={name}>
+                      {name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <div className="grid gap-x-4 sm:grid-cols-2">
+                <Field
+                  label="Recorded area"
+                  hint="The variable holding the area each record says it was in."
+                >
+                  <select
+                    className="input"
+                    aria-label="Recorded area variable"
+                    value={config.area_variable ?? ""}
+                    onChange={(event) =>
+                      set({ area_variable: event.target.value || undefined })
+                    }
+                  >
+                    <option value="">Do not check</option>
+                    {(mapDataset.data?.variables ?? [])
+                      .filter((v) => !v.is_hidden)
+                      .map((v) => (
+                        <option key={v.name} value={v.name}>
+                          {v.name}
+                        </option>
+                      ))}
+                  </select>
+                </Field>
+                <Field
+                  label="Matched against"
+                  hint="The area code on the boundary layer."
+                >
+                  <select
+                    className="input"
+                    aria-label="Boundary code attribute"
+                    value={config.boundary_key ?? ""}
+                    onChange={(event) =>
+                      set({ boundary_key: event.target.value || undefined })
+                    }
+                  >
+                    <option value="">Choose…</option>
+                    {boundaryProperties.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </Field>
+              </div>
+              {config.area_variable && !config.boundary_key && (
+                <p className="mb-4 -mt-2 text-xs text-amber-700">
+                  Choose the boundary attribute the recorded area should match,
+                  or every record will be reported as a mismatch.
+                </p>
+              )}
+            </>
+          )}
+        </>
+      </Section>
+      )}
+
+      <Section title="Appearance" summary={summaries.look} open={open.has('look')} onToggle={(o) => toggle('look', o)}>
+      {kind === "map" && (
+        <>
+          <Field
+            label="Point shape"
+            hint="A shape is told apart in a photocopy; a shade of a colour is not."
+          >
+            <select
+              className="input"
+              aria-label="Map point shape"
+              value={config.point_icon ?? "circle"}
+              onChange={(event) =>
+                set({
+                  point_icon:
+                    event.target.value === "circle"
+                      ? undefined
+                      : event.target.value,
+                })
+              }
+            >
+              {POINT_ICON_NAMES.map((name) => (
+                <option key={name} value={name}>
+                  {POINT_ICONS[name].label}
+                </option>
+              ))}
+            </select>
+          </Field>
+
+          <div className="grid gap-x-4 sm:grid-cols-2">
+            <Field label="Point colour">
+              <ColorPicker
+                value={config.point_color ?? ""}
+                onChange={(next) => set({ point_color: next || undefined })}
+                allowNone
+                label="Map point"
+                noneLabel="Default blue"
+              />
+            </Field>
+            <Field
+              label="Point size"
+              hint="How big a pin is before the value scales it."
+            >
+              <div className="flex items-center gap-3">
+                <input
+                  type="range"
+                  min={6}
+                  max={40}
+                  step={1}
+                  className="w-40"
+                  aria-label="Map point size"
+                  value={config.point_size ?? DEFAULT_POINT_SIZE}
+                  onChange={(event) =>
+                    set({ point_size: Number(event.target.value) })
+                  }
+                />
+                <span className="w-10 text-sm text-ink-600">
+                  {config.point_size ?? DEFAULT_POINT_SIZE}
+                </span>
+              </div>
+            </Field>
+          </div>
+
+          <Field
+            label="Point transparency"
+            hint="Low values let a crowd of overlapping pins be read as density rather than one blob."
+          >
+            <div className="flex items-center gap-3">
+              <input
+                type="range"
+                min={10}
+                max={100}
+                step={5}
+                className="w-40"
+                aria-label="Map point transparency"
+                value={Math.round(
+                  (config.point_opacity ?? DEFAULT_POINT_OPACITY) * 100,
+                )}
+                onChange={(event) =>
+                  set({ point_opacity: Number(event.target.value) / 100 })
+                }
+              />
+              <span className="w-12 text-sm text-ink-600">
+                {Math.round(
+                  (config.point_opacity ?? DEFAULT_POINT_OPACITY) * 100,
+                )}
+                %
+              </span>
+            </div>
+          </Field>
+
+          <label className="mb-4 flex items-center gap-2 text-sm text-ink-700">
+            <input
+              type="checkbox"
+              checked={config.size_by_value !== false}
+              onChange={(event) => set({ size_by_value: event.target.checked })}
+            />
+            Bigger pins where the number is bigger
+          </label>
+
+          <Field
+            label="Base map"
+            hint="A reader can switch this on the map itself."
+          >
+            <select
+              className="input"
+              value={config.basemap ?? "streets"}
+              onChange={(event) =>
+                set({
+                  basemap:
+                    event.target.value === "streets"
+                      ? undefined
+                      : event.target.value,
+                })
+              }
+            >
+              {BASEMAP_NAMES.map((name) => (
+                <option key={name} value={name}>
+                  {BASEMAPS[name].label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          <Field label="Map tiles" hint="Blank uses the base map above.">
+            <input
+              className="input font-mono text-xs"
+              value={config.tiles ?? ""}
+              placeholder={DEFAULT_TILES}
+              onChange={(event) => set({ tiles: event.target.value })}
+            />
+          </Field>
+        </>
+      )}
+
+      {kind === "chart" && (
+        <Field
+          label="Chart colour"
+          hint="The colour this chart leads with. A chart with several series keeps distinct hues behind it, so they stay tellable apart."
+        >
+          <ColorPicker
+            value={config.series_color ?? ""}
+            onChange={(next) => set({ series_color: next || undefined })}
+            allowNone
+            label="Chart series"
+            noneLabel="Use the dashboard's theme"
+          />
+        </Field>
+      )}
+
+      {kind === "chart" && (
+        <>
+          <label className="mb-3 flex items-center gap-2 text-sm text-ink-700">
+            <input
+              type="checkbox"
+              checked={config.show_values ?? false}
+              onChange={(event) => set({ show_values: event.target.checked })}
+            />
+            Print the value on each bar, slice or point
+            <span className="text-ink-400">(up to 24 marks)</span>
+          </label>
+        </>
+      )}
+
+      {/* The same knob for both, because it is the same question: how far away
+          is this being read from. On a chart it sets the axes, the legend and
+          the printed values; on a data quality panel it sets the findings and
+          scales everything else in the panel from them. */}
+      {(kind === "chart" || kind === "quality") && (
+        <Field
+          label={kind === "quality" ? "Text size" : "Chart text size"}
+          hint={
+            kind === "quality"
+              ? "The findings and the lines under them together. Bigger for a board read across a room, smaller for a crowded tile."
+              : "The axes, the legend and the printed values together. Bigger for a board read across a room, smaller for a crowded tile."
+          }
+        >
+          <div className="flex items-center gap-3">
+            <input
+              type="range"
+              min={8}
+              max={28}
+              step={1}
+              className="w-40"
+              aria-label={kind === "quality" ? "Text size" : "Chart text size"}
+              value={config.chart_font_size ?? panelDefault(kind)}
+              onChange={(event) =>
+                set({ chart_font_size: Number(event.target.value) })
+              }
+            />
+            <span className="w-12 text-sm text-ink-600">
+              {config.chart_font_size ?? panelDefault(kind)}px
+            </span>
+            {config.chart_font_size !== undefined && (
+              <button
+                className="btn-ghost btn-sm"
+                onClick={() => set({ chart_font_size: undefined })}
+              >
+                Default
+              </button>
+            )}
+          </div>
+        </Field>
+      )}
 
       <Field
         label="Background"
@@ -1025,538 +1620,8 @@ export function EditWidgetModal({
           )}
         </div>
       </Field>
+      </Section>
 
-      {kind === "chart" && (
-        <Field
-          label="Chart colour"
-          hint="The colour this chart leads with. A chart with several series keeps distinct hues behind it, so they stay tellable apart."
-        >
-          <ColorPicker
-            value={config.series_color ?? ""}
-            onChange={(next) => set({ series_color: next || undefined })}
-            allowNone
-            label="Chart series"
-            noneLabel="Use the dashboard's theme"
-          />
-        </Field>
-      )}
-
-      {kind === "chart" && (
-        <>
-          <label className="mb-3 flex items-center gap-2 text-sm text-ink-700">
-            <input
-              type="checkbox"
-              checked={config.show_values ?? false}
-              onChange={(event) => set({ show_values: event.target.checked })}
-            />
-            Print the value on each bar, slice or point
-            <span className="text-ink-400">(up to 24 marks)</span>
-          </label>
-        </>
-      )}
-
-      {/* The same knob for both, because it is the same question: how far away
-          is this being read from. On a chart it sets the axes, the legend and
-          the printed values; on a data quality panel it sets the findings and
-          scales everything else in the panel from them. */}
-      {(kind === "chart" || kind === "quality") && (
-        <Field
-          label={kind === "quality" ? "Text size" : "Chart text size"}
-          hint={
-            kind === "quality"
-              ? "The findings and the lines under them together. Bigger for a board read across a room, smaller for a crowded tile."
-              : "The axes, the legend and the printed values together. Bigger for a board read across a room, smaller for a crowded tile."
-          }
-        >
-          <div className="flex items-center gap-3">
-            <input
-              type="range"
-              min={8}
-              max={28}
-              step={1}
-              className="w-40"
-              aria-label={kind === "quality" ? "Text size" : "Chart text size"}
-              value={config.chart_font_size ?? panelDefault(kind)}
-              onChange={(event) =>
-                set({ chart_font_size: Number(event.target.value) })
-              }
-            />
-            <span className="w-12 text-sm text-ink-600">
-              {config.chart_font_size ?? panelDefault(kind)}px
-            </span>
-            {config.chart_font_size !== undefined && (
-              <button
-                className="btn-ghost btn-sm"
-                onClick={() => set({ chart_font_size: undefined })}
-              >
-                Default
-              </button>
-            )}
-          </div>
-        </Field>
-      )}
-
-      {kind === "chart" && (
-        <Field label="Chart">
-          <select
-            className="input"
-            value={chartId}
-            onChange={(event) => setChartId(event.target.value)}
-          >
-            {charts.data?.map((chart) => (
-              <option key={chart.id} value={chart.id}>
-                {chart.name} (
-                {chart.chart_type === "crosstab"
-                  ? "cross-tab"
-                  : chart.chart_type}
-                )
-              </option>
-            ))}
-          </select>
-        </Field>
-      )}
-
-      {kind === "indicator" && (
-        <>
-          <Field label="Indicator">
-            <select
-              className="input"
-              value={indicatorId}
-              onChange={(event) => setIndicatorId(event.target.value)}
-            >
-              {indicators.data?.map((indicator) => (
-                <option key={indicator.id} value={indicator.id}>
-                  {indicator.name}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <label className="mb-4 flex items-center gap-2 text-sm text-ink-700">
-            <input
-              type="checkbox"
-              checked={Boolean(config.show_breakdown)}
-              onChange={(event) =>
-                set({ show_breakdown: event.target.checked })
-              }
-            />
-            Show the breakdown chart under the number
-          </label>
-          <label className="mb-4 flex items-center gap-2 text-sm text-ink-700">
-            <input
-              type="checkbox"
-              checked={Boolean(config.show_trend)}
-              onChange={(event) => set({ show_trend: event.target.checked })}
-            />
-            Draw a trend line from the stored runs
-          </label>
-        </>
-      )}
-
-      {(kind === "quality" || kind === "map") && (
-        <Field label="Dataset">
-          <select
-            className="input"
-            value={datasetId}
-            onChange={(event) => setDatasetId(event.target.value)}
-          >
-            <option value="">Choose a dataset…</option>
-            {datasets.data?.items.map((dataset) => (
-              <option key={dataset.id} value={dataset.id}>
-                {dataset.name}
-              </option>
-            ))}
-          </select>
-        </Field>
-      )}
-
-      {kind === "quality" && (
-        <Field
-          label="Show it as"
-          hint="A panel of findings reads at a desk; a chart reads from across a room, and a line says whether it is getting better."
-        >
-          <select
-            className="input"
-            value={String(config.quality_view ?? "list")}
-            onChange={(event) => set({ quality_view: event.target.value })}
-          >
-            <option value="list">The findings, listed</option>
-            <option value="rate">Bar chart: share of rows failing</option>
-            <option value="rows">Bar chart: how many rows flagged</option>
-            <option value="trend">Line chart: failure rate over time</option>
-          </select>
-        </Field>
-      )}
-
-      {kind === "map" && (
-        <>
-          <div className="grid gap-x-4 sm:grid-cols-2">
-            <Field label="Latitude">
-              <select
-                className="input"
-                value={config.latitude ?? ""}
-                onChange={(event) => set({ latitude: event.target.value })}
-              >
-                <option value="">Choose…</option>
-                {numericVariables.map((v) => (
-                  <option key={v.name} value={v.name}>
-                    {v.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Longitude">
-              <select
-                className="input"
-                value={config.longitude ?? ""}
-                onChange={(event) => set({ longitude: event.target.value })}
-              >
-                <option value="">Choose…</option>
-                {numericVariables.map((v) => (
-                  <option key={v.name} value={v.name}>
-                    {v.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-          </div>
-          {looksLikeAnUnsplitGps(mapDataset.data?.variables ?? []) && (
-            <p className="-mt-2 mb-3 text-xs text-slate-500">
-              {UNSPLIT_GPS_HINT}
-            </p>
-          )}
-          <Field label="What each pin counts">
-            <div className="flex gap-2">
-              <select
-                className="input w-56"
-                value={config.measure_agg ?? "count"}
-                onChange={(event) => set({ measure_agg: event.target.value })}
-              >
-                <option value="count">How many records</option>
-                <option value="sum">Total of</option>
-                <option value="mean">Average of</option>
-                <option value="max">Highest</option>
-                <option value="min">Lowest</option>
-              </select>
-              {(config.measure_agg ?? "count") !== "count" && (
-                <select
-                  className="input"
-                  value={config.measure_variable ?? ""}
-                  onChange={(event) =>
-                    set({ measure_variable: event.target.value })
-                  }
-                >
-                  <option value="">Choose a variable…</option>
-                  {numericVariables.map((v) => (
-                    <option key={v.name} value={v.name}>
-                      {v.name}
-                    </option>
-                  ))}
-                </select>
-              )}
-            </div>
-          </Field>
-          <Field
-            label="Point shape"
-            hint="A shape is told apart in a photocopy; a shade of a colour is not."
-          >
-            <select
-              className="input"
-              aria-label="Map point shape"
-              value={config.point_icon ?? "circle"}
-              onChange={(event) =>
-                set({
-                  point_icon:
-                    event.target.value === "circle"
-                      ? undefined
-                      : event.target.value,
-                })
-              }
-            >
-              {POINT_ICON_NAMES.map((name) => (
-                <option key={name} value={name}>
-                  {POINT_ICONS[name].label}
-                </option>
-              ))}
-            </select>
-          </Field>
-
-          <div className="grid gap-x-4 sm:grid-cols-2">
-            <Field label="Point colour">
-              <ColorPicker
-                value={config.point_color ?? ""}
-                onChange={(next) => set({ point_color: next || undefined })}
-                allowNone
-                label="Map point"
-                noneLabel="Default blue"
-              />
-            </Field>
-            <Field
-              label="Point size"
-              hint="How big a pin is before the value scales it."
-            >
-              <div className="flex items-center gap-3">
-                <input
-                  type="range"
-                  min={6}
-                  max={40}
-                  step={1}
-                  className="w-40"
-                  aria-label="Map point size"
-                  value={config.point_size ?? DEFAULT_POINT_SIZE}
-                  onChange={(event) =>
-                    set({ point_size: Number(event.target.value) })
-                  }
-                />
-                <span className="w-10 text-sm text-ink-600">
-                  {config.point_size ?? DEFAULT_POINT_SIZE}
-                </span>
-              </div>
-            </Field>
-          </div>
-
-          <Field
-            label="Point transparency"
-            hint="Low values let a crowd of overlapping pins be read as density rather than one blob."
-          >
-            <div className="flex items-center gap-3">
-              <input
-                type="range"
-                min={10}
-                max={100}
-                step={5}
-                className="w-40"
-                aria-label="Map point transparency"
-                value={Math.round(
-                  (config.point_opacity ?? DEFAULT_POINT_OPACITY) * 100,
-                )}
-                onChange={(event) =>
-                  set({ point_opacity: Number(event.target.value) / 100 })
-                }
-              />
-              <span className="w-12 text-sm text-ink-600">
-                {Math.round(
-                  (config.point_opacity ?? DEFAULT_POINT_OPACITY) * 100,
-                )}
-                %
-              </span>
-            </div>
-          </Field>
-
-          <label className="mb-4 flex items-center gap-2 text-sm text-ink-700">
-            <input
-              type="checkbox"
-              checked={config.size_by_value !== false}
-              onChange={(event) => set({ size_by_value: event.target.checked })}
-            />
-            Bigger pins where the number is bigger
-          </label>
-
-          <Field
-            label="Base map"
-            hint="A reader can switch this on the map itself."
-          >
-            <select
-              className="input"
-              value={config.basemap ?? "streets"}
-              onChange={(event) =>
-                set({
-                  basemap:
-                    event.target.value === "streets"
-                      ? undefined
-                      : event.target.value,
-                })
-              }
-            >
-              {BASEMAP_NAMES.map((name) => (
-                <option key={name} value={name}>
-                  {BASEMAPS[name].label}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="Map tiles" hint="Blank uses the base map above.">
-            <input
-              className="input font-mono text-xs"
-              value={config.tiles ?? ""}
-              placeholder={DEFAULT_TILES}
-              onChange={(event) => set({ tiles: event.target.value })}
-            />
-          </Field>
-
-          <Field
-            label="Boundaries"
-            hint="Enumeration areas, districts or villages, drawn under the pins."
-          >
-            <select
-              className="input"
-              aria-label="Boundary layer"
-              value={config.boundary_id ?? ""}
-              onChange={(event) =>
-                // Changing layer drops the two attributes chosen from the old
-                // one: they are its column names, and carrying them over would
-                // silently check against a property the new layer has not got.
-                set({
-                  boundary_id: event.target.value || undefined,
-                  boundary_key: undefined,
-                  boundary_label: undefined,
-                })
-              }
-            >
-              <option value="">None</option>
-              {boundaries.data?.map((item) => (
-                <option key={item.id} value={item.id}>
-                  {item.name} ({item.feature_count} areas)
-                </option>
-              ))}
-            </select>
-          </Field>
-
-          {config.boundary_id && (
-            <>
-              <Field
-                label="Write on each area"
-                hint="Which attribute names it on the map."
-              >
-                <select
-                  className="input"
-                  aria-label="Boundary label attribute"
-                  value={config.boundary_label ?? ""}
-                  onChange={(event) =>
-                    set({ boundary_label: event.target.value || undefined })
-                  }
-                >
-                  <option value="">Nothing</option>
-                  {boundaryProperties.map((name) => (
-                    <option key={name} value={name}>
-                      {name}
-                    </option>
-                  ))}
-                </select>
-              </Field>
-
-              <div className="grid gap-x-4 sm:grid-cols-2">
-                <Field
-                  label="Recorded area"
-                  hint="The variable holding the area each record says it was in."
-                >
-                  <select
-                    className="input"
-                    aria-label="Recorded area variable"
-                    value={config.area_variable ?? ""}
-                    onChange={(event) =>
-                      set({ area_variable: event.target.value || undefined })
-                    }
-                  >
-                    <option value="">Do not check</option>
-                    {(mapDataset.data?.variables ?? [])
-                      .filter((v) => !v.is_hidden)
-                      .map((v) => (
-                        <option key={v.name} value={v.name}>
-                          {v.name}
-                        </option>
-                      ))}
-                  </select>
-                </Field>
-                <Field
-                  label="Matched against"
-                  hint="The area code on the boundary layer."
-                >
-                  <select
-                    className="input"
-                    aria-label="Boundary code attribute"
-                    value={config.boundary_key ?? ""}
-                    onChange={(event) =>
-                      set({ boundary_key: event.target.value || undefined })
-                    }
-                  >
-                    <option value="">Choose…</option>
-                    {boundaryProperties.map((name) => (
-                      <option key={name} value={name}>
-                        {name}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-              </div>
-              {config.area_variable && !config.boundary_key && (
-                <p className="mb-4 -mt-2 text-xs text-amber-700">
-                  Choose the boundary attribute the recorded area should match,
-                  or every record will be reported as a mismatch.
-                </p>
-              )}
-            </>
-          )}
-        </>
-      )}
-
-      {kind === "text" && (
-        <Field label="Text">
-          <textarea
-            className="input"
-            rows={4}
-            value={config.content ?? ""}
-            onChange={(event) => set({ content: event.target.value })}
-          />
-        </Field>
-      )}
-
-      {kind === "html" && (
-        <Field label="HTML" hint="Rendered in a sandboxed frame.">
-          <HtmlLibrary
-            html={config.html ?? ""}
-            projectId={projectId}
-            onLoad={(next) => set({ html: next })}
-          />
-          <textarea
-            className="input font-mono text-xs"
-            rows={8}
-            value={config.html ?? ""}
-            onChange={(event) => set({ html: event.target.value })}
-          />
-        </Field>
-      )}
-
-      {kind === "countdown" && (
-        <>
-          <Field label="Counting down to">
-            <input
-              type="datetime-local"
-              className="input"
-              value={toLocalInput(config.target)}
-              onChange={(event) =>
-                set({
-                  target: event.target.value
-                    ? new Date(event.target.value).toISOString()
-                    : "",
-                })
-              }
-            />
-          </Field>
-          <Field label="Caption">
-            <input
-              className="input"
-              value={config.label ?? ""}
-              onChange={(event) => set({ label: event.target.value })}
-            />
-          </Field>
-          <Field label="When it runs out">
-            <input
-              className="input"
-              value={config.expired_text ?? ""}
-              placeholder="Time is up"
-              onChange={(event) => set({ expired_text: event.target.value })}
-            />
-          </Field>
-        </>
-      )}
-
-      {kind === "freshness" && (
-        <FreshnessFields
-          datasets={datasets.data?.items ?? []}
-          config={config}
-          onChange={set}
-        />
-      )}
     </Modal>
   );
 }
