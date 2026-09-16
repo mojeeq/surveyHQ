@@ -411,6 +411,61 @@ def test_a_null_weight_does_not_count_towards_a_weighted_cell(
     assert hidden(weighted)["Shefa"] == [True], "one weighted household, not fifty"
 
 
+def test_a_weighted_count_is_not_withheld_over_a_variable_it_never_reads(
+    client, auth_headers, request, floor
+):
+    """Which records count is decided by the SQL, not by the request's fields.
+
+    A weighted count is SUM(weight) and never mentions the variable, so a
+    sparsely answered optional question carried alongside it must not withhold
+    a cell backed by fifty weighted households. Over-withholding is not the
+    safe direction to err in: it teaches readers that the stars mean nothing.
+    """
+    frame = pd.DataFrame(
+        {
+            "interview__key": [f"k{i}" for i in range(50)],
+            "province": ["Shefa"] * 50,
+            # An optional question almost nobody answered.
+            "wage": [100.0] + [None] * 49,
+            "wt": [12.5] * 50,
+        }
+    )
+    name = request.node.name[:40]
+    dataset = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                f"{name}.zip",
+                _zip_bytes({f"{name}.dta": _stata_bytes(frame)}),
+                "application/zip",
+            )
+        },
+    ).json()["datasets"][0]["id"]
+
+    counted = table(
+        client,
+        auth_headers,
+        dataset,
+        row_variable="province",
+        # `variable` is ignored by a weighted count, and the API accepts one.
+        measure={"agg": "count", "variable": "wage", "weight": "wt"},
+    )
+    assert hidden(counted)["Shefa"] == [False], "fifty weighted households"
+    assert cells(counted)["Shefa"] == [625]
+
+    # The mean of the same sparse variable still is withheld: that one reads
+    # the variable, and one answer is one person's answer.
+    means = table(
+        client,
+        auth_headers,
+        dataset,
+        row_variable="province",
+        measure={"agg": "mean", "variable": "wage", "weight": "wt"},
+    )
+    assert hidden(means)["Shefa"] == [True]
+
+
 def test_a_category_too_small_to_name_is_not_listed(client, auth_headers, tiny, floor):
     """A table with no cell values has no cell to blank.
 

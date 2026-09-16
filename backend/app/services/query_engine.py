@@ -787,6 +787,25 @@ def _suppression_mask(
     return mask
 
 
+def _contributing_columns(measure: Measure) -> list[str]:
+    """The columns a measure's SQL actually reads.
+
+    This decides which records count towards disclosure, so it has to match
+    `SQLBuilder.measure_expr` rather than the request's fields. A weighted
+    count is `SUM(weight)` and never mentions the variable, so requiring the
+    variable there would withhold a cell backed by hundreds of weighted
+    households because some optional question beside them went unanswered.
+
+    Everything else reads its variable, and reads the weight too when it has
+    one - `SUM(col * weight)` is null if either side is.
+    """
+    if measure.agg in (Aggregation.count, Aggregation.share):
+        if measure.weight:
+            return [measure.weight]
+        return [measure.variable] if measure.variable else []
+    return [name for name in (measure.variable, measure.weight) if name]
+
+
 def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabResult:
     """A table of one or two variables.
 
@@ -846,7 +865,7 @@ def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabR
         # nulls, and a weighted one ignores a null weight as well, so a
         # category of a hundred people with one reported wage shows that one
         # person's wage - and counting the hundred would call it safe.
-        guards = [name for name in (measure.variable, measure.weight) if name]
+        guards = _contributing_columns(measure)
         counts_filters = (
             FilterGroup(
                 op="and",
