@@ -200,7 +200,7 @@ default install finds them already there:
 | `X-Content-Type-Options` | `nosniff` |
 | `X-Frame-Options` | `SAMEORIGIN` |
 | `Referrer-Policy` | `strict-origin-when-cross-origin` |
-| `Permissions-Policy` | camera, microphone, payment and USB denied |
+| `Permissions-Policy` | camera, microphone, geolocation, payment and USB denied |
 | `Content-Security-Policy` | see below |
 | `Strict-Transport-Security` | one year, subdomains included, **only over HTTPS** |
 
@@ -235,10 +235,13 @@ answer becoming script on the page. What stops that is escaping the values
 before they reach a chart or map tooltip, which the application does. This is a
 floor under that, not a substitute for it.
 
-`Permissions-Policy` leaves geolocation alone for the same reason: the platform
-never asks for it, but an embedded map might, and that header reaches the embed
-widget too. Camera, microphone, payment and USB are denied, since neither the
-platform nor any embed anybody has described needs them.
+`Permissions-Policy` denies camera, microphone, geolocation, payment and USB.
+None of them is used by the platform, and none is reachable from an embed
+either: that frame is sandboxed without `allow-same-origin` and carries no
+`allow=` delegation, so it has an opaque origin that the default allowlist of
+`self` never matches. Granting a capability there would mean letting pasted
+markup prompt a reader for their location, which is not something a census
+platform should offer.
 
 ## Putting it behind HTTPS
 
