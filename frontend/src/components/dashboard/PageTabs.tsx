@@ -101,7 +101,7 @@ export function PageTabs({
     <div
       className={`mb-4 flex flex-wrap items-end justify-between gap-x-2 border-b ${
         onDark ? "border-white/25" : "border-ink-200"
-      } ${band ? "rounded-t-lg px-2" : ""}`}
+      } ${band ? "rounded-lg px-2" : ""}`}
       style={band ? { backgroundColor: band } : undefined}
     >
       <div className="flex min-w-0 flex-wrap items-center gap-x-1">
