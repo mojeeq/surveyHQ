@@ -1,0 +1,87 @@
+[
+  {
+    "id": "",
+    "label": "Interface",
+    "stack": "",
+    "kind": "system"
+  },
+  {
+    "id": "inter",
+    "label": "Inter",
+    "stack": "\"Inter Variable\", system-ui, -apple-system, \"Segoe UI\", sans-serif",
+    "kind": "bundled",
+    "family": "Inter Variable"
+  },
+  {
+    "id": "source-sans",
+    "label": "Source Sans",
+    "stack": "\"Source Sans 3 Variable\", system-ui, -apple-system, \"Segoe UI\", sans-serif",
+    "kind": "bundled",
+    "family": "Source Sans 3 Variable"
+  },
+  {
+    "id": "plex-sans",
+    "label": "IBM Plex Sans",
+    "stack": "\"IBM Plex Sans Variable\", system-ui, -apple-system, \"Segoe UI\", sans-serif",
+    "kind": "bundled",
+    "family": "IBM Plex Sans Variable"
+  },
+  {
+    "id": "space-grotesk",
+    "label": "Space Grotesk",
+    "stack": "\"Space Grotesk Variable\", system-ui, -apple-system, \"Segoe UI\", sans-serif",
+    "kind": "bundled",
+    "family": "Space Grotesk Variable"
+  },
+  {
+    "id": "source-serif",
+    "label": "Source Serif",
+    "stack": "\"Source Serif 4 Variable\", Georgia, \"Times New Roman\", serif",
+    "kind": "bundled",
+    "family": "Source Serif 4 Variable"
+  },
+  {
+    "id": "plex-serif",
+    "label": "IBM Plex Serif",
+    "stack": "\"IBM Plex Serif\", Georgia, \"Times New Roman\", serif",
+    "kind": "bundled",
+    "family": "IBM Plex Serif"
+  },
+  {
+    "id": "jetbrains-mono",
+    "label": "JetBrains Mono",
+    "stack": "\"JetBrains Mono Variable\", ui-monospace, Menlo, Consolas, monospace",
+    "kind": "bundled",
+    "family": "JetBrains Mono Variable"
+  },
+  {
+    "id": "grotesque",
+    "label": "Helvetica / Arial",
+    "stack": "\"Helvetica Neue\", Helvetica, Arial, sans-serif",
+    "kind": "system"
+  },
+  {
+    "id": "serif",
+    "label": "Georgia",
+    "stack": "Georgia, \"Times New Roman\", \"Nimbus Roman\", serif",
+    "kind": "system"
+  },
+  {
+    "id": "slab",
+    "label": "Slab",
+    "stack": "\"Rockwell\", \"Roboto Slab\", \"DejaVu Serif\", Georgia, serif",
+    "kind": "system"
+  },
+  {
+    "id": "condensed",
+    "label": "Condensed",
+    "stack": "\"Arial Narrow\", \"Roboto Condensed\", sans-serif",
+    "kind": "system"
+  },
+  {
+    "id": "mono",
+    "label": "System monospace",
+    "stack": "ui-monospace, \"SFMono-Regular\", Menlo, \"DejaVu Sans Mono\", monospace",
+    "kind": "system"
+  }
+]

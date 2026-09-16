@@ -1075,7 +1075,9 @@ def export_dashboard_html(dashboard_id: str, db: DbSession, user: CurrentUser) -
     db.commit()
     name = slugify(dashboard.name) or "dashboard"
     return Response(
-        content=static_export.render_html(payload),
+        content=static_export.render_html(
+            payload, static_export.appearance_css(dashboard)
+        ),
         media_type="text/html; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{name}.html"'},
     )

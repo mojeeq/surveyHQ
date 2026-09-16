@@ -44,7 +44,7 @@ from app.schemas.query import (
     Measure,
     QuerySpec,
 )
-from app.services import export_fonts
+from app.services import export_appearance, export_fonts
 from app.services.datasets import dataset_is_queryable
 from app.services.query_engine import DatasetContext, QueryError, execute_query
 
@@ -565,19 +565,26 @@ def build_payload(
         ],
         "filters": controls,
         "widgets": widgets,
+        # The logo and the one structural choice the page's own script acts on.
+        # Everything else about how this board is dressed is in the stylesheet.
+        "look": export_appearance.look(
+            dashboard, export_appearance.image_data_url(dashboard, "logo")
+        ),
     }
 
 
-def render_html(payload: dict[str, Any]) -> str:
+def render_html(payload: dict[str, Any], stylesheet: str = "") -> str:
     """The payload wrapped in the page that draws it.
 
     The data goes in as JSON inside a script tag of a type the browser does not
     execute, so nothing in a survey answer can become code on the page. The
     only sequence that could end that tag early is escaped.
 
-    Any bundled font a widget is set in is carried in the file as well, because
-    the file is meant to open where this platform cannot be reached and a font
-    it only names is a font it will not have.
+    Two things travel outside the JSON. Any bundled font a widget is set in is
+    carried in the file, because the file is meant to open where this platform
+    cannot be reached and a font it only names is a font it will not have. And
+    `stylesheet` is how the board is dressed, which is CSS rather than data -
+    put through the JSON it would be a background image encoded twice.
     """
     data = json.dumps(payload, default=str, separators=(",", ":"))
     data = data.replace("<", "\\u003c").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
@@ -585,24 +592,37 @@ def render_html(payload: dict[str, Any]) -> str:
     return (
         template.replace("__TITLE__", _escape(payload["name"]))
         .replace("/*__FONTS__*/", export_fonts.css_for(_fonts_used(payload)))
+        .replace("/*__LOOK__*/", stylesheet)
         .replace('"__PAYLOAD__"', data)
+    )
+
+
+def appearance_css(dashboard: Any) -> str:
+    """How this board is dressed, as CSS for the exported file.
+
+    Separate from the payload because it is paint, not data, and because the
+    background image inside it is already base64 - carrying it through the JSON
+    as well would put the same megabyte in the file twice.
+    """
+    return export_appearance.stylesheet(
+        dashboard, export_appearance.image_data_url(dashboard, "background")
     )
 
 
 def _fonts_used(payload: dict[str, Any]) -> list[str]:
     """The bundled families this board is set in.
 
-    Only what a widget carries: the template draws from each widget's own
-    style and does not read the dashboard's appearance, so a family named
-    nowhere else would be embedded and never drawn.
+    Each widget's own font, and the board title's. The title is stored as an
+    id rather than a stack, so it is looked up by the stack the catalogue gives
+    it - which is the same lookup the interface does.
     """
-    return export_fonts.collect(
-        [
-            (widget.get("style") or {}).get("font_family")
-            for widget in payload.get("widgets") or []
-            if isinstance(widget, dict)
-        ]
-    )
+    stacks: list[str | None] = [
+        (widget.get("style") or {}).get("font_family")
+        for widget in payload.get("widgets") or []
+        if isinstance(widget, dict)
+    ]
+    stacks.append((payload.get("look") or {}).get("title_stack"))
+    return export_fonts.collect(stacks)
 
 
 def _escape(text: str) -> str:

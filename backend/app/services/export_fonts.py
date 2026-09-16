@@ -24,6 +24,7 @@ from pathlib import Path
 
 FONT_DIR = Path(__file__).parent / "export_assets" / "fonts"
 MANIFEST = FONT_DIR / "fonts.json"
+CATALOGUE = FONT_DIR / "catalogue.json"
 
 
 @lru_cache(maxsize=1)
@@ -39,6 +40,30 @@ def _manifest() -> list[dict[str, object]]:
         return json.loads(MANIFEST.read_text(encoding="utf-8"))
     except (ValueError, OSError):
         return []
+
+
+@lru_cache(maxsize=1)
+def _catalogue() -> dict[str, str]:
+    """Font id to CSS stack, generated from the interface's own catalogue.
+
+    A dashboard title stores an id where a widget stores the stack, so the
+    export has to resolve one of them. The mapping is written by
+    `scripts/sync-export-fonts.mjs`, which compiles and imports
+    `frontend/src/lib/fonts.ts` rather than reading it, so the two cannot say
+    different things.
+    """
+    if not CATALOGUE.is_file():
+        return {}
+    try:
+        entries = json.loads(CATALOGUE.read_text(encoding="utf-8"))
+    except (ValueError, OSError):
+        return {}
+    return {str(e["id"]): str(e.get("stack") or "") for e in entries if e.get("id")}
+
+
+def stack_for(font_id: str | None) -> str:
+    """The CSS a stored font id means, or empty for none and for the unknown."""
+    return _catalogue().get(str(font_id or ""), "")
 
 
 def bundled_families() -> set[str]:
