@@ -13,40 +13,11 @@ import { useToast } from '@/hooks/useToast'
 import type { Appearance, Widget } from '@/lib/types'
 import { Field, Modal } from '@/components/ui'
 import ColorPicker from '@/components/ColorPicker'
+import { FONTS, fontStack } from '@/lib/fonts'
 
 /** Ready-made grounds, so a usable background does not need a colour picker. */
-/** Title faces, as stacks rather than downloads.
- *
- *  Every one of these is already on the machine, so a dashboard on a field
- *  office screen with no internet still renders in the face it was designed
- *  in - which a webfont would not.
- */
-export const TITLE_FONTS: { label: string; value: string; stack: string }[] = [
-  { label: 'Interface', value: '', stack: '' },
-  {
-    label: 'Grotesque',
-    value: 'grotesque',
-    stack: '"Helvetica Neue", Helvetica, Arial, sans-serif',
-  },
-  {
-    label: 'Serif',
-    value: 'serif',
-    stack: 'Georgia, "Times New Roman", "Nimbus Roman", serif',
-  },
-  {
-    label: 'Slab',
-    value: 'slab',
-    stack: '"Rockwell", "Roboto Slab", "DejaVu Serif", Georgia, serif',
-  },
-  {
-    label: 'Monospace',
-    value: 'mono',
-    stack: 'ui-monospace, "SFMono-Regular", Menlo, "DejaVu Sans Mono", monospace',
-  },
-]
-
 export function titleFontStack(value?: string): string | undefined {
-  return TITLE_FONTS.find((f) => f.value === value)?.stack || undefined
+  return fontStack(value)
 }
 
 /** Whether text on this colour has to be light. Null means no colour is set. */
@@ -710,8 +681,12 @@ export default function AppearanceModal({
             value={draft.title_font ?? ''}
             onChange={(event) => setDraft({ ...draft, title_font: event.target.value })}
           >
-            {TITLE_FONTS.map((font) => (
-              <option key={font.value} value={font.value}>
+            {FONTS.map((font) => (
+              <option
+                key={font.id}
+                value={font.id}
+                style={font.stack ? { fontFamily: font.stack } : undefined}
+              >
                 {font.label}
               </option>
             ))}

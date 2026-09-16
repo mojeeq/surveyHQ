@@ -500,7 +500,7 @@ export interface Appearance {
   /** Title size in pixels. 0 or absent uses the default. */
   title_size?: number
   title_color?: string
-  /** A named stack from TITLE_FONTS, not arbitrary CSS. */
+  /** A font id from lib/fonts, not arbitrary CSS. */
   title_font?: string
   title_align?: 'left' | 'center'
   /** A line under the header, which most branded dashboards want. */

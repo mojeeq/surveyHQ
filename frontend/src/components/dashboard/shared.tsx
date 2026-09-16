@@ -29,25 +29,6 @@ export const ROW_HEIGHT = 74;
 // short of the edge instead of butting against it.
 export const CANVAS_PADDING = 16;
 
-/** Stacks rather than single faces, so a missing font still lands somewhere sane. */
-export const WIDGET_FONTS: { label: string; value: string }[] = [
-  { label: "Default (Inter)", value: "" },
-  {
-    label: "System",
-    value: 'system-ui, -apple-system, "Segoe UI", sans-serif',
-  },
-  { label: "Serif", value: 'Georgia, "Times New Roman", serif' },
-  { label: "Slab", value: '"Roboto Slab", Rockwell, Georgia, serif' },
-  {
-    label: "Mono",
-    value: 'ui-monospace, "Cascadia Mono", Menlo, Consolas, monospace',
-  },
-  {
-    label: "Condensed",
-    value: '"Arial Narrow", "Roboto Condensed", sans-serif',
-  },
-];
-
 export const appearanceOf = (dashboard: Dashboard | undefined): Appearance =>
   (dashboard?.appearance ?? {}) as Appearance;
 
@@ -62,7 +43,7 @@ export interface WidgetStyle {
   font_color?: string;
   /** The widget title's own size in pixels, over the card's. */
   title_size?: number;
-  /** The widget title's own typeface, named from TITLE_FONTS. */
+  /** The widget title's own typeface, named by id from lib/fonts. */
   title_font?: string;
   /** Where the title sits in its bar. Left unless asked otherwise. */
   title_align?: "left" | "center" | "right";
