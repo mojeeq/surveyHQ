@@ -200,7 +200,7 @@ default install finds them already there:
 | `X-Content-Type-Options` | `nosniff` |
 | `X-Frame-Options` | `SAMEORIGIN` |
 | `Referrer-Policy` | `strict-origin-when-cross-origin` |
-| `Permissions-Policy` | camera, microphone, geolocation, payment and USB all denied |
+| `Permissions-Policy` | camera, microphone, geolocation, payment and USB denied |
 | `Content-Security-Policy` | see below |
 | `Strict-Transport-Security` | one year, subdomains included, **only over HTTPS** |
 
@@ -213,22 +213,35 @@ that header through; the reverse proxy examples below already do.
 
 ### What the content policy does and does not cover
 
-It blocks an injected `<base>` tag, a plugin, a form posting somewhere else,
-and the page being framed by another site. Map tiles are allowed from the three
-hosts the basemaps use and nowhere else.
+It is deliberately short: an injected `<base>` tag is refused, a plugin cannot
+be loaded, and another site cannot put this page in a frame.
 
-**It does not restrict `script-src`, and that is deliberate.** An iframe's
-`srcdoc` document inherits the policy of the page that made it, and so do
-`data:` and `blob:` frames. So any `script-src` that blocks inline code also
-silences the HTML embed widget, whose whole purpose is to run markup a
-dashboard author pasted in. Making that widget work under a real `script-src`
-means serving its markup from its own response with its own headers, which is a
-change to the feature rather than to this file.
+It does not restrict scripts, images, frames or connections, and that is not an
+oversight. An iframe's `srcdoc` document inherits the policy of the page that
+made it, and the Embedded HTML widget exists to render whatever markup a
+dashboard author pasted in - a logo, an embedded video, a link bar. A
+`frame-src` or `img-src` tight enough to be worth having is also tight enough
+to break an embedded video. The map has the same problem from the other end:
+**Map tiles** accepts an arbitrary tile URL for deployments with no route to
+the public hosts, so any fixed list of tile hosts would break exactly the
+installations that needed that setting.
+
+Making the policy stricter means serving embedded markup from its own response
+with its own headers rather than from `srcdoc`, which is a change to that
+feature rather than to the nginx config.
 
 So do not read the presence of a CSP here as the thing that stops a survey
 answer becoming script on the page. What stops that is escaping the values
-before they reach a chart or map tooltip, which the application does. The
-policy is defence in depth behind it.
+before they reach a chart or map tooltip, which the application does. This is a
+floor under that, not a substitute for it.
+
+`Permissions-Policy` denies camera, microphone, geolocation, payment and USB.
+None of them is used by the platform, and none is reachable from an embed
+either: that frame is sandboxed without `allow-same-origin` and carries no
+`allow=` delegation, so it has an opaque origin that the default allowlist of
+`self` never matches. Granting a capability there would mean letting pasted
+markup prompt a reader for their location, which is not something a census
+platform should offer.
 
 ## Putting it behind HTTPS
 
