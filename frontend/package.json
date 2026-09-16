@@ -11,6 +11,7 @@
     "preview": "vite preview",
     "prelint": "node ../scripts/build-help.mjs",
     "lint": "tsc --noEmit",
+    "test": "vitest run",
     "help": "node ../scripts/build-help.mjs",
     "test:e2e": "playwright test",
     "fonts:sync": "node ../scripts/sync-export-fonts.mjs"
@@ -43,6 +44,7 @@
     "postcss": "^8.4.49",
     "tailwindcss": "^3.4.17",
     "typescript": "^5.7.2",
-    "vite": "^6.0.5"
+    "vite": "^6.0.5",
+    "vitest": "^5.0.1"
   }
 }

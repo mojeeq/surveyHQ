@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import { formatNumber } from '@/lib/format'
+import { escapeHtml, formatNumber } from '@/lib/format'
 
 /**
  * The grounds the pins can be drawn on, in the order they are offered.
@@ -196,12 +196,9 @@ export interface BoundaryOverlay {
 }
 
 /** Escapes text going into a popup: the values are survey data, not markup. */
+/** A popup field: escaped, and a dash where the record has nothing. */
 function escape(value: unknown): string {
-  return String(value ?? '-').replace(
-    /[&<>"']/g,
-    (character) =>
-      ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]!,
-  )
+  return escapeHtml(value ?? '-')
 }
 
 export default function MapWidget({
@@ -422,7 +419,9 @@ export default function MapWidget({
           // answers every click: the pin under the cursor never gets one, and
           // the pins are what the map is about. Hovering says where you are;
           // clicking interrogates the record standing there.
-          drawnLayer.bindTooltip(String(name), {
+          // Escaped: a string handed to bindTooltip is set as innerHTML, and
+          // this name is a property of an uploaded boundary file.
+          drawnLayer.bindTooltip(escape(name), {
             direction: 'center',
             className: 'boundary-label',
           })
