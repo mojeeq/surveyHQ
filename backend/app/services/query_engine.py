@@ -15,6 +15,7 @@ from typing import Any
 
 import duckdb
 
+from app.core.config import settings
 from app.core.logging import get_logger
 from app.schemas.query import (
     Aggregation,
@@ -710,10 +711,80 @@ _ONE_WAY = object()
 
 
 def _measure_label(measure: Measure) -> str:
-    """What to call the one column of a one-way table."""
+    """What to call the one column of a one-way table.
+
+    A weighted count is not a count. It is an estimate of how many there are
+    in the population the sample stands for, and heading it "Count" invites a
+    reader to add it to an unweighted one or quote it as a number of
+    interviews.
+    """
     if measure.agg == Aggregation.count:
-        return "Count"
-    return f"{measure.agg.value} of {measure.variable}" if measure.variable else measure.agg.value
+        return f"Estimated total ({measure.weight})" if measure.weight else "Count"
+    base = (
+        f"{measure.agg.value} of {measure.variable}"
+        if measure.variable
+        else measure.agg.value
+    )
+    return f"weighted {base}" if measure.weight else base
+
+
+def _suppression_mask(
+    frequencies: list[list[float]], threshold: int
+) -> list[list[bool]]:
+    """Which cells must be withheld, given how many records each rests on.
+
+    Primary suppression is the rule itself: a cell resting on fewer records
+    than the floor can identify them. A zero is left alone - an absence
+    identifies nobody, and blanking it would only tell the reader that
+    somebody is being protected where nobody is.
+
+    Secondary suppression is the part that is easy to forget and fatal to
+    skip. A row whose only withheld cell sits beside published cells and a
+    published total gives that cell back by subtraction, so the withholding
+    was decorative. Where that is the case a second cell goes too, and the
+    smallest one is chosen because it is the one whose loss costs the reader
+    least. Columns are read the same way, which is also what protects a
+    one-way table: its single column is the only direction a reader can
+    subtract along.
+
+    Iterating rather than solving: choosing the cheapest possible set of
+    secondary cells is a hard problem, and the greedy pass is what statistical
+    offices actually use. It terminates because every round withholds at least
+    one more cell, and it stops early if a line has nothing left to give.
+    """
+    rows = len(frequencies)
+    columns = len(frequencies[0]) if rows else 0
+    mask = [
+        [1 <= frequencies[i][j] < threshold for j in range(columns)] for i in range(rows)
+    ]
+    if rows == 0 or columns == 0:
+        return mask
+
+    def protect(line: list[tuple[int, int]]) -> bool:
+        """One row or column. True if this pass withheld another cell."""
+        hidden = [(i, j) for i, j in line if mask[i][j]]
+        if len(hidden) != 1 or len(line) < 2:
+            # Nothing withheld, or two already withheld and neither can be
+            # recovered. A line of one cell has no second cell to subtract
+            # from and is handled by the other direction.
+            return False
+        candidates = [(i, j) for i, j in line if not mask[i][j]]
+        if not candidates:
+            return False
+        i, j = min(candidates, key=lambda cell: frequencies[cell[0]][cell[1]])
+        mask[i][j] = True
+        return True
+
+    # Bounded by the number of cells: each round withholds at least one more.
+    for _ in range(rows * columns + 1):
+        moved = False
+        for i in range(rows):
+            moved |= protect([(i, j) for j in range(columns)])
+        for j in range(columns):
+            moved |= protect([(i, j) for i in range(rows)])
+        if not moved:
+            break
+    return mask
 
 
 def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabResult:
@@ -762,6 +833,27 @@ def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabR
     sql, params = builder.build_aggregate(spec)
     _, raw = run_sql(sql, params)
 
+    # How many records each cell rests on, which is a different question from
+    # what the cell shows. A mean of two incomes discloses those two people
+    # however large the mean is, and a weighted count of 4,000 can rest on
+    # three households - so disclosure is judged on the unweighted frequency
+    # and a second query is what it takes to know it. Skipped entirely when no
+    # floor is set, which is every deployment that has not asked for one.
+    threshold = max(0, settings.disclosure_threshold)
+    frequency: dict[tuple[Any, Any], float] = {}
+    if threshold:
+        counts_sql, counts_params = builder.build_aggregate(
+            spec.model_copy(update={"measures": [Measure(alias="__value")]})
+        )
+        _, counted = run_sql(counts_sql, counts_params)
+        for record in counted:
+            if row_info is not None and col_info is not None:
+                frequency[(record[0], record[1])] = float(record[2] or 0)
+            elif row_info is not None:
+                frequency[(record[0], _ONE_WAY)] = float(record[1] or 0)
+            else:
+                frequency[(_ONE_WAY, record[0])] = float(record[1] or 0)
+
     # Normalise to (row key, column key, value) whichever way round it came, so
     # the counting below is the same for one variable and for two.
     if row_info is not None and col_info is not None:
@@ -792,6 +884,7 @@ def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabR
 
     all_rows = _sorted_keys(row_keys, row_info)
     all_cols = _sorted_keys(col_keys, col_info)
+    rows_withheld = 0
     if request.measure is None:
         # The axis the table does not have carried a single column of counts.
         # Nobody asked for those, so it goes rather than being printed empty,
@@ -801,6 +894,21 @@ def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabR
             all_rows = []
         else:
             all_cols = []
+        if threshold:
+            # A listing has no cell to blank. Naming a category that three
+            # people are in still says those three exist and where they are,
+            # so a category below the floor is left out of the list instead.
+            listed = all_cols if row_info is None else all_rows
+            kept = []
+            for key in listed:
+                cell = (_ONE_WAY, key) if row_info is None else (key, _ONE_WAY)
+                if not 1 <= frequency.get(cell, 0) < threshold:
+                    kept.append(key)
+            rows_withheld = len(listed) - len(kept)
+            if row_info is None:
+                all_cols = kept
+            else:
+                all_rows = kept
     row_keys = all_rows[: request.max_rows]
     col_keys = all_cols[: request.max_columns]
     rows_omitted = len(all_rows) - len(row_keys)
@@ -813,7 +921,39 @@ def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabR
     ]
     grand_total = sum(row_totals)
 
-    chi_square = _chi_square(values, row_totals, column_totals, grand_total)
+    # The totals are the true ones and stay published; that is exactly why a
+    # withheld cell has to be protected from being recovered by subtracting
+    # from them, which is what the secondary pass above does.
+    suppressed = (
+        _suppression_mask(
+            [[frequency.get((r, c), 0) for c in col_keys] for r in row_keys],
+            threshold,
+        )
+        if threshold and row_keys and col_keys
+        else [[False] * len(col_keys) for _ in row_keys]
+    )
+    if threshold:
+        values = [
+            [None if suppressed[i][j] else value for j, value in enumerate(row)]
+            for i, row in enumerate(values)
+        ]
+
+    # Pearson's test counts observations. Weighted cells are an estimate of a
+    # population, so feeding them in claims a sample the size of the country
+    # and calls a coin toss significant at four decimal places. A design-based
+    # test is not arithmetic on the finished table, so the honest thing is to
+    # report nothing rather than something confident and wrong.
+    #
+    # It also goes when cells were actually withheld, because a statistic
+    # computed over the full table is a statement about numbers the reader has
+    # been refused. Merely having a floor configured is not enough: a table
+    # with nothing small in it has nothing to protect.
+    withheld_any = any(any(row) for row in suppressed)
+    chi_square = (
+        None
+        if measure.weight or withheld_any
+        else _chi_square(values, row_totals, column_totals, grand_total)
+    )
 
     one_way = row_info is None or col_info is None
     if request.percentages != "none" and grand_total:
@@ -854,6 +994,9 @@ def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabR
         chi_square=chi_square,
         rows_omitted=rows_omitted,
         columns_omitted=columns_omitted,
+        suppressed=suppressed,
+        rows_withheld=rows_withheld,
+        disclosure_threshold=threshold,
     )
 
 

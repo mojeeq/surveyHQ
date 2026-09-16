@@ -551,6 +551,31 @@ row, column, or percent of total. Row and column totals are always shown.
 Underneath, chi-square and Cramér's V are reported so you can see whether an
 apparent association is worth anything.
 
+**Survey weight.** With cell values set to a count, a sum or a mean, a **Survey
+weight** picker appears. Unweighted, a cell counts interviews; weighted, it
+estimates the population those interviews stand for, which is what a labour
+force or census table is normally quoting. A weighted count is headed
+"Estimated total" rather than "Count", because the two must not be read as the
+same kind of number or added together.
+
+No chi-square is reported for a weighted table. Pearson's test counts
+observations, so feeding it a population estimate claims a sample the size of
+the country and calls almost anything significant. A test that accounts for the
+design is not arithmetic on the finished table - use R for that.
+
+The weight is offered only where it means something. A weighted median or
+percentile is a different calculation rather than the same one with a
+multiplier in it, so those aggregations do not take one, and switching to them
+clears the weight rather than carrying it along out of sight.
+
+**Withheld cells.** If your deployment has a disclosure floor set, a cell
+resting on fewer records than the floor reads `*` instead of a number, and a
+note under the table says so. An empty cell still reads `-`: the two say
+different things, and a reader has to be able to tell "nobody was here" from
+"we are not telling you". Totals are the true ones, so a second cell in the
+same row or column is sometimes withheld as well - otherwise the first could be
+recovered by subtraction. See the deployment guide for how to set the floor.
+
 A cross-tabulation is not capped at a readable size: up to 5,000 rows and 1,000
 columns come back, so tabulating by interview key or enumeration area gives you
 the whole table. It scrolls with its headers pinned, and exports whole. If a

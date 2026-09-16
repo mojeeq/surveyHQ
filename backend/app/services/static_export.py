@@ -29,6 +29,7 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from app.core.config import settings
 from app.db.base import utcnow
 from app.models import (
     Chart,
@@ -46,7 +47,12 @@ from app.schemas.query import (
 )
 from app.services import export_appearance, export_fonts
 from app.services.datasets import dataset_is_queryable
-from app.services.query_engine import DatasetContext, QueryError, execute_query
+from app.services.query_engine import (
+    DatasetContext,
+    QueryError,
+    execute_crosstab,
+    execute_query,
+)
 
 TEMPLATE = Path(__file__).parent / "export_assets" / "dashboard.html"
 
@@ -309,6 +315,42 @@ def _chart_widget(
 
     if spec_raw.get("crosstab"):
         request = CrosstabRequest.model_validate(spec_raw["crosstab"])
+        if settings.disclosure_threshold > 0:
+            # The cube is the cell values at their finest grain, which is the
+            # whole point of it - the browser re-adds them as the reader
+            # filters. Under disclosure control that is a file carrying the
+            # exact numbers the platform refuses to show on screen, and a
+            # standalone file is the copy nobody can withdraw.
+            #
+            # So the table is computed here, withheld here, and travels
+            # finished. The reader loses the ability to narrow this one widget
+            # inside the file; the alternative is publishing what the rule
+            # exists to protect.
+            table = execute_crosstab(ctx, request)
+            return {
+                "kind": "crosstab",
+                "chart_type": "crosstab",
+                "crosstab": {
+                    "row_variable": request.row_variable,
+                    "column_variable": request.column_variable,
+                    "percentages": table.percentages,
+                    "include_totals": request.include_totals,
+                    "show_values": request.measure is not None,
+                    "measure_label": "",
+                    "fixed": {
+                        "row_labels": table.row_labels,
+                        "column_labels": table.column_labels,
+                        "values": table.values,
+                        "suppressed": table.suppressed,
+                        "row_totals": table.row_totals,
+                        "column_totals": table.column_totals,
+                        "grand_total": table.grand_total,
+                        "threshold": table.disclosure_threshold,
+                        "rows_withheld": table.rows_withheld,
+                    },
+                },
+                "cube": {"dimensions": [], "measures": [], "filters": [], "rows": []},
+            }
         cube = _cube(ctx, _crosstab_spec(request), names)
         return {
             "kind": "crosstab",

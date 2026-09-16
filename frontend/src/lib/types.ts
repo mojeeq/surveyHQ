@@ -295,6 +295,18 @@ export interface CrosstabResult {
   /** Categories the data had beyond what was returned, so a cut table says so. */
   rows_omitted?: number
   columns_omitted?: number
+  /**
+   * Which cells were withheld under disclosure control, same shape as `values`.
+   *
+   * A withheld cell and an empty one are both null in `values`, and they say
+   * different things: one is "we are not telling you", the other is "nobody
+   * was here".
+   */
+  suppressed?: boolean[][]
+  /** Categories too small to name at all, on a table with no cell values. */
+  rows_withheld?: number
+  /** The floor that was applied. Zero means disclosure control is off. */
+  disclosure_threshold?: number
 }
 
 export interface SummaryStats {

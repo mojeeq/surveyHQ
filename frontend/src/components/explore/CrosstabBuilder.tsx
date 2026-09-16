@@ -46,6 +46,17 @@ import {
  */
 const NO_VALUES = "__no_values";
 
+/**
+ * The aggregations a survey weight can be applied to.
+ *
+ * The server refuses the rest: a weighted median or percentile is a different
+ * calculation rather than the same one with a multiplier in it, and pretending
+ * otherwise would quietly return the unweighted answer under a weighted name.
+ * Mirrors the check in `Measure` so the control is never offered where the
+ * request would be rejected.
+ */
+const WEIGHTABLE = new Set<Aggregation>(["count", "sum", "mean"]);
+
 export function CrosstabBuilder({
   datasetId,
   datasetName,
@@ -173,7 +184,14 @@ export function CrosstabBuilder({
                 const needs = AGGREGATIONS.find(
                   (a) => a.value === agg,
                 )?.needsVariable;
-                setMeasure({ agg, variable: needs ? numeric[0]?.name : null });
+                setMeasure({
+                  agg,
+                  variable: needs ? numeric[0]?.name : null,
+                  // Dropped rather than carried along invisibly: the server
+                  // rejects a weight on a median, and a control that has
+                  // scrolled out of view must not decide the request.
+                  weight: WEIGHTABLE.has(agg) ? (measure?.weight ?? null) : null,
+                });
               }}
             >
               {/* Only offered without a column variable: two variables crossed
@@ -201,6 +219,32 @@ export function CrosstabBuilder({
                 {numeric.map((v) => (
                   <option key={v.name} value={v.name}>
                     {v.name}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
+          {measure && WEIGHTABLE.has(measure.agg) && (
+            <Field
+              label="Survey weight"
+              hint={
+                measure.weight
+                  ? "Cells estimate the population. Disclosure is still judged on the number of records behind each one."
+                  : "Cells count interviews, not the population they stand for."
+              }
+            >
+              <select
+                className="input py-1.5 text-xs"
+                aria-label="Survey weight"
+                value={measure.weight ?? ""}
+                onChange={(event) =>
+                  setMeasure({ ...measure, weight: event.target.value || null })
+                }
+              >
+                <option value="">Unweighted</option>
+                {numeric.map((v) => (
+                  <option key={v.name} value={v.name}>
+                    Weight by {v.name}
                   </option>
                 ))}
               </select>

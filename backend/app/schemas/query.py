@@ -256,6 +256,20 @@ class CrosstabResult(BaseModel):
     # totals still add up, so nothing on screen says the rest is missing.
     rows_omitted: int = 0
     columns_omitted: int = 0
+    # Statistical disclosure control, when the deployment has a floor set.
+    #
+    # A withheld cell and an empty cell are both blank in `values`, and a
+    # reader must be able to tell them apart - "we are not telling you" is a
+    # different statement from "nobody was here" - so the mask says which is
+    # which. It is the same shape as `values`.
+    suppressed: list[list[bool]] = Field(default_factory=list)
+    # Categories dropped entirely, which happens on a table with no cell values:
+    # there is no cell to blank, so a category too small to publish cannot be
+    # listed at all.
+    rows_withheld: int = 0
+    # The floor that was applied, so the table can say what rule it followed.
+    # Zero means disclosure control is off and nothing here was touched.
+    disclosure_threshold: int = 0
 
 
 class FrequencyRow(BaseModel):

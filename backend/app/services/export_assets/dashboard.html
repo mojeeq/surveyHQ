@@ -475,7 +475,64 @@
   }
 
   /** A cross-tab rebuilt from its cells: the totals and shares are arithmetic. */
+  function drawFixedCrosstab(body, spec) {
+    // Under disclosure control the table arrives finished rather than as a
+    // cube, because a cube is the cell values and the withheld ones are
+    // exactly what must not travel. Nothing here is recomputed, so the page
+    // filters cannot narrow this widget - the note at the foot says so.
+    var fixed = spec.fixed
+    var totals = spec.include_totals && fixed.column_labels.length > 0
+    var rowTotals = fixed.column_labels.length > 1
+    var table = el('table', 'data')
+    var thead = document.createElement('thead')
+    var head = document.createElement('tr')
+    head.appendChild(el('th', '', spec.row_variable || spec.column_variable || ''))
+    fixed.column_labels.forEach(function (c) { head.appendChild(el('th', 'n', c)) })
+    if (rowTotals) head.appendChild(el('th', 'n', 'Total'))
+    thead.appendChild(head)
+    table.appendChild(thead)
+    var tbody = document.createElement('tbody')
+    var suffix = spec.percentages === 'none' ? '' : '%'
+    fixed.row_labels.forEach(function (label, i) {
+      var line = document.createElement('tr')
+      line.appendChild(el('td', '', label))
+      ;(fixed.values[i] || []).forEach(function (value, j) {
+        var hidden = (fixed.suppressed[i] || [])[j]
+        var text = hidden ? '*' : value === null ? '-' : num(value) + suffix
+        line.appendChild(el('td', 'n', text))
+      })
+      if (rowTotals) line.appendChild(el('td', 'n total', num(fixed.row_totals[i])))
+      tbody.appendChild(line)
+    })
+    if (totals && fixed.row_labels.length > 1) {
+      var last = document.createElement('tr')
+      last.className = 'total'
+      last.appendChild(el('td', '', 'Total'))
+      fixed.column_totals.forEach(function (t) { last.appendChild(el('td', 'n', num(t))) })
+      if (rowTotals) last.appendChild(el('td', 'n', num(fixed.grand_total)))
+      tbody.appendChild(last)
+    }
+    table.appendChild(tbody)
+    body.appendChild(table)
+
+    var withheld = fixed.suppressed.some(function (row) {
+      return row.some(function (cell) { return cell })
+    })
+    if (withheld || fixed.rows_withheld > 0) {
+      var note = el('p', 'note')
+      note.textContent =
+        (withheld ? '* withheld to protect fewer than ' + fixed.threshold + ' records. ' : '') +
+        (fixed.rows_withheld > 0
+          ? fixed.rows_withheld + ' categor' + (fixed.rows_withheld === 1 ? 'y' : 'ies') +
+            ' below that floor are not listed. '
+          : '') +
+        'Totals cover every record, including the withheld ones. This table does not respond to the filters above.'
+      body.appendChild(note)
+    }
+  }
+
   function drawCrosstab(body, result, spec) {
+    if (spec.fixed) return drawFixedCrosstab(body, spec)
     // A table can be asked for with no cell values at all: the categories of
     // the one variable it has and nothing beside them. There is nothing to
     // total either, so the stand-in column and both total lines go.
@@ -883,7 +940,12 @@
     try {
       if (widget.kind === 'indicator') drawIndicator(body, widget)
       else if (widget.kind === 'map') drawMap(body, widget)
-      else if (widget.kind === 'crosstab') drawCrosstab(body, combine(widget.cube), widget.crosstab)
+      else if (widget.kind === 'crosstab') {
+        // A withheld table travels finished and carries an empty cube, so
+        // there is nothing to re-add and combine() has nothing to walk.
+        if (widget.crosstab.fixed) drawFixedCrosstab(body, widget.crosstab)
+        else drawCrosstab(body, combine(widget.cube), widget.crosstab)
+      }
       else if (widget.kind === 'chart') drawChart(body, widget.chart_type, combine(widget.cube), widget.display)
       else drawSnapshot(body, widget)
     } catch (error) {
