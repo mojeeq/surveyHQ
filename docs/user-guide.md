@@ -1530,13 +1530,43 @@ better" is a question about a line rather than about today:
   each other at the width a widget has. A day with no run is a gap rather than
   a straight line across it: a check added last week has nothing to say about
   the week before.
+- **Rows flagged over time** - the same stored runs counted rather than rated.
+  Worth having both: on a survey still collecting, the two move in opposite
+  directions, because the rate falls while the count climbs when rows are
+  arriving faster than errors are.
+- **Passing, failing and never run** - the three counts as one shape, for the
+  board that carries a panel per dataset. It answers a different question from
+  the others: not which check is worst, but whether this dataset is broadly in
+  order. This is the one chart whose parts are states rather than checks, so it
+  is the one whose colours are red, green and grey wherever it is drawn. The
+  counts are not also printed as badges above it, which would be the chart
+  written out again directly above itself.
 
 **Drawn as** says how that form is drawn. Share of rows failing and how many
 rows flagged can each be horizontal bars, upright columns or a plain table;
 rows flagged can also be a pie or a donut, because there the parts really are
 parts - each check's share of all the rows flagged in the dataset. Failure
-rates are not offered one: three checks at 40% are not 120% of anything. The
-trend can be a line, an area or a table.
+rates are not offered one: three checks at 40% are not 120% of anything.
+Either trend can be a line, an area or a table, and the mix can be a donut, a
+pie, bars either way round, or a table.
+
+The same list of forms is on the panel's own menu, under the **...** in its
+title bar, with a tick against the one it is showing. Which form to show is a
+question asked while looking at the board - the list reads at a desk, the mix
+from across the room - and answering it through the edit dialog means losing
+sight of the thing being decided about. It saves like any other setting, so the
+board opens that way next time, and it is there for anyone who may edit the
+dashboard. How the form is drawn stays in the dialog: that is settled once,
+when the panel is built.
+
+**Draw at most** cuts a chart to its worst few checks. A dataset with forty
+rules on it draws forty bars, and on a widget that is forty slivers with no
+room for a name against any of them; the ones a supervisor acts on are all at
+one end. The panel says which few it drew - "the 5 worst of 14 checks" - and
+the counts above the chart go on counting every check, because how many are
+failing is not something the cut changed. Leave it blank to draw them all. It
+applies to the two per-check views; a trend and the mix are not lists of checks
+to cut.
 
 Whichever way round the chart runs, the worst check is where the reading
 starts. That is last in the data on a horizontal bar, whose categories are
@@ -1545,9 +1575,9 @@ the top left. The bars are coloured by what each check found; a pie is not,
 because every failing check would come out the same red and the legend would be
 the only thing telling one slice from the next.
 
-The line is drawn from stored runs, which counted the whole dataset, so the
-page's filters do not reach it and the panel says so under the chart. The other
-two views are the current state, so they narrow with the page like everything
+Both lines are drawn from stored runs, which counted the whole dataset, so the
+page's filters do not reach them and the panel says so under the chart. The
+other views are the current state, so they narrow with the page like everything
 else.
 
 **Text size** sets how big the panel reads. It moves the findings and scales

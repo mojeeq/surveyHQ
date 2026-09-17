@@ -12,6 +12,8 @@ import { useToast } from "@/hooks/useToast";
 
 import type { Widget, WidgetGroup } from "@/lib/types";
 
+import { QUALITY_VIEWS } from "@/lib/quality";
+
 import ChartCard from "@/components/ChartCard";
 
 import CrosstabTable from "@/components/CrosstabTable";
@@ -48,6 +50,7 @@ export function WidgetFrame({
   pageNames,
   groups,
   onGroup,
+  onConfigure,
   basePath,
   onMove,
   onEdit,
@@ -75,6 +78,13 @@ export function WidgetFrame({
   /** The groups on this widget's page, for the menu that puts it in one. */
   groups?: WidgetGroup[];
   onGroup?: (groupId: string) => void;
+  /**
+   * Change part of this widget's saved settings, from its own menu.
+   *
+   * A patch rather than the whole thing: the menu knows the one key it is
+   * setting and nothing about the rest, and the caller merges it in.
+   */
+  onConfigure?: (patch: Record<string, unknown>) => void;
   onMove: (page: number) => void;
   onEdit: () => void;
   onRemove: () => void;
@@ -154,6 +164,7 @@ export function WidgetFrame({
       payload={payload}
       view={String((widget.config as any)?.quality_view || "list")}
       chart={String((widget.config as any)?.quality_chart || "")}
+      limit={Number((widget.config as any)?.quality_limit) || 0}
       theme={theme}
       display={{
         ...(style.series_color ? { seriesColor: style.series_color } : {}),
@@ -302,6 +313,24 @@ export function WidgetFrame({
                   ]
                 : []),
             ],
+            // Which form a data quality panel takes, on the panel itself.
+            // That is a question asked while looking at the board - the list
+            // reads at a desk, the mix from across the room - and answering it
+            // through the edit dialog means losing sight of the thing being
+            // decided about. How the form is drawn stays in the dialog: it is
+            // settled once when the panel is built, where the view is not.
+            // Keyed off what the widget is rather than off what it drew, so
+            // that a panel whose dataset failed to render can still be moved
+            // to a form that might work.
+            canEdit && onConfigure && widget.widget_type === "quality"
+              ? QUALITY_VIEWS.map((option) => ({
+                  label: option.label,
+                  checked:
+                    String((widget.config as any)?.quality_view || "list") ===
+                    option.value,
+                  onClick: () => onConfigure({ quality_view: option.value }),
+                }))
+              : [],
             // Which page a widget belongs on is usually decided after it is
             // built, and rebuilding it somewhere else is not an answer.
             canEdit && pageNames.length > 1
