@@ -16,11 +16,17 @@ import type { BuildOptions } from "@/lib/charts";
 import { formatNumber, formatValue, relativeTime } from "@/lib/format";
 
 import {
+  CHARTED_VIEWS,
   CHECK_COLOURS,
+  PER_CHECK_VIEWS,
+  TREND_VIEWS,
   checkState,
   countResult,
+  mixColours,
+  mixResult,
   qualityChartType,
   rateResult,
+  topChecks,
   trendResult,
   worstFirst,
 } from "@/lib/quality";
@@ -253,6 +259,7 @@ export function QualityWidget({
   payload,
   view,
   chart,
+  limit = 0,
   theme,
   display,
 }: {
@@ -261,21 +268,36 @@ export function QualityWidget({
   view: string;
   /** How that form is drawn, where the form is a chart. */
   chart?: string;
+  /** How many checks the chart draws, worst first. Nought draws them all. */
+  limit?: number;
   theme: string;
   display?: BuildOptions;
 }) {
   const failing = payload.checks.filter((c: any) => c.passed === false);
   const stale = payload.oldest_run_at;
-  const charted = view === "rate" || view === "rows" || view === "trend";
+  const charted = CHARTED_VIEWS.has(view);
   const chartType = qualityChartType(view, chart);
+  // Drawn from the runs already stored rather than from the checks as they
+  // stand, which is what the filters on the page reach.
+  const trending = TREND_VIEWS.has(view);
   // A horizontal bar's categories read bottom-up, so the worst check goes last
   // in the data; every other form reads from the top left and wants it first.
   const horizontal = chartType === "horizontal_bar";
-  // Colouring a mark by its finding is for the bars only. A table has no marks,
-  // and a pie is read for how the flagged rows divide between the checks: paint
-  // its slices by state and every failing check comes out the same red, which
-  // leaves the legend as the only thing telling one slice from the next.
+  // Colouring a mark by its finding is for the bars only, where a bar is a
+  // check. A table has no marks, and a pie of checks is read for how the
+  // flagged rows divide between them: paint its slices by state and every
+  // failing check comes out the same red, which leaves the legend as the only
+  // thing telling one slice from the next. The mix is the exception, because
+  // there the slices are the states.
   const marked = chartType === "horizontal_bar" || chartType === "bar";
+  const measure = (check: any) =>
+    view === "rows" ? (check.failed_rows ?? 0) : (check.failure_rate ?? 0);
+  // The checks this chart draws. Cut to the worst few where the panel asked
+  // for that, and only on the views that are one mark per check.
+  const shown = PER_CHECK_VIEWS.has(view)
+    ? topChecks(payload.checks, measure, limit)
+    : payload.checks;
+  const withheld = payload.checks.length - shown.length;
   return (
     // One size for the whole panel, and every part of it sized in em from
     // there: a finding is read at a glance from wherever the board is, and
@@ -297,11 +319,16 @@ export function QualityWidget({
           like a panel of passing ones. It reads as a count beside the others
           rather than as an alarm.
 
+          And not over the mix, which is these three counts drawn: the badges
+          there are the chart written out again, in the same order, directly
+          above itself.
+
           The row goes entirely when it has nothing to say, rather than sitting
           there as an empty strip with a margin under it. */}
-      {(charted && payload.failing > 0) ||
-      payload.passing > 0 ||
-      payload.never_run > 0 ? (
+      {view !== "mix" &&
+      ((charted && payload.failing > 0) ||
+        payload.passing > 0 ||
+        payload.never_run > 0) ? (
         <div className="mb-3 flex flex-wrap items-center gap-2">
           {charted && payload.failing > 0 && (
             <Badge tone="neutral">{payload.failing} failing</Badge>
@@ -333,7 +360,7 @@ export function QualityWidget({
               : ""
           }`}
         >
-          {view === "trend" && !payload.history ? (
+          {trending && !payload.history ? (
             <p className="text-ink-500">
               No runs stored yet. The checks run every few hours, and a line
               needs two days of them.
@@ -345,37 +372,50 @@ export function QualityWidget({
               theme={theme}
               chartType={chartType}
               result={
-                view === "trend"
-                  ? trendResult(payload.history)
-                  : view === "rows"
-                    ? countResult(payload.checks, horizontal)
-                    : rateResult(payload.checks, horizontal)
+                view === "mix"
+                  ? mixResult(payload, horizontal)
+                  : trending
+                    ? trendResult(
+                        payload.history,
+                        view === "rows_trend" ? "rows" : "values",
+                      )
+                    : view === "rows"
+                      ? countResult(shown, horizontal)
+                      : rateResult(shown, horizontal)
               }
               display={{
                 ...display,
-                showValues: display?.showValues ?? view !== "trend",
+                showValues: display?.showValues ?? !trending,
                 sort: "none",
-                decimals: view === "rows" ? 0 : 2,
-                // Colour is the finding here. A bar's hue says whether that
+                // The two views of a rate are read to a decimal place. Rows,
+                // rows over time and a count of checks are whole things, and
+                // "480.00" of them reads as a measurement rather than a count.
+                decimals: view === "rate" || view === "trend" ? 2 : 0,
+                // Colour is the finding here. A mark's hue says whether that
                 // check is passing, which is the thing being looked for, so it
                 // is not left to the palette's order.
-                ...(view === "trend"
+                ...(trending
                   ? // No axis title: the legend needs the top of the plot, the
                     // footnote below says what the numbers are, and the two
                     // were landing on each other at widget width.
                     { showLegend: true, smooth: false }
-                  : marked
+                  : view === "mix"
                     ? {
-                        pointColors: worstFirst(
-                          payload.checks,
-                          (check: any) =>
-                            view === "rows"
-                              ? (check.failed_rows ?? 0)
-                              : (check.failure_rate ?? 0),
-                          horizontal,
-                        ).map((check: any) => CHECK_COLOURS[checkState(check)]),
+                        // Every form of the mix but the table, the pie
+                        // included: its slices are the three states.
+                        ...(chartType === "table"
+                          ? {}
+                          : { pointColors: mixColours(payload, horizontal) }),
                       }
-                    : {}),
+                    : marked
+                      ? {
+                          pointColors: worstFirst(
+                            shown,
+                            measure,
+                            horizontal,
+                          ).map((check: any) => CHECK_COLOURS[checkState(check)]),
+                        }
+                      : {}),
               }}
             />
           )}
@@ -428,7 +468,16 @@ export function QualityWidget({
         </ul>
       )}
 
-      {view === "trend" ? (
+      {/* Which few of the checks the chart is drawing. A panel cut to its
+          worst ten is not a panel of ten checks, and the difference is the
+          whole reason to trust the one above it. */}
+      {withheld > 0 && (
+        <p className="mt-2 text-[0.8em] text-ink-400">
+          The {shown.length} worst of {payload.checks.length} checks
+        </p>
+      )}
+
+      {trending ? (
         <p className="mt-2 text-[0.8em] text-ink-400">
           {/* The line is drawn from what the scheduled runs stored, and those
               counted the whole dataset. A filter cannot reach backwards into
