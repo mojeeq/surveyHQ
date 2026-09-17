@@ -194,6 +194,22 @@ def test_a_trend_panel_carries_the_runs_behind_it(client, auth_headers, graded):
     # Half the rows are out of range, as a percentage rather than a fraction:
     # a chart axis reading 0.5 for "50% failing" is read as half a row.
     assert line["values"] == [50.0]
+    # And the same runs counted, for the panel drawn as rows rather than rates.
+    assert line["rows"] == [4]
+
+
+def test_a_panel_of_rows_over_time_carries_the_same_runs(
+    client, auth_headers, graded
+):
+    """The count and the rate are two readings of one stored run, so asking for
+    either is worth the read. On a survey still collecting they move in
+    opposite directions, which is the reason to offer both."""
+    set_view(client, auth_headers, graded["board"], "rows_trend")
+    history = render(client, auth_headers, graded["board"])["history"]
+    assert history is not None
+    line = history["series"][0]
+    assert line["rows"] == [4]
+    assert line["values"] == [50.0]
 
 
 def test_the_last_run_of_a_day_is_the_day(client, auth_headers, graded, db_session):

@@ -40,7 +40,7 @@ import {
   panelDefault,
 } from "@/components/dashboard/shared";
 import { Field, Loading, Modal, Section, useOpenSections } from "@/components/ui";
-import { QUALITY_CHARTS, qualityChartType } from "@/lib/quality";
+import { PER_CHECK_VIEWS, QUALITY_CHARTS, qualityChartType } from "@/lib/quality";
 
 /** Whether this dataset looks like it has a GPS reading the map cannot offer.
  *
@@ -97,18 +97,24 @@ function looksLikeAnUnsplitGps(
 function QualityForm({
   view,
   chart,
+  limit,
   onChange,
 }: {
   view: string;
   chart: string;
-  onChange: (patch: { quality_view?: string; quality_chart?: string }) => void;
+  limit: string;
+  onChange: (patch: {
+    quality_view?: string;
+    quality_chart?: string;
+    quality_limit?: number;
+  }) => void;
 }) {
   const offered = QUALITY_CHARTS[view] ?? [];
   return (
     <>
       <Field
         label="Show it as"
-        hint="A panel of findings reads at a desk; a chart reads from across a room, and a line says whether it is getting better."
+        hint="A panel of findings reads at a desk; a chart reads from across a room, a line says whether it is getting better, and the mix says in one shape whether this dataset is in order."
       >
         <select
           className="input"
@@ -119,6 +125,8 @@ function QualityForm({
           <option value="rate">Share of rows failing</option>
           <option value="rows">How many rows flagged</option>
           <option value="trend">Failure rate over time</option>
+          <option value="rows_trend">Rows flagged over time</option>
+          <option value="mix">Passing, failing and never run</option>
         </select>
       </Field>
       {offered.length > 1 && (
@@ -137,6 +145,33 @@ function QualityForm({
               </option>
             ))}
           </select>
+        </Field>
+      )}
+      {PER_CHECK_VIEWS.has(view) && (
+        <Field
+          label="Draw at most"
+          hint="A dataset with forty checks on it draws forty bars, and on a widget that is forty slivers with no room for a name against any of them. The worst few are the ones acted on. Blank draws them all, and the counts above the chart go on counting every check either way."
+        >
+          <input
+            className="input"
+            type="number"
+            min={0}
+            step={1}
+            placeholder="Every check"
+            value={limit}
+            // Rounded down, not merely stepped. The step on a number input is
+            // enforced by a form's own validation, and this dialog saves from
+            // a button of its own, so "0.5" typed in by hand would otherwise
+            // be stored as it stands - and half a check is no checks at all.
+            onChange={(event) =>
+              onChange({
+                quality_limit: Math.max(
+                  0,
+                  Math.floor(Number(event.target.value) || 0),
+                ),
+              })
+            }
+          />
         </Field>
       )}
     </>
@@ -187,6 +222,7 @@ export function AddWidgetModal({
   /** Which form a new quality panel opens in, and how that form is drawn. */
   const [qualityView, setQualityView] = useState("list");
   const [qualityChart, setQualityChart] = useState("");
+  const [qualityLimit, setQualityLimit] = useState(0);
   const [latitude, setLatitude] = useState("");
   const [longitude, setLongitude] = useState("");
   const [measureAgg, setMeasureAgg] = useState("count");
@@ -271,6 +307,7 @@ export function AddWidgetModal({
                   ? {
                       quality_view: qualityView,
                       ...(qualityChart ? { quality_chart: qualityChart } : {}),
+                      ...(qualityLimit ? { quality_limit: qualityLimit } : {}),
                     }
                   : kind === "indicator"
                     ? { show_breakdown: showBreakdown, show_trend: showTrend }
@@ -407,10 +444,13 @@ export function AddWidgetModal({
         <QualityForm
           view={qualityView}
           chart={qualityChart}
+          limit={qualityLimit ? String(qualityLimit) : ""}
           onChange={(patch) => {
             if (patch.quality_view !== undefined) setQualityView(patch.quality_view);
             if (patch.quality_chart !== undefined)
               setQualityChart(patch.quality_chart);
+            if (patch.quality_limit !== undefined)
+              setQualityLimit(patch.quality_limit);
           }}
         />
       )}
@@ -1035,6 +1075,7 @@ export function EditWidgetModal({
         <QualityForm
           view={String(config.quality_view ?? "list")}
           chart={String(config.quality_chart ?? "")}
+          limit={config.quality_limit ? String(config.quality_limit) : ""}
           onChange={set}
         />
       )}
