@@ -234,8 +234,13 @@ export function topChecks(
   of: (check: any) => number,
   limit: number,
 ): any[] {
-  if (!limit || limit >= checks.length) return checks;
-  return worstFirst(checks, of, false).slice(0, limit);
+  // Whole checks. A limit is stored as an integer, but a widget's settings can
+  // be written straight through the API as well as through the dialog, and
+  // `slice` reads 0.5 as 0: an empty chart under a note saying it is the worst
+  // 0 of 14, which is a stranger thing to have drawn than one check.
+  const few = Math.floor(limit) || 0;
+  if (few < 1 || few >= checks.length) return checks;
+  return worstFirst(checks, of, false).slice(0, few);
 }
 
 /** The stored runs, one line per check: is this getting better or worse. */

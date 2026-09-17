@@ -159,8 +159,17 @@ function QualityForm({
             step={1}
             placeholder="Every check"
             value={limit}
+            // Rounded down, not merely stepped. The step on a number input is
+            // enforced by a form's own validation, and this dialog saves from
+            // a button of its own, so "0.5" typed in by hand would otherwise
+            // be stored as it stands - and half a check is no checks at all.
             onChange={(event) =>
-              onChange({ quality_limit: Math.max(0, Number(event.target.value) || 0) })
+              onChange({
+                quality_limit: Math.max(
+                  0,
+                  Math.floor(Number(event.target.value) || 0),
+                ),
+              })
             }
           />
         </Field>

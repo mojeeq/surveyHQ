@@ -144,3 +144,24 @@ describe("a trend drawn from rates or from counts", () => {
     expect(trendResult(gapped, "rows").rows[1]).toEqual(["9 Sep", null]);
   });
 });
+
+describe("a limit that is not a whole number of checks", () => {
+  // A widget's settings can be written through the API as well as through the
+  // dialog, and the dialog's own number input steps by one without a form to
+  // enforce it. Half a check drawn as `slice(0, 0.5)` is no checks at all,
+  // under a note calling them the worst 0 of 3.
+  it("draws every check rather than none", () => {
+    for (const limit of [0.5, 0.99, -3, Number.NaN]) {
+      expect(
+        topChecks(CHECKS, (check) => check.failed_rows, limit),
+        `a limit of ${limit} emptied the chart`,
+      ).toBe(CHECKS);
+    }
+  });
+
+  it("rounds a fraction over one down to the checks it covers", () => {
+    expect(
+      topChecks(CHECKS, (check) => check.failed_rows, 2.7).map((c) => c.name),
+    ).toEqual(["Too fast", "Duplicate key"]);
+  });
+});
