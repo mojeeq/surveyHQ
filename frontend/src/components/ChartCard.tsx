@@ -324,7 +324,9 @@ export default function ChartCard({
           // A third of the chart, which leaves two thirds for the bars. Long
           // check names and long question labels otherwise push the plot into
           // a sliver at the right, and the bigger the text the worse it is.
-          ...(width ? { maxLabelWidth: Math.round(width / 3) } : {}),
+          ...(width
+            ? { maxLabelWidth: Math.round(width / 3), chartWidth: width }
+            : {}),
         })}
         style={fill ? { flex: 1, minHeight: 0, width: '100%' } : { height, width: '100%' }}
         opts={{ renderer: 'canvas' }}
