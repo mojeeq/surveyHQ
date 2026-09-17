@@ -359,6 +359,43 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
     onError: (error: Error) => toast.push(error.message, 'error'),
   })
 
+  /** The last save sent from a widget's menu, so the next one waits for it. */
+  const saving = useRef<Promise<unknown>>(Promise.resolve())
+
+  // One saved setting on a widget, changed from the widget's own menu rather
+  // than through the edit dialog. The config is sent whole, because that is
+  // what the endpoint stores, so the patch is merged onto what the widget is
+  // already carrying at the call.
+  const reconfigureWidget = useMutation({
+    mutationFn: ({
+      widgetId,
+      config,
+    }: {
+      widgetId: string
+      config: Record<string, unknown>
+    }) => {
+      // One at a time, in the order they were asked for. The endpoint stores
+      // the config whole, so two of these in flight together are two writes of
+      // the same field and whichever lands last decides it - which, sent in
+      // parallel, need not be the one clicked last. Reopening the menu and
+      // picking again before the first save returns is quick enough to do by
+      // hand, and it would have left the panel showing the earlier choice.
+      const next = saving.current
+        .catch(() => {})
+        .then(() => api.patch(`/dashboards/${id}/widgets/${widgetId}`, { config }))
+      saving.current = next
+      return next
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['dashboard', id] })
+      // And the data behind it, because what a panel is showing decides what
+      // the server sends: a quality panel asked for a trend is sent a month of
+      // stored runs, and one asked for its findings is not.
+      queryClient.invalidateQueries({ queryKey: ['dashboard-data', id] })
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
   const removeWidget = useMutation({
     mutationFn: (widgetId: string) => api.delete(`/dashboards/${id}/widgets/${widgetId}`),
     onSuccess: () => {
@@ -972,6 +1009,12 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
                 basePath={basePath}
                 groups={groups}
                 onGroup={(groupId) => putInGroup(widget, groupId)}
+                onConfigure={(patch) =>
+                  reconfigureWidget.mutate({
+                    widgetId: widget.id,
+                    config: { ...((widget.config as Record<string, unknown>) ?? {}), ...patch },
+                  })
+                }
                 onMove={(toPage) => moveWidget.mutate({ widgetId: widget.id, page: toPage })}
                 onEdit={() => setEditingWidget(widget)}
                 onRemove={() => {

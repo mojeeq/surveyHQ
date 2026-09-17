@@ -40,7 +40,12 @@ import {
   panelDefault,
 } from "@/components/dashboard/shared";
 import { Field, Loading, Modal, Section, useOpenSections } from "@/components/ui";
-import { PER_CHECK_VIEWS, QUALITY_CHARTS, qualityChartType } from "@/lib/quality";
+import {
+  PER_CHECK_VIEWS,
+  QUALITY_CHARTS,
+  QUALITY_VIEWS,
+  qualityChartType,
+} from "@/lib/quality";
 
 /** Whether this dataset looks like it has a GPS reading the map cannot offer.
  *
@@ -121,12 +126,11 @@ function QualityForm({
           value={view}
           onChange={(event) => onChange({ quality_view: event.target.value })}
         >
-          <option value="list">The findings, listed</option>
-          <option value="rate">Share of rows failing</option>
-          <option value="rows">How many rows flagged</option>
-          <option value="trend">Failure rate over time</option>
-          <option value="rows_trend">Rows flagged over time</option>
-          <option value="mix">Passing, failing and never run</option>
+          {QUALITY_VIEWS.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
         </select>
       </Field>
       {offered.length > 1 && (

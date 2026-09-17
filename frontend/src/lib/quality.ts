@@ -23,6 +23,23 @@ export const checkState = (check: any) =>
   check.passed === false ? "failing" : check.passed ? "passing" : "not run";
 
 /**
+ * What a quality panel can plot, in the order the picker offers them.
+ *
+ * Named once because two places ask the question: the widget dialog, and the
+ * panel's own menu on the board. A view that read one way in the dialog and
+ * another on the menu would be two features as far as anybody using it is
+ * concerned.
+ */
+export const QUALITY_VIEWS: { value: string; label: string }[] = [
+  { value: "list", label: "The findings, listed" },
+  { value: "rate", label: "Share of rows failing" },
+  { value: "rows", label: "How many rows flagged" },
+  { value: "trend", label: "Failure rate over time" },
+  { value: "rows_trend", label: "Rows flagged over time" },
+  { value: "mix", label: "Passing, failing and never run" },
+];
+
+/**
  * How a quality panel may be drawn, by what it is plotting.
  *
  * Not the whole chart menu. A pie of failure rates would be a pie of numbers

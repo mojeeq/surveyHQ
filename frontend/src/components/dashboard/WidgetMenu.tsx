@@ -51,7 +51,12 @@ export function WidgetMenu({
   onOpen?: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const [at, setAt] = useState<{ top: number; right: number } | null>(null);
+  const [at, setAt] = useState<{
+    top?: number;
+    bottom?: number;
+    right: number;
+    maxHeight: number;
+  } | null>(null);
   const button = useRef<HTMLButtonElement>(null);
   const panel = useRef<HTMLDivElement>(null);
   const bands = groups.filter((band) => band.length > 0);
@@ -86,11 +91,29 @@ export function WidgetMenu({
 
   const show = () => {
     const box = button.current?.getBoundingClientRect();
-    if (box)
-      setAt({
-        top: box.bottom + 4,
-        right: Math.max(8, window.innerWidth - box.right),
-      });
+    if (box) {
+      const right = Math.max(8, window.innerWidth - box.right);
+      // The room on each side of the button, less a margin off the edge.
+      const below = window.innerHeight - box.bottom - 12;
+      const above = box.top - 12;
+      // Dropped under the button where there is more room under it, raised
+      // above it where there is more room there, and capped to whichever it
+      // is. The panel is fixed to the viewport, so a menu longer than the
+      // room below the button used to run off the bottom of the screen with
+      // no way to reach what was down there: scrolling the page does not move
+      // a fixed panel, and the overflow was hidden rather than scrollable. A
+      // widget low on a board has a title bar low on the screen, and a data
+      // quality panel's menu is long enough to reach past it.
+      setAt(
+        below >= above
+          ? { top: box.bottom + 4, right, maxHeight: below }
+          : {
+              bottom: window.innerHeight - box.top + 4,
+              right,
+              maxHeight: above,
+            },
+      );
+    }
     if (!open) onOpen?.();
     setOpen((was) => !was);
   };
@@ -131,8 +154,15 @@ export function WidgetMenu({
         createPortal(
           <div
             ref={panel}
-            className="fixed z-50 min-w-[11rem] overflow-hidden rounded-card border border-ink-200 bg-white py-1 shadow-lg"
-            style={{ top: at.top, right: at.right }}
+            // Hidden across and scrolling down: across is what keeps the
+            // corners rounded, down is what makes a capped menu reachable.
+            className="fixed z-50 min-w-[11rem] overflow-hidden overflow-y-auto rounded-card border border-ink-200 bg-white py-1 shadow-lg"
+            style={{
+              top: at.top,
+              bottom: at.bottom,
+              right: at.right,
+              maxHeight: at.maxHeight,
+            }}
             role="menu"
           >
             {bands.map((band, index) => (

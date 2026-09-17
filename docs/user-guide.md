@@ -1550,6 +1550,15 @@ rates are not offered one: three checks at 40% are not 120% of anything.
 Either trend can be a line, an area or a table, and the mix can be a donut, a
 pie, bars either way round, or a table.
 
+The same list of forms is on the panel's own menu, under the **...** in its
+title bar, with a tick against the one it is showing. Which form to show is a
+question asked while looking at the board - the list reads at a desk, the mix
+from across the room - and answering it through the edit dialog means losing
+sight of the thing being decided about. It saves like any other setting, so the
+board opens that way next time, and it is there for anyone who may edit the
+dashboard. How the form is drawn stays in the dialog: that is settled once,
+when the panel is built.
+
 **Draw at most** cuts a chart to its worst few checks. A dataset with forty
 rules on it draws forty bars, and on a widget that is forty slivers with no
 room for a name against any of them; the ones a supervisor acts on are all at
