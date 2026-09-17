@@ -1531,9 +1531,23 @@ better" is a question about a line rather than about today:
   a straight line across it: a check added last week has nothing to say about
   the week before.
 
+**Drawn as** says how that form is drawn. Share of rows failing and how many
+rows flagged can each be horizontal bars, upright columns or a plain table;
+rows flagged can also be a pie or a donut, because there the parts really are
+parts - each check's share of all the rows flagged in the dataset. Failure
+rates are not offered one: three checks at 40% are not 120% of anything. The
+trend can be a line, an area or a table.
+
+Whichever way round the chart runs, the worst check is where the reading
+starts. That is last in the data on a horizontal bar, whose categories are
+drawn upwards from the origin, and first on everything else, which reads from
+the top left. The bars are coloured by what each check found; a pie is not,
+because every failing check would come out the same red and the legend would be
+the only thing telling one slice from the next.
+
 The line is drawn from stored runs, which counted the whole dataset, so the
-page's filters do not reach it and the panel says so under the chart. The two
-bar charts are the current state, so they narrow with the page like everything
+page's filters do not reach it and the panel says so under the chart. The other
+two views are the current state, so they narrow with the page like everything
 else.
 
 **Text size** sets how big the panel reads. It moves the findings and scales
@@ -1544,11 +1558,14 @@ the printed values - since it is the same question either way: how far away is
 this being read from.
 
 A chart makes room for the bigger text rather than being crowded out by it. A
-category name may take a third of the chart's width before it is cut short with
-an ellipsis, so the bars keep the other two thirds; the gutter for a number
-printed off the end of a bar grows with the text rather than clipping it at the
-edge; and value ticks that would collide are dropped instead of being printed
-over each other. That holds for every chart on a dashboard, not only these.
+category name beside a horizontal bar may take a third of the chart's width
+before it is cut short with an ellipsis, so the bars keep the other two thirds;
+under upright columns a name is cut to the width of its own column instead, and
+only where the names are long enough that the axis would otherwise start
+dropping every second one; the gutter for a number printed off the end of a bar
+grows with the text rather than clipping it at the edge; and value ticks that
+would collide are dropped instead of being printed over each other. That holds
+for every chart on a dashboard, not only these.
 
 **A filtered page filters the panel.** Narrow a dashboard to one province and
 the panel counts that province: no stored run ever counted only those rows, so

@@ -238,6 +238,15 @@ export interface BuildOptions {
    * the less is left.
    */
   maxLabelWidth?: number
+  /**
+   * How wide the chart was drawn, in pixels, where the caller measured it.
+   *
+   * Only the category labels under an upright bar use it, and they need the
+   * width itself rather than `maxLabelWidth`: what bounds a label there is the
+   * slot its own bar stands in, which is the plot divided by how many bars
+   * there are, not a fixed share of the chart.
+   */
+  chartWidth?: number
   /** Font for this widget's chart text. */
   fontFamily?: string
   /** Colour for this widget's chart text: axes, their names, and the legend. */
@@ -1052,18 +1061,72 @@ function buildOption(
         chartType === 'stacked_bar' ||
         chartType === 'horizontal_stacked_bar' ||
         options.stacked
-      const common_ = axisCommon(horizontal ? 0 : categories.length > 8 ? 30 : 0)
+      // Past eight categories the labels under an upright bar are turned on
+      // their side, which is the axis' own answer to names that will not fit
+      // beside each other.
+      const rotated = !horizontal && categories.length > 8
+      const common_ = axisCommon(rotated ? 30 : 0)
+      // What one category has to itself under an upright bar.
+      //
+      // The plot's own width is not known here - only the chart's - and the
+      // difference is mostly the value axis, which is about as wide as its
+      // longest number. So that number is worked out and measured: an axis
+      // running to 12 costs two digits and leaves the labels nearly the whole
+      // chart, while one counting households costs four and leaves less.
+      //
+      // Erring narrow is the safe way round. A label bounded tighter than its
+      // slot is shorter than it needed to be; one bounded looser overlaps its
+      // neighbour, and ECharts answers that by hiding one of the two.
+      const widest = Math.max(
+        0,
+        ...(stacked
+          ? categories.map((_, at) =>
+              series.reduce((total, entry) => total + Number(entry.data[at] ?? 0), 0),
+            )
+          : series.flatMap((entry) => entry.data.map((value) => Number(value ?? 0)))),
+      )
+      const textSize = options.fontSize ?? 12
+      // Never under four characters: the axis is labelled by its ticks, not by
+      // its largest value, and an axis running to 1 is ticked "0.25".
+      const digits = Math.max(4, formatNumber(widest).length)
+      const axisGutter = digits * textSize * 0.62 + 8
+      const slot =
+        options.chartWidth && categories.length
+          ? // 8 and 24 are the grid's own gutters, set below.
+            Math.floor((options.chartWidth - axisGutter - 32) / categories.length)
+          : 0
       const categoryAxis = {
         type: 'category' as const,
         data: categories,
         ...common_,
         axisLabel: {
           ...common_.axisLabel,
-          // Only across: a label above or below a bar is bounded by the bar's
-          // own width already, and truncating there would cut names that fit.
-          ...(horizontal && options.maxLabelWidth
-            ? { width: options.maxLabelWidth, overflow: 'truncate' as const }
-            : {}),
+          ...(horizontal
+            ? options.maxLabelWidth
+              ? { width: options.maxLabelWidth, overflow: 'truncate' as const }
+              : {}
+            : // Under the bars, what bounds a label is the slot its own bar
+              // stands in. ECharts' answer to a label wider than that is to
+              // drop it and every second one after it, which on a chart of
+              // long names - data quality checks, questions, province names -
+              // leaves two labels hanging over the ends of the axis and no way
+              // to tell which bar is which. Cutting each name to its slot
+              // keeps them all, and the tooltip still carries the whole one.
+              //
+              // A name shorter than its slot is drawn whole, so this costs
+              // the charts that already fitted nothing: the bound only bites
+              // where a name was going to be dropped.
+              //
+              // Only while the labels are upright and a slot is wide enough to
+              // hold something worth reading, though. A turned label is not
+              // bounded by its own slot at all - it runs diagonally under its
+              // neighbour's - so cutting it to that width would shorten a name
+              // the axis had room to draw. And below the width, the axis' own
+              // thinning is the better of the two, because forty checks across
+              // a quarter tile would be forty ellipses.
+              !rotated && slot >= 44
+              ? { interval: 0, width: slot - 4, overflow: 'truncate' as const }
+              : {}),
         },
       }
       return {
@@ -1114,6 +1177,12 @@ function buildOption(
           ? categoryAxis
           : {
               ...valueAxis(options.valueTitle ?? (multiSeries ? '' : valueLabelText)),
+              // Anchored at the axis rather than centred over it. ECharts puts
+              // the name above the top tick and centres it there, and nothing
+              // in the layout reserves room for it, so "% of rows failing"
+              // over a narrow axis of two-digit ticks hung off the left edge
+              // of the widget and was cut to "of rows failing".
+              nameTextStyle: { color: INK.muted, ...BASE_TEXT, align: 'left' },
               ...bounds(options),
             },
         series: series.map((entry, index) => ({

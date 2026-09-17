@@ -153,6 +153,7 @@ export function WidgetFrame({
     <QualityWidget
       payload={payload}
       view={String((widget.config as any)?.quality_view || "list")}
+      chart={String((widget.config as any)?.quality_chart || "")}
       theme={theme}
       display={{
         ...(style.series_color ? { seriesColor: style.series_color } : {}),

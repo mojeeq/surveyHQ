@@ -40,6 +40,7 @@ import {
   panelDefault,
 } from "@/components/dashboard/shared";
 import { Field, Loading, Modal, Section, useOpenSections } from "@/components/ui";
+import { QUALITY_CHARTS, qualityChartType } from "@/lib/quality";
 
 /** Whether this dataset looks like it has a GPS reading the map cannot offer.
  *
@@ -77,6 +78,68 @@ function looksLikeAnUnsplitGps(
       words(v.name).some((w) =>
         ["gps", "geopoint", "gpspoint", "location", "coordinates", "latlon"].includes(w),
       ),
+  );
+}
+
+/**
+ * The two questions a data quality panel asks: what to plot, and how to draw it.
+ *
+ * One component because the new-widget form and the edit form ask them
+ * identically; they differ only in where the answer is kept, which is what the
+ * patch handed back is for.
+ *
+ * The chart is not cleared when the view changes. A panel moved from rows
+ * flagged to failure rates cannot stay a donut - rates are not parts of a
+ * whole, so that view does not offer one - but moving back should not have
+ * cost the choice, and `qualityChartType` draws the view's own default in the
+ * meantime.
+ */
+function QualityForm({
+  view,
+  chart,
+  onChange,
+}: {
+  view: string;
+  chart: string;
+  onChange: (patch: { quality_view?: string; quality_chart?: string }) => void;
+}) {
+  const offered = QUALITY_CHARTS[view] ?? [];
+  return (
+    <>
+      <Field
+        label="Show it as"
+        hint="A panel of findings reads at a desk; a chart reads from across a room, and a line says whether it is getting better."
+      >
+        <select
+          className="input"
+          value={view}
+          onChange={(event) => onChange({ quality_view: event.target.value })}
+        >
+          <option value="list">The findings, listed</option>
+          <option value="rate">Share of rows failing</option>
+          <option value="rows">How many rows flagged</option>
+          <option value="trend">Failure rate over time</option>
+        </select>
+      </Field>
+      {offered.length > 1 && (
+        <Field
+          label="Drawn as"
+          hint="Bars compare the checks against each other; a share says how the flagged rows divide between them; a table is for reading the numbers off."
+        >
+          <select
+            className="input"
+            value={qualityChartType(view, chart)}
+            onChange={(event) => onChange({ quality_chart: event.target.value })}
+          >
+            {offered.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+      )}
+    </>
   );
 }
 
@@ -121,8 +184,9 @@ export function AddWidgetModal({
   const [caption, setCaption] = useState("");
   const [showBreakdown, setShowBreakdown] = useState(true);
   const [showTrend, setShowTrend] = useState(true);
-  /** Which form a new quality panel opens in. */
+  /** Which form a new quality panel opens in, and how that form is drawn. */
   const [qualityView, setQualityView] = useState("list");
+  const [qualityChart, setQualityChart] = useState("");
   const [latitude, setLatitude] = useState("");
   const [longitude, setLongitude] = useState("");
   const [measureAgg, setMeasureAgg] = useState("count");
@@ -204,7 +268,10 @@ export function AddWidgetModal({
               : kind === "html"
                 ? { html }
                 : kind === "quality"
-                  ? { quality_view: qualityView }
+                  ? {
+                      quality_view: qualityView,
+                      ...(qualityChart ? { quality_chart: qualityChart } : {}),
+                    }
                   : kind === "indicator"
                     ? { show_breakdown: showBreakdown, show_trend: showTrend }
                     : kind === "text"
@@ -337,21 +404,15 @@ export function AddWidgetModal({
       )}
 
       {kind === "quality" && (
-        <Field
-          label="Show it as"
-          hint="A panel of findings reads at a desk; a chart reads from across a room, and a line says whether it is getting better."
-        >
-          <select
-            className="input"
-            value={qualityView}
-            onChange={(event) => setQualityView(event.target.value)}
-          >
-            <option value="list">The findings, listed</option>
-            <option value="rate">Bar chart: share of rows failing</option>
-            <option value="rows">Bar chart: how many rows flagged</option>
-            <option value="trend">Line chart: failure rate over time</option>
-          </select>
-        </Field>
+        <QualityForm
+          view={qualityView}
+          chart={qualityChart}
+          onChange={(patch) => {
+            if (patch.quality_view !== undefined) setQualityView(patch.quality_view);
+            if (patch.quality_chart !== undefined)
+              setQualityChart(patch.quality_chart);
+          }}
+        />
       )}
 
       {kind === "indicator" && (
@@ -971,21 +1032,11 @@ export function EditWidgetModal({
       )}
 
       {kind === "quality" && (
-        <Field
-          label="Show it as"
-          hint="A panel of findings reads at a desk; a chart reads from across a room, and a line says whether it is getting better."
-        >
-          <select
-            className="input"
-            value={String(config.quality_view ?? "list")}
-            onChange={(event) => set({ quality_view: event.target.value })}
-          >
-            <option value="list">The findings, listed</option>
-            <option value="rate">Bar chart: share of rows failing</option>
-            <option value="rows">Bar chart: how many rows flagged</option>
-            <option value="trend">Line chart: failure rate over time</option>
-          </select>
-        </Field>
+        <QualityForm
+          view={String(config.quality_view ?? "list")}
+          chart={String(config.quality_chart ?? "")}
+          onChange={set}
+        />
       )}
 
       {kind === "map" && (

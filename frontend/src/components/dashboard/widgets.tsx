@@ -8,13 +8,24 @@ import "react-resizable/css/styles.css";
 
 import { api } from "@/lib/api";
 
+
 import { STATUS_COLORS } from "@/lib/charts";
 
 import type { BuildOptions } from "@/lib/charts";
 
 import { formatNumber, formatValue, relativeTime } from "@/lib/format";
 
-import type { QueryResult, Widget } from "@/lib/types";
+import {
+  CHECK_COLOURS,
+  checkState,
+  countResult,
+  qualityChartType,
+  rateResult,
+  trendResult,
+  worstFirst,
+} from "@/lib/quality";
+
+import type { Widget } from "@/lib/types";
 
 import ChartCard from "@/components/ChartCard";
 
@@ -237,149 +248,34 @@ export function CountdownWidget({ payload }: { payload: any }) {
   );
 }
 
-/** What a check's bar is coloured by: its finding, not its position. */
-export const CHECK_COLOURS: Record<string, string> = {
-  failing: STATUS_COLORS.critical,
-  passing: STATUS_COLORS.ok,
-  "not run": STATUS_COLORS.unknown,
-};
-
-export const checkState = (check: any) =>
-  check.passed === false ? "failing" : check.passed ? "passing" : "not run";
-
-/**
- * Worst first, which on a horizontal bar means last in the data.
- *
- * A category axis is drawn upwards from the origin, so the first row lands at
- * the bottom of the plot. Sorted the way it reads - biggest number first - the
- * chart came out with the worst check at the foot of the widget, under
- * everything that did not matter.
- */
-export function worstFirst(checks: any[], of: (check: any) => number): any[] {
-  return [...checks].sort((a, b) => of(a) - of(b));
-}
-
-/**
- * The checks as a chart of their failure rates, worst first.
- *
- * One bar per check, coloured by what it found rather than by where it sits,
- * which is the whole reason to draw this rather than read the list: a board on
- * a wall is read from across the room, and the shape of the red is the message.
- */
-export function rateResult(checks: any[]): QueryResult {
-  const ordered = worstFirst(checks, (check) => check.failure_rate ?? 0);
-  return {
-    columns: [
-      { name: "check", label: "Check", type: "dimension", data_type: "text" },
-      {
-        name: "rate",
-        label: "% of rows failing",
-        type: "measure",
-        data_type: "number",
-      },
-    ],
-    rows: ordered.map((check) => [
-      check.name,
-      round2((check.failure_rate ?? 0) * 100),
-    ]),
-    row_count: ordered.length,
-    truncated: false,
-    sql: "",
-    duration_ms: 0,
-  };
-}
-
-/** How many rows each check flagged, for the panel drawn as counts. */
-export function countResult(checks: any[]): QueryResult {
-  const ordered = worstFirst(checks, (check) => check.failed_rows ?? 0);
-  return {
-    columns: [
-      { name: "check", label: "Check", type: "dimension", data_type: "text" },
-      {
-        name: "rows",
-        label: "Rows flagged",
-        type: "measure",
-        data_type: "number",
-      },
-    ],
-    rows: ordered.map((check) => [check.name, check.failed_rows ?? 0]),
-    row_count: ordered.length,
-    truncated: false,
-    sql: "",
-    duration_ms: 0,
-  };
-}
-
-/** The stored runs, one line per check: is this getting better or worse. */
-export function trendResult(history: any): QueryResult {
-  const series = history?.series ?? [];
-  return {
-    columns: [
-      { name: "day", label: "Day", type: "dimension", data_type: "date" },
-      ...series.map((line: any) => ({
-        name: line.id,
-        label: line.name,
-        type: "measure" as const,
-        data_type: "number" as const,
-      })),
-    ],
-    rows: (history?.days ?? []).map((day: string, index: number) => [
-      shortDay(day),
-      ...series.map((line: any) => line.values[index] ?? null),
-    ]),
-    row_count: (history?.days ?? []).length,
-    truncated: false,
-    sql: "",
-    duration_ms: 0,
-  };
-}
-
-export const round2 = (value: number) => Math.round(value * 100) / 100;
-
-export const MONTHS = [
-  "Jan",
-  "Feb",
-  "Mar",
-  "Apr",
-  "May",
-  "Jun",
-  "Jul",
-  "Aug",
-  "Sep",
-  "Oct",
-  "Nov",
-  "Dec",
-];
-
-/**
- * "26 Aug" rather than "2026-08-26".
- *
- * A fortnight of full dates does not fit across a widget, and the year is the
- * same on every one of them. Cut from the string rather than parsed into a
- * Date: an ISO day parsed as a moment is midnight UTC, which in Port Vila is
- * the same day and in Lima is the day before.
- */
-export function shortDay(day: string): string {
-  const [year, month, date] = day.split("-").map(Number);
-  if (!year || !month || !date) return day;
-  return `${date} ${MONTHS[month - 1] ?? month}`;
-}
 
 export function QualityWidget({
   payload,
   view,
+  chart,
   theme,
   display,
 }: {
   payload: any;
   /** Which of the panel's forms this widget was saved showing. */
   view: string;
+  /** How that form is drawn, where the form is a chart. */
+  chart?: string;
   theme: string;
   display?: BuildOptions;
 }) {
   const failing = payload.checks.filter((c: any) => c.passed === false);
   const stale = payload.oldest_run_at;
   const charted = view === "rate" || view === "rows" || view === "trend";
+  const chartType = qualityChartType(view, chart);
+  // A horizontal bar's categories read bottom-up, so the worst check goes last
+  // in the data; every other form reads from the top left and wants it first.
+  const horizontal = chartType === "horizontal_bar";
+  // Colouring a mark by its finding is for the bars only. A table has no marks,
+  // and a pie is read for how the flagged rows divide between the checks: paint
+  // its slices by state and every failing check comes out the same red, which
+  // leaves the legend as the only thing telling one slice from the next.
+  const marked = chartType === "horizontal_bar" || chartType === "bar";
   return (
     // One size for the whole panel, and every part of it sized in em from
     // there: a finding is read at a glance from wherever the board is, and
@@ -433,13 +329,13 @@ export function QualityWidget({
               fill
               showToggle={false}
               theme={theme}
-              chartType={view === "trend" ? "line" : "horizontal_bar"}
+              chartType={chartType}
               result={
                 view === "trend"
                   ? trendResult(payload.history)
                   : view === "rows"
-                    ? countResult(payload.checks)
-                    : rateResult(payload.checks)
+                    ? countResult(payload.checks, horizontal)
+                    : rateResult(payload.checks, horizontal)
               }
               display={{
                 ...display,
@@ -454,13 +350,18 @@ export function QualityWidget({
                     // footnote below says what the numbers are, and the two
                     // were landing on each other at widget width.
                     { showLegend: true, smooth: false }
-                  : {
-                      pointColors: worstFirst(payload.checks, (check: any) =>
-                        view === "rows"
-                          ? (check.failed_rows ?? 0)
-                          : (check.failure_rate ?? 0),
-                      ).map((check: any) => CHECK_COLOURS[checkState(check)]),
-                    }),
+                  : marked
+                    ? {
+                        pointColors: worstFirst(
+                          payload.checks,
+                          (check: any) =>
+                            view === "rows"
+                              ? (check.failed_rows ?? 0)
+                              : (check.failure_rate ?? 0),
+                          horizontal,
+                        ).map((check: any) => CHECK_COLOURS[checkState(check)]),
+                      }
+                    : {}),
               }}
             />
           )}
