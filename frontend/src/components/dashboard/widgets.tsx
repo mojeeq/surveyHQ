@@ -345,7 +345,21 @@ export function QualityWidget({
       {!payload.checks.length ? (
         <p className="text-ink-500">No active checks on {payload.name}.</p>
       ) : charted ? (
-        <div className="min-h-0 flex-1">
+        // A table drawn here is the panel's data like any other form of it, so
+        // it takes the panel's text size. Nothing else in the widget has to
+        // ask: the size is set on the panel and everything under it is in em.
+        // A table is not - `.table-base` pins 13px and its headings 12px, for
+        // the tables on every other page, where there is no such setting - so
+        // the two rules are put back in em from here. Reaching in by class is
+        // the cheap half of the alternative, which is a size prop threaded
+        // through ChartCard into a component that has never needed one.
+        <div
+          className={`min-h-0 flex-1 ${
+            chartType === "table"
+              ? "[&_.table-base]:text-[1em] [&_.table-base_thead_th]:text-[0.8em]"
+              : ""
+          }`}
+        >
           {trending && !payload.history ? (
             <p className="text-ink-500">
               No runs stored yet. The checks run every few hours, and a line
