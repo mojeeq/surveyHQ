@@ -154,6 +154,7 @@ export function WidgetFrame({
       payload={payload}
       view={String((widget.config as any)?.quality_view || "list")}
       chart={String((widget.config as any)?.quality_chart || "")}
+      limit={Number((widget.config as any)?.quality_limit) || 0}
       theme={theme}
       display={{
         ...(style.series_color ? { seriesColor: style.series_color } : {}),

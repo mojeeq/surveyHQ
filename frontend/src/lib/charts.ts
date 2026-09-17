@@ -222,11 +222,11 @@ export interface BuildOptions {
    */
   seriesColors?: string[]
   /**
-   * A colour per bar, by position along the axis, for the one case where the
-   * bars are not a series but a set of states: a data quality chart, where
-   * each bar is a check that is passing or failing and the colour is the
-   * finding rather than decoration. Ignored where there is more than one
-   * series, since colour is carrying the series there.
+   * A colour per mark, by position, for the case where the marks are not a
+   * series but a set of states: a data quality chart, where each mark is a
+   * check that is passing or failing, or the split between those states, and
+   * the colour is the finding rather than decoration. Ignored on bars where
+   * there is more than one series, since colour is carrying the series there.
    */
   pointColors?: (string | undefined)[]
   /**
@@ -668,6 +668,14 @@ function buildOption(
       const values = categories.map((name, index) => ({
         name,
         value: Number(series[0]?.data[index] ?? 0),
+        // A named colour for this slice, where the caller has one, which it
+        // does when the slices are states rather than categories: passing,
+        // failing and never run are green, red and grey wherever they are
+        // drawn. The border survives it, because ECharts merges a datum's
+        // style over the series' rather than replacing it.
+        ...(options.pointColors?.[index]
+          ? { itemStyle: { color: options.pointColors[index] } }
+          : {}),
       }))
       return {
         ...common,

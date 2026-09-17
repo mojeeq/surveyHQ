@@ -1799,6 +1799,12 @@ def _map_boundary(
     return layer, areas
 
 
+#: The quality panel views drawn from stored runs rather than from the checks
+#: as they stand now. Both are drawn from the same month of history - one as a
+#: rate, one as a count - so both are worth the read and the rest are not.
+_TREND_VIEWS = {"trend", "rows_trend"}
+
+
 def _render_quality(
     db: DbSession, widget: Widget, filters: FilterGroup | None = None
 ) -> dict[str, Any]:
@@ -1873,7 +1879,7 @@ def _render_quality(
         # quality panel on a board would be work done to be thrown away.
         "history": (
             _quality_history(db, rules)
-            if (widget.config or {}).get("quality_view") == "trend"
+            if (widget.config or {}).get("quality_view") in _TREND_VIEWS
             else None
         ),
     }
@@ -1932,8 +1938,18 @@ def _quality_history(
             {
                 "id": rule.id,
                 "name": rule.name,
+                # The rate and the count of the same runs. A supervisor asking
+                # whether a check is getting better is asking about the rate; a
+                # supervisor asking how much work is left to fix is asking how
+                # many rows, and on a survey still collecting those two move in
+                # opposite directions - the rate falls while the count climbs,
+                # because the denominator is growing faster than the errors.
                 "values": [
                     (latest.get((rule.id, day)) or {}).get("rate") for day in day_list
+                ],
+                "rows": [
+                    (latest.get((rule.id, day)) or {}).get("failed_rows")
+                    for day in day_list
                 ],
             }
             for rule in rules

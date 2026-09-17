@@ -1,10 +1,15 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  CHECK_COLOURS,
   QUALITY_CHARTS,
   countResult,
+  mixColours,
+  mixResult,
   qualityChartType,
   rateResult,
+  topChecks,
+  trendResult,
   worstFirst,
 } from "@/lib/quality";
 
@@ -64,5 +69,78 @@ describe("which end of the chart the worst check lands on", () => {
     expect(countResult(CHECKS, true).rows[2]).toEqual(["Too fast", 480]);
     expect(rateResult(CHECKS, false).rows[0]).toEqual(["Too fast", 12]);
     expect(rateResult(CHECKS, true).rows[2]).toEqual(["Too fast", 12]);
+  });
+});
+
+describe("the mix of passing, failing and never run", () => {
+  const payload = { failing: 3, passing: 12, never_run: 1 };
+
+  it("counts the three states, worst first", () => {
+    expect(mixResult(payload).rows).toEqual([
+      ["Failing", 3],
+      ["Passing", 12],
+      ["Never run", 1],
+    ]);
+  });
+
+  it("turns them round for a horizontal bar, which reads bottom-up", () => {
+    expect(mixResult(payload, true).rows).toEqual([
+      ["Never run", 1],
+      ["Passing", 12],
+      ["Failing", 3],
+    ]);
+  });
+
+  it("leaves out a state nothing is in", () => {
+    const clean = { failing: 0, passing: 9, never_run: 0 };
+    expect(mixResult(clean).rows).toEqual([["Passing", 9]]);
+    expect(mixColours(clean)).toHaveLength(1);
+  });
+
+  it("keeps a colour against each state it drew, the same way round", () => {
+    expect(mixColours(payload)).toHaveLength(mixResult(payload).rows.length);
+    expect(mixColours(payload)[0]).toBe(CHECK_COLOURS.failing);
+    expect(mixColours(payload, true)[0]).toBe(CHECK_COLOURS["not run"]);
+  });
+});
+
+describe("cutting a panel to its worst few checks", () => {
+  it("takes them worst first", () => {
+    expect(topChecks(CHECKS, (check) => check.failed_rows, 2).map((c) => c.name)).toEqual([
+      "Too fast",
+      "Duplicate key",
+    ]);
+  });
+
+  it("draws every check where no limit was set, or the limit covers them", () => {
+    expect(topChecks(CHECKS, (check) => check.failed_rows, 0)).toBe(CHECKS);
+    expect(topChecks(CHECKS, (check) => check.failed_rows, 3)).toBe(CHECKS);
+    expect(topChecks(CHECKS, (check) => check.failed_rows, 99)).toBe(CHECKS);
+  });
+});
+
+describe("a trend drawn from rates or from counts", () => {
+  const history = {
+    days: ["2026-09-08", "2026-09-09"],
+    series: [{ id: "a", name: "Duplicate key", values: [4.1, 3.6], rows: [41, 36] }],
+  };
+
+  it("reads the rate by default, and the count when asked", () => {
+    expect(trendResult(history).rows).toEqual([
+      ["8 Sep", 4.1],
+      ["9 Sep", 3.6],
+    ]);
+    expect(trendResult(history, "rows").rows).toEqual([
+      ["8 Sep", 41],
+      ["9 Sep", 36],
+    ]);
+  });
+
+  it("keeps a day with no run as a gap rather than a nought", () => {
+    const gapped = {
+      days: ["2026-09-08", "2026-09-09"],
+      series: [{ id: "a", name: "Duplicate key", values: [4.1, null], rows: [41, null] }],
+    };
+    expect(trendResult(gapped, "rows").rows[1]).toEqual(["9 Sep", null]);
   });
 });
