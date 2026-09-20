@@ -45,7 +45,6 @@ from app.models.monitoring import (
 from app.models.project import (
     Project,
     ProjectMember,
-    ProjectScript,
     ProjectStatus,
 )
 from app.models.relationship import (
@@ -107,7 +106,6 @@ __all__ = [
     "SystemSetting",
     "Project",
     "ProjectMember",
-    "ProjectScript",
     "ProjectStatus",
     "DatasetRelationship",
     "Cardinality",

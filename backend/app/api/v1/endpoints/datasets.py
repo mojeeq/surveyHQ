@@ -45,6 +45,7 @@ from app.schemas.common import Message, Page
 from app.schemas.dataset import (
     ArchiveImportOut,
     BulkDeleteRequest,
+    CommandRequest,
     DatasetDetail,
     DatasetOut,
     DatasetPreview,
@@ -54,7 +55,7 @@ from app.schemas.dataset import (
 )
 from app.schemas.monitoring import JobOut
 from app.schemas.query import FilterGroup
-from app.services import rproject
+from app.services import stata
 from app.services.audit import record
 from app.services.datasets import (
     ArchiveImport,
@@ -78,6 +79,8 @@ from app.services.query_engine import (
     distinct_values,
     run_sql,
 )
+from app.services.stata import CommandError
+from app.services.stata_expr import ExpressionError
 
 logger = get_logger(__name__)
 router = APIRouter()
@@ -394,9 +397,17 @@ async def upload_dataset(
                     name_prefix=name.strip(),
                     mode=mode if index == 0 else "append",
                     stamp=(stamp_column, stamps[index]) if stamp_column else None,
+                    # Variables somebody generated are not in the export, so a
+                    # replacement drops them and everything built on them. The
+                    # recorded commands are run again on the new data.
+                    after_replace=stata.replay,
                 )
                 outcome = merge_imports(outcome, step)
         else:
+            # No replay here: a single file always creates a dataset of its
+            # own rather than replacing one, so there is no recorded history
+            # to put back. Only an archive matches its member files onto
+            # datasets that already exist.
             load_file_into_dataset(db, dataset, saved[0])
     except IngestError as exc:
         db.commit()  # keep the failed record so the user can see why
@@ -412,16 +423,6 @@ async def upload_dataset(
     if rebuilt:
         names = [d.name for d in (db.get(Dataset, i) for i in rebuilt) if d]
         outcome.warnings.append("Rebuilt from the new data: " + ", ".join(sorted(names)))
-    # A variable somebody derived in R is not in the export that just landed,
-    # so the project's own scripts are run again over the new data. Failures
-    # come back as notes rather than raising: an import that worked is not a
-    # failed import because a script written weeks ago no longer matches the
-    # file. Only the archive response has anywhere to put them; a single-file
-    # upload still runs them, it just answers with the dataset.
-    replayed = rproject.run_on_import(db, project_id or None, user.id)
-    if archive:
-        outcome.warnings.extend(replayed)
-
     if archive:
         record(
             db,
@@ -894,3 +895,91 @@ def discard_import_review(job_id: str, db: DbSession, user: RequireManager):
     job.status = JobStatus.cancelled
     db.commit()
     return Message(detail="Import discarded")
+
+
+@router.post("/{dataset_id}/command", response_model=dict)
+def run_command(
+    dataset_id: str, payload: CommandRequest, db: DbSession, user: RequireManager
+) -> dict[str, Any]:
+    """Run a Stata-style script against the dataset, a command per line.
+
+    Recorded on the dataset and replayed after a newer export replaces it: a
+    variable somebody generated is not in the export file, so otherwise it
+    would disappear on exactly the upload this platform is built around.
+
+    A line that fails stops the script, and the response says which line and
+    why. Everything above it has already run - as in a do-file - so it is
+    committed rather than rolled back, and the log says what got through.
+    """
+    dataset = get_ready_dataset(dataset_id, db, user)
+    if dataset.project_id and not can_edit(db, user, dataset.project_id, Role.manager):
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    done: list[Any] = []
+    failure: str | None = None
+    try:
+        done = stata.run_script(db, dataset, payload.command)
+    except stata.ScriptError as exc:
+        done, failure = exc.done, str(exc)
+    except (CommandError, ExpressionError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if failure and not done:
+        # Nothing ran, so nothing to report but the reason.
+        db.rollback()
+        raise HTTPException(status_code=422, detail=failure)
+
+    result = done[-1]
+    rebuilt = (
+        rebuild_dependents(db, [dataset.id])
+        if any(step.data_changed for step in done)
+        else []
+    )
+    record(
+        db,
+        user=user,
+        action="run_command",
+        entity_type="dataset",
+        entity_id=dataset.id,
+        detail={"commands": [step.command for step in done]},
+    )
+    db.commit()
+    db.refresh(dataset)
+    return {
+        "results": [
+            {
+                "command": step.command,
+                "message": step.message,
+                "variables_added": step.variables_added,
+                "variables_removed": step.variables_removed,
+            }
+            for step in done
+        ],
+        # The last one, kept so a caller that ran a single command still reads
+        # the same fields it always did.
+        "command": result.command,
+        "message": result.message,
+        "error": failure,
+        "rows": dataset.row_count,
+        "columns": dataset.column_count,
+        "variables_added": result.variables_added,
+        "variables_removed": result.variables_removed,
+        "rebuilt": len(rebuilt),
+    }
+
+
+@router.get("/{dataset_id}/commands", response_model=list[str])
+def list_commands(dataset_id: str, db: DbSession, user: CurrentUser) -> list[str]:
+    """What has been run against this dataset, in the order it will be replayed."""
+    return stata.entries(get_dataset(dataset_id, db, user))
+
+
+@router.delete("/{dataset_id}/commands", response_model=Message)
+def clear_commands(dataset_id: str, db: DbSession, user: RequireManager) -> Message:
+    """Stop replaying the recorded commands, without undoing what they did."""
+    dataset = get_dataset(dataset_id, db, user)
+    if dataset.project_id and not can_edit(db, user, dataset.project_id, Role.manager):
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    stata.forget(dataset)
+    db.commit()
+    return Message(detail="The command history is cleared. Re-upload to rebuild from source.")

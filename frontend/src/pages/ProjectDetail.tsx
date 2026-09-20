@@ -14,7 +14,6 @@ import type {
   Relationship,
   Role,
 } from '@/lib/types'
-import ProjectRWorkspace from '@/components/ProjectRWorkspace'
 import RelationshipMap from '@/components/RelationshipMap'
 import {
   Badge,
@@ -41,7 +40,7 @@ export default function ProjectDetail() {
   const queryClient = useQueryClient()
   const [deleting, setDeleting] = useState(false)
   const [confirmName, setConfirmName] = useState('')
-  const [tab, setTab] = useState<'data' | 'model' | 'r' | 'members'>('data')
+  const [tab, setTab] = useState<'data' | 'model' | 'members'>('data')
 
   const project = useQuery({
     queryKey: ['project', id],
@@ -167,11 +166,10 @@ export default function ProjectDetail() {
           { id: 'model', label: 'Relationships', count: relationships.data?.length },
           // R is the project's, not any one dataset's: a script reads the
           // household file and writes the person file.
-          { id: 'r', label: 'R' },
           { id: 'members', label: 'Members', count: project.data.member_count },
         ]}
         active={tab}
-        onChange={(next) => setTab(next as 'data' | 'model' | 'r' | 'members')}
+        onChange={(next) => setTab(next as 'data' | 'model' | 'members')}
       />
 
       {tab === 'data' ? (
@@ -232,8 +230,6 @@ export default function ProjectDetail() {
             )}
           </Card>
         </div>
-      ) : tab === 'r' ? (
-        <ProjectRWorkspace projectId={id} canManage={canManage} />
       ) : tab === 'model' ? (
         <RelationshipsTab
           projectId={id}

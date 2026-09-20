@@ -93,99 +93,49 @@ PUT    /projects/assign/dataset/{id}      {"project_id": "..."} or null for the
 PUT    /projects/assign/dashboard/{id}    the same, for a dashboard
 ```
 
-#### The project's R workspace
+#### The Stata command box
 
-R runs against a project rather than against one dataset: a script that
-prepares a survey reads several of its datasets and writes several others.
-Every route here needs manager rights on the project. Where R is switched off
-or not installed, a run answers **422** saying which of the two it is - those
-need different people to fix them - and `/tools` says the same thing before the
-console is drawn, so a server without R does not offer a box that can only
-fail.
+A subset of Stata's data-preparation commands, run against one dataset. Manager
+rights on the dataset's project are needed for anything that changes it.
+
+Nothing typed is passed to the database as written: the command is tokenised,
+every name in it has to be a variable of that dataset, only a listed few
+functions are understood, and the query is built from the tokens. A command
+that cannot be parsed answers **422** naming the piece that was not understood.
 
 ```
-GET    /projects/{id}/tools               whether R can be run here, why not if
-                                          it cannot, and the datasets a script
-                                          can read
-POST   /projects/{id}/run                 {"code": "..."} - run code without
-                                          saving it, as at a console  [manager]
-GET    /projects/{id}/scripts             the saved scripts, in the order they
-                                          are run
-POST   /projects/{id}/scripts             save one: name, description, code,
-                                          run_on_import               [manager]
-PATCH  /projects/{id}/scripts/{sid}       change any of those, or display_order
-                                                                      [manager]
-POST   /projects/{id}/scripts/{sid}/run   run that one                [manager]
-DELETE /projects/{id}/scripts/{sid}       forget it; what it wrote stays
-                                                                      [manager]
-GET    /projects/{id}/workspace           the working directory: files, the
-                                          project's datasets, and what the
-                                          last run left in R      [manager]
-DELETE /projects/{id}/workspace           empty it, packages and saved objects
-                                          included. The datasets are untouched
-                                                                      [manager]
+POST   /datasets/{id}/command             {"command": "..."} - a script, one
+                                          command per line            [manager]
+GET    /datasets/{id}/commands            what will be replayed, in order
+DELETE /datasets/{id}/commands            stop replaying them; what they did
+                                          stays done                  [manager]
 ```
 
-A script is given two functions and one value: `read_dataset(name)` returns a
-data frame by the dataset's name or slug, `write_dataset(df, name)` creates a
-dataset in the project or replaces one of that name, and `datasets` is a data
-frame of what can be read. Everything else is base R plus whatever the
-administrator installed.
-
-Both run routes answer with the same shape:
+A script runs top to bottom and stops at the first error. What ran before it is
+committed rather than rolled back, as a do-file behaves, so the response says
+both what got through and why it stopped:
 
 ```json
 {
-  "message": "Ran against 3 datasets, wrote Adults",
-  "output": "…whatever the script printed…",
-  "written": [{"name": "Adults", "id": "0f3c…", "rows": 438}],
-  "files":   ["lookup.rds", "adults.rds"],
-  "environment": [
-    {"name": "adults", "kind": "data", "type": "data.frame",
-     "shape": "438 obs. of 12 variables", "preview": "interview__key, age, …",
-     "bytes": 51232}
-  ]
+  "results": [
+    {"command": "gen adult = age >= 18",
+     "message": "Created adult",
+     "variables_added": ["adult"], "variables_removed": []}
+  ],
+  "error": "line 2: 'agee' is not a variable of this dataset",
+  "rows": 438,
+  "columns": 13,
+  "rebuilt": 1
 }
 ```
 
-`written` covers both ways a script saves data: `write_dataset(df, name)`, and
-any `.csv`, `.dta`, `.sav`, `.tsv`, `.xls` or `.xlsx` file the run left in the
-working directory, which becomes a dataset named after the file. Only files
-that run wrote, and only ones that read as a table; anything else stays a file
-and the run still succeeds.
+`error` is null when everything ran. `rebuilt` counts the merged datasets
+rebuilt because this one changed underneath them.
 
-`environment` is what the script left in R's global environment, one entry per
-object, up to 200. `kind` is `data`, `value` or `function`; for a function,
-`preview` is its signature. Every run is a new R session, so this is a record
-of the run rather than state the next run can reach.
+The commands are recorded on the dataset and replayed, in order, after a newer
+export replaces it, which is what stops a generated variable disappearing on
+exactly the upload the platform exists to make routine.
 
-`files` names what is in the working directory afterwards. `GET
-/projects/{id}/workspace` returns the same directory in more detail:
-
-```json
-{
-  "files":    [{"path": "lookup.rds", "bytes": 4096, "dataset": false}],
-  "datasets": [{"name": "Household", "slug": "household", "rows": 4182,
-                "path": "data/household.csv"}],
-  "environment": []
-}
-```
-
-up to 200 files. `datasets` is where a script finds the project's data on disk,
-and `dataset` marks a file that is itself a dataset here. `environment` is the
-last run's, read from the workspace so it survives a reload; a run that failed
-leaves none.
-
-A script that fails answers **422** with the error R gave, and writes nothing:
-the frames are read, the code runs, and only a run that finished writes back. A
-saved script keeps its last run's success and output, so the failure can be
-read without running it again.
-
-The working directory survives between runs, so an object saved with `saveRDS`
-or a package installed into the project's own library is there next time. That
-is a deliberate widening of what a script can reach: files one script leaves
-are readable by the next script anyone runs in the same project. A script
-marked `run_on_import` is re-run when a newer export lands in the project.
 
 ### Relationships and merges
 
@@ -211,7 +161,7 @@ POST   /relationships/rebuild/{id}        re-run that merge against the current
 ```
 
 A merged dataset also rebuilds itself whenever a source is replaced by a newer
-import or rewritten by an R script, so `/rebuild` is for forcing the issue
+import or changed by a command, so `/rebuild` is for forcing the issue
 rather than for keeping up.
 
 A many-to-many link is refused by `/merge`: joining two rosters on the interview

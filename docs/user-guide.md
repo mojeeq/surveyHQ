@@ -125,7 +125,7 @@ rows rather than add columns. Those links are recorded but cannot be merged.
 
 The merge is saved with the dataset it produces. **Rebuild from sources** re-runs
 it on demand, and a merged dataset rebuilds itself automatically whenever a
-source is replaced by a newer export or rewritten by an R script - including a
+source is replaced by a newer export or changed by a command - including a
 merge of a merge, which waits for the merge underneath it to finish first.
 
 ## Getting data in
@@ -232,8 +232,8 @@ What survives a replacement, and is put back automatically:
 
 - the dataset's id, so nothing pointing at it breaks,
 - variable and value labels you wrote by hand (the file does not carry them),
-- whatever the project's R scripts derived, where they are marked to run after
-  an import; they re-run in their saved order,
+- whatever the recorded commands derived; they re-run in the order they were
+  first run in,
 - datasets merged out of it, rebuilt from the new data.
 
 Two things it will tell you rather than let pass quietly:
@@ -295,7 +295,7 @@ the day it was uploaded.
 **Stata**, **CSV** and **Excel** on a dataset download the whole table. All
 three are written from the data the platform is actually querying, not from
 whatever was uploaded - so a merged dataset, which never had a file of its own,
-downloads like any other, and so does one an R script wrote.
+downloads like any other, and so do the variables a command generated.
 
 Prefer **Stata**: it carries the variable labels and, where the codes are whole
 numbers, the value labels. CSV carries neither. Excel stops at a million rows
@@ -335,142 +335,70 @@ cell's tooltip. A categorical column stored as numbers with no names for its
 codes says so in amber, because until they are written every table of it prints
 the codes. A column of 0s and 1s is left alone: that is a tick, not a code.
 
-### Preparing data with R
+### Preparing data with Stata commands
 
-A survey's data almost never arrives in the shape its tables want. Recoding a
-battery of questions, deriving a poverty line, reshaping a roster, building a
-person file out of a household file: each is a few lines of R and no lines of
-anything this platform could reasonably invent.
+Deriving a variable, recoding an answer, labelling a question: anyone who has
+prepared survey data has the idioms in their fingers, and reaching for a
+spreadsheet to add one derived column is a poor substitute for them.
 
-R runs against a **project**, not against a dataset. Open the project and go to
-the **R** tab. A script that prepares a survey usually reads several of its
-datasets and writes several others, so pinning one to a single dataset was
-always a fiction - and it meant a two-file job had to be written twice or not
-at all.
+Open a dataset and go to the **Command** tab. It takes a script, one command
+per line, as a do-file is written:
 
-#### The contract
+    * everyone old enough to work
+    gen adult = age >= 18
+    replace adult = 0 if age == .
+    label variable adult "Aged 18 or over"
 
-Two functions and one value, defined before your code runs:
+Lines run top to bottom and stop at the first error. What ran before it stays
+applied, exactly as a do-file behaves, and the log says what got through.
+`*` and `//` start a comment, `///` continues a line.
 
-| | |
+#### What it understands
+
+| Command | What it does |
 |---|---|
-| `read_dataset("household")` | a data frame, by the dataset's name or its slug |
-| `write_dataset(df, "Adults")` | create a dataset in this project, or replace one of that name |
-| `datasets` | a data frame of what is available to read |
+| `gen` | A new variable from an expression, with an optional `if`. |
+| `replace` | Change an existing one, with an optional `if`. |
+| `egen` | Aggregate with `by()`, or the row-wise family: `rowtotal`, `rowmean`, `rowmin`, `rowmax`, `rowmiss`, `rownonmiss`. |
+| `label variable` | The question wording a chart reads. |
+| `label define` / `label values` | A value set, and the variable that uses it. |
+| `rename` | A new name, carried to everything built on the old one. |
+| `drop` / `keep` | Variables, or rows with `if`. |
 
-Writing a data file works too: see [Saving a file saves a dataset](#saving-a-file-saves-a-dataset).
+The expression language is the useful subset: arithmetic, comparison, `&`
+`|` `!`, `.` for missing, and functions such as `int`, `round`, `abs`, `min`,
+`max`, `substr`, `upper`, `lower`, `strlen` and `real`.
 
-```r
-hh     <- read_dataset("household")
-people <- read_dataset("roster")
+#### Nothing is passed through as written
 
-people$adult    <- as.integer(people$age >= 18)
-people$province <- hh$province[match(people$interview__key, hh$interview__key)]
+What you type never reaches the database as text. The command is tokenised,
+every name in it has to be a variable of this dataset, only the listed
+functions are understood, and the query is built from the tokens rather than
+from the string. So `gen x = 1); DROP TABLE users --` is a message about the
+piece that was not understood, not a query. The same parse is what turns a
+typo into something readable instead of a database error.
 
-write_dataset(people[people$adult == 1, ], "Adults")
-```
+#### The commands survive the next export
 
-Everything else is base R, plus whatever packages the administrator installed
-on the server. Anything the script prints comes back under the box, so `cat()`
-and `print()` are how it is debugged. Ctrl or ⌘ with Enter runs it.
+This is the reason they are recorded at all. A variable somebody generated is
+not in the export file, so a newer export replacing the dataset would drop it,
+and every chart standing on it, on exactly the upload this platform exists to
+make routine.
 
-**What you can read** lists the project's datasets with the name to pass, and
-each one can be dropped into the console as a `read_dataset` line rather than
-typed.
+So each command is kept on the dataset and replayed, in order, after a
+replacement lands. They run *before* the import reports what the new file no
+longer has, so a variable that is about to exist again is not announced as
+lost. One that genuinely cannot be re-applied - it named a variable this export
+does not have - is a note beside the import rather than a failure of it, since
+the data is already in.
 
-#### Saving a file saves a dataset
+The **Kept for the next import** panel lists what will be replayed. **Clear**
+stops the replaying without undoing what those commands already did.
 
-`write_dataset()` is the explicit way back. Writing a data file does the same
-thing, because that is what most people write without thinking about it:
+Row order is held through every command. A window function - `egen` with
+`by()` - is otherwise free to hand the rows back grouped, which would silently
+reorder the dataset under everything that reads it by position.
 
-```r
-write.csv(adults, "adults.csv", row.names = FALSE)
-haven::write_dta(adults, "adults.dta")
-```
-
-Either one leaves a dataset in the project called `adults`, ready to chart,
-filter and put on a dashboard like any other. The rules are short:
-
-- `.csv`, `.dta`, `.sav`, `.tsv`, `.xls` and `.xlsx` are read; anything else
-  stays an ordinary file.
-- The name comes from the file. Writing `adults.csv` twice replaces the dataset
-  rather than making a second one, so a script can be re-run safely.
-- Only files the run actually wrote. The working directory survives, so a file
-  from three runs ago became a dataset three runs ago.
-- Anything that does not read as a table stays a file, and the run still
-  succeeds. A log written to `.csv` is a log.
-
-#### The Environment pane
-
-**Environment** lists what the last run left behind: the data frames with their
-size, the loose values, and the functions with their signatures. It is the
-quickest way to see whether a merge produced the 4,182 rows you expected.
-
-Every run is a **new R session**, so what is listed is a record of the run that
-made it, not something the next line of code can reach. Keep anything you need
-with `write_dataset()`, by writing it to a file, or with `saveRDS()`.
-
-#### The workspace
-
-The working directory **survives between runs**. An object saved with
-`saveRDS`, a lookup table written to disk, a package installed into the
-project's own library: all still there next time. That is what makes a project
-an environment rather than a series of unrelated runs, and it is what lets one
-script set something up for the next.
-
-**Working directory** lists what is in it, the project's datasets included: they
-are on disk as `data/<slug>.csv`, which is where `read_dataset()` reads them
-from and where a script can read them itself. A file that is also a dataset is
-marked. **Empty it** clears the scratch space, packages and saved objects
-included; the project's datasets are not touched, because those live in the
-platform rather than in the workspace.
-
-#### Saved scripts
-
-The console is for trying something. A script worth keeping is saved, named and
-ordered, and the **Saved scripts** panel runs them in that order. A script ticked
-**After each import** is re-run automatically when a newer export lands in the
-project, which is what keeps a derived dataset from vanishing on exactly the
-upload this platform is built around.
-
-A script that fails changes nothing: the frames are read, the code runs, and
-only a run that finished writes anything back. The error R gave is shown as R
-gave it, and a saved script keeps its last failure so the panel can show what
-went wrong without running it again.
-
-#### What this is and is not
-
-A script runs inside a sandbox. The kernel confines it to **this project's
-workspace and nothing else**: the datasets it asked for, the files it wrote,
-its own installed packages. Another project's files are not merely hidden from
-the interface, they are unreadable. Networking is removed, so a script cannot
-call out, and neither can anything it starts. The runtime - R itself, its
-libraries, the standard tools - is readable but cannot be changed.
-
-That is a real boundary, and it is worth being exact about what it is not.
-
-- It does **not** make arbitrary R safe to offer to strangers. A script can
-  still use the whole machine's processor and memory up to the limits below,
-  and read everything its own project holds.
-- It is **not** a promise about the code itself. There is no list of forbidden
-  functions, because a list like that over a language with `eval(parse(text=))`
-  would only be a promise nobody can keep. The confinement is the kernel's, not
-  a reading of what you wrote.
-- It needs a kernel that can enforce it - Linux 5.13 or newer, with Landlock
-  reachable. Where it cannot be enforced the platform **refuses to run R** and
-  says so, rather than quietly running it unconfined. An administrator can
-  check with `surveyhq-check-r-sandbox` before turning R on.
-
-So it is **off until an administrator turns it on**, with
-`R_SCRIPTS_ENABLED=true`, and only a manager of the project or an administrator
-can reach it. `R_TIMEOUT_SECONDS` (60 by default) and `R_MEMORY_MB` (2048)
-bound one run, and every script that runs is written to the audit log with the
-account that ran it and the code it ran.
-
-The workspace persisting is deliberate and unchanged: files one script leaves
-are readable by the next script anyone runs **in the same project**. A project
-is the trust boundary, and the people who can run R in one are the people who
-could already read everything in it.
 
 ## Explore
 

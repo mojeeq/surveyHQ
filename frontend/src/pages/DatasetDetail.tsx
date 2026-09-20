@@ -23,7 +23,7 @@ import {
   Tabs,
 } from '@/components/ui'
 
-type TabId = 'variables' | 'data' | 'summary' | 'progress'
+type TabId = 'variables' | 'data' | 'summary' | 'progress' | 'command'
 
 const TYPE_TONE = {
   numeric: 'info',
@@ -172,6 +172,9 @@ export default function DatasetDetail() {
           { id: 'data', label: 'Data' },
           { id: 'summary', label: 'Statistics' },
           { id: 'progress', label: 'Field progress' },
+          // Only for somebody who may change the data, since every command
+          // here does.
+          ...(can('manager') ? [{ id: 'command' as const, label: 'Command' }] : []),
         ]}
         active={tab}
         onChange={setTab}
@@ -272,6 +275,7 @@ export default function DatasetDetail() {
         {tab === 'data' && <DataPreview datasetId={id} totalRows={data.row_count} />}
         {tab === 'summary' && <SummaryPanel datasetId={id} variables={variables} />}
         {tab === 'progress' && <ProgressPanel datasetId={id} />}
+        {tab === 'command' && <CommandPanel datasetId={id} />}
       </div>
 
       {appending && <AppendModal datasetId={id} onClose={() => setAppending(false)} />}
@@ -977,5 +981,216 @@ function DownloadMenu({ dataset }: { dataset: Dataset }) {
         </button>
       ))}
     </div>
+  )
+}
+
+/**
+ * A Stata-style command line over the dataset.
+ *
+ * The idioms are the ones anybody who has prepared survey data types without
+ * thinking, and reaching for a spreadsheet to add one derived column is a poor
+ * substitute for them. What is typed here is not sent to the database as
+ * written: it is parsed, every name in it has to be a variable of this
+ * dataset, and only a listed few functions are understood.
+ *
+ * The commands are kept and re-run after a newer export replaces the data,
+ * which is what stops a generated variable disappearing on exactly the upload
+ * this platform exists to make routine.
+ */
+const EXAMPLES = [
+  'gen adult = age >= 18',
+  'gen band = 1 if age < 18',
+  'replace band = 2 if age >= 18',
+  'egen n_in_region = count(interview__key), by(region)',
+  'egen household_size = rowtotal(men women)',
+  'label variable age "Age in years"',
+  'label define yn 1 "Yes" 2 "No"',
+  'label values consent yn',
+  'rename q1 age',
+  'drop if age == .',
+  'keep if region == "North"',
+]
+
+function CommandPanel({ datasetId }: { datasetId: string }) {
+  // Held here rather than inside the box so that clicking an example adds a
+  // line to the script, which is what the list beside it is for.
+  const [text, setText] = useState('')
+  const add = (line: string) => setText(text ? `${text}\n${line}` : line)
+
+  const history = useQuery({
+    queryKey: ['commands', datasetId],
+    queryFn: () => api.get<string[]>(`/datasets/${datasetId}/commands`),
+  })
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-3">
+      <div className="lg:col-span-2">
+        <StataBox datasetId={datasetId} text={text} setText={setText} />
+      </div>
+
+      <div className="space-y-4">
+        <CommandHistory datasetId={datasetId} steps={history.data ?? []} />
+        <Card title="Commands it understands">
+          <ul className="space-y-1 font-mono text-xs text-ink-600">
+            {EXAMPLES.map((example) => (
+              <li key={example}>
+                <button
+                  className="text-left hover:text-brand-700 hover:underline"
+                  title="Add this line to the script"
+                  onClick={() => add(example)}
+                >
+                  {example}
+                </button>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      </div>
+    </div>
+  )
+}
+
+/** What this dataset will replay, in the order it was run. */
+function CommandHistory({ datasetId, steps }: { datasetId: string; steps: string[] }) {
+  const toast = useToast()
+  const queryClient = useQueryClient()
+
+  const forget = useMutation({
+    mutationFn: () => api.delete(`/datasets/${datasetId}/commands`),
+    onSuccess: () => {
+      toast.push('Command history cleared', 'info')
+      queryClient.invalidateQueries({ queryKey: ['commands', datasetId] })
+    },
+  })
+
+  return (
+    <Card
+      title="Kept for the next import"
+      subtitle={`${steps.length} step(s) will be re-run, in this order`}
+      actions={
+        steps.length > 0 && (
+          <button
+            className="btn-ghost btn-sm text-red-600"
+            onClick={() => {
+              if (confirm('Stop re-running these? What they already did stays done.'))
+                forget.mutate()
+            }}
+          >
+            Clear
+          </button>
+        )
+      }
+    >
+      {!steps.length ? (
+        <p className="text-sm text-ink-400">Nothing recorded yet.</p>
+      ) : (
+        <ol className="space-y-1 font-mono text-xs text-ink-600">
+          {steps.map((step, index) => (
+            <li key={index} className="flex items-start gap-1.5" title={step}>
+              <span className="shrink-0 text-ink-400">{index + 1}.</span>
+              <span className="truncate">{step}</span>
+            </li>
+          ))}
+        </ol>
+      )}
+    </Card>
+  )
+}
+
+function StataBox({
+  datasetId,
+  text,
+  setText,
+}: {
+  datasetId: string
+  text: string
+  setText: (value: string) => void
+}) {
+  const queryClient = useQueryClient()
+  const [log, setLog] = useState<{ command: string; message: string; ok: boolean }[]>([])
+
+  const run = useMutation({
+    mutationFn: (command: string) =>
+      api.post<{
+        results: { command: string; message: string }[]
+        error: string | null
+        rows: number
+        columns: number
+      }>(`/datasets/${datasetId}/command`, { command }),
+    onSuccess: (result) => {
+      // Newest first, so a long script's last line is the one in view.
+      const entries = [
+        ...(result.error ? [{ command: '', message: result.error, ok: false }] : []),
+        ...result.results.map((step) => ({
+          command: step.command,
+          message: step.message,
+          ok: true,
+        })),
+      ].reverse()
+      setLog((previous) => [...entries, ...previous])
+      if (!result.error) setText('')
+      queryClient.invalidateQueries({ queryKey: ['dataset', datasetId] })
+      queryClient.invalidateQueries({ queryKey: ['commands', datasetId] })
+      queryClient.invalidateQueries({ queryKey: ['preview', datasetId] })
+    },
+    onError: (error: Error, command) =>
+      setLog((entries) => [{ command, message: error.message, ok: false }, ...entries]),
+  })
+
+  const submit = () => {
+    const script = text.trim()
+    if (script) run.mutate(script)
+  }
+
+  // Ctrl/Cmd+Enter runs, since Enter has to be a new line in a script box.
+  const onKeyDown = (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault()
+      submit()
+    }
+  }
+
+  return (
+    <Card title="Command">
+      <textarea
+        className="input min-h-[220px] font-mono text-sm"
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        onKeyDown={onKeyDown}
+        placeholder={'* One command per line, as in a do-file\ngen adult = age >= 18\nreplace adult = 0 if age == .'}
+        spellCheck={false}
+        rows={10}
+        autoFocus
+      />
+      <div className="mt-2 flex flex-wrap items-center gap-3">
+        <button className="btn-primary" onClick={submit} disabled={run.isPending || !text.trim()}>
+          {run.isPending && <Spinner className="h-4 w-4 text-white" />}
+          Run script
+        </button>
+        <span className="text-xs text-ink-400">Ctrl/⌘ + Enter</span>
+        {text.trim() && (
+          <button className="btn-ghost btn-sm text-ink-500" onClick={() => setText('')}>
+            Clear
+          </button>
+        )}
+      </div>
+      <p className="mt-2 text-xs text-ink-500">
+        Lines run top to bottom and stop at the first error; what ran before it stays
+        applied, as a do-file does. <code>*</code> and <code>//</code> are comments, and{' '}
+        <code>///</code> continues a line. Changes the data in place - every command is kept
+        and re-run after a newer export replaces this dataset.
+      </p>
+
+      {log.length > 0 && (
+        <div className="mt-4 max-h-80 overflow-auto rounded border border-ink-200 bg-ink-50 p-3 font-mono text-xs">
+          {log.map((entry, index) => (
+            <div key={index} className="mb-2">
+              {entry.command && <div className="text-ink-700">. {entry.command}</div>}
+              <div className={entry.ok ? 'text-green-700' : 'text-red-700'}>{entry.message}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
   )
 }

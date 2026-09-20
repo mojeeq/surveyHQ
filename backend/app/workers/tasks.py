@@ -31,7 +31,7 @@ from app.models import (
     SyncRun,
     SyncStatus,
 )
-from app.services import rproject
+from app.services import stata
 from app.services.datasets import (
     ArchiveImport,
     load_archive_as_datasets,
@@ -501,20 +501,16 @@ def run_upload_import(self: Any, job_id: str) -> dict[str, Any]:
                         # appended onto what it produced.
                         mode=mode if index == 0 else "append",
                         stamp=(version_column, labels[index]) if version_column else None,
+                        # A variable somebody generated is not in the export
+                        # that just landed, so the commands recorded on each
+                        # replaced dataset are run again over the new data.
+                        # Not while reviewing: nothing has been published yet.
+                        after_replace=None if review else stata.replay,
                     )
                     outcome = merge_imports(outcome, step)
                 rebuilt = [] if review else rebuild_dependents(db, outcome.replaced_ids)
                 db.flush()
                 warnings = list(outcome.warnings)
-                # A variable somebody derived is not in the export that just
-                # landed, so the project's own scripts are run again over it.
-                warnings.extend(
-                    []
-                    if review
-                    else rproject.run_on_import(
-                        db, str(params.get("project_id") or "") or None, created_by
-                    )
-                )
                 if rebuilt:
                     names = [d.name for d in (db.get(Dataset, i) for i in rebuilt) if d]
                     warnings.append("Rebuilt from the new data: " + ", ".join(sorted(names)))
@@ -643,61 +639,3 @@ def prune_history() -> dict[str, int]:
     return removed
 
 
-@celery_app.task(name="app.workers.tasks.run_project_r", bind=True, max_retries=120)
-def run_project_r(self: Any, job_id: str) -> dict[str, Any]:
-    from dataclasses import asdict
-
-    from app.models import Project, ProjectScript, Role, User
-    from app.services.audit import record
-    from app.services.operation_lock import OperationBusy
-    from app.services.projects import can_edit
-
-    with session_scope() as db:
-        job = db.get(Job, job_id)
-        if job is None or job.status in (JobStatus.success, JobStatus.cancelled):
-            return {}
-        params, user_id = dict(job.params), job.created_by
-        job.status, job.started_at = JobStatus.running, utcnow()
-    try:
-        with session_scope() as db:
-            user = db.get(User, user_id)
-            project = db.get(Project, params["project_id"])
-            if (
-                not user
-                or not user.is_active
-                or not project
-                or not can_edit(db, user, project.id, Role.manager)
-            ):
-                raise ValueError("Project access is no longer available")
-            outcome = rproject.run(db, project, params["code"], created_by=user_id)
-            script = (
-                db.get(ProjectScript, params.get("script_id")) if params.get("script_id") else None
-            )
-            if script and script.project_id == project.id and script.code == params["code"]:
-                script.last_run_at, script.last_ok = utcnow(), True
-                script.last_output = outcome.output or outcome.message
-            record(
-                db,
-                user=user,
-                action="project.run_queued",
-                entity_type="project",
-                entity_id=project.id,
-                detail={"job_id": job_id, "code": params["code"]},
-            )
-            job = db.get(Job, job_id)
-            job.status, job.result = JobStatus.success, asdict(outcome)
-            job.finished_at, job.progress = utcnow(), 100
-            return job.result
-    except OperationBusy as exc:
-        if self.request.retries < self.max_retries:
-            with session_scope() as db:
-                db.get(Job, job_id).status = JobStatus.queued
-            raise self.retry(exc=exc, countdown=5) from exc
-        failure = str(exc)
-    except Exception as exc:
-        failure = str(exc)
-    with session_scope() as db:
-        job = db.get(Job, job_id)
-        job.status, job.error = JobStatus.failed, failure
-        job.finished_at, job.progress = utcnow(), 100
-    return {"error": failure}

@@ -56,11 +56,11 @@ Runs on Ubuntu with Docker. One command to install.
   group gets a box drawn from its minimum, quartiles, median and maximum.
 - Tabulate a "tick all that apply" question from the 0/1 columns it exports as,
   as one table rather than twelve.
-- Prepare data with **R, per project**: a script reads any of the project's
-  datasets with `read_dataset()` and writes new ones with `write_dataset()`.
-  The working directory survives between runs, so saved objects and installed
-  packages are there next time, and a script can be set to re-run itself after
-  the next export lands. Off until an administrator enables it.
+- Prepare data with a **Stata command box**: `gen`, `replace`, `egen` with
+  `by()` and the row-wise family, `label`, `rename`, `drop` and `keep`, each
+  with `if`. Every command is recorded on the dataset and replayed after a
+  newer export replaces it, so a generated variable does not vanish on the
+  upload the platform exists to make routine.
 - Export any result to CSV or Excel, or download a whole dataset as Stata (with
   its labels), CSV or Excel - merged datasets included.
 
@@ -300,11 +300,11 @@ More in [docs/architecture.md](docs/architecture.md).
   dataset's registered variables and literals are always bound as parameters, so
   a query specification cannot inject SQL.
 - Public dashboard links are opt-in per dashboard and carry a random token.
-- Running R is running a program on the server, so it is off unless an
-  administrator sets `R_SCRIPTS_ENABLED`, reachable only by a manager of the
-  project, bounded by a timeout and a memory cap, and every run is recorded in
-  the audit log with the code it ran. Landlock and seccomp enforce project
-  confinement by default; see the deployment guide for kernel requirements.
+- The command box never passes what was typed to the database. Each command is
+  tokenised, every name in it has to be a variable of that dataset, only a
+  listed few functions are understood, and the query is built from the tokens
+  rather than from the string. It is reachable only by a manager of the
+  project, and every run is recorded in the audit log.
 - Embedded HTML renders in a sandboxed frame with no access to the page around
   it, and uploaded dashboard backgrounds are identified from their bytes rather
   than their name or content type (SVG is refused: it can carry script).
