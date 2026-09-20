@@ -223,12 +223,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      # Every shell script in the repository, not one directory of them: the
-      # sandbox check ships in the image and lives beside the sandbox, and was
-      # going unchecked because the glob did not reach it.
+      # Every shell script in the repository. backend/sandbox/ was named here
+      # too until the R sandbox went; a glob that matches nothing is left
+      # unexpanded by the shell and then fails as a filename, so a directory
+      # named here has to be one that exists.
       - name: Check syntax
-        run: for f in scripts/*.sh backend/sandbox/*.sh; do bash -n "$f"; done
+        run: for f in scripts/*.sh; do bash -n "$f"; done
       - name: Shellcheck
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
-          shellcheck --severity=warning scripts/*.sh backend/sandbox/*.sh
+          shellcheck --severity=warning scripts/*.sh
