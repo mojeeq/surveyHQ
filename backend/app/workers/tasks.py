@@ -104,6 +104,10 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
                 mode,
             )
 
+            # Every dataset the whole plan touched, so the commands recorded
+            # on them are replayed once at the end rather than per version.
+            touched: list[str] = []
+
             for identity, identity_mode in plan:
                 questionnaire = catalogue.get(identity)
                 title = questionnaire.title if questionnaire else identity
@@ -156,6 +160,7 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
                                 f"{outcome['datasets']} dataset(s)"
                             )
                             run.log = outcome["log"]
+                    touched.extend(outcome.get("dataset_ids") or [])
                 except (SurveySolutionsError, IngestError) as exc:
                     logger.error("Sync failed for %s: %s", identity, exc)
                     summary["errors"].append({"questionnaire": title, "error": str(exc)})
@@ -165,6 +170,26 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
                             run.status = SyncStatus.failed
                             run.finished_at = utcnow()
                             run.message = str(exc)
+
+            # Now that every version of every questionnaire is in, put back
+            # what was derived from the data. Deferred to here because the
+            # versions of one questionnaire arrive as a replacement followed by
+            # appends: replaying on the replacement alone would compute a
+            # generated variable over the first version's rows and leave it
+            # blank on the rest, and a recorded `drop if` would never reach
+            # them. Order matters after it too - the merges standing on those
+            # datasets are rebuilt from the replayed data, not from the export.
+            if touched:
+                with session_scope() as db:
+                    problems: list[str] = []
+                    for dataset_id in dict.fromkeys(touched):
+                        dataset = db.get(Dataset, dataset_id)
+                        if dataset is not None:
+                            problems.extend(stata.replay(db, dataset))
+                    db.flush()
+                    rebuild_dependents(db, list(dict.fromkeys(touched)))
+                    if problems:
+                        summary.setdefault("warnings", []).extend(problems)
 
         prune_archives(str(connection_id))
 
@@ -322,12 +347,14 @@ def _import_export_archive(
             name_prefix="",
             mode=mode,
             stamp=(QUESTIONNAIRE_VERSION_COLUMN, str(version)) if version else None,
-            # A sync is the commonest way a newer export arrives, so it is the
-            # path a generated variable most has to survive. Without this the
-            # variable vanished on every automatic sync while its command sat
-            # recorded on the dataset, and the merges built on it were rebuilt
-            # from an export that no longer had it.
-            after_replace=stata.replay,
+            # No replay here, deliberately. A questionnaire revised mid
+            # fieldwork arrives as several versions: the first replaces what is
+            # stored and the rest are appended onto it, and `after_replace`
+            # fires only on the replacement. Replaying here would therefore
+            # compute a generated variable over the first version's rows and
+            # leave it blank on every later one, and a recorded `drop if`
+            # would never reach them at all. The caller replays once the whole
+            # plan has been imported; see run_connection_sync.
         )
         rebuilt = rebuild_dependents(db, result.replaced_ids)
         db.flush()
@@ -352,6 +379,7 @@ def _import_export_archive(
         return {
             "rows": result.rows,
             "datasets": len(result.datasets),
+            "dataset_ids": [dataset.id for dataset in result.datasets],
             "log": log + result.warnings,
         }
 
