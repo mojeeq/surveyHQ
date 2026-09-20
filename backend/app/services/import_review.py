@@ -128,22 +128,33 @@ def accept(db, job, user):
     from app.services import stata
     from app.services.derived import rebuild_dependents
 
+    # Publishing a reviewed import replaces the data under each dataset, so
+    # what was recorded against it is run again: a generated variable is not in
+    # the file that was reviewed either.
+    #
+    # Before the rebuild and before the counts, and the order matters for both.
+    # A merge standing on a generated variable cannot be rebuilt until the
+    # variable is back, and rebuilding first leaves the merged dataset holding
+    # the previous export with nothing to say so. The row counts reported below
+    # are the other half: a `drop if` in the history has not run yet when they
+    # are read, so the job would report the file's rows rather than the
+    # dataset's.
+    warnings: list[str] = []
+    for target in published:
+        warnings.extend(stata.replay(db, target))
+    db.flush()
+
     rebuild_dependents(db, [d.id for d in published])
     summary = {
         "datasets": [{"id": d.id, "name": d.name, "rows": d.row_count} for d in published],
         "rows": sum(d.row_count for d in published),
-        "warnings": [],
+        "warnings": warnings,
         "created": [],
         "replaced": [],
         "appended": [],
         "skipped": [],
         "review": False,
     }
-    # Publishing a reviewed import replaces the data under each dataset, so
-    # what was recorded against it is run again: a generated variable is not in
-    # the file that was reviewed either.
-    for target in published:
-        summary["warnings"].extend(stata.replay(db, target))
     params.pop("candidates", None)
     job.params, job.result, job.finished_at = params, summary, utcnow()
     return summary
