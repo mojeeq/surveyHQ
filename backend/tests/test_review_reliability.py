@@ -196,41 +196,6 @@ def test_migration_adopts_populated_legacy_database(tmp_path):
     bind.dispose()
 
 
-def test_queued_r_run_retains_code_and_result(client, auth_headers, monkeypatch):
-    from types import SimpleNamespace
-
-    from app.models import Job
-    from app.services import rproject
-    from app.workers.tasks import run_project_r
-
-    project = client.post(
-        "/api/v1/projects", headers=auth_headers, json={"name": "Queued R"}
-    ).json()["id"]
-    monkeypatch.setattr(rproject, "unavailable_reason", lambda: "")
-    monkeypatch.setattr(run_project_r, "delay", lambda *args: SimpleNamespace(id="test-r-task"))
-    queued = client.post(
-        f"/api/v1/projects/{project}/queue-run", headers=auth_headers, json={"code": "print(42)"}
-    )
-    assert queued.status_code == 202, queued.text
-    ident = queued.json()["id"]
-    monkeypatch.setattr(
-        rproject,
-        "_run",
-        lambda *args, **kwargs: rproject.ProjectRResult(
-            message="Ran", output="42", written=[], files=[], environment=[]
-        ),
-    )
-    result = run_project_r.run(ident)
-    assert result["output"] == "42"
-    with SessionLocal() as db:
-        job = db.get(Job, ident)
-        assert job.status.value == "success"
-        assert job.params["code"] == "print(42)"
-    directory = rproject.get_settings().storage_path / "r-runs" / project
-    assert len(list(directory.glob("*/script.R"))) == 1
-    assert len(list(directory.glob("*/run.json"))) == 1
-
-
 def test_database_rollback_never_changes_the_active_file(client, auth_headers, tmp_path):
     from app.services.datasets import load_file_into_dataset
 

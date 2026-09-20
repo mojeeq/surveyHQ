@@ -100,6 +100,12 @@ class DatasetUpdate(BaseModel):
     tags: list[str] | None = None
 
 
+class CommandRequest(BaseModel):
+    """A Stata-style script: one command per line, as a do-file is written."""
+
+    command: str = Field(min_length=1, max_length=20000)
+
+
 class DatasetPreview(BaseModel):
     columns: list[str]
     rows: list[list[Any]]

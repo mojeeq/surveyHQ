@@ -56,40 +56,6 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements-dev.txt
 
-      # The command box can hand a dataset to R, and those tests skip
-      # themselves where R is missing - which on a runner without it means a
-      # feature with eleven tests silently has none. Installed on one leg of
-      # the matrix, since nothing about it depends on the database.
-      - name: Install R
-        if: matrix.database == 'sqlite'
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends r-base-core
-
-      # Proves it before the suite runs, so the R tests cannot pass by being
-      # skipped.
-      - name: Check R is there
-        if: matrix.database == 'sqlite'
-        run: Rscript --version
-
-      # The sandbox tests assert that R is *denied* things, and an assertion
-      # like that passes for the wrong reason when R never started. Building
-      # the launcher here is what makes them run rather than skip.
-      - name: Build the R sandbox launcher
-        if: matrix.database == 'sqlite'
-        run: |
-          sudo apt-get install -y --no-install-recommends libseccomp-dev
-          cc -O2 -Wall -Wextra -Werror sandbox/r-sandbox.c -lseccomp \
-            -o /tmp/surveyhq-r-sandbox
-          sudo install -m 0755 /tmp/surveyhq-r-sandbox /usr/local/bin/surveyhq-r-sandbox
-
-      # And that the kernel will actually enforce it. If this fails the
-      # confinement is untested, which is worth failing the build over rather
-      # than discovering as a skip nobody reads.
-      - name: Check the sandbox can confine
-        if: matrix.database == 'sqlite'
-        run: |
-          surveyhq-r-sandbox --surveyhq-sandbox-probe
-          surveyhq-r-sandbox --surveyhq-sandbox-selftest
-
       - name: Lint
         run: ruff check app tests migrations
 

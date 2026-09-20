@@ -125,7 +125,7 @@ def accept(db, job, user):
         target.meta = {**(target.meta or {}), **item["meta"]}
         _apply_ingest(db, target, as_ingest(item["snapshot"]))
         published.append(target)
-    from app.services import rproject
+    from app.services import stata
     from app.services.derived import rebuild_dependents
 
     rebuild_dependents(db, [d.id for d in published])
@@ -139,8 +139,11 @@ def accept(db, job, user):
         "skipped": [],
         "review": False,
     }
-    for project_id in {d.project_id for d in published}:
-        summary["warnings"].extend(rproject.run_on_import(db, project_id, user.id))
+    # Publishing a reviewed import replaces the data under each dataset, so
+    # what was recorded against it is run again: a generated variable is not in
+    # the file that was reviewed either.
+    for target in published:
+        summary["warnings"].extend(stata.replay(db, target))
     params.pop("candidates", None)
     job.params, job.result, job.finished_at = params, summary, utcnow()
     return summary

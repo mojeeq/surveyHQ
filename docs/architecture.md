@@ -97,10 +97,10 @@ would be lost every morning if they were not put back:
 1. **Labels written by hand.** The variable rows are deleted and rebuilt from
    the file on every import, so hand-written labels are kept on the dataset's
    own metadata as well and reapplied afterwards.
-2. **Derived variables.** A project's R scripts marked to run after an import
-   are re-run, in their saved order, immediately after the new data lands -
-   before the import checks which variables went missing, so a variable a
-   script restores is not reported as lost.
+2. **Derived variables.** The commands recorded on the dataset are re-run, in
+   order, immediately after the new data lands - before the import checks which
+   variables went missing, so a variable a command restores is not reported as
+   lost.
 3. **Merged datasets.** `derived.py` walks the dependency graph outward in
    rounds, so a merge of a merge is rebuilt only once the merge underneath it
    has been.
@@ -169,62 +169,51 @@ A connection stamps `questionnaire_version` by itself, from the version the
 export was taken at, so the same combined dataset builds itself from scheduled
 imports without anybody naming anything.
 
-## Derived variables: the project R workspace
+## Derived variables: the Stata command box
 
-`rproject.py` runs R against a **project**, not a dataset. The scripts that
-prepare a survey read several of its datasets and write several others - a
-recode reads the household file and writes the person file - so pinning a
-script to one dataset was always a fiction, and it meant a two-file job had to
-be written twice or not at all.
+`stata.py` runs a subset of Stata's data-preparation commands against one
+dataset: `gen`, `replace`, `egen` (aggregate with `by()`, and the row-wise
+family), `label variable` / `define` / `values`, `rename`, `drop` and `keep`,
+each with the `if` that makes them worth having.
 
-Every queryable dataset in the project is written to a CSV in the workspace
-before the run; the script is given three things and nothing else is invented:
+Dataset-scoped rather than project-scoped, and that is the right shape for
+this command set: every one of these operates on the variables of a single
+table, so there is nothing here that wants to read two.
 
-    read_dataset("household")     a data frame, by name or by slug
-    write_dataset(df, "Adults")   create or replace a dataset in this project
-    datasets                      a data frame of what is available
+### Nothing reaches the database as text
 
-The round trip goes through CSV, which base R reads and writes with no packages
-at all, and what comes back is ingested by the same path an uploaded CSV takes,
-so types are re-read the same way and nothing downstream needs a second case.
-A manifest names what the script wrote, so a run that writes two datasets and
-fails on the third writes neither: only a run that finished is applied.
+`stata_expr.py` is the whole of the safety argument. An expression is
+tokenised; every identifier has to be a variable of this dataset; only a listed
+set of functions is understood; and the SQL is built from the tokens rather
+than from the string. A command that cannot be parsed is a message about the
+piece that was not understood. The same parse is what makes a typo readable
+instead of a database error.
 
-The working directory **survives between runs**. An object saved with
-`saveRDS`, a lookup table on disk, a package installed into the project's own
-`rlibs`: all still there next time. That is what makes a project an environment
-rather than a series of unrelated runs, and it is the reason a project is the
-trust boundary here - files one script leaves are readable by the next script
-anyone runs in the same project.
+That is why this needs no sandbox, no separate binary and no setting to turn
+on. There is no interpreter here: a command is translated to the same DuckDB
+SQL the rest of the platform runs, and nothing else can be expressed.
 
-A script runs inside a sandbox, and the sandbox is the kernel's rather than a
-reading of the code. `sandbox/r-sandbox.c` builds a small launcher that the
-image installs as `surveyhq-r-sandbox`: it opens a Landlock ruleset allowing
-read and execute on the runtime paths, read and write on the project's own
-workspace and nothing else, loads a seccomp filter that denies the socket
-family and the namespace, ptrace and module syscalls, sets `no_new_privs`, and
-only then execs `/usr/bin/Rscript`. So a script reaches its own project and
-stops there - a sibling project's Parquet files are absent from the allowlist
-and therefore unreadable, which is the property that matters when several
-surveys share one server.
+### The record, and the replay
 
-Two deliberate details. The launcher keeps `/usr/bin/Rscript` under its
-ordinary name beside it and answers `--surveyhq-sandbox-probe`, so the platform
-can tell the two apart and refuse to start if `R_BINARY` names a bare Rscript -
-a configuration mistake fails closed rather than silently unconfining
-everything. And `--surveyhq-sandbox-selftest` asks the kernel whether Landlock
-can be installed at all, which is asked before R is offered: a host that cannot
-enforce the sandbox is told which check failed instead of discovering it at the
-first script.
+Each command is appended to `datasets.meta["commands"]` - a JSON column, which
+is why turning this feature off and on again has never needed a migration in
+either direction.
 
-What the sandbox is not is a claim about the code. There is no blocklist of
-dangerous R functions, because a blocklist over a language with
-`eval(parse(text=))` would only be a promise nobody can keep; the timeout and
-the address-space cap still stop a runaway rather than a hostile script. It is
-off unless `R_SCRIPTS_ENABLED` says otherwise, only a manager of the project
-can reach it, and every run is written to the audit log with the code it ran.
-`R_SANDBOX_REQUIRED=false` gives the confinement up deliberately, for a host
-whose kernel cannot provide it.
+After a newer export replaces a dataset, `stata.replay` re-runs the list in
+order. It is passed as `after_replace` to `load_archive_as_datasets`, so it
+runs while the import is still assembling its report: a variable that is about
+to exist again is therefore not announced as lost. Failures are collected as
+warnings rather than raised, because the data is already in and a step that no
+longer applies is a note beside the import rather than a failure of it.
+
+Only the archive path replays. A single uploaded file always creates a dataset
+of its own rather than replacing one, so it has no history to put back.
+
+Row order is preserved through every command by carrying an explicit
+`__row_order` column while one runs. A window function - `egen` with `by()` -
+is otherwise free to return rows grouped, which would silently reorder the
+dataset under everything that reads it by position.
+
 
 ## Dashboards
 

@@ -25,6 +25,9 @@ class JobType(str, enum.Enum):
     export = "export"
     monitor = "monitor"
     quality = "quality"
+    # Kept although R was removed: this is a Postgres enum value, and the
+    # jobs table still holds rows that were written with it. Dropping it
+    # would make that history unreadable to answer nothing.
     rscript = "rscript"
 
 

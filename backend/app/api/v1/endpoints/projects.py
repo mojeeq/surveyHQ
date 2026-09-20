@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException
 from slugify import slugify
@@ -19,7 +19,6 @@ from app.models import (
     Indicator,
     Project,
     ProjectMember,
-    ProjectScript,
     QualityRule,
     Role,
     SavedQuery,
@@ -33,13 +32,8 @@ from app.schemas.project import (
     ProjectMemberIn,
     ProjectMemberOut,
     ProjectOut,
-    ProjectScriptIn,
-    ProjectScriptOut,
-    ProjectScriptPatch,
     ProjectUpdate,
-    RunScriptIn,
 )
-from app.services import rproject
 from app.services.audit import record
 from app.services.dashboard_assets import remove_all
 from app.services.datasets import delete_dataset_files
@@ -291,240 +285,6 @@ def remove_member(project_id: str, user_id: str, db: DbSession, user: CurrentUse
 # --- assigning resources ----------------------------------------------------
 
 
-# --- the project's R workspace ---------------------------------------------
-#
-# R runs against the project rather than against one dataset: a recode reads
-# the household file and writes the person file, and pinning it to either was
-# always a fiction. The working directory survives between runs, so a project
-# is an environment - see services/rproject.py.
-
-
-@router.get("/{project_id}/tools", response_model=dict)
-def project_tools(project_id: str, db: DbSession, user: CurrentUser) -> dict[str, Any]:
-    """Whether R can be run here, and what there is to run it against.
-
-    Asked before the console is drawn, so a server without R does not offer a
-    box that can only fail. The reason travels with the answer: "install R" and
-    "switch it on" are different jobs for different people.
-    """
-    _visible_project(project_id, db, user)
-    reason = rproject.unavailable_reason()
-    return {
-        "r": {"enabled": not reason, "reason": reason},
-        "datasets": [
-            {"name": dataset.name, "slug": dataset.slug, "rows": dataset.row_count or 0}
-            for dataset in rproject.project_datasets(db, project_id)
-        ],
-    }
-
-
-@router.get("/{project_id}/scripts", response_model=list[ProjectScriptOut])
-def list_scripts(project_id: str, db: DbSession, user: CurrentUser) -> list[ProjectScript]:
-    _visible_project(project_id, db, user)
-    return list(
-        db.scalars(
-            select(ProjectScript)
-            .where(ProjectScript.project_id == project_id)
-            .order_by(ProjectScript.display_order, ProjectScript.name)
-        ).all()
-    )
-
-
-@router.post("/{project_id}/scripts", response_model=ProjectScriptOut, status_code=201)
-def create_script(
-    project_id: str, payload: ProjectScriptIn, db: DbSession, user: RequireManager
-) -> ProjectScript:
-    project = _editable_project(project_id, db, user, Role.manager)
-    highest = db.scalar(
-        select(func.max(ProjectScript.display_order)).where(ProjectScript.project_id == project.id)
-    )
-    script = ProjectScript(
-        project_id=project.id,
-        name=payload.name.strip(),
-        description=payload.description.strip(),
-        code=payload.code,
-        run_on_import=payload.run_on_import,
-        display_order=(highest or 0) + 1,
-        created_by=user.id,
-    )
-    db.add(script)
-    db.commit()
-    db.refresh(script)
-    return script
-
-
-@router.patch("/{project_id}/scripts/{script_id}", response_model=ProjectScriptOut)
-def update_script(
-    project_id: str,
-    script_id: str,
-    payload: ProjectScriptPatch,
-    db: DbSession,
-    user: RequireManager,
-) -> ProjectScript:
-    project = _editable_project(project_id, db, user, Role.manager)
-    script = _project_script(db, project, script_id)
-    changes = payload.model_dump(exclude_unset=True)
-    if "name" in changes and changes["name"]:
-        script.name = changes["name"].strip()
-    if "description" in changes:
-        script.description = (changes["description"] or "").strip()
-    if "code" in changes:
-        script.code = changes["code"] or ""
-    if "run_on_import" in changes:
-        script.run_on_import = bool(changes["run_on_import"])
-    if "display_order" in changes and changes["display_order"] is not None:
-        script.display_order = int(changes["display_order"])
-    db.commit()
-    db.refresh(script)
-    return script
-
-
-@router.delete("/{project_id}/scripts/{script_id}", response_model=Message)
-def delete_script(project_id: str, script_id: str, db: DbSession, user: RequireManager) -> Message:
-    project = _editable_project(project_id, db, user, Role.manager)
-    script = _project_script(db, project, script_id)
-    name = script.name
-    db.delete(script)
-    db.commit()
-    return Message(detail=f"'{name}' deleted. What it already wrote stays.")
-
-
-@router.post("/{project_id}/scripts/{script_id}/run", response_model=dict)
-def run_saved_script(
-    project_id: str, script_id: str, db: DbSession, user: RequireManager
-) -> dict[str, Any]:
-    project = _editable_project(project_id, db, user, Role.manager)
-    script = _project_script(db, project, script_id)
-    try:
-        result = rproject.run_saved(db, project, script, user.id)
-    except rproject.RError as exc:
-        # The failure is recorded on the script before it is raised, so the
-        # panel can show what went wrong without running it again.
-        db.commit()
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    record(
-        db,
-        user=user,
-        action="project.run_script",
-        entity_type="project",
-        entity_id=project.id,
-        detail={"script": script.name, "wrote": [w["name"] for w in result.written]},
-    )
-    db.commit()
-    return _run_payload(result)
-
-
-@router.post("/{project_id}/run", response_model=dict)
-def run_console(
-    project_id: str, payload: RunScriptIn, db: DbSession, user: RequireManager
-) -> dict[str, Any]:
-    """Run code that is not saved, the way a console is used.
-
-    Saved or not, it runs in the same workspace and can write datasets, so it
-    is recorded in the audit trail in full: this is arbitrary code changing a
-    project's data.
-    """
-    project = _editable_project(project_id, db, user, Role.manager)
-    try:
-        result = rproject.run(db, project, payload.code, created_by=user.id)
-    except rproject.RError as exc:
-        db.rollback()
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    record(
-        db,
-        user=user,
-        action="project.run_console",
-        entity_type="project",
-        entity_id=project.id,
-        detail={"code": payload.code[:10000]},
-    )
-    db.commit()
-    return _run_payload(result)
-
-
-@router.get("/{project_id}/workspace", response_model=dict)
-def list_workspace(project_id: str, db: DbSession, user: RequireManager) -> dict[str, Any]:
-    """What is in the project's working directory, which survives between runs.
-
-    Three things, because a working directory is all three. The datasets are
-    the files the platform puts there for a script to read, so they belong in
-    the same picture as the files a script wrote - and a file that became a
-    dataset says so, which is the only way to tell "adults.csv is a dataset
-    here" from "adults.csv is a file here". The environment is what the last
-    run left behind, read from the workspace so a reload does not empty it.
-    """
-    project = _editable_project(project_id, db, user, Role.manager)
-    room = rproject.workspace(project.id)
-    datasets = rproject.project_datasets(db, project.id)
-    named = {dataset.name for dataset in datasets}
-
-    files = []
-    for path in sorted(room.rglob("*")):
-        relative = path.relative_to(room)
-        if not path.is_file() or rproject.is_plumbing(relative):
-            continue
-        files.append(
-            {
-                "path": str(relative),
-                "bytes": path.stat().st_size,
-                # Only a file that could be one: "adults.txt" beside a dataset
-                # called "adults" is a note about it, not the dataset.
-                "dataset": path.suffix.lower() in rproject.ADOPTED_EXTENSIONS
-                and path.stem in named,
-            }
-        )
-        if len(files) >= 200:
-            break
-
-    return {
-        "files": files,
-        "datasets": [
-            {
-                "name": dataset.name,
-                "slug": dataset.slug,
-                "rows": dataset.row_count or 0,
-                # Where a script actually finds it, for anyone who would rather
-                # read the file than call read_dataset().
-                "path": f"{rproject.DATA_DIR}/{dataset.slug}.csv",
-            }
-            for dataset in datasets
-        ],
-        "environment": rproject.snapshot(room),
-    }
-
-
-@router.delete("/{project_id}/workspace", response_model=Message)
-def clear_workspace(project_id: str, db: DbSession, user: RequireManager) -> Message:
-    """Empty the working directory, packages and saved objects included.
-
-    The datasets are not touched: they live in the platform, and the workspace
-    is only the scratch space around them.
-    """
-    project = _editable_project(project_id, db, user, Role.manager)
-    from app.services.operation_lock import acquire
-
-    acquire(db, f"project-r:{project.id}")
-    rproject.forget(project.id)
-    return Message(detail="The workspace is empty. The project's datasets are untouched.")
-
-
-def _project_script(db: DbSession, project: Project, script_id: str) -> ProjectScript:
-    script = db.get(ProjectScript, script_id)
-    if script is None or script.project_id != project.id:
-        raise HTTPException(status_code=404, detail="Script not found")
-    return script
-
-
-def _run_payload(result: rproject.ProjectRResult) -> dict[str, Any]:
-    return {
-        "message": result.message,
-        "output": result.output,
-        "written": result.written,
-        "files": result.files,
-        "environment": result.environment,
-    }
-
-
 @router.put("/assign/dataset/{dataset_id}", response_model=Message)
 def assign_dataset(
     dataset_id: str, payload: AssignProjectIn, db: DbSession, user: CurrentUser
@@ -681,36 +441,3 @@ def _to_detail(project: Project, db: DbSession, user: User) -> ProjectDetail:
         **_to_out(project, db, user).model_dump(),
         members=_members(project.id, db),
     )
-
-
-@router.post("/{project_id}/queue-run", status_code=202)
-def queue_r_run(project_id: str, payload: RunScriptIn, db: DbSession, user: RequireManager):
-    from app.models import Job, JobStatus, JobType
-    from app.schemas.monitoring import JobOut
-    from app.workers.tasks import run_project_r
-
-    project = _editable_project(project_id, db, user, Role.manager)
-    reason = rproject.unavailable_reason()
-    if reason:
-        raise HTTPException(status_code=422, detail=reason)
-    if payload.script_id:
-        _project_script(db, project, payload.script_id)
-    if not payload.code.strip():
-        raise HTTPException(status_code=422, detail="Enter some R code")
-    job = Job(
-        job_type=JobType.rscript,
-        status=JobStatus.queued,
-        title=f"Run R: {project.name}",
-        created_by=user.id,
-        params={"project_id": project.id, "code": payload.code, "script_id": payload.script_id},
-    )
-    db.add(job)
-    db.commit()
-    try:
-        result = run_project_r.delay(job.id)
-        job.celery_task_id = result.id
-    except Exception:
-        job.status = JobStatus.failed
-        job.error = "Could not reach the background worker. Check Redis and the worker."
-    db.commit()
-    return JobOut.model_validate(job)
