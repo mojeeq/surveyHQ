@@ -327,3 +327,51 @@ def test_only_the_lines_that_ran_are_kept_for_replay(client, auth_headers, workb
     command(client, auth_headers, workbench, "gen a = 1\ngen b = nope\ngen c = 3")
     kept = client.get(f"/api/v1/datasets/{workbench}/commands", headers=auth_headers).json()
     assert kept == ["gen a = 1"]
+
+
+def test_a_slash_in_a_string_is_not_a_comment(client, auth_headers, workbench):
+    """Counting the quotes on the line and calling an even count safe looks
+    right and is not: a line with a balanced string has an even count, so the
+    // inside a URL was read as a comment and the command was truncated to an
+    unterminated string."""
+    ran = command(
+        client, auth_headers, workbench, 'label variable age "see https://example.org/ages"'
+    )
+    assert ran.status_code == 200, ran.text
+    after = client.get(f"/api/v1/datasets/{workbench}", headers=auth_headers).json()
+    age = next(v for v in after["variables"] if v["name"] == "age")
+    assert age["label"] == "see https://example.org/ages"
+
+
+def test_a_comment_after_a_string_is_still_a_comment(client, auth_headers, workbench):
+    """The other half of the same rule: outside the quotes, // still ends the
+    line, or the fix above would have turned every trailing comment into part
+    of the command."""
+    ran = command(
+        client, auth_headers, workbench, 'label variable age "Age in years" // as reported'
+    )
+    assert ran.status_code == 200, ran.text
+    after = client.get(f"/api/v1/datasets/{workbench}", headers=auth_headers).json()
+    age = next(v for v in after["variables"] if v["name"] == "age")
+    assert age["label"] == "Age in years"
+
+
+def test_a_variable_whose_name_holds_if(client, auth_headers, workbench):
+    """`if` is a word, and underscores are part of a name.
+
+    Testing only for alphanumeric neighbours read the `if` inside `if_flag` as
+    the qualifier, leaving an empty expression and a condition of `_flag`.
+    """
+    assert command(client, auth_headers, workbench, "gen if_flag = age >= 18").status_code == 200
+    copied = command(client, auth_headers, workbench, "gen copy = if_flag")
+    assert copied.status_code == 200, copied.text
+    assert copied.json()["variables_added"] == ["copy"]
+
+    # And a real qualifier still splits, or the fix would have disabled `if`.
+    guarded = command(client, auth_headers, workbench, "gen adult = 1 if age >= 18")
+    assert guarded.status_code == 200, guarded.text
+    rows = client.get(
+        f"/api/v1/datasets/{workbench}/preview?limit=10", headers=auth_headers
+    ).json()
+    adult = rows["columns"].index("adult")
+    assert [r[adult] for r in rows["rows"]].count(1.0) == 3

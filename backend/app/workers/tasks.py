@@ -322,6 +322,12 @@ def _import_export_archive(
             name_prefix="",
             mode=mode,
             stamp=(QUESTIONNAIRE_VERSION_COLUMN, str(version)) if version else None,
+            # A sync is the commonest way a newer export arrives, so it is the
+            # path a generated variable most has to survive. Without this the
+            # variable vanished on every automatic sync while its command sat
+            # recorded on the dataset, and the merges built on it were rebuilt
+            # from an export that no longer had it.
+            after_replace=stata.replay,
         )
         rebuilt = rebuild_dependents(db, result.replaced_ids)
         db.flush()

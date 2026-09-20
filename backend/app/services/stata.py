@@ -166,13 +166,14 @@ def _lines(text: str) -> list[str]:
         line = raw.strip()
         if line.startswith("*"):
             continue
-        # A // inside a string is part of the string, not a comment.
-        if "//" in line and line.count('"') % 2 == 0:
-            head, _, tail = line.partition("//")
-            if tail.startswith("/"):
-                buffer += " " + head.strip()
+        marker = _comment_at(line)
+        if marker is not None:
+            head = line[:marker].strip()
+            # /// continues the line rather than ending it.
+            if line[marker:].startswith("///"):
+                buffer += " " + head
                 continue
-            line = head.strip()
+            line = head
         if not line:
             continue
         buffer = (buffer + " " + line).strip() if buffer else line
@@ -181,6 +182,36 @@ def _lines(text: str) -> list[str]:
     if buffer:
         joined.append(buffer)
     return joined
+
+
+def _is_name_char(character: str) -> bool:
+    """Part of a variable name. Underscores are, which is the whole point.
+
+    Without this an `if` inside a name was read as the qualifier: `gen copy =
+    if_flag` split into an empty expression and a condition of `_flag`.
+    """
+    return character.isalnum() or character == "_"
+
+
+def _comment_at(line: str) -> int | None:
+    """Where a // comment starts on this line, or None if it holds none.
+
+    Scanned rather than counted. Counting the quotes on the line and calling it
+    a comment while the count was even looks right and is not: a line with a
+    balanced string has an even count, so the // inside `gen site =
+    "https://example.org"` was read as a comment and the command was truncated
+    to an unterminated string.
+    """
+    quoted = False
+    index = 0
+    while index < len(line):
+        character = line[index]
+        if character == '"':
+            quoted = not quoted
+        elif not quoted and line.startswith("//", index):
+            return index
+        index += 1
+    return None
 
 
 # --- commands ---------------------------------------------------------------
@@ -450,8 +481,8 @@ def _split_if(text: str) -> tuple[str, str]:
             elif (
                 depth == 0
                 and text[index : index + 2].lower() == "if"
-                and (index == 0 or not text[index - 1].isalnum())
-                and (index + 2 >= len(text) or not text[index + 2].isalnum())
+                and (index == 0 or not _is_name_char(text[index - 1]))
+                and (index + 2 >= len(text) or not _is_name_char(text[index + 2]))
             ):
                 return text[:index].strip(), text[index + 2 :].strip()
         index += 1
