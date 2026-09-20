@@ -104,9 +104,16 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
                 mode,
             )
 
-            # Every dataset the whole plan touched, so the commands recorded
-            # on them are replayed once at the end rather than per version.
-            touched: list[str] = []
+            # The datasets this plan REPLACED, so the commands recorded on
+            # them are replayed once at the end rather than per version.
+            #
+            # Replaced, not merely touched. A replacement wipes the generated
+            # columns, so re-running the whole history over it is right. An
+            # append leaves them in place, so the same replay would apply every
+            # command a second time to rows that already carry it: `replace
+            # score = score + 1` would add two, and a recorded `gen` would fail
+            # outright because its column already exists.
+            replaced: list[str] = []
 
             for identity, identity_mode in plan:
                 questionnaire = catalogue.get(identity)
@@ -160,7 +167,7 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
                                 f"{outcome['datasets']} dataset(s)"
                             )
                             run.log = outcome["log"]
-                    touched.extend(outcome.get("dataset_ids") or [])
+                    replaced.extend(outcome.get("replaced_ids") or [])
                 except (SurveySolutionsError, IngestError) as exc:
                     logger.error("Sync failed for %s: %s", identity, exc)
                     summary["errors"].append({"questionnaire": title, "error": str(exc)})
@@ -179,15 +186,24 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
             # blank on the rest, and a recorded `drop if` would never reach
             # them. Order matters after it too - the merges standing on those
             # datasets are rebuilt from the replayed data, not from the export.
-            if touched:
+            if replaced:
+                ids = list(dict.fromkeys(replaced))
                 with session_scope() as db:
                     problems: list[str] = []
-                    for dataset_id in dict.fromkeys(touched):
+                    for dataset_id in ids:
                         dataset = db.get(Dataset, dataset_id)
                         if dataset is not None:
                             problems.extend(stata.replay(db, dataset))
                     db.flush()
-                    rebuild_dependents(db, list(dict.fromkeys(touched)))
+                    rebuild_dependents(db, ids)
+                    # The counts were read per version, before these commands
+                    # ran, so a recorded `drop if` left the job reporting the
+                    # file's rows rather than the dataset's.
+                    for entry in summary["datasets"]:
+                        if entry["id"] in ids:
+                            dataset = db.get(Dataset, entry["id"])
+                            if dataset is not None:
+                                entry["rows"] = dataset.row_count
                     if problems:
                         summary.setdefault("warnings", []).extend(problems)
 
@@ -379,7 +395,7 @@ def _import_export_archive(
         return {
             "rows": result.rows,
             "datasets": len(result.datasets),
-            "dataset_ids": [dataset.id for dataset in result.datasets],
+            "replaced_ids": list(result.replaced_ids),
             "log": log + result.warnings,
         }
 
