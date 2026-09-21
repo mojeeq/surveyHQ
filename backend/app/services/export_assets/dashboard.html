@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>__TITLE__</title>
-<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<!--__HEAD__-->
 <style>
 /* Any bundled font a widget on this board is set in, carried in the file as
    base64 so the board reads the same on a laptop that has never met this
@@ -14,6 +14,11 @@
     --ink-900: #1c1b19; --ink-700: #44423e; --ink-500: #6f6c66;
     --ink-400: #8d8a83; --ink-200: #e3e1dc; --ink-100: #efedea; --ink-50: #f7f6f4;
     --brand: #2f6fd0; --surface: #ffffff; --canvas: #f4f3f1;
+    /* The platform's defaults, for a board that set none of its own. A row is
+       74px and the gutter between rows and columns is 16px, which is what
+       react-grid-layout is given; span n rows then measures
+       n*74 + (n-1)*16, the same arithmetic the platform does. */
+    --cols: 12; --row: 74px; --gap: 16px;
   }
   * { box-sizing: border-box; }
   body {
@@ -21,7 +26,11 @@
     font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
   }
   .wrap { max-width: 1500px; margin: 0 auto; padding: 20px 16px 48px; }
-  header.board h1 { margin: 0; font-size: 24px; font-weight: 600; }
+  header.board {
+    padding-bottom: 12px; margin-bottom: 4px;
+    border-bottom: 1px solid var(--ink-200);
+  }
+  header.board h1 { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -0.01em; }
   header.board p { margin: 4px 0 0; color: var(--ink-500); font-size: 13px; }
   .tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 14px 0 10px; }
   .tabs button {
@@ -35,7 +44,7 @@
   .filters {
     display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
     background: var(--surface); border: 1px solid var(--ink-200);
-    border-radius: 10px; padding: 10px 12px; margin-bottom: 12px;
+    border-radius: 3px; padding: 10px 12px; margin-bottom: 12px;
   }
   .filters label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-700); }
   .filters select {
@@ -43,11 +52,22 @@
     border: 1px solid var(--ink-200); background: #fff; min-width: 150px;
   }
   .filters .clear { border: 0; background: none; color: var(--brand); font: inherit; font-size: 12px; cursor: pointer; }
-  .grid { display: grid; grid-template-columns: repeat(12, 1fr); grid-auto-rows: 42px; gap: 14px; }
+  /* Screen has the control itself; see the print rules at the foot. */
+  .filters .printed { display: none; }
+  /* The board's own geometry, written onto the page from its appearance so a
+     widget arrives the size it was drawn. These were once fixed at 12 columns
+     and 42px rows against the platform's 74px, which put every widget at just
+     over half its height: a chart squeezed until its axis was cut off, and a
+     table showing four of its rows and half of a fifth. */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+    grid-auto-rows: var(--row); gap: var(--gap);
+  }
   /* A group is a band here: this page flows its widgets rather than pinning
      them to coordinates, so there is no rectangle to draw a frame around. */
   .group {
-    border: 1px dashed var(--ink-200); border-radius: 10px;
+    border: 1px dashed var(--ink-200); border-radius: 3px;
     padding: 10px 12px 14px; margin: 16px 0;
   }
   .group > summary {
@@ -55,9 +75,16 @@
     text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 10px;
   }
   .group[open] > summary { margin-bottom: 12px; }
+  /* The platform's own card: a 3px corner and the same three-part shadow,
+     rather than the 10px pill and flat hairline this page used to draw. A
+     board printed beside a report reads as a report, not as a web page. */
   .card {
-    background: var(--surface); border: 1px solid var(--ink-200); border-radius: 10px;
+    background: var(--surface); border: 1px solid var(--ink-200); border-radius: 3px;
     display: flex; flex-direction: column; overflow: hidden; min-width: 0;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.5),
+      0 1px 3px rgba(15, 23, 42, 0.08),
+      0 6px 16px -10px rgba(15, 23, 42, 0.25);
   }
   .card > h2 {
     margin: 0; padding: 12px 14px 0; font-size: 14px; font-weight: 600;
@@ -100,13 +127,49 @@
     .grid { display: block; }
     .card { margin-bottom: 14px; height: 320px; }
   }
+  /* On paper.
+     The file is made to be attached to a report and carried into a meeting,
+     and a meeting is where it gets printed. Printed as it stands, the page
+     came out with its ground colour over every sheet, a row of dropdowns
+     nobody can use, and cards sliced in half at the page break.
+
+     What the ink says is kept: which filters the numbers were read under is
+     part of the figure, so the controls are printed as the values they are
+     set to rather than dropped. The charts are canvases and print as they are
+     drawn, which is why the background colours have to be told to print. */
+  @media print {
+    @page { margin: 14mm; }
+    body { background: #fff; }
+    .wrap { max-width: none; padding: 0; }
+    /* Backgrounds off by default in most browsers, which would print a dark
+       tile as black text on white and a chart's own fill as nothing. */
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    /* A card is a unit: half a chart at the foot of one sheet and half at the
+       head of the next is worse than a shorter first sheet. */
+    .card, .group { break-inside: avoid; page-break-inside: avoid; }
+    .card { box-shadow: none; }
+    /* Nothing on paper can be unfolded, so a folded group is opened for the
+       print and closed again after it - see the beforeprint handler. The
+       marker goes, because a disclosure triangle on paper is furniture for a
+       thing the reader cannot do. */
+    .group > summary { list-style: none; }
+    .group > summary::-webkit-details-marker { display: none; }
+    .tabs { display: none; }
+    .filters { border: 0; padding: 0; background: none; margin-bottom: 10px; }
+    .filters .clear { display: none; }
+    /* The chosen value, as text. `.printed` is written beside each control on
+       every render, because a <select> prints as a control and a reader
+       holding the sheet has no way to see which option it was left on. */
+    .filters select { display: none; }
+    .filters .printed { display: inline; font-size: 12px; font-weight: 600; color: var(--ink-900); }
+    footer.board { margin-top: 14px; }
+  }
 </style>
 </head>
 <body>
 <div class="wrap" id="app"></div>
 <script type="application/json" id="board-data">"__PAYLOAD__"</script>
-<script src="https://cdn.jsdelivr.net/npm/echarts@5.5.1/dist/echarts.min.js"></script>
-<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<!--__SCRIPTS__-->
 <script>
 /*
  * The exported dashboard, drawn from the cube beside it.
@@ -120,8 +183,49 @@
  */
 (function () {
   var DATA = JSON.parse(document.getElementById('board-data').textContent)
-  var PALETTE = ['#2f6fd0', '#e07b39', '#2aa876', '#8b5cf6', '#d94f4f', '#0e9aa7',
-                 '#c2872f', '#6b7280', '#b3527d', '#4f7d3a']
+  /* The colours this board is drawn in, carried in the payload from the
+     platform's own theme table. There used to be a private list of ten here
+     that matched no theme the platform has, so a board came back in hues it
+     had never been shown in. The fallback is the default ordering, for a file
+     written before the payload carried them. */
+  var PALETTE = (DATA.colors && DATA.colors.length) ? DATA.colors
+    : ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#4a3aa7', '#e34948']
+  /* The chart furniture the platform draws: a hairline axis, no ticks, muted
+     12px labels, and split lines on the value axis only. Drawn from ECharts'
+     defaults instead, an exported chart arrived with darker labels, tick marks
+     and a full grid the same board does not have on screen. */
+  var INK = { muted: '#898781', grid: '#e1e0d9', axis: '#c3c2b7', surface: '#ffffff', primary: '#0b0b0b' }
+  var FACE = { fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif', fontSize: 12 }
+  function categoryAxis(data) {
+    return {
+      type: 'category', data: data,
+      axisLine: { lineStyle: { color: INK.axis } },
+      axisTick: { show: false },
+      axisLabel: Object.assign({ color: INK.muted, hideOverlap: true }, FACE),
+      splitLine: { show: false },
+    }
+  }
+  function valueAxis() {
+    return {
+      type: 'value',
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: Object.assign({
+        color: INK.muted, hideOverlap: true,
+        formatter: function (value) {
+          return Math.abs(value) < 10 && value % 1 !== 0
+            ? value.toLocaleString(undefined, { maximumFractionDigits: 2 })
+            : num(value)
+        },
+      }, FACE),
+      splitLine: { lineStyle: { color: INK.grid, width: 1 } },
+    }
+  }
+  var TOOLTIP = {
+    backgroundColor: '#ffffff', borderColor: INK.grid, borderWidth: 1, padding: [8, 12],
+    textStyle: Object.assign({ color: INK.primary }, FACE),
+    extraCssText: 'box-shadow: 0 10px 30px rgba(15,23,42,.12); border-radius: 8px;',
+  }
   var STATUS = { ok: '#2aa876', warning: '#c2872f', critical: '#d94f4f', unknown: '#8d8a83' }
   var app = document.getElementById('app')
   var page = 0
@@ -296,7 +400,7 @@
     }
   }
 
-  function chartOption(kind, result, display) {
+  function chartOption(kind, result, display, width) {
     var built = shape(result)
     var many = built.series.length > 1
     var horizontalKind = kind === 'horizontal_bar' || kind === 'horizontal_stacked_bar'
@@ -313,21 +417,39 @@
       : { show: false }
     var base = {
       color: PALETTE,
-      animationDuration: 300,
-      grid: { left: 8, right: 22, top: many ? 34 : 22, bottom: 6, containLabel: true },
-      tooltip: { trigger: kind === 'pie' || kind === 'donut' ? 'item' : 'axis' },
-      legend: many ? { top: 0, left: 0, itemWidth: 10, itemHeight: 10, type: 'scroll' } : { show: false },
+      textStyle: Object.assign({}, FACE),
+      animationDuration: 400,
+      grid: { left: 8, right: 16, top: many ? 40 : 16, bottom: 8, containLabel: true },
+      tooltip: Object.assign({}, TOOLTIP, {
+        trigger: kind === 'pie' || kind === 'donut' ? 'item' : 'axis',
+        axisPointer: { type: 'line', lineStyle: { color: INK.axis, width: 1 } },
+      }),
+      legend: many
+        ? {
+            type: 'scroll', top: 0, left: 0, icon: 'roundRect',
+            itemWidth: 10, itemHeight: 10, itemGap: 16,
+            textStyle: Object.assign({ color: '#52514e' }, FACE),
+          }
+        : { show: false },
     }
     if (kind === 'pie' || kind === 'donut') {
       return Object.assign({}, base, {
         grid: undefined,
-        legend: { bottom: 0, left: 'center', type: 'scroll', itemWidth: 10, itemHeight: 10 },
+        legend: {
+          type: 'scroll', orient: 'horizontal', bottom: 0, left: 'center', icon: 'roundRect',
+          itemWidth: 10, itemHeight: 10, itemGap: 16,
+          textStyle: Object.assign({ color: '#52514e' }, FACE),
+        },
         series: [{
           type: 'pie',
           radius: kind === 'donut' ? ['48%', '70%'] : ['0%', '68%'],
           center: ['50%', '45%'],
-          itemStyle: { borderColor: '#fff', borderWidth: 2 },
-          label: { formatter: '{d}%' },
+          avoidLabelOverlap: true,
+          itemStyle: { borderColor: INK.surface, borderWidth: 2, borderRadius: 3 },
+          label: Object.assign({ color: '#52514e' }, FACE, display && display.showValues
+            ? { formatter: function (p) { return num(p.value) + ' (' + p.percent + '%)' } }
+            : { formatter: '{d}%' }),
+          labelLine: { length: 8, length2: 8, lineStyle: { color: INK.axis } },
           data: built.categories.map(function (name, index) {
             return { name: name, value: built.series[0] ? built.series[0].data[index] : 0 }
           }),
@@ -337,9 +459,11 @@
     if (kind === 'scatter') {
       var x = built.series[0], y = built.series[1]
       return Object.assign({}, base, {
-        tooltip: { trigger: 'item' },
-        xAxis: { type: 'value', scale: true, name: x ? x.name : '' },
-        yAxis: { type: 'value', scale: true, name: y ? y.name : '' },
+        tooltip: Object.assign({}, TOOLTIP, { trigger: 'item' }),
+        xAxis: Object.assign(valueAxis(), { scale: true, name: x ? x.name : '',
+          nameTextStyle: Object.assign({ color: INK.muted }, FACE) }),
+        yAxis: Object.assign(valueAxis(), { scale: true, name: y ? y.name : '',
+          nameTextStyle: Object.assign({ color: INK.muted }, FACE) }),
         series: [{
           type: 'scatter',
           symbolSize: 10,
@@ -352,7 +476,7 @@
     if (kind === 'funnel') {
       return Object.assign({}, base, {
         grid: undefined,
-        tooltip: { trigger: 'item' },
+        tooltip: Object.assign({}, TOOLTIP, { trigger: 'item' }),
         series: [{
           type: 'funnel', left: '8%', right: '8%', label: { position: 'inside' },
           data: built.categories.map(function (name, index) {
@@ -363,8 +487,52 @@
     }
     var horizontal = horizontalKind
     var stacked = stackedKind
-    var category = { type: 'category', data: built.categories, axisLabel: { hideOverlap: true } }
-    var value = { type: 'value' }
+    /* Names under upright bars, kept rather than thinned.
+       ECharts' answer to a label wider than the slot its bar stands in is to
+       drop it and every second one after it. On six provinces across a wide
+       card that left three labelled bars and three unlabelled ones, with no
+       way to tell which was which. Cutting each name to its own slot keeps
+       every one, and the tooltip still carries the whole name.
+
+       The slot is the plot divided by the number of bars, and the plot is the
+       chart less the value axis, which is about as wide as its longest number.
+       Erring narrow is the safe way round: a label bounded tighter than its
+       slot is shorter than it needed to be, while one bounded looser overlaps
+       its neighbour and ECharts hides one of the two. This is the same
+       arithmetic the platform's own chart builder does. */
+    var rotated = !horizontal && built.categories.length > 8
+    var widest = 0
+    if (stacked) {
+      built.categories.forEach(function (_, at) {
+        var total = 0
+        built.series.forEach(function (line) { total += Number(line.data[at]) || 0 })
+        if (total > widest) widest = total
+      })
+    } else {
+      built.series.forEach(function (line) {
+        line.data.forEach(function (value) { if ((Number(value) || 0) > widest) widest = Number(value) || 0 })
+      })
+    }
+    // Never under four characters: the axis is labelled by its ticks, not by
+    // its largest value, and an axis running to 1 is ticked "0.25".
+    var digits = Math.max(4, num(widest).length)
+    var axisGutter = digits * FACE.fontSize * 0.62 + 8
+    // 8 and 24 are the grid's own gutters, set in `base` above.
+    var slot = width && built.categories.length
+      ? Math.floor((width - axisGutter - 32) / built.categories.length) : 0
+    var category = categoryAxis(built.categories)
+    if (rotated) category.axisLabel.rotate = 30
+    // A turned label is not bounded by its own slot - it runs diagonally under
+    // its neighbour's - so cutting it to that width would shorten a name the
+    // axis had room for. Below 44px the axis' own thinning is the better of
+    // the two, because forty names across a quarter tile would be forty
+    // ellipses.
+    if (!horizontal && !rotated && slot >= 44) {
+      category.axisLabel.interval = 0
+      category.axisLabel.width = slot - 4
+      category.axisLabel.overflow = 'truncate'
+    }
+    var value = valueAxis()
     return Object.assign({}, base, {
       xAxis: horizontal ? value : category,
       yAxis: horizontal ? category : value,
@@ -401,8 +569,16 @@
     // Read off the host rather than threaded through: the widget node already
     // carries the colour, whether it was chosen or decided from the background.
     var ink = getComputedStyle(host).color
-    instance.setOption(inkOption(chartOption(kind, result, display || {}), ink))
-    drawn.push(instance)
+    // How much width the category labels have to share is not known yet: the
+    // card is still being assembled and is not in the page, so the host
+    // measures nothing. The option is set now at that width and set again from
+    // the real one on the layout pass below - the same pass that gives every
+    // chart its first real size.
+    function paint() {
+      instance.setOption(inkOption(chartOption(kind, result, display || {}, host.clientWidth), ink))
+    }
+    paint()
+    drawn.push({ chart: instance, refit: paint })
   }
 
   /* Rec. 709 luma: the eye takes green as much brighter than blue at the same
@@ -661,7 +837,7 @@
           data: breakdown.map(function (p) { return p[1] }),
         }],
       })
-      drawn.push(instance)
+      drawn.push({ chart: instance, refit: function () {} })
     }
   }
 
@@ -784,9 +960,16 @@
   }
 
   function render() {
-    drawn.forEach(function (instance) { instance.dispose() })
+    drawn.forEach(function (entry) { entry.chart.dispose() })
     drawn = []
     app.innerHTML = ''
+
+    // How much board there is to arrange on, taken from the same appearance
+    // the platform lays this board out with rather than assumed.
+    var dress = DATA.appearance || {}
+    var root = document.documentElement.style
+    root.setProperty('--cols', String(Math.max(1, Number(dress.columns) || 12)))
+    root.setProperty('--row', (Math.max(8, Number(dress.row_height) || 74)) + 'px')
 
     var look = DATA.look || {}
     var header = el('header', 'board')
@@ -843,6 +1026,11 @@
           render()
         }
         label.appendChild(select)
+        // What the control is set to, in words, for the printed sheet. A
+        // <select> prints as a control, and a reader holding the paper cannot
+        // see which option it was left on - so a page narrowed to one province
+        // printed as if it were the whole country.
+        label.appendChild(el('span', 'printed', select.value || 'All'))
         bar.appendChild(label)
       })
       var clear = el('button', 'clear', 'Clear')
@@ -888,8 +1076,10 @@
       // on the way open is what makes a folded group worth exporting folded.
       band.addEventListener('toggle', function () {
         if (!band.open) return
-        drawn.forEach(function (instance) {
-          if (band.contains(instance.getDom())) instance.resize()
+        drawn.forEach(function (entry) {
+          if (!band.contains(entry.chart.getDom())) return
+          entry.chart.resize()
+          entry.refit()
         })
       })
       app.appendChild(band)
@@ -901,7 +1091,7 @@
     // it found: the card appears and stays empty. One resize after the page is
     // in place puts every one of them right.
     requestAnimationFrame(function () {
-      drawn.forEach(function (instance) { instance.resize() })
+      drawn.forEach(function (entry) { entry.chart.resize(); entry.refit() })
     })
 
     var footer = el('footer', 'board')
@@ -914,7 +1104,14 @@
     var node = el('article', 'card')
     var layout = widget.layout || {}
     if (window.matchMedia('(min-width: 781px)').matches) {
-      node.style.gridColumn = ((Number(layout.x) || 0) + 1) + ' / span ' + Math.max(1, Number(layout.w) || 4)
+      var columns = Math.max(1, Number((DATA.appearance || {}).columns) || 12)
+      // A widget cannot start past the last column or run off the end of the
+      // board: a board narrowed after its widgets were placed still holds some
+      // at the old width, and `span` past the edge adds an implicit column,
+      // which narrows every other widget on the page to make room for it.
+      var wide = Math.min(columns, Math.max(1, Number(layout.w) || 4))
+      var from = Math.min(columns - wide, Math.max(0, Number(layout.x) || 0))
+      node.style.gridColumn = (from + 1) + ' / span ' + wide
       // Rows flow rather than being pinned to the stored y. The dashboard packs
       // its widgets upwards as they are dragged, so the y a widget was saved
       // with can sit well below the one above it - which here would be a band
@@ -957,8 +1154,38 @@
   }
 
   window.addEventListener('resize', function () {
-    drawn.forEach(function (instance) { instance.resize() })
+    drawn.forEach(function (entry) { entry.chart.resize(); entry.refit() })
   })
+
+  /* Printing.
+     A group exported folded is folded on paper too, and a sheet cannot be
+     unfolded: whatever it holds would simply be missing from the printout
+     with nothing to say so. Each one is opened for the print and put back
+     afterwards, and the charts inside are measured again on the way - a chart
+     in a folded group has never had a size, and would otherwise print blank.
+     Both handlers run before and after the browser lays the sheets out, which
+     is what makes this work without the reader doing anything. */
+  var unfolded = []
+  window.addEventListener('beforeprint', function () {
+    unfolded = []
+    Array.prototype.forEach.call(document.querySelectorAll('details.group'), function (band) {
+      if (band.open) return
+      band.open = true
+      unfolded.push(band)
+    })
+    drawn.forEach(function (entry) { entry.chart.resize(); entry.refit() })
+  })
+  window.addEventListener('afterprint', function () {
+    unfolded.forEach(function (band) { band.open = false })
+    unfolded = []
+    // A frame later, so the charts are measured against the restored screen
+    // layout rather than the sheet's - the two are different widths, and a
+    // chart left at the paper's would have its labels fitted for paper.
+    requestAnimationFrame(function () {
+      drawn.forEach(function (entry) { entry.chart.resize(); entry.refit() })
+    })
+  })
+
   render()
 })()
 </script>

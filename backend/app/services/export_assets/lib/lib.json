@@ -1,0 +1,26 @@
+[
+  {
+    "file": "echarts.js",
+    "when": "always",
+    "package": "echarts",
+    "version": "5.6.0",
+    "sha256": "bf4a223524e40b77c304bec67e1222cf551f14880cf42c69dc046558e11c07b1",
+    "bytes": 1034102
+  },
+  {
+    "file": "leaflet.js",
+    "when": "map",
+    "package": "leaflet",
+    "version": "1.9.4",
+    "sha256": "db49d009c841f5ca34a888c96511ae936fd9f5533e90d8b2c4d57596f4e5641a",
+    "bytes": 147552
+  },
+  {
+    "file": "leaflet.css",
+    "when": "map",
+    "package": "leaflet",
+    "version": "1.9.4",
+    "sha256": "a7837102824184820dfa198d1ebcd109ff6d0ff9a2672a074b9a1b4d147d04c6",
+    "bytes": 14806
+  }
+]
