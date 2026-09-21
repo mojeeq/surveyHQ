@@ -7,6 +7,16 @@ documentation inside the platform: searchable across every document, and needing
 no internet. It is built from these same files on every release, so what it says
 is what the version you are running does.
 
+### The keyboard
+
+In any dialog, **Enter** does what its main button does - Save, Add, Apply,
+whichever it ends in - and **Escape** closes it. Enter is left alone wherever
+it already means something: in a box meant to hold more than one line it is a
+new line, and on a list that is offering you a choice it takes the choice.
+
+In the **Command** tab, where Enter has to be a new line, **Ctrl+Enter**
+(**Cmd+Enter** on a Mac) runs the script.
+
 ## Roles
 
 | Role | Can do |
@@ -348,6 +358,9 @@ per line, as a do-file is written:
     gen adult = age >= 18
     replace adult = 0 if age == .
     label variable adult "Aged 18 or over"
+
+**Ctrl+Enter**, or **Cmd+Enter** on a Mac, runs it; plain Enter is a new line,
+because a script is more than one.
 
 Lines run top to bottom and stop at the first error. What ran before it stays
 applied, exactly as a do-file behaves, and the log says what got through.

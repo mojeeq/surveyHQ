@@ -1,6 +1,7 @@
 // Small presentational primitives shared across pages.
 
-import { type CSSProperties, type ReactNode, useEffect, useState } from 'react'
+import { type CSSProperties, type ReactNode, useEffect, useRef, useState } from 'react'
+import { confirmsOnEnter, enterContext } from '@/lib/keys'
 
 export function Spinner({ className = 'h-5 w-5' }: { className?: string }) {
   return (
@@ -138,9 +139,74 @@ export function Modal({
   footer?: ReactNode
   wide?: boolean
 }) {
+  const panel = useRef<HTMLDivElement>(null)
+
+  /**
+   * Whether this is the dialog a key is meant for.
+   *
+   * Every open Modal listens on the document, so a dialog opened over another
+   * one leaves two listeners for the same key. Escape then closed whichever
+   * had registered first - the one underneath - and left the one on top
+   * stranded over an emptied page. Nothing in the app opens a dialog over a
+   * dialog today, so this is a trap rather than a bug anybody hits; it is
+   * worth closing while the key handling is being written, because the day
+   * somebody nests two the failure is silent and reads as Escape being
+   * ignored.
+   *
+   * Last in the document is the one on top: each dialog is appended as it
+   * opens, and they all share one stacking context.
+   */
+  const topmost = () => {
+    const all = document.querySelectorAll('[data-modal]')
+    return all.length > 0 && all[all.length - 1] === panel.current
+  }
+
+  /**
+   * Enter does what the dialog's own button does.
+   *
+   * Which button that is is not asked of the caller. It is the primary one in
+   * the footer, read off the dialog when the key is pressed: every dialog
+   * here already ends in one, and reading it live means a dialog that changes
+   * its own footer - a Save that becomes Saving..., a button that appears
+   * once a file is chosen - is still answered correctly. Pressing it rather
+   * than calling a handler is also what keeps its own guards: a disabled
+   * button is not pressed, and neither is a dialog with no footer, which is
+   * right for the ones that only have a Close.
+   *
+   * A primary button in the *body* is left alone. The comments dialog has
+   * one, under a textarea meant to hold a paragraph, and Enter there is a new
+   * line rather than a post.
+   *
+   * When Enter should be ignored altogether is in `confirmsOnEnter`.
+   */
+  const confirm = (event: KeyboardEvent) => {
+    if (!confirmsOnEnter(enterContext(event))) return
+
+    const dialog = panel.current
+    const target = event.target as HTMLElement | null
+    // The key has to have been pressed in this dialog, or with nothing
+    // focused at all.
+    if (!dialog) return
+    if (target && target !== document.body && !dialog.contains(target)) return
+
+    const primary = dialog.querySelector<HTMLButtonElement>('footer button.btn-primary')
+    if (!primary || primary.disabled) return
+    // Stops the browser from also submitting a form the dialog happens to sit
+    // in, which would send the same thing twice.
+    event.preventDefault()
+    primary.click()
+  }
+
   useEffect(() => {
     if (!open) return
-    const onKey = (event: KeyboardEvent) => event.key === 'Escape' && onClose()
+    const onKey = (event: KeyboardEvent) => {
+      if (!topmost()) return
+      if (event.key === 'Escape') {
+        onClose()
+        return
+      }
+      if (event.key === 'Enter') confirm(event)
+    }
     document.addEventListener('keydown', onKey)
     document.body.style.overflow = 'hidden'
     return () => {
@@ -161,6 +227,8 @@ export function Modal({
         role="dialog"
         aria-modal="true"
         aria-label={title}
+        ref={panel}
+        data-modal
         className={`relative w-full ${wide ? 'max-w-4xl' : 'max-w-lg'} rounded-card bg-white shadow-pop dark:bg-dark-50`}
       >
         <header className="flex items-center justify-between border-b border-ink-200 px-5 py-4 dark:border-dark-200">
