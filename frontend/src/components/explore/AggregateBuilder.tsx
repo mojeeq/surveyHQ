@@ -28,11 +28,12 @@ import type { BuildOptions } from "@/lib/charts";
 
 import FilterBuilder, { emptyFilter } from "@/components/FilterBuilder";
 
+import { VariablePicker } from "@/components/explore/VariablePicker";
+
 import {
   AGGREGATIONS,
   CHART_TYPES,
   VariableList,
-  optionLabel,
 } from "@/components/explore/shared";
 import {
   Card,
@@ -55,7 +56,7 @@ import {
  * These whiskers reach the smallest and largest value in the group rather than
  * one and a half times the box, so nothing sits outside them as an outlier and
  * nothing is quietly left out of the picture. Somebody comparing this against
- * a box drawn in R has to be told that.
+ * a box drawn in another package has to be told that.
  */
 export function BoxMeasure({
   numeric,
@@ -68,20 +69,15 @@ export function BoxMeasure({
 }) {
   return (
     <div className="space-y-2 rounded-card border border-ink-200 p-3">
-      <select
-        className="input py-1.5 text-xs"
-        aria-label="Variable to summarise"
+      <VariablePicker
+        label="Variable to summarise"
+        variables={numeric}
         value={variable}
-        onChange={(event) => onVariable(event.target.value)}
-      >
-        {numeric.map((v) => (
-          <option key={v.name} value={v.name}>
-            {optionLabel(v)}
-          </option>
-        ))}
-      </select>
+        onChange={onVariable}
+      />
       <p className="text-xs text-ink-500">
-        Box plots are unweighted. Use R for weighted quantiles.
+        Box plots are unweighted, so a survey weight does not move the five
+        numbers.
       </p>
       <p className="text-xs text-ink-500 dark:text-dark-500">
         One box for each group, drawn from{" "}
@@ -284,29 +280,19 @@ export function AggregateBuilder({
                 className="mb-3 rounded-card border border-ink-200 p-3"
               >
                 <div className="flex items-center gap-2">
-                  <select
-                    className="input flex-1 py-1.5 text-xs"
+                  <VariablePicker
+                    className="flex-1"
+                    label={`Group by, level ${index + 1}`}
+                    variables={groupable}
                     value={dimension.variable}
-                    onChange={(event) =>
+                    onChange={(next) =>
                       setDimensions(
                         dimensions.map((d, i) =>
-                          i === index
-                            ? {
-                                ...d,
-                                variable: event.target.value,
-                                grain: null,
-                              }
-                            : d,
+                          i === index ? { ...d, variable: next, grain: null } : d,
                         ),
                       )
                     }
-                  >
-                    {groupable.map((v) => (
-                      <option key={v.name} value={v.name}>
-                        {optionLabel(v)}
-                      </option>
-                    ))}
-                  </select>
+                  />
                   <button
                     className="btn-ghost btn-sm text-red-600"
                     onClick={() =>
@@ -415,13 +401,13 @@ export function AggregateBuilder({
                 label="Variable"
                 hint="The question or categorical variable whose category you want as a percentage."
               >
-                <select
-                  className="input py-1.5 text-xs"
-                  aria-label="KPI variable"
+                <VariablePicker
+                  label="KPI variable"
+                  variables={groupable}
                   value={kpiColumn}
-                  onChange={(event) => {
+                  onChange={(chosen) => {
                     const next = allVariables.find(
-                      (variable) => variable.name === event.target.value,
+                      (variable) => variable.name === chosen,
                     );
                     const labels = Object.values(next?.value_labels ?? {});
                     const target =
@@ -435,17 +421,11 @@ export function AggregateBuilder({
                     ]);
                     setDisplay({
                       ...display,
-                      kpiVariable: event.target.value,
+                      kpiVariable: chosen,
                       kpiTarget: target,
                     } as BuildOptions);
                   }}
-                >
-                  {groupable.map((v) => (
-                    <option key={v.name} value={v.name}>
-                      {optionLabel(v)}
-                    </option>
-                  ))}
-                </select>
+                />
               </Field>
               <Field
                 label="Category to display"
@@ -483,27 +463,21 @@ export function AggregateBuilder({
                 )}
               </Field>
               <Field label="Survey weight">
-                <select
-                  className="input py-1.5 text-xs"
-                  aria-label="Weight"
+                <VariablePicker
+                  label="Weight"
+                  variables={numeric}
                   value={selectedKpi?.weight ?? ""}
-                  onChange={(event) =>
+                  onChange={(next) =>
                     setMeasures([
                       {
                         agg: "share",
                         alias: "kpi_share",
-                        weight: event.target.value || null,
+                        weight: next || null,
                       },
                     ])
                   }
-                >
-                  <option value="">Unweighted</option>
-                  {numeric.map((v) => (
-                    <option key={v.name} value={v.name}>
-                      Weight by {v.name}
-                    </option>
-                  ))}
-                </select>
+                  emptyOption="Unweighted"
+                />
               </Field>
               <p className="text-xs text-ink-500 dark:text-dark-500">
                 The card shows this category as a percentage of valid responses
@@ -576,55 +550,37 @@ export function AggregateBuilder({
                       )}
                     </div>
                     {definition?.needsVariable && (
-                      <select
-                        className="input py-1.5 text-xs"
+                      <VariablePicker
+                        label={`Measure ${index + 1} variable`}
+                        variables={numeric}
                         value={measure.variable ?? ""}
-                        onChange={(event) =>
+                        onChange={(next) =>
                           setMeasures(
                             measures.map((m, i) =>
                               i === index
-                                ? {
-                                    ...m,
-                                    variable: event.target.value,
-                                    alias: `${m.agg}_${event.target.value}`,
-                                  }
+                                ? { ...m, variable: next, alias: `${m.agg}_${next}` }
                                 : m,
                             ),
                           )
                         }
-                      >
-                        {numeric.map((v) => (
-                          <option key={v.name} value={v.name}>
-                            {optionLabel(v)}
-                          </option>
-                        ))}
-                      </select>
+                      />
                     )}
-                    <select
-                      className="input py-1.5 text-xs"
-                      disabled={
-                        !["count", "share", "sum", "mean"].includes(measure.agg)
-                      }
-                      aria-label="Measure survey weight"
-                      title="Weights are supported for counts, shares, sums and means"
+                    <VariablePicker
+                      label={`Measure ${index + 1} survey weight`}
+                      variables={numeric}
                       value={measure.weight ?? ""}
-                      onChange={(event) =>
+                      onChange={(next) =>
                         setMeasures(
                           measures.map((m, i) =>
-                            i === index
-                              ? { ...m, weight: event.target.value || null }
-                              : m,
+                            i === index ? { ...m, weight: next || null } : m,
                           ),
                         )
                       }
-                    >
-                      <option value="">Unweighted</option>
-                      {numeric.map((v) => (
-                        <option key={v.name} value={v.name}>
-                          Weight by {v.name}
-                        </option>
-                      ))}
-                    </select>
+                      emptyOption="Unweighted"
+                      disabled={
+                        !["count", "share", "sum", "mean"].includes(measure.agg)
+                      }
+                    />
                   </div>
                 );
               })}
