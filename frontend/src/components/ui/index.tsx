@@ -141,6 +141,26 @@ export function Modal({
 }) {
   const panel = useRef<HTMLDivElement>(null)
   const content = useRef<HTMLDivElement>(null)
+  const opener = useRef<HTMLElement | null>(null)
+  const wasOpen = useRef(false)
+
+  /*
+   * Who to give the focus back to, captured while it is still true.
+   *
+   * During render, not in the effect below. React focuses a child asking for
+   * `autoFocus` when it commits, which is before any effect runs, so an effect
+   * reading `document.activeElement` finds that child and never sees the
+   * button that opened the dialog. Closing then tried to hand the focus to an
+   * input that had just been removed from the page, and it landed on the body
+   * instead - which is the new-dashboard dialog, among others.
+   *
+   * Render is the last moment before that commit, so this is where the
+   * launcher is still the focused thing.
+   */
+  if (open && !wasOpen.current) {
+    opener.current = document.activeElement as HTMLElement | null
+  }
+  wasOpen.current = open
 
   /**
    * A dialog takes the focus when it opens, and hands it back when it closes.
@@ -152,34 +172,54 @@ export function Modal({
    * Enter then re-pressed that hidden button rather than confirming the
    * dialog - so the dialog opened, and opened, and never saved.
    *
-   * The first control in the body, not the first in the panel: the first in
-   * the panel is the header's close button, and a dialog that opens with the
-   * focus on its own X is offering to undo itself before it has been read. If
-   * the body holds nothing to focus, the panel itself takes it, which is what
-   * keeps the key handling and the screen reader on the dialog either way.
-   *
    * A child asking for `autoFocus` has already been focused by the time this
    * runs, so nothing is moved when the focus is inside the panel: the author's
    * choice wins over the default.
    */
   useEffect(() => {
     if (!open) return
-    const opener = document.activeElement as HTMLElement | null
     const dialog = panel.current
-    if (dialog && !dialog.contains(document.activeElement)) {
-      const first = content.current?.querySelector<HTMLElement>(
-        'input:not([disabled]):not([type="hidden"]), select:not([disabled]), ' +
-          'textarea:not([disabled]), button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
-      )
-      ;(first ?? dialog).focus()
-    }
+    if (dialog && !dialog.contains(document.activeElement)) takeFocus(dialog)
     return () => {
       // Back where it came from, but only if that is still on the page: a
       // dialog that deleted the row its own button sat in has nothing to
       // return to, and focusing a detached node drops focus onto the body.
-      if (opener && opener.isConnected) opener.focus()
+      const back = opener.current
+      opener.current = null
+      if (back && back.isConnected) back.focus()
     }
   }, [open])
+
+  /**
+   * Put the focus on the first control that will actually take it.
+   *
+   * The first control in the *body*, not in the panel: first in the panel is
+   * the header's close button, and a dialog that opens with the focus on its
+   * own X is offering to undo itself before it has been read.
+   *
+   * Tried in turn rather than picked, because matching the selector is not the
+   * same as being focusable. A control inside a folded `Section` is still in
+   * the document and still matches - a closed `<details>` keeps its contents -
+   * and focusing it does nothing at all. Taking the first match on trust left
+   * the focus outside the dialog, back on the launcher, which is the bug this
+   * was written to fix; the appearance and widget dialogs both remember which
+   * of their sections were folded, so it is an ordinary state to open in.
+   *
+   * Whatever is left over - every candidate hidden, or none to begin with -
+   * the panel takes the focus itself, which keeps the key handling and the
+   * screen reader on the dialog either way.
+   */
+  const takeFocus = (dialog: HTMLElement) => {
+    const candidates = content.current?.querySelectorAll<HTMLElement>(
+      'input:not([disabled]):not([type="hidden"]), select:not([disabled]), ' +
+        'textarea:not([disabled]), button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+    )
+    for (const candidate of candidates ?? []) {
+      candidate.focus()
+      if (document.activeElement === candidate) return
+    }
+    dialog.focus()
+  }
 
   /**
    * Whether this is the dialog a key is meant for.
