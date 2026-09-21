@@ -154,7 +154,12 @@ def load(workspace: Workspace, dataset: Dataset) -> Frame:
     )
 
 
-def write(workspace: Workspace, frame: Frame, data: pd.DataFrame, renamed: dict[str, str] | None = None) -> None:
+def write(
+    workspace: Workspace,
+    frame: Frame,
+    data: pd.DataFrame,
+    renamed: dict[str, str] | None = None,
+) -> None:
     """Put the new shape of the data back into the workspace.
 
     The variable metadata is rebuilt from what was actually written rather than

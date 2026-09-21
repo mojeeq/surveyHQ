@@ -94,7 +94,7 @@ def apply(work: Workspace, frame: Frame, text: str) -> CommandResult:
     if handler is None:
         raise CommandError(
             f"'{verb}' is not a command this understands. "
-            f"Available: {', '.join(sorted({'gen', 'replace', 'egen', 'label', 'rename', 'drop', 'keep'}))}"
+            "Available: gen, replace, egen, label, rename, drop, keep"
         )
 
     result = handler(work, frame, rest.strip())
