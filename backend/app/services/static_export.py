@@ -45,7 +45,7 @@ from app.schemas.query import (
     Measure,
     QuerySpec,
 )
-from app.services import export_appearance, export_fonts
+from app.services import export_appearance, export_fonts, export_lib
 from app.services.datasets import dataset_is_queryable
 from app.services.query_engine import (
     DatasetContext,
@@ -595,6 +595,11 @@ def build_payload(
         "description": dashboard.description or "",
         "generated_at": utcnow().isoformat(),
         "theme": dashboard.theme or "default",
+        # The colours that theme stands for, resolved here rather than looked
+        # up in the page. The exported file drew from a private list of its own
+        # that matched no theme the platform has, so a board came back in hues
+        # it had never been shown in.
+        "colors": export_lib.colors_for(dashboard.theme),
         "appearance": dashboard.appearance or {},
         "pages": pages,
         # The frames and their names. A group says what a handful of widgets
@@ -631,20 +636,31 @@ def render_html(payload: dict[str, Any], stylesheet: str = "") -> str:
     execute, so nothing in a survey answer can become code on the page. The
     only sequence that could end that tag early is escaped.
 
-    Two things travel outside the JSON. Any bundled font a widget is set in is
-    carried in the file, because the file is meant to open where this platform
-    cannot be reached and a font it only names is a font it will not have. And
-    `stylesheet` is how the board is dressed, which is CSS rather than data -
-    put through the JSON it would be a background image encoded twice.
+    Three things travel outside the JSON. The drawing libraries, because a file
+    that fetched them from a CDN was a file whose charts turned into tables of
+    numbers the moment it was opened without the internet. Any bundled font a
+    widget is set in, because a font the file only names is a font it will not
+    have. And `stylesheet`, which is how the board is dressed: CSS rather than
+    data, and put through the JSON its background image would be encoded twice.
     """
     data = json.dumps(payload, default=str, separators=(",", ":"))
     data = data.replace("<", "\\u003c").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
     template = TEMPLATE.read_text(encoding="utf-8")
+    needs_map = any(
+        (widget or {}).get("kind") == "map"
+        for widget in payload.get("widgets") or []
+        if isinstance(widget, dict)
+    )
     return (
         template.replace("__TITLE__", _escape(payload["name"]))
+        .replace("<!--__HEAD__-->", export_lib.head_for(needs_map))
         .replace("/*__FONTS__*/", export_fonts.css_for(_fonts_used(payload)))
         .replace("/*__LOOK__*/", stylesheet)
         .replace('"__PAYLOAD__"', data)
+        # Last, so that neither the board's data nor the marks the other
+        # substitutions look for are ever searched for inside a megabyte of
+        # somebody else's minified JavaScript.
+        .replace("<!--__SCRIPTS__-->", export_lib.scripts_for(needs_map))
     )
 
 

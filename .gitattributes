@@ -1,2 +1,8 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Vendored by scripts/sync-export-lib.mjs, byte for byte from node_modules.
+# `test_export_lib.py` compares them by checksum against the package they came
+# from, so line-ending normalisation would fail the build on a fresh clone -
+# Leaflet's stylesheet ships with CRLF.
+backend/app/services/export_assets/lib/** -text
