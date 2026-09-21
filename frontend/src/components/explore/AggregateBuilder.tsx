@@ -580,6 +580,7 @@ export function AggregateBuilder({
                       disabled={
                         !["count", "share", "sum", "mean"].includes(measure.agg)
                       }
+                      title="Weights are supported for counts, shares, sums and means"
                     />
                   </div>
                 );

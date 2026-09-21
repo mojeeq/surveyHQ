@@ -57,7 +57,9 @@ test("upload, review, chart, dashboard and anonymous sharing", async ({
 
   // The UI must not offer a survey weight that the selected statistic ignores.
   await page.getByLabel("Aggregation", { exact: true }).selectOption("median");
-  await expect(page.getByLabel("Measure survey weight")).toBeDisabled();
+  // Numbered, because a summary can carry several measures and each picker's
+  // label is also the id its option list is addressed by.
+  await expect(page.getByLabel("Measure 1 survey weight")).toBeDisabled();
 
   await page.goto("/dashboards");
   await page
