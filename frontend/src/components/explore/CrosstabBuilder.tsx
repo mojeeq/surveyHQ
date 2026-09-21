@@ -21,10 +21,11 @@ import CrosstabTable from "@/components/CrosstabTable";
 
 import FilterBuilder, { emptyFilter } from "@/components/FilterBuilder";
 
+import { VariablePicker } from "@/components/explore/VariablePicker";
+
 import {
   AGGREGATIONS,
   VariableList,
-  optionLabel,
 } from "@/components/explore/shared";
 import {
   Card,
@@ -136,39 +137,28 @@ export function CrosstabBuilder({
             label="Rows"
             hint="Leave one of the two empty to tabulate a single variable on its own."
           >
-            <select
-              className="input py-1.5 text-xs"
+            <VariablePicker
+              label="Rows"
+              variables={groupable}
               value={rowVariable}
-              onChange={(event) => setRowVariable(event.target.value)}
-            >
-              <option value="">No rows</option>
-              {groupable.map((v) => (
-                <option key={v.name} value={v.name}>
-                  {optionLabel(v)}
-                </option>
-              ))}
-            </select>
+              onChange={setRowVariable}
+              emptyOption="No rows"
+            />
           </Field>
           <Field label="Columns">
-            <select
-              className="input py-1.5 text-xs"
+            <VariablePicker
+              label="Columns"
+              variables={groupable}
               value={columnVariable}
-              onChange={(event) => {
-                const next = event.target.value;
+              onChange={(next) => {
                 setColumnVariable(next);
                 // Two variables crossed with nothing in the cells is a grid of
                 // blanks, so choosing a column brings the count back rather
                 // than leaving a request the server will refuse.
                 if (next && !measure) setMeasure({ agg: "count" });
               }}
-            >
-              <option value="">No columns</option>
-              {groupable.map((v) => (
-                <option key={v.name} value={v.name}>
-                  {optionLabel(v)}
-                </option>
-              ))}
-            </select>
+              emptyOption="No columns"
+            />
           </Field>
           <Field label="Cell values">
             <select
@@ -209,19 +199,12 @@ export function CrosstabBuilder({
           </Field>
           {measure && AGGREGATIONS.find((a) => a.value === measure.agg)?.needsVariable && (
             <Field label="Of variable">
-              <select
-                className="input py-1.5 text-xs"
+              <VariablePicker
+                label="Of variable"
+                variables={numeric}
                 value={measure.variable ?? ""}
-                onChange={(event) =>
-                  setMeasure({ ...measure, variable: event.target.value })
-                }
-              >
-                {numeric.map((v) => (
-                  <option key={v.name} value={v.name}>
-                    {v.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(next) => setMeasure({ ...measure, variable: next })}
+              />
             </Field>
           )}
           {measure && WEIGHTABLE.has(measure.agg) && (
@@ -233,21 +216,13 @@ export function CrosstabBuilder({
                   : "Cells count interviews, not the population they stand for."
               }
             >
-              <select
-                className="input py-1.5 text-xs"
-                aria-label="Survey weight"
+              <VariablePicker
+                label="Survey weight"
+                variables={numeric}
                 value={measure.weight ?? ""}
-                onChange={(event) =>
-                  setMeasure({ ...measure, weight: event.target.value || null })
-                }
-              >
-                <option value="">Unweighted</option>
-                {numeric.map((v) => (
-                  <option key={v.name} value={v.name}>
-                    Weight by {v.name}
-                  </option>
-                ))}
-              </select>
+                onChange={(next) => setMeasure({ ...measure, weight: next || null })}
+                emptyOption="Unweighted"
+              />
             </Field>
           )}
           <Field
