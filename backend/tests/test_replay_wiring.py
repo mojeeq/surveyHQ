@@ -116,6 +116,27 @@ def test_a_sync_replays_after_every_version_is_in_and_rebuilds_after_that():
     body = Path("app/workers/tasks.py").read_text()
     loop = body.index("for identity, identity_mode in plan:")
     replay = body.index("problems.extend(stata.replay(db, dataset))")
-    rebuild = body.index("rebuild_dependents(db, list(dict.fromkeys(touched)))")
+    rebuild = body.index("rebuild_dependents(db, ids)")
+    counts = body.index('entry["rows"] = dataset.row_count')
     assert loop < replay, "the sync replays before it has imported every version"
     assert replay < rebuild, "the sync rebuilds dependents before it replays"
+    assert replay < counts, "the sync reports row counts read before the replay"
+
+
+def test_a_sync_replays_only_what_it_replaced():
+    """An append leaves the generated columns in place.
+
+    Replaying the whole history over one would apply every command a second
+    time to rows that already carry it: `replace score = score + 1` adds two,
+    and a recorded `gen` fails because its column exists. Only a replacement
+    wipes those columns, and only a replacement earns the full replay.
+    """
+    body = Path("app/workers/tasks.py").read_text()
+    assert '"replaced_ids": list(result.replaced_ids)' in body
+    assert "replaced.extend(outcome.get(\"replaced_ids\") or [])" in body
+    # The word itself is fine in the comment that explains the distinction;
+    # what must not come back is a list of everything the plan touched.
+    assert "touched.extend(" not in body, (
+        "the sync is collecting every dataset it touched, not only the ones it "
+        "replaced, so an append would be replayed over twice"
+    )
