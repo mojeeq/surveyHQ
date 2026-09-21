@@ -33,6 +33,8 @@ export interface EnterContext {
   keyCode: number
   /** The focused element's tag, upper case, or null when nothing is focused. */
   tagName: string | null
+  /** An <input>'s type, lower case. Empty for everything else. */
+  inputType: string
   isContentEditable: boolean
   /** Its `role`, for the things that are buttons without being <button>. */
   role: string | null
@@ -48,6 +50,21 @@ export interface EnterContext {
  */
 const OWNS_ENTER = new Set(['TEXTAREA', 'BUTTON', 'A', 'SUMMARY'])
 
+/**
+ * Input types that answer Enter themselves, despite reporting as INPUT.
+ *
+ * A file input opens the file chooser on Enter, and the upload dialog is
+ * exactly where that matters: focus the Data file control, press Enter, and
+ * confirming the dialog instead means it complains that no file was chosen -
+ * having just swallowed the keystroke that would have let you choose one.
+ *
+ * The rest are buttons wearing an <input>, which Enter already presses, so
+ * confirming as well would do two things at once. A checkbox and a radio are
+ * deliberately not here: they are worked with the space bar, and Enter on one
+ * inside a form has always submitted it.
+ */
+const INPUTS_OWNING_ENTER = new Set(['file', 'submit', 'reset', 'button', 'image'])
+
 export function confirmsOnEnter(event: EnterContext): boolean {
   if (event.key !== 'Enter') return false
   if (event.defaultPrevented) return false
@@ -55,6 +72,7 @@ export function confirmsOnEnter(event: EnterContext): boolean {
   if (event.isComposing || event.keyCode === 229) return false
   if (event.isContentEditable) return false
   if (event.tagName !== null && OWNS_ENTER.has(event.tagName)) return false
+  if (event.tagName === 'INPUT' && INPUTS_OWNING_ENTER.has(event.inputType)) return false
   if (event.role === 'button' || event.role === 'link') return false
   return true
 }
@@ -74,6 +92,7 @@ export function enterContext(event: KeyboardEvent): EnterContext {
     // Nothing focused reads as no tag, and counts: the dialog is the only
     // thing on the screen, so Enter can only have been meant for it.
     tagName: target && target !== document.body ? target.tagName : null,
+    inputType: String((target as HTMLInputElement | null)?.type ?? '').toLowerCase(),
     isContentEditable: Boolean(target?.isContentEditable),
     role: target?.getAttribute('role') ?? null,
   }

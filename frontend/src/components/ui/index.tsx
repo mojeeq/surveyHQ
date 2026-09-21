@@ -140,6 +140,46 @@ export function Modal({
   wide?: boolean
 }) {
   const panel = useRef<HTMLDivElement>(null)
+  const content = useRef<HTMLDivElement>(null)
+
+  /**
+   * A dialog takes the focus when it opens, and hands it back when it closes.
+   *
+   * It did neither. Focus stayed on whatever button opened the dialog, which
+   * is now behind it and cannot be seen, and that had two consequences. The
+   * obvious one is that a reader on a keyboard was still standing outside the
+   * thing that had just appeared in front of them. The sharper one is that
+   * Enter then re-pressed that hidden button rather than confirming the
+   * dialog - so the dialog opened, and opened, and never saved.
+   *
+   * The first control in the body, not the first in the panel: the first in
+   * the panel is the header's close button, and a dialog that opens with the
+   * focus on its own X is offering to undo itself before it has been read. If
+   * the body holds nothing to focus, the panel itself takes it, which is what
+   * keeps the key handling and the screen reader on the dialog either way.
+   *
+   * A child asking for `autoFocus` has already been focused by the time this
+   * runs, so nothing is moved when the focus is inside the panel: the author's
+   * choice wins over the default.
+   */
+  useEffect(() => {
+    if (!open) return
+    const opener = document.activeElement as HTMLElement | null
+    const dialog = panel.current
+    if (dialog && !dialog.contains(document.activeElement)) {
+      const first = content.current?.querySelector<HTMLElement>(
+        'input:not([disabled]):not([type="hidden"]), select:not([disabled]), ' +
+          'textarea:not([disabled]), button:not([disabled]), [href], [tabindex]:not([tabindex="-1"])',
+      )
+      ;(first ?? dialog).focus()
+    }
+    return () => {
+      // Back where it came from, but only if that is still on the page: a
+      // dialog that deleted the row its own button sat in has nothing to
+      // return to, and focusing a detached node drops focus onto the body.
+      if (opener && opener.isConnected) opener.focus()
+    }
+  }, [open])
 
   /**
    * Whether this is the dialog a key is meant for.
@@ -229,6 +269,7 @@ export function Modal({
         aria-label={title}
         ref={panel}
         data-modal
+        tabIndex={-1}
         className={`relative w-full ${wide ? 'max-w-4xl' : 'max-w-lg'} rounded-card bg-white shadow-pop dark:bg-dark-50`}
       >
         <header className="flex items-center justify-between border-b border-ink-200 px-5 py-4 dark:border-dark-200">
@@ -237,7 +278,9 @@ export function Modal({
             ✕
           </button>
         </header>
-        <div className="max-h-[70vh] overflow-y-auto px-5 py-4">{children}</div>
+        <div ref={content} className="max-h-[70vh] overflow-y-auto px-5 py-4">
+          {children}
+        </div>
         {footer && (
           <footer className="flex justify-end gap-2 border-t border-ink-200 px-5 py-3 dark:border-dark-200">
             {footer}

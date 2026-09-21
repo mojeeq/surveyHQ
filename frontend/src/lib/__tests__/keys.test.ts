@@ -24,6 +24,7 @@ function pressed(overrides: Partial<EnterContext> = {}): EnterContext {
     isComposing: false,
     keyCode: 13,
     tagName: 'INPUT',
+    inputType: 'text',
     isContentEditable: false,
     role: null,
     ...overrides,
@@ -43,8 +44,12 @@ describe('Enter confirms a dialog', () => {
     expect(confirmsOnEnter(pressed({ tagName: 'SELECT' }))).toBe(true)
   })
 
-  it('from a checkbox or a date field, which are inputs like any other', () => {
-    expect(confirmsOnEnter(pressed({ tagName: 'INPUT' }))).toBe(true)
+  it('from a checkbox, a radio or a date field, which do not answer Enter', () => {
+    // A checkbox and a radio are worked with the space bar, and Enter on one
+    // inside a form has always submitted it.
+    for (const inputType of ['checkbox', 'radio', 'date', 'number', 'search']) {
+      expect(confirmsOnEnter(pressed({ inputType }))).toBe(true)
+    }
   })
 
   it('only on Enter', () => {
@@ -76,6 +81,20 @@ describe('Enter is left alone where it already means something', () => {
 
   it('on a summary, which opens its own section', () => {
     expect(confirmsOnEnter(pressed({ tagName: 'SUMMARY' }))).toBe(false)
+  })
+
+  it('on a file input, which opens the file chooser on Enter', () => {
+    // The upload dialog is exactly where this bites: focus the Data file
+    // control, press Enter, and confirming the dialog instead means it
+    // complains no file was chosen - having just swallowed the keystroke
+    // that would have let you choose one.
+    expect(confirmsOnEnter(pressed({ inputType: 'file' }))).toBe(false)
+  })
+
+  it('on the input types that are buttons in disguise', () => {
+    for (const inputType of ['submit', 'reset', 'button', 'image']) {
+      expect(confirmsOnEnter(pressed({ inputType }))).toBe(false)
+    }
   })
 
   it('on anything playing a button or a link without being one', () => {
