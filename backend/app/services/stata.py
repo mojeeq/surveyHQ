@@ -39,6 +39,7 @@ from app.services.query_engine import (
     run_sql,
 )
 from app.services.stata_expr import ExpressionError, translate
+from app.services.stata_frame import Frame, Workspace, load, write
 
 logger = get_logger(__name__)
 
@@ -78,8 +79,37 @@ EGEN_AGGREGATES = {
 EGEN_ROWWISE = {"rowtotal", "rowmean", "rowmiss", "rownonmiss", "rowmax", "rowmin"}
 
 
+def apply(work: Workspace, frame: Frame, text: str) -> CommandResult:
+    """Run one command against the data in memory.
+
+    Nothing here touches a dataset: a command reads the working copy and
+    writes the next one. What reaches disk is decided by `save`.
+    """
+    command = text.strip().rstrip(";").strip()
+    if not command:
+        raise CommandError("Type a command, for example: gen adult = age >= 18")
+
+    verb, _, rest = command.partition(" ")
+    handler = verbs().get(verb.lower())
+    if handler is None:
+        raise CommandError(
+            f"'{verb}' is not a command this understands. "
+            f"Available: {', '.join(sorted({'gen', 'replace', 'egen', 'label', 'rename', 'drop', 'keep'}))}"
+        )
+
+    result = handler(work, frame, rest.strip())
+    result.command = command
+    return result
+
+
 def run(db: Session, dataset: Dataset, text: str, record_it: bool = True) -> CommandResult:
-    """Run one command against a dataset, and remember it if it changed anything."""
+    """Run one command against a dataset, and remember it if it changed anything.
+
+    The engine works on a copy in a scratch workspace, so this loads one,
+    applies the command and writes the result back - which is the in-place
+    behaviour the dataset command box has always had, now expressed in terms
+    of the same frame a project script uses.
+    """
     # The variable rows are deleted and rebuilt by every command that changes
     # the data, so a second command in the same transaction would otherwise be
     # deciding against the list as it was before the first one ran.
@@ -89,38 +119,39 @@ def run(db: Session, dataset: Dataset, text: str, record_it: bool = True) -> Com
     if not dataset_is_queryable(dataset):
         raise CommandError(f"'{dataset.name}' has no data to work on yet")
 
-    command = text.strip().rstrip(";").strip()
-    if not command:
-        raise CommandError("Type a command, for example: gen adult = age >= 18")
+    with Workspace() as work:
+        frame = load(work, dataset)
+        frame.label_books = dict((dataset.meta or {}).get("label_books") or {})
+        result = apply(work, frame, text)
+        _store(db, dataset, frame)
 
-    verb, _, rest = command.partition(" ")
-    verb = verb.lower()
-    rest = rest.strip()
-
-    if verb in ("gen", "gene", "generate", "g"):
-        result = _generate(db, dataset, rest)
-    elif verb == "replace":
-        result = _replace(db, dataset, rest)
-    elif verb == "egen":
-        result = _egen(db, dataset, rest)
-    elif verb in ("label", "la", "lab"):
-        result = _label(db, dataset, rest)
-    elif verb in ("rename", "ren"):
-        result = _rename(db, dataset, rest)
-    elif verb == "drop":
-        result = _drop(db, dataset, rest)
-    elif verb == "keep":
-        result = _keep(db, dataset, rest)
-    else:
-        raise CommandError(
-            f"'{verb}' is not a command this understands. "
-            "Available: gen, replace, egen, label, rename, drop, keep"
-        )
-
-    result.command = command
     if record_it:
-        _remember(dataset, command)
+        _remember(dataset, result.command)
     return result
+
+
+def _store(db: Session, dataset: Dataset, frame: Frame) -> None:
+    """Write the frame back over the dataset it was loaded from."""
+    import pandas as pd_
+
+    columns, rows = run_sql(f"SELECT * FROM read_parquet({_quote_path(str(frame.path))})")
+    _apply_ingest(
+        db,
+        dataset,
+        ingest_frame(
+            pd_.DataFrame(rows, columns=columns),
+            dict(frame.labels),
+            dict(frame.value_labels),
+            dataset_directory(dataset.id),
+            [],
+        ),
+    )
+    # Label sets outlive the command that defined them, so a later script can
+    # apply one without defining it again.
+    if frame.label_books:
+        meta = dict(dataset.meta or {})
+        meta["label_books"] = dict(frame.label_books)
+        dataset.meta = meta
 
 
 def run_script(db: Session, dataset: Dataset, text: str) -> list[CommandResult]:
@@ -217,38 +248,38 @@ def _comment_at(line: str) -> int | None:
 # --- commands ---------------------------------------------------------------
 
 
-def _generate(db: Session, dataset: Dataset, rest: str) -> CommandResult:
+def _generate(work: Workspace, frame: Frame, rest: str) -> CommandResult:
     name, expression, condition = _assignment(rest)
-    _check_new_name(dataset, name)
-    ctx = _context(dataset)
+    _check_new_name(frame, name)
+    ctx = frame.context
     value = translate(expression, set(ctx.variables), quote_ident)
     where = _condition_sql(ctx, condition)
     # Outside the if, the new variable is missing - which is what Stata does.
     column = f"CASE WHEN {where} THEN {value} ELSE NULL END" if where else value
-    frame = _select(dataset, ctx, extra=[(name, column)])
-    _write(db, dataset, frame)
+    data = _select(frame, ctx, extra=[(name, column)])
+    write(work, frame, data)
     return CommandResult(
         command="",
         message=f"Created {name}",
         variables_added=[name],
-        changed_rows=len(frame),
+        changed_rows=len(data),
         data_changed=True,
     )
 
 
-def _replace(db: Session, dataset: Dataset, rest: str) -> CommandResult:
+def _replace(work: Workspace, frame: Frame, rest: str) -> CommandResult:
     name, expression, condition = _assignment(rest)
-    ctx = _context(dataset)
+    ctx = frame.context
     if name not in ctx.variables:
-        raise CommandError(f"'{name}' is not a variable in this dataset. Use gen to create it.")
+        raise CommandError(f"'{name}' is not a variable in the data. Use gen to create it.")
     value = translate(expression, set(ctx.variables), quote_ident)
     where = _condition_sql(ctx, condition)
     column = f"CASE WHEN {where} THEN {value} ELSE {quote_ident(name)} END" if where else value
 
-    changed = _count_matching(dataset, where) if where else None
-    frame = _select(dataset, ctx, replace={name: column})
-    _write(db, dataset, frame)
-    affected = changed if changed is not None else len(frame)
+    changed = _count_matching(frame, where) if where else None
+    data = _select(frame, ctx, replace={name: column})
+    write(work, frame, data)
+    affected = changed if changed is not None else len(data)
     return CommandResult(
         command="",
         message=f"Replaced {name} in {affected:,} row(s)",
@@ -257,20 +288,20 @@ def _replace(db: Session, dataset: Dataset, rest: str) -> CommandResult:
     )
 
 
-def _egen(db: Session, dataset: Dataset, rest: str) -> CommandResult:
+def _egen(work: Workspace, frame: Frame, rest: str) -> CommandResult:
     """egen new = fn(args) [, by(v1 v2)] - the aggregate and row-wise forms."""
     body, options = _split_options(rest)
     name, _, call = (part.strip() for part in body.partition("="))
     if not name or not call:
         raise CommandError('egen needs a name and a function, e.g. egen n = count(age), by(region)')
-    _check_new_name(dataset, name)
+    _check_new_name(frame, name)
 
     match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*\((.*)\)$", call.strip(), re.DOTALL)
     if match is None:
         raise CommandError(f"'{call}' is not a function call egen understands")
     function, arguments = match.group(1).lower(), match.group(2).strip()
 
-    ctx = _context(dataset)
+    ctx = frame.context
     by = _by_variables(ctx, options)
 
     if function in EGEN_ROWWISE:
@@ -299,36 +330,37 @@ def _egen(db: Session, dataset: Dataset, rest: str) -> CommandResult:
         allowed = sorted(set(EGEN_AGGREGATES) | EGEN_ROWWISE | {"group", "tag"})
         raise CommandError(f"egen has no '{function}'. Available: {', '.join(allowed)}")
 
-    frame = _select(dataset, ctx, extra=[(name, column)])
-    _write(db, dataset, frame)
+    data = _select(frame, ctx, extra=[(name, column)])
+    write(work, frame, data)
     return CommandResult(
         command="",
         message=f"Created {name}" + (f" within {', '.join(by)}" if by else ""),
         variables_added=[name],
-        changed_rows=len(frame),
+        changed_rows=len(data),
         data_changed=True,
     )
 
 
-def _label(db: Session, dataset: Dataset, rest: str) -> CommandResult:
-    """label variable / label define / label values - names, not data."""
+def _label(work: Workspace, frame: Frame, rest: str) -> CommandResult:
+    """label variable / label define / label values - names, not data.
+
+    These change the frame's own labels rather than any dataset's. They are
+    written out by whatever `save` comes next, which is what makes a script
+    that labels and then saves under a new name leave the original's labels
+    alone.
+    """
     kind, _, body = rest.partition(" ")
     kind, body = kind.lower(), body.strip()
 
     if kind in ("variable", "var", "v"):
         name, _, text = body.partition(" ")
-        variable = _variable(dataset, name)
-        variable.label = _unquote(text.strip())
-        _remember_label(dataset, variable.name, label=variable.label)
-        return CommandResult(command="", message=f"Labelled {variable.name}")
+        info = frame.info(name)
+        frame.labels[info.name] = _unquote(text.strip())
+        return CommandResult(command="", message=f"Labelled {info.name}")
 
     if kind in ("define", "def"):
         book, pairs = _label_definition(body)
-        meta = dict(dataset.meta or {})
-        books = dict(meta.get("label_books") or {})
-        books[book] = pairs
-        meta["label_books"] = books
-        dataset.meta = meta
+        frame.label_books[book] = pairs
         return CommandResult(
             command="", message=f"Defined label set '{book}' with {len(pairs)} value(s)"
         )
@@ -336,22 +368,23 @@ def _label(db: Session, dataset: Dataset, rest: str) -> CommandResult:
     if kind in ("values", "val", "value"):
         name, _, book = body.partition(" ")
         book = book.strip()
-        variable = _variable(dataset, name)
-        books = (dataset.meta or {}).get("label_books") or {}
-        if book and book not in books:
+        info = frame.info(name)
+        if book and book not in frame.label_books:
             raise CommandError(
                 f"No label set called '{book}'. Define it first: "
                 f'label define {book} 1 "Yes" 2 "No"'
             )
-        pairs = dict(books.get(book) or {}) if book else {}
-        variable.value_labels = pairs
-        _remember_label(dataset, variable.name, value_labels=pairs)
+        pairs = dict(frame.label_books.get(book) or {}) if book else {}
+        if pairs:
+            frame.value_labels[info.name] = pairs
+        else:
+            frame.value_labels.pop(info.name, None)
         return CommandResult(
             command="",
             message=(
-                f"Applied '{book}' to {variable.name}"
+                f"Applied '{book}' to {info.name}"
                 if book
-                else f"Cleared labels on {variable.name}"
+                else f"Cleared labels on {info.name}"
             ),
         )
 
@@ -360,37 +393,38 @@ def _label(db: Session, dataset: Dataset, rest: str) -> CommandResult:
     )
 
 
-def _rename(db: Session, dataset: Dataset, rest: str) -> CommandResult:
+def _rename(work: Workspace, frame: Frame, rest: str) -> CommandResult:
     parts = rest.split()
     if len(parts) != 2:
         raise CommandError("rename takes the old name and the new one: rename q1 age")
     old, new = parts
-    variable = _variable(dataset, old)
-    _check_new_name(dataset, new)
+    info = frame.info(old)
+    _check_new_name(frame, new)
 
-    ctx = _context(dataset)
-    frame = _select(dataset, ctx, rename={variable.name: new})
-    _write(db, dataset, frame, renamed={variable.name: new})
+    ctx = frame.context
+    was = info.name
+    data = _select(frame, ctx, rename={was: new})
+    write(work, frame, data, renamed={was: new})
     return CommandResult(
         command="",
-        message=f"Renamed {variable.name} to {new}",
+        message=f"Renamed {was} to {new}",
         variables_added=[new],
-        variables_removed=[variable.name],
+        variables_removed=[was],
         data_changed=True,
     )
 
 
-def _drop(db: Session, dataset: Dataset, rest: str) -> CommandResult:
-    ctx = _context(dataset)
+def _drop(work: Workspace, frame: Frame, rest: str) -> CommandResult:
+    ctx = frame.context
     if rest.lower().startswith("if "):
         where = _condition_sql(ctx, rest[3:].strip())
-        before = dataset.row_count
-        frame = _select(dataset, ctx, where=f"NOT ({where}) OR ({where}) IS NULL")
-        _write(db, dataset, frame)
+        before = frame.rows
+        data = _select(frame, ctx, where=f"NOT ({where}) OR ({where}) IS NULL")
+        write(work, frame, data)
         return CommandResult(
             command="",
-            message=f"Dropped {before - len(frame):,} row(s)",
-            changed_rows=before - len(frame),
+            message=f"Dropped {before - len(data):,} row(s)",
+            changed_rows=before - len(data),
             data_changed=True,
         )
 
@@ -399,9 +433,9 @@ def _drop(db: Session, dataset: Dataset, rest: str) -> CommandResult:
         raise CommandError("drop needs variables, or an if condition")
     remaining = [v for v in ctx.variables if v not in names]
     if not remaining:
-        raise CommandError("That would drop every variable in the dataset")
-    frame = _select(dataset, ctx, only=remaining)
-    _write(db, dataset, frame)
+        raise CommandError("That would drop every variable in the data")
+    data = _select(frame, ctx, only=remaining)
+    write(work, frame, data)
     return CommandResult(
         command="",
         message=f"Dropped {', '.join(names)}",
@@ -410,17 +444,17 @@ def _drop(db: Session, dataset: Dataset, rest: str) -> CommandResult:
     )
 
 
-def _keep(db: Session, dataset: Dataset, rest: str) -> CommandResult:
-    ctx = _context(dataset)
+def _keep(work: Workspace, frame: Frame, rest: str) -> CommandResult:
+    ctx = frame.context
     if rest.lower().startswith("if "):
         where = _condition_sql(ctx, rest[3:].strip())
-        before = dataset.row_count
-        frame = _select(dataset, ctx, where=where)
-        _write(db, dataset, frame)
+        before = frame.rows
+        data = _select(frame, ctx, where=where)
+        write(work, frame, data)
         return CommandResult(
             command="",
-            message=f"Kept {len(frame):,} row(s), dropped {before - len(frame):,}",
-            changed_rows=len(frame),
+            message=f"Kept {len(data):,} row(s), dropped {before - len(data):,}",
+            changed_rows=len(data),
             data_changed=True,
         )
 
@@ -428,8 +462,8 @@ def _keep(db: Session, dataset: Dataset, rest: str) -> CommandResult:
     if not names:
         raise CommandError("keep needs variables, or an if condition")
     dropped = [v for v in ctx.variables if v not in names]
-    frame = _select(dataset, ctx, only=names)
-    _write(db, dataset, frame)
+    data = _select(frame, ctx, only=names)
+    write(work, frame, data)
     return CommandResult(
         command="",
         message=f"Kept {len(names)} variable(s), dropped {len(dropped)}",
@@ -439,6 +473,24 @@ def _keep(db: Session, dataset: Dataset, rest: str) -> CommandResult:
 
 
 # --- plumbing ---------------------------------------------------------------
+
+
+def verbs() -> dict[str, Any]:
+    """Every spelling Stata takes for the commands that change the data.
+
+    A function rather than a module-level dict, so the table can sit beside
+    the commands it names instead of below every one of them, out of sight of
+    the dispatcher that reads it.
+    """
+    return {
+        "gen": _generate, "gene": _generate, "generate": _generate, "g": _generate,
+        "replace": _replace,
+        "egen": _egen,
+        "label": _label, "la": _label, "lab": _label,
+        "rename": _rename, "ren": _rename,
+        "drop": _drop,
+        "keep": _keep,
+    }
 
 
 def _context(dataset: Dataset) -> DatasetContext:
@@ -510,7 +562,7 @@ def _variable_list(ctx: DatasetContext, text: str) -> list[str]:
         if not raw:
             continue
         if raw not in ctx.variables:
-            raise CommandError(f"'{raw}' is not a variable in this dataset")
+            raise CommandError(f"'{raw}' is not a variable in the data")
         names.append(raw)
     return names
 
@@ -542,9 +594,9 @@ def _condition_sql(ctx: DatasetContext, condition: str) -> str:
     return translate(condition, set(ctx.variables), quote_ident)
 
 
-def _count_matching(dataset: Dataset, where: str) -> int:
+def _count_matching(frame: Frame, where: str) -> int:
     sql = (
-        f"SELECT COUNT(*) FROM read_parquet({_quote_path(dataset.storage_path)}) "
+        f"SELECT COUNT(*) FROM read_parquet({_quote_path(str(frame.path))}) "
         f"WHERE {where}"
     )
     _, rows = run_sql(sql)
@@ -552,7 +604,7 @@ def _count_matching(dataset: Dataset, where: str) -> int:
 
 
 def _select(
-    dataset: Dataset,
+    frame: Frame,
     ctx: DatasetContext,
     extra: list[tuple[str, str]] | None = None,
     replace: dict[str, str] | None = None,
@@ -560,7 +612,7 @@ def _select(
     only: list[str] | None = None,
     where: str = "",
 ) -> pd.DataFrame:
-    """Build the dataset as the command leaves it, and read it back."""
+    """Build the data as the command leaves it, and read it back."""
     replace = replace or {}
     rename = rename or {}
     names = only if only is not None else list(ctx.variables)
@@ -575,13 +627,13 @@ def _select(
 
     # The rows come back in the order they are stored in. Without this a
     # command using a window function - egen with by(), say - is free to return
-    # them grouped, which silently reorders the dataset under everything that
+    # them grouped, which silently reorders the data under everything that
     # reads it by position.
     ordinal = quote_ident(ROW_ORDER)
     sql = (
         f"SELECT {', '.join(selected)} FROM ("
         f"SELECT *, ROW_NUMBER() OVER () AS {ordinal} "
-        f"FROM read_parquet({_quote_path(dataset.storage_path)})"
+        f"FROM read_parquet({_quote_path(str(frame.path))})"
         f")"
     )
     if where:
@@ -591,38 +643,10 @@ def _select(
     return pd.DataFrame(rows, columns=columns)
 
 
-def _write(
-    db: Session, dataset: Dataset, frame: pd.DataFrame, renamed: dict[str, str] | None = None
-) -> None:
-    """Persist the new shape of the dataset, keeping the labels it had."""
-    renamed = renamed or {}
-    labels = {}
-    value_labels = {}
-    for variable in dataset.variables:
-        name = renamed.get(variable.name, variable.name)
-        if variable.label:
-            labels[name] = variable.label
-        if variable.value_labels:
-            value_labels[name] = variable.value_labels
-    _apply_ingest(
-        db,
-        dataset,
-        ingest_frame(frame, labels, value_labels, dataset_directory(dataset.id), []),
-    )
-
-
-def _variable(dataset: Dataset, name: str) -> Any:
-    name = name.strip()
-    for variable in dataset.variables:
-        if variable.name == name:
-            return variable
-    raise CommandError(f"'{name}' is not a variable in this dataset")
-
-
-def _check_new_name(dataset: Dataset, name: str) -> None:
+def _check_new_name(frame: Frame, name: str) -> None:
     if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", name):
         raise CommandError(f"'{name}' is not a usable variable name")
-    if any(v.name == name for v in dataset.variables):
+    if frame.has(name):
         raise CommandError(f"'{name}' already exists. Use replace to change it.")
 
 
