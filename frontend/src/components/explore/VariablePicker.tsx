@@ -27,6 +27,7 @@ export function VariablePicker({
   /** Offered at the top, for the pickers where choosing nothing is a choice. */
   emptyOption,
   disabled,
+  title,
   className = "",
 }: {
   variables: Variable[];
@@ -35,6 +36,8 @@ export function VariablePicker({
   label: string;
   emptyOption?: string;
   disabled?: boolean;
+  /** Hover text, for saying why a disabled picker is disabled. */
+  title?: string;
   className?: string;
 }) {
   const [open, setOpen] = useState(false);
@@ -138,6 +141,7 @@ export function VariablePicker({
         autoComplete="off"
         spellCheck={false}
         disabled={disabled}
+        title={title}
         // Typing replaces what is shown; leaving without choosing puts it back.
         value={open ? typed : settled}
         placeholder={settled || "Type to search"}
