@@ -55,7 +55,7 @@ from app.schemas.dataset import (
 )
 from app.schemas.monitoring import JobOut
 from app.schemas.query import FilterGroup
-from app.services import stata
+from app.services import project_script, stata
 from app.services.audit import record
 from app.services.datasets import (
     ArchiveImport,
@@ -419,10 +419,28 @@ async def upload_dataset(
     # Whatever was merged out of the replaced files is holding the previous
     # export's join until it is re-run. Nothing on a dashboard would say so:
     # the merged dataset keeps its id, its name and its old row count.
-    rebuilt = rebuild_dependents(db, outcome.replaced_ids if archive else [])
+    replaced = outcome.replaced_ids if archive else []
+    rebuilt = rebuild_dependents(db, replaced)
     if rebuilt:
         names = [d.name for d in (db.get(Dataset, i) for i in rebuilt) if d]
         outcome.warnings.append("Rebuilt from the new data: " + ", ".join(sorted(names)))
+
+    # And the scripts that read what was replaced, after the merges: a script
+    # that reads a merged dataset has to wait for that merge to be rebuilt, or
+    # it builds on last week's join.
+    #
+    # Only for an archive. `outcome` exists only on that branch, and so does
+    # the possibility of anything having been replaced: a single file always
+    # creates a dataset of its own.
+    if archive:
+        reruns = project_script.rerun_for(db, replaced + rebuilt)
+        outcome.warnings.extend(project_script.warnings_from(db, reruns))
+        made = [i for entry in reruns if entry.ran for i in entry.written]
+        names = sorted({d.name for d in (db.get(Dataset, i) for i in made) if d})
+        if names:
+            outcome.warnings.append(
+                "Rebuilt by the project's script: " + ", ".join(names)
+            )
     if archive:
         record(
             db,

@@ -144,7 +144,19 @@ def accept(db, job, user):
         warnings.extend(stata.replay(db, target))
     db.flush()
 
-    rebuild_dependents(db, [d.id for d in published])
+    rebuilt = rebuild_dependents(db, [d.id for d in published])
+
+    # Then the project scripts standing on any of it. After the merges, for
+    # the same reason the merges come after the replay: a script that reads a
+    # merged dataset would otherwise build on the previous export's join.
+    from app.services import project_script
+
+    reruns = project_script.rerun_for(db, [d.id for d in published] + rebuilt)
+    warnings.extend(project_script.warnings_from(db, reruns))
+    db.flush()
+    for entry in published:
+        db.refresh(entry)
+
     summary = {
         "datasets": [{"id": d.id, "name": d.name, "rows": d.row_count} for d in published],
         "rows": sum(d.row_count for d in published),

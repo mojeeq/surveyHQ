@@ -351,7 +351,7 @@ Deriving a variable, recoding an answer, labelling a question: anyone who has
 prepared survey data has the idioms in their fingers, and reaching for a
 spreadsheet to add one derived column is a poor substitute for them.
 
-Open a dataset and go to the **Command** tab. It takes a script, one command
+Open a project and go to its **Command** tab. It takes a script, one command
 per line, as a do-file is written:
 
     * everyone old enough to work
@@ -428,6 +428,35 @@ number; it says which variable and stops.
 **collapse** and **contract** replace what is in memory rather than adding to
 it, exactly as in Stata: a person-level file becomes a province-level one. Give
 the result a name of its own with `save as`.
+
+#### Saving, running, and running again
+
+**Save** keeps the script without running it, so one half-written at the end of
+the day survives being closed. **Run script** runs what is in the box, whether
+or not it has been saved.
+
+The script is a recipe rather than a one-off. When a newer export replaces a
+dataset the script read, the script runs again from the top and rebuilds
+everything it built, so what it wrote keeps up with the data instead of
+quietly holding last week's numbers. The **Last run** panel says which datasets
+it reads and which it writes; those are what it actually touched last time, not
+what the text appears to mention.
+
+Two things follow from that:
+
+- A script that has never been run here is left alone by an import. A draft is
+  not started off for the first time inside somebody else's upload; run it once
+  and it joins the rotation.
+- `save as` may write over what the script itself built last time, because
+  rebuilding its own output is the whole point. It refuses a dataset it did not
+  build, unless the line says `save as <name>, replace`.
+
+A re-run that fails does not fail the import, which has already happened. It is
+reported beside the uploaded data and on the project's Command tab, with the
+line that stopped it.
+
+Scripts run after merges rebuild, so one that reads a merged dataset gets the
+new join rather than the previous export's.
 
 The expression language is the useful subset: arithmetic, comparison, `&`
 `|` `!`, `.` for missing, and functions such as `int`, `round`, `abs`, `min`,
