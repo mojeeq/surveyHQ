@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException
 from slugify import slugify
@@ -33,7 +33,11 @@ from app.schemas.project import (
     ProjectMemberOut,
     ProjectOut,
     ProjectUpdate,
+    ScriptIn,
+    ScriptOut,
+    ScriptRunIn,
 )
+from app.services import project_script, stata
 from app.services.audit import record
 from app.services.dashboard_assets import remove_all
 from app.services.datasets import delete_dataset_files
@@ -43,6 +47,7 @@ from app.services.projects import (
     scope_for,
     visible_projects,
 )
+from app.services.stata import CommandError
 
 router = APIRouter()
 
@@ -433,6 +438,98 @@ def _to_out(project: Project, db: DbSession, user: User) -> ProjectOut:
         dashboard_count=dashboards,
         member_count=members,
         your_role=effective_role(db, user, project.id),
+    )
+
+
+# --- the project's script ---------------------------------------------------
+
+
+@router.get("/{project_id}/script", response_model=ScriptOut)
+def read_script(project_id: str, db: DbSession, user: CurrentUser) -> ScriptOut:
+    """The project's do-file, and how its last run went."""
+    _visible_project(project_id, db, user)
+    script = project_script.script_for(db, project_id)
+    db.commit()
+    return _script_out(db, script)
+
+
+@router.put("/{project_id}/script", response_model=ScriptOut)
+def write_script(
+    project_id: str, payload: ScriptIn, db: DbSession, user: RequireManager
+) -> ScriptOut:
+    """Keep the script without running it.
+
+    Saving and running are separate on purpose: a script half-written at the
+    end of the day should survive being closed, and running it then would
+    build half of something.
+    """
+    _visible_project(project_id, db, user)
+    script = project_script.script_for(db, project_id)
+    script.text = payload.text
+    script.updated_by = user.id
+    db.commit()
+    return _script_out(db, script)
+
+
+@router.post("/{project_id}/script/run", response_model=dict)
+def run_script(
+    project_id: str, payload: ScriptRunIn, db: DbSession, user: RequireManager
+) -> dict[str, Any]:
+    """Run the script and report what it did, line by line.
+
+    A line that fails stops the run and the response says which and why.
+    Whatever it saved before that point is saved, as in a do-file: the work is
+    not unwound, so a script fixed at line nine does not redo lines one to
+    eight.
+    """
+    _visible_project(project_id, db, user)
+    try:
+        outcome = project_script.run(db, project_id, payload.text)
+    except stata.ScriptError as exc:
+        # Committed rather than rolled back: what ran, ran.
+        db.commit()
+        raise HTTPException(
+            status_code=422,
+            detail=str(exc),
+            headers={"X-Script-Line": str(exc.line_number)},
+        ) from exc
+    except CommandError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    record(
+        db,
+        user=user,
+        action="run_project_script",
+        entity_type="project",
+        entity_id=project_id,
+        detail={"saved": [entry.name for entry in outcome.saved]},
+    )
+    db.commit()
+    return {
+        "log": [
+            {"command": step.command, "message": step.message}
+            for step in outcome.results
+        ],
+        "saved": [
+            {"id": entry.dataset_id, "name": entry.name,
+             "created": entry.created, "rows": entry.rows}
+            for entry in outcome.saved
+        ],
+    }
+
+
+def _script_out(db: DbSession, script) -> ScriptOut:
+    def named(ids: list[str]) -> list[str]:
+        found = [db.get(Dataset, one) for one in ids or []]
+        return [one.name for one in found if one is not None]
+
+    return ScriptOut(
+        text=script.text,
+        reads=named(script.reads),
+        writes=named(script.writes),
+        last_run_at=script.last_run_at,
+        last_error=script.last_error,
     )
 
 

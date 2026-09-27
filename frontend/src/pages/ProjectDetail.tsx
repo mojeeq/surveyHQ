@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
+import { ProjectScript } from '@/components/ProjectScript'
 import { api } from '@/lib/api'
 import { useToast } from '@/hooks/useToast'
 import { formatNumber, relativeTime } from '@/lib/format'
@@ -40,7 +41,7 @@ export default function ProjectDetail() {
   const queryClient = useQueryClient()
   const [deleting, setDeleting] = useState(false)
   const [confirmName, setConfirmName] = useState('')
-  const [tab, setTab] = useState<'data' | 'model' | 'members'>('data')
+  const [tab, setTab] = useState<'data' | 'model' | 'script' | 'members'>('data')
 
   const project = useQuery({
     queryKey: ['project', id],
@@ -164,12 +165,14 @@ export default function ProjectDetail() {
             count: (datasets.data?.items.length ?? 0) + (dashboards.data?.length ?? 0),
           },
           { id: 'model', label: 'Relationships', count: relationships.data?.length },
-          // R is the project's, not any one dataset's: a script reads the
-          // household file and writes the person file.
+          // The script belongs to the project, not to any one dataset: it
+          // reads the household file and writes the person file. Only for
+          // somebody who may change the data, since running it does.
+          ...(canManage ? [{ id: 'script' as const, label: 'Command' }] : []),
           { id: 'members', label: 'Members', count: project.data.member_count },
         ]}
         active={tab}
-        onChange={(next) => setTab(next as 'data' | 'model' | 'members')}
+        onChange={(next) => setTab(next as 'data' | 'model' | 'script' | 'members')}
       />
 
       {tab === 'data' ? (
@@ -237,6 +240,8 @@ export default function ProjectDetail() {
           relationships={relationships.data ?? []}
           canManage={canManage}
         />
+      ) : tab === 'script' ? (
+        <ProjectScript projectId={id} />
       ) : (
         <Members projectId={id} members={project.data.members ?? []} canManage={canManage} />
       )}

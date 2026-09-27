@@ -16,7 +16,9 @@ import datetime as dt
 import enum
 
 from sqlalchemy import (
+    JSON,
     Date,
+    DateTime,
     Enum,
     ForeignKey,
     String,
@@ -54,6 +56,43 @@ class Project(UUIDMixin, TimestampMixin, Base):
     members: Mapped[list[ProjectMember]] = relationship(
         back_populates="project", cascade="all, delete-orphan"
     )
+
+
+class ProjectScript(UUIDMixin, TimestampMixin, Base):
+    """The project's do-file: one script, written once and re-run.
+
+    One per project rather than a library of them. A project's data preparation
+    is a single sequence - read these files, put them together, write those out
+    - and splitting it across several scripts only raises the question of which
+    order they run in, which is a question the script itself already answers by
+    being written top to bottom.
+
+    `reads` and `writes` are what the last run actually touched, recorded
+    rather than parsed out of the text. That is what lets a newer export of one
+    dataset re-run the scripts that stand on it, and only those: parsing would
+    have to resolve names the way `use` does, and would count a line that never
+    ran because the one above it failed.
+    """
+
+    __tablename__ = "project_scripts"
+    __table_args__ = (UniqueConstraint("project_id", name="uq_project_script"),)
+
+    project_id: Mapped[str] = mapped_column(
+        ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    text: Mapped[str] = mapped_column(Text, default="")
+    updated_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # The datasets the last run read and the ones it wrote, by id.
+    reads: Mapped[list] = mapped_column(JSON, default=list)
+    writes: Mapped[list] = mapped_column(JSON, default=list)
+
+    last_run_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    # Empty when the last run finished. Otherwise what stopped it, kept so the
+    # project page can say a nightly re-run failed without anybody watching.
+    last_error: Mapped[str] = mapped_column(Text, default="")
 
 
 class ProjectMember(UUIDMixin, TimestampMixin, Base):

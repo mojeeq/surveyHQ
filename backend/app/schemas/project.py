@@ -79,3 +79,25 @@ class AssignProjectIn(BaseModel):
     """Move a dataset or dashboard into a project, or out to the shared area."""
 
     project_id: str | None = None
+
+
+class ScriptIn(BaseModel):
+    """The project's do-file, as the editor holds it."""
+
+    text: str = Field(default="", max_length=200_000)
+
+
+class ScriptRunIn(BaseModel):
+    """What to run. Omitted, the stored script runs."""
+
+    text: str | None = Field(default=None, max_length=200_000)
+
+
+class ScriptOut(BaseModel):
+    text: str = ""
+    # What the last run touched, by name rather than by id: whoever reads this
+    # is looking at a page, not a database.
+    reads: list[str] = Field(default_factory=list)
+    writes: list[str] = Field(default_factory=list)
+    last_run_at: dt.datetime | None = None
+    last_error: str = ""

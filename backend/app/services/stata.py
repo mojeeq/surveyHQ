@@ -114,6 +114,16 @@ class Run:
     frame: Frame | None = None
     project_id: str | None = None
     saved: list[Saved] = field(default_factory=list)
+    # The datasets this project's script made last time. A `save as` may write
+    # over one of these, because the script owns what it built and re-running
+    # it has to rebuild them; anything else it refuses, so a script cannot
+    # quietly take over a dataset somebody else made.
+    owns: set[str] = field(default_factory=set)
+    # Every dataset this run opened, in the order it opened them. Recorded as
+    # it happens rather than parsed out of the text afterwards: parsing would
+    # have to resolve names the way `use` does, and would count a line that
+    # never ran because the one above it failed.
+    read: list[str] = field(default_factory=list)
 
     @property
     def data(self) -> Frame:
@@ -212,13 +222,20 @@ class ScriptOutcome:
 
     results: list[CommandResult]
     saved: list[Saved]
+    read: list[str] = field(default_factory=list)
 
     @property
     def created(self) -> list[Saved]:
         return [entry for entry in self.saved if entry.created]
 
+    @property
+    def written(self) -> list[str]:
+        return list(dict.fromkeys(entry.dataset_id for entry in self.saved))
 
-def run_project_script(db: Session, project_id: str, text: str) -> ScriptOutcome:
+
+def run_project_script(
+    db: Session, project_id: str, text: str, owns: set[str] | None = None
+) -> ScriptOutcome:
     """Run a project's do-file, from the first `use` to the last `save`.
 
     The whole script shares one workspace and one piece of data in memory, so
@@ -232,17 +249,25 @@ def run_project_script(db: Session, project_id: str, text: str) -> ScriptOutcome
     """
     results: list[CommandResult] = []
     with Workspace() as work:
-        run = Run(db=db, work=work, project_id=project_id)
+        run = Run(db=db, work=work, project_id=project_id, owns=set(owns or ()))
         for number, line in enumerate(_lines(text), start=1):
             try:
                 results.append(apply(run, line))
             except (CommandError, ExpressionError, FrameError) as exc:
-                raise ScriptError(number, line, str(exc), results) from exc
+                error = ScriptError(number, line, str(exc), results)
+                # What it managed to read before stopping still says which
+                # datasets this script stands on, which is what decides
+                # whether a later import re-runs it.
+                error.read = list(run.read)
+                error.saved = list(run.saved)
+                raise error from exc
         if not results:
             raise CommandError("There is nothing to run")
         # Inside the workspace: the saves have already read what they needed
         # from it, but the frame's file is only there until this block ends.
-        outcome = ScriptOutcome(results=results, saved=list(run.saved))
+        outcome = ScriptOutcome(
+            results=results, saved=list(run.saved), read=list(run.read)
+        )
     return outcome
 
 
@@ -274,6 +299,11 @@ class ScriptError(CommandError):
         self.line = line
         self.reason = message
         self.done = done
+        # Filled in by the runner: what the script had read, and saved, before
+        # it stopped. A run that failed halfway still says which datasets it
+        # stands on, which is what decides whether a later import re-runs it.
+        self.read: list[str] = []
+        self.saved: list[Saved] = []
 
 
 def _lines(text: str) -> list[str]:
@@ -593,6 +623,7 @@ def _use(run: Run, rest: str) -> CommandResult:
     # does and what makes a script re-runnable: each `use` starts a section.
     run.frame = load(run.work, dataset)
     run.frame.label_books = dict((dataset.meta or {}).get("label_books") or {})
+    _note_read(run, dataset)
     return CommandResult(
         command="",
         message=f"Loaded {dataset.name}: {run.frame.rows:,} row(s), "
@@ -618,7 +649,7 @@ def _save(run: Run, rest: str) -> CommandResult:
         name = _unquote(target.strip())
         if not name:
             raise CommandError('save as needs a name, e.g. save as "Adults"')
-        return _save_as(run, frame, name)
+        return _save_as(run, frame, name, replacing=replacing)
 
     if body:
         raise CommandError(
@@ -638,14 +669,36 @@ def _save(run: Run, rest: str) -> CommandResult:
     return _save_over(run, frame)
 
 
-def _save_as(run: Run, frame: Frame, name: str) -> CommandResult:
-    """Write the data in memory out as a dataset the project did not have."""
+def _save_as(run: Run, frame: Frame, name: str, replacing: bool = False) -> CommandResult:
+    """Write the data in memory out, as a new dataset or over the script's own.
+
+    A script is a recipe, so running it twice has to rebuild what it built the
+    first time rather than refusing because that already exists - otherwise it
+    could only ever be run once, which is the opposite of the point. What it
+    may write over is only what it wrote before: the ids the last run saved.
+    Anything else is somebody else's dataset and is refused, unless the line
+    says `replace` out loud.
+    """
     if run.project_id is None:
         raise CommandError("save as needs a project to save into")
-    if _lookup(run, name) is not None:
-        raise CommandError(
-            f"'{name}' already exists in this project. Pick another name, or "
-            f"`use {name}` and `save, replace` to write over it."
+    existing = _lookup(run, name)
+    if existing is not None:
+        if not (replacing or existing.id in run.owns):
+            raise CommandError(
+                f"'{name}' already exists in this project and was not built by "
+                f"this script. Pick another name, or write `save as {name}, "
+                f"replace` to take it over."
+            )
+        _store(run.db, existing, frame)
+        run.saved.append(
+            Saved(dataset_id=existing.id, name=existing.name, created=False, rows=frame.rows)
+        )
+        frame.origin = existing.id
+        frame.name = existing.name
+        return CommandResult(
+            command="",
+            message=f"Saved {frame.rows:,} row(s) over {name}",
+            data_changed=True,
         )
 
     dataset = create_dataset_record(
@@ -689,6 +742,12 @@ def _save_over(run: Run, frame: Frame) -> CommandResult:
         message=f"Saved {frame.rows:,} row(s) over {dataset.name}",
         data_changed=True,
     )
+
+
+def _note_read(run: Run, dataset: Dataset) -> None:
+    """Remember that the script read this one, without repeating it."""
+    if dataset.id not in run.read:
+        run.read.append(dataset.id)
 
 
 def _find_dataset(run: Run, name: str) -> Dataset:
@@ -789,6 +848,7 @@ def _merge(run: Run, rest: str) -> CommandResult:
     other = _find_dataset(run, using_name)
     if not dataset_is_queryable(other):
         raise CommandError(f"'{other.name}' has no data to merge")
+    _note_read(run, other)
     there_names = [variable.name for variable in other.variables]
     absent = [name for name in keys if name not in there_names]
     if absent:
@@ -980,6 +1040,7 @@ def _append(run: Run, rest: str) -> CommandResult:
     other = _find_dataset(run, using_name)
     if not dataset_is_queryable(other):
         raise CommandError(f"'{other.name}' has no data to append")
+    _note_read(run, other)
 
     here_types = _column_types(str(frame.path))
     there_types = _column_types(str(other.storage_path))
