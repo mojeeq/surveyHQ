@@ -378,6 +378,57 @@ applied, exactly as a do-file behaves, and the log says what got through.
 | `rename` | A new name, carried to everything built on the old one. |
 | `drop` / `keep` | Variables, or rows with `if`. |
 
+A comparison is a number, as it is in Stata: `gen adult = age >= 18` gives 1
+and 0, not true and false, so `egen total = sum(adult)` and
+`collapse (sum) adult` are arithmetic and a chart of it is a chart of a count.
+A missing age stays missing rather than becoming a zero.
+
+#### Working across a project's datasets
+
+A script run at project level starts by saying which dataset it is working on,
+and nothing on disk changes until it says to save. That is what makes a script
+you can re-run: one that loads, edits and forgets to save leaves the project
+exactly as it found it.
+
+    use people
+    merge m:1 hhid using households, keep(match)
+    gen adult = age >= 18
+    collapse (sum) adult (count) age, by(province)
+    save as "Adults by province"
+
+| Command | What it does |
+|---|---|
+| `use` | Load a copy of one of the project's datasets. A second `use` starts a new section. |
+| `save as <name>` | Write what is in memory out as a new dataset. It refuses a name already taken. |
+| `save, replace` | Write back over the dataset this was loaded from. A bare `save` is refused, so a script cannot quietly eat the file it read. |
+| `merge 1:1` / `m:1` / `1:m` | Join another dataset on one or more keys. |
+| `append using` | Stack another dataset's rows underneath. |
+| `collapse` | One row per group: `collapse (mean) wage (sum) hours, by(province)`. A bare varlist means the mean. |
+| `contract` | How many rows each combination has, counted into `_freq`. |
+
+**merge** keeps everything by default, as Stata does, and says which is which
+in `_merge`: 1 for rows only the data in memory had, 2 for rows only the other
+dataset had, 3 for rows that matched. Narrow it with `keep(match)`, choose what
+crosses over with `keepusing(...)`, or leave the column out with `nogen`.
+
+Write the shape down and it is held to it. A `1:1` that meets a repeated key is
+refused rather than quietly becoming a one-to-many and multiplying rows, which
+is the kind of mistake only noticed weeks later when a total is too big.
+
+A variable on both sides is taken from the data in memory and the other copy is
+not brought over, which is Stata's rule. A missing key matches nothing, not even
+another missing key: pairing them would multiply every row whose key was never
+recorded by every other one. Those rows come back as `_merge == 1`.
+
+**append** lines columns up by name rather than position, which is what makes
+stacking two rounds safe when a question was inserted in between. A variable
+only one side has is missing on the other's rows. Text will not stack on a
+number; it says which variable and stops.
+
+**collapse** and **contract** replace what is in memory rather than adding to
+it, exactly as in Stata: a person-level file becomes a province-level one. Give
+the result a name of its own with `save as`.
+
 The expression language is the useful subset: arithmetic, comparison, `&`
 `|` `!`, `.` for missing, and functions such as `int`, `round`, `abs`, `min`,
 `max`, `substr`, `upper`, `lower`, `strlen` and `real`.
