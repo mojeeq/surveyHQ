@@ -63,10 +63,17 @@ def test_gen_creates_a_variable_from_an_expression(client, auth_headers, workben
     assert response.status_code == 200, response.text
     assert response.json()["variables_added"] == ["adult"]
 
-    # The missing age stays missing rather than becoming false
-    assert values(client, auth_headers, workbench, "adult") == [
-        False, True, True, True, False, None
-    ]
+    # One and zero, not true and false: Stata has no boolean, and everything
+    # downstream assumes a number - `egen total = sum(adult)` is arithmetic,
+    # and DuckDB refuses `sum(BOOLEAN)` outright. Spelt out rather than left
+    # as True/False, which this read as passing either way because 0 == False.
+    # One and zero, not true and false: Stata has no boolean. What is actually
+    # load-bearing is the type the column is *stored* as, which this cannot
+    # see - the preview hands back 0/1 either way - so it is pinned in
+    # test_project_script_verbs, where summing it is the thing that breaks.
+    #
+    # The missing age stays missing rather than becoming a zero.
+    assert values(client, auth_headers, workbench, "adult") == [0, 1, 1, 1, 0, None]
 
 
 def test_gen_with_an_if_leaves_the_other_rows_missing(client, auth_headers, workbench):
