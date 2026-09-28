@@ -206,7 +206,7 @@ def copy_join_to_parquet(
     *,
     left_path: str | Path,
     right_path: str | Path,
-    left_key: str,
+    on: str,
     right_key: str,
     right_columns: Iterable[str],
     left_columns: set[str],
@@ -214,7 +214,13 @@ def copy_join_to_parquet(
     how: str = "left",
     prefix: str = "",
 ) -> tuple[int, list[str]]:
-    """Stream a relationship join directly to Parquet and return its shape."""
+    """Stream a relationship join directly to Parquet and return its shape.
+
+    `on` is the whole join condition, built by the relationships service, which
+    is where the keys are converted when the relationship says to convert them.
+    It is composed of checked identifiers there, never of anything a caller
+    typed.
+    """
     selected: list[str] = []
     for column in right_columns:
         if column == right_key:
@@ -229,7 +235,7 @@ def copy_join_to_parquet(
         f"SELECT l.*{',' if selected else ''} {', '.join(selected)} "
         f"FROM read_parquet({quote_path(left_path)}) l "
         f"{join} read_parquet({quote_path(right_path)}) r "
-        f"ON l.{quote_ident(left_key)} = r.{quote_ident(right_key)}"
+        f"ON {on}"
     )
 
     destination = Path(destination)

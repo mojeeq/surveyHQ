@@ -17,7 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
-from app.models import Cardinality, Dataset, DatasetRelationship
+from app.models import Cardinality, Dataset, DatasetRelationship, KeyMatch
 from app.services.datasets import dataset_is_queryable
 from app.services.query_engine import (
     _quote_path,
@@ -192,6 +192,7 @@ def check_key_types(
     right: Dataset,
     left_variable: str,
     right_variable: str,
+    match: KeyMatch = KeyMatch.exact,
 ) -> None:
     """Refuse a join between a text key and a numeric one, in those words.
 
@@ -204,7 +205,12 @@ def check_key_types(
 
     Read from the files rather than from the variables' `var_type`, which is the
     semantic type the interface offers and not what the column holds.
+
+    A relationship that says how to match its keys has already answered this, so
+    there is nothing here to refuse.
     """
+    if match is not KeyMatch.exact:
+        return
     here = column_types(left.storage_path).get(left_variable)
     there = column_types(right.storage_path).get(right_variable)
     # A column that is not in the file at all is the caller's own check to make,
@@ -222,8 +228,108 @@ def check_key_types(
     raise ValueError(
         f"{named}: the key is {kind_of(here)} in '{left.name}' and "
         f"{kind_of(there)} in '{right.name}', so the two cannot be joined on it. "
-        f"Make them the same type on both sides first."
+        f"Make them the same type on both sides, or set this relationship to "
+        f"match its keys as text."
     )
+
+
+def key_expression(qualified: str, stored: str, match: KeyMatch) -> str:
+    """One side of the join condition, converted the way the relationship says.
+
+    `qualified` is the column already quoted and prefixed with its table alias,
+    because these expressions mention it more than once.
+    """
+    if match is KeyMatch.exact:
+        return qualified
+    numeric = kind_of(stored) == "a number"
+
+    if match is KeyMatch.number:
+        if numeric:
+            return qualified
+        # TRY_CAST, not CAST: a value that is not a number becomes null and so
+        # matches nothing, where a plain cast fails the whole join on the first
+        # one it meets - which is the 500 this feature exists to answer.
+        return f"TRY_CAST(trim({qualified}) AS DOUBLE)"
+
+    if not numeric:
+        # Trimmed, because an id that came through a CSV often arrives padded
+        # and " 41" is not "41" to anything but a person reading it.
+        return f"trim(CAST({qualified} AS VARCHAR))"
+    # A household id read from a .dta is a DOUBLE, and 41.0 as text is "41.0" -
+    # which matches the string "41" no better than the number did. So a whole
+    # number is rendered whole. TRY_CAST guards the one case that would fail,
+    # a value too large for a 128-bit integer, which is not an id but is not
+    # worth an error either.
+    return (
+        f"CASE WHEN {qualified} IS NULL THEN NULL "
+        f"WHEN {qualified} = floor({qualified}) THEN COALESCE("
+        f"CAST(TRY_CAST({qualified} AS HUGEINT) AS VARCHAR), "
+        f"CAST({qualified} AS VARCHAR)) "
+        f"ELSE CAST({qualified} AS VARCHAR) END"
+    )
+
+
+def join_condition(
+    left: Dataset,
+    right: Dataset,
+    left_variable: str,
+    right_variable: str,
+    match: KeyMatch = KeyMatch.exact,
+    left_alias: str = "l",
+    right_alias: str = "r",
+) -> str:
+    """The `ON` for a merge, with both keys converted the same way."""
+    here = column_types(left.storage_path).get(left_variable, "")
+    there = column_types(right.storage_path).get(right_variable, "")
+    return (
+        f"{key_expression(f'{left_alias}.{quote_ident(left_variable)}', here, match)}"
+        f" = "
+        f"{key_expression(f'{right_alias}.{quote_ident(right_variable)}', there, match)}"
+    )
+
+
+def matched_rows(
+    left: Dataset,
+    right: Dataset,
+    left_variable: str,
+    right_variable: str,
+    match: KeyMatch,
+) -> int:
+    """How many pairs the keys actually make, counted before anything is built.
+
+    Worth one aggregate pass when a relationship has been told to convert its
+    keys, because that is the case where the merge can succeed and mean nothing:
+    a left join that matched no rows writes out the left side with a column of
+    blanks beside it, and nothing on the page would say the conversion had not
+    worked.
+    """
+    on = join_condition(left, right, left_variable, right_variable, match)
+    sql = (
+        f"SELECT COUNT(*) FROM read_parquet({_quote_path(left.storage_path)}) l "
+        f"JOIN read_parquet({_quote_path(right.storage_path)}) r ON {on}"
+    )
+    _, rows = run_sql(sql)
+    return int(rows[0][0]) if rows else 0
+
+
+def unmatched_warning(
+    left: Dataset,
+    right: Dataset,
+    left_variable: str,
+    right_variable: str,
+    match: KeyMatch,
+) -> list[str]:
+    """A note when a converted key still lines nothing up."""
+    if match is KeyMatch.exact:
+        return []
+    if matched_rows(left, right, left_variable, right_variable, match):
+        return []
+    how = "as text" if match is KeyMatch.text else "as numbers"
+    return [
+        f"Matching the keys {how} lined up no rows at all, so nothing from "
+        f"'{right.name}' reached this dataset. The two ids may differ by more "
+        f"than how they are written."
+    ]
 
 
 def merge_frames(
@@ -234,6 +340,7 @@ def merge_frames(
     how: str = "left",
     columns: list[str] | None = None,
     prefix: str = "",
+    match: KeyMatch = KeyMatch.exact,
 ) -> pd.DataFrame:
     """Join two datasets on their related key.
 
@@ -241,7 +348,7 @@ def merge_frames(
     join happens over Parquet, so only the columns asked for are read and the
     memory cost is the result rather than both inputs.
     """
-    check_key_types(left, right, left_variable, right_variable)
+    check_key_types(left, right, left_variable, right_variable, match)
 
     right_columns = [v.name for v in right.variables]
     if columns:
@@ -271,7 +378,7 @@ def merge_frames(
         f"SELECT l.*{',' if selected else ''} {', '.join(selected)} "
         f"FROM read_parquet({_quote_path(left.storage_path)}) l "
         f"{join} read_parquet({_quote_path(right.storage_path)}) r "
-        f"ON l.{quote_ident(left_variable)} = r.{quote_ident(right_variable)}"
+        f"ON {join_condition(left, right, left_variable, right_variable, match)}"
     )
     columns_out, rows = run_sql(sql)
     return pd.DataFrame(rows, columns=columns_out)
