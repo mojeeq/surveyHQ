@@ -230,6 +230,18 @@ def append_frame_fast(
     return dataset
 
 
+def _complaint(exc: Exception) -> str:
+    """What DuckDB said, without the query it said it about.
+
+    DuckDB follows its message with the offending SQL - "LINE 1: ...", a caret,
+    and as much of the statement as fits. That statement holds the storage paths
+    of both files and a value out of the data, and it goes to whoever asked for
+    the merge. The first line is the part that helps them; the rest describes
+    generated SQL they did not write and cannot act on.
+    """
+    return str(exc).split("\nLINE ", 1)[0].strip()[:500]
+
+
 def run_merge_fast(
     db: Any,
     target: Any,
@@ -297,7 +309,7 @@ def run_merge_fast(
         # reach the browser as a bare 500.
         logger.warning("Columnar merge failed: %s", exc)
         destination.unlink(missing_ok=True)
-        raise QueryError(f"The merge could not be built: {exc}") from exc
+        raise QueryError(f"The merge could not be built: {_complaint(exc)}") from exc
 
     labels = {v.name: v.label for v in left.variables if v.label}
     value_labels = {v.name: v.value_labels for v in left.variables if v.value_labels}

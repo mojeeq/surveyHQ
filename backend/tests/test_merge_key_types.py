@@ -549,3 +549,40 @@ def test_matching_alphanumerically_keeps_letters_that_tell_two_ids_apart(
     assert merged.status_code == 201, merged.text
     # Only HH-1. PP-1 has the same digits and is not the same id.
     assert merged.json()["row_count"] == 1
+
+
+def test_a_duckdb_complaint_reaches_the_browser_without_the_sql_it_is_about(
+    client, auth_headers, monkeypatch
+):
+    """DuckDB follows its message with the statement it failed on.
+
+    That statement is generated, holds the storage paths of both Parquet files
+    and a value out of the data, and is of no use to whoever asked for the
+    merge. The first line is the part they can act on; the rest goes no further
+    than the log.
+    """
+    import duckdb
+
+    from app.services import columnar
+
+    def refuse(**_: object) -> None:
+        raise duckdb.ConversionException(
+            "Conversion Error: Could not convert string 'H1' to DOUBLE\n"
+            "LINE 1: ...read_parquet('/srv/surveyhq/storage/abc/data-9f.parquet') r ON ...\n"
+            "                                                  ^"
+        )
+
+    monkeypatch.setattr(columnar, "copy_join_to_parquet", refuse)
+    project = _matching_project(client, auth_headers, "Complaint trimmed")
+    link = _link(client, auth_headers, project["sk_people"], project["sk_wages"])
+
+    refused = client.post(
+        "/api/v1/relationships/merge",
+        headers=auth_headers,
+        json={"name": "Trimmed", "relationship_id": link["id"]},
+    )
+    assert refused.status_code == 422, refused.status_code
+    detail = refused.json()["detail"]
+    assert "Could not convert string 'H1' to DOUBLE" in detail
+    assert "LINE 1" not in detail
+    assert ".parquet" not in detail and "/srv/" not in detail
