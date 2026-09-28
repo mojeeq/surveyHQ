@@ -22,10 +22,11 @@ from __future__ import annotations
 
 import re
 import shlex
+import shutil
 from dataclasses import dataclass, field
 from typing import Any
+from uuid import uuid4
 
-import pandas as pd
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -37,7 +38,7 @@ from app.services.datasets import (
     dataset_directory,
     dataset_is_queryable,
 )
-from app.services.ingest import ingest_frame
+from app.services.ingest import IngestResult
 from app.services.query_engine import (
     DatasetContext,
     _quote_path,
@@ -45,7 +46,14 @@ from app.services.query_engine import (
     run_sql,
 )
 from app.services.stata_expr import ExpressionError, translate
-from app.services.stata_frame import Frame, FrameError, Workspace, load, write
+from app.services.stata_frame import (
+    Frame,
+    FrameError,
+    Workspace,
+    load,
+    variables_of,
+    write,
+)
 
 logger = get_logger(__name__)
 
@@ -193,19 +201,29 @@ def run(db: Session, dataset: Dataset, text: str, record_it: bool = True) -> Com
 
 
 def _store(db: Session, dataset: Dataset, frame: Frame) -> None:
-    """Write the frame back over the dataset it was loaded from."""
-    import pandas as pd_
+    """Write the frame back over the dataset it was loaded from.
 
-    columns, rows = run_sql(f"SELECT * FROM read_parquet({_quote_path(str(frame.path))})")
+    The working file is already Parquet in the platform's own shape, so it is
+    moved into the dataset's directory and described where it lands. Reading it
+    into pandas and ingesting it again would re-derive what it already is, at
+    the cost of a Python object per cell - on a census-sized file, the single
+    most expensive thing the engine did.
+    """
+    destination = dataset_directory(dataset.id) / f"data-{uuid4().hex}.parquet"
+    destination.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(frame.path, destination)
+
+    variables = variables_of(destination, dict(frame.labels), dict(frame.value_labels))
     _apply_ingest(
         db,
         dataset,
-        ingest_frame(
-            pd_.DataFrame(rows, columns=columns),
-            dict(frame.labels),
-            dict(frame.value_labels),
-            dataset_directory(dataset.id),
-            [],
+        IngestResult(
+            parquet_path=destination,
+            row_count=frame.rows,
+            column_count=len(variables),
+            file_size=destination.stat().st_size,
+            variables=variables,
+            warnings=[] if frame.rows else ["The data has no rows left in it."],
         ),
     )
     # Label sets outlive the command that defined them, so a later script can
@@ -379,13 +397,12 @@ def _generate(run: Run, rest: str) -> CommandResult:
     where = _condition_sql(ctx, condition)
     # Outside the if, the new variable is missing - which is what Stata does.
     column = f"CASE WHEN {where} THEN {value} ELSE NULL END" if where else value
-    data = _as_numbers(_select(frame, ctx, extra=[(name, column)]), [name])
-    write(work, frame, data)
+    write(work, frame, _select_sql(frame, ctx, extra=[(name, _as_number(frame, column))]))
     return CommandResult(
         command="",
         message=f"Created {name}",
         variables_added=[name],
-        changed_rows=len(data),
+        changed_rows=frame.rows,
         data_changed=True,
     )
 
@@ -401,9 +418,8 @@ def _replace(run: Run, rest: str) -> CommandResult:
     column = f"CASE WHEN {where} THEN {value} ELSE {quote_ident(name)} END" if where else value
 
     changed = _count_matching(frame, where) if where else None
-    data = _as_numbers(_select(frame, ctx, replace={name: column}), [name])
-    write(work, frame, data)
-    affected = changed if changed is not None else len(data)
+    write(work, frame, _select_sql(frame, ctx, replace={name: _as_number(frame, column)}))
+    affected = changed if changed is not None else frame.rows
     return CommandResult(
         command="",
         message=f"Replaced {name} in {affected:,} row(s)",
@@ -455,13 +471,12 @@ def _egen(run: Run, rest: str) -> CommandResult:
         allowed = sorted(set(EGEN_AGGREGATES) | EGEN_ROWWISE | {"group", "tag"})
         raise CommandError(f"egen has no '{function}'. Available: {', '.join(allowed)}")
 
-    data = _as_numbers(_select(frame, ctx, extra=[(name, column)]), [name])
-    write(work, frame, data)
+    write(work, frame, _select_sql(frame, ctx, extra=[(name, _as_number(frame, column))]))
     return CommandResult(
         command="",
         message=f"Created {name}" + (f" within {', '.join(by)}" if by else ""),
         variables_added=[name],
-        changed_rows=len(data),
+        changed_rows=frame.rows,
         data_changed=True,
     )
 
@@ -531,8 +546,7 @@ def _rename(run: Run, rest: str) -> CommandResult:
 
     ctx = frame.context
     was = info.name
-    data = _select(frame, ctx, rename={was: new})
-    write(work, frame, data, renamed={was: new})
+    write(work, frame, _select_sql(frame, ctx, rename={was: new}), renamed={was: new})
     return CommandResult(
         command="",
         message=f"Renamed {was} to {new}",
@@ -548,12 +562,11 @@ def _drop(run: Run, rest: str) -> CommandResult:
     if rest.lower().startswith("if "):
         where = _condition_sql(ctx, rest[3:].strip())
         before = frame.rows
-        data = _select(frame, ctx, where=f"NOT ({where}) OR ({where}) IS NULL")
-        write(work, frame, data)
+        write(work, frame, _select_sql(frame, ctx, where=f"NOT ({where}) OR ({where}) IS NULL"))
         return CommandResult(
             command="",
-            message=f"Dropped {before - len(data):,} row(s)",
-            changed_rows=before - len(data),
+            message=f"Dropped {before - frame.rows:,} row(s)",
+            changed_rows=before - frame.rows,
             data_changed=True,
         )
 
@@ -563,8 +576,7 @@ def _drop(run: Run, rest: str) -> CommandResult:
     remaining = [v for v in ctx.variables if v not in names]
     if not remaining:
         raise CommandError("That would drop every variable in the data")
-    data = _select(frame, ctx, only=remaining)
-    write(work, frame, data)
+    write(work, frame, _select_sql(frame, ctx, only=remaining))
     return CommandResult(
         command="",
         message=f"Dropped {', '.join(names)}",
@@ -579,12 +591,11 @@ def _keep(run: Run, rest: str) -> CommandResult:
     if rest.lower().startswith("if "):
         where = _condition_sql(ctx, rest[3:].strip())
         before = frame.rows
-        data = _select(frame, ctx, where=where)
-        write(work, frame, data)
+        write(work, frame, _select_sql(frame, ctx, where=where))
         return CommandResult(
             command="",
-            message=f"Kept {len(data):,} row(s), dropped {before - len(data):,}",
-            changed_rows=len(data),
+            message=f"Kept {frame.rows:,} row(s), dropped {before - frame.rows:,}",
+            changed_rows=frame.rows,
             data_changed=True,
         )
 
@@ -592,8 +603,7 @@ def _keep(run: Run, rest: str) -> CommandResult:
     if not names:
         raise CommandError("keep needs variables, or an if condition")
     dropped = [v for v in ctx.variables if v not in names]
-    data = _select(frame, ctx, only=names)
-    write(work, frame, data)
+    write(work, frame, _select_sql(frame, ctx, only=names))
     return CommandResult(
         command="",
         message=f"Kept {len(names)} variable(s), dropped {len(dropped)}",
@@ -907,15 +917,13 @@ def _merge(run: Run, rest: str) -> CommandResult:
     )
     if keeping:
         sql += f" WHERE {verdict} IN ({', '.join(str(code) for code in sorted(keeping))})"
-    columns, rows = run_sql(sql)
-    data = pd.DataFrame(rows, columns=columns)
-
-    counts = {code: int((data["_merge"] == code).sum()) for code in (1, 2, 3)}
+    counts = _merge_counts(sql)
     if not generate:
-        data = data.drop(columns=["_merge"])
+        # The verdict was only ever there to be counted.
+        sql = f'SELECT * EXCLUDE ("_merge") FROM ({sql})'
 
     _carry_labels(frame, other, carried)
-    write(work, frame, data)
+    write(work, frame, sql)
     # The data is no longer the dataset it was loaded from, so a bare `save`
     # has nothing to write back over and will ask for a name.
     frame.origin = None
@@ -923,11 +931,23 @@ def _merge(run: Run, rest: str) -> CommandResult:
 
     return CommandResult(
         command="",
-        message=_merge_message(other.name, len(data), counts, shadowed, generate),
+        message=_merge_message(other.name, frame.rows, counts, shadowed, generate),
         variables_added=(["_merge"] if generate else []) + carried,
-        changed_rows=len(data),
+        changed_rows=frame.rows,
         data_changed=True,
     )
+
+
+def _merge_counts(sql: str) -> dict[int, int]:
+    """How many rows came from each side, counted where the join is.
+
+    One aggregate pass over the join rather than a copy of the whole of it in
+    Python. The only column it asks for is the verdict, so DuckDB reads the two
+    key columns and the sentinels and skips the rest of both files.
+    """
+    _, rows = run_sql(f'SELECT "_merge", COUNT(*) FROM ({sql}) GROUP BY 1')
+    found = {int(row[0]): int(row[1]) for row in rows}
+    return {code: found.get(code, 0) for code in (MASTER_ONLY, USING_ONLY, MATCHED)}
 
 
 MERGE_HERE = "__in_memory"
@@ -1068,21 +1088,18 @@ def _append(run: Run, rest: str) -> CommandResult:
         f"UNION ALL BY NAME "
         f"SELECT * FROM read_parquet({_quote_path(str(other.storage_path))})"
     )
-    columns, rows = run_sql(sql)
-    data = pd.DataFrame(rows, columns=columns)
-
     _carry_labels(frame, other, [name for name in there if not frame.has(name)])
-    write(work, frame, data)
+    write(work, frame, sql)
     frame.origin = None
     frame.name = f"{frame.name} + {other.name}"
 
     return CommandResult(
         command="",
         message=(
-            f"Appended {other.name}: {len(data):,} row(s), "
-            f"{before:,} from here and {len(data) - before:,} from there"
+            f"Appended {other.name}: {frame.rows:,} row(s), "
+            f"{before:,} from here and {frame.rows - before:,} from there"
         ),
-        changed_rows=len(data) - before,
+        changed_rows=frame.rows - before,
         data_changed=True,
     )
 
@@ -1143,9 +1160,6 @@ def _collapse(run: Run, rest: str) -> CommandResult:
     if by:
         grouped = ", ".join(quote_ident(name) for name in by)
         sql += f" GROUP BY {grouped} ORDER BY {grouped}"
-    columns, rows = run_sql(sql)
-    data = pd.DataFrame(rows, columns=columns)
-
     before = frame.rows
     # The summaries are new numbers, so a label saying what the column held
     # one row at a time no longer describes it.
@@ -1154,7 +1168,7 @@ def _collapse(run: Run, rest: str) -> CommandResult:
     frame.value_labels = {
         name: pairs for name, pairs in frame.value_labels.items() if name in kept
     }
-    write(work, frame, data)
+    write(work, frame, sql)
     frame.origin = None
     frame.name = f"{frame.name} collapsed"
 
@@ -1162,8 +1176,8 @@ def _collapse(run: Run, rest: str) -> CommandResult:
     where = f" by {', '.join(by)}" if by else ""
     return CommandResult(
         command="",
-        message=f"Collapsed {before:,} row(s) to {len(data):,}{where}: {how}",
-        changed_rows=len(data),
+        message=f"Collapsed {before:,} row(s) to {frame.rows:,}{where}: {how}",
+        changed_rows=frame.rows,
         data_changed=True,
     )
 
@@ -1219,27 +1233,24 @@ def _contract(run: Run, rest: str) -> CommandResult:
         f"FROM read_parquet({_quote_path(str(frame.path))}) "
         f"GROUP BY {grouped} ORDER BY {grouped}"
     )
-    columns, rows = run_sql(sql)
-    data = pd.DataFrame(rows, columns=columns)
-
     before = frame.rows
     kept = set(names)
     frame.labels = {name: text for name, text in frame.labels.items() if name in kept}
     frame.value_labels = {
         name: pairs for name, pairs in frame.value_labels.items() if name in kept
     }
-    write(work, frame, data)
+    write(work, frame, sql)
     frame.origin = None
     frame.name = f"{frame.name} counted"
 
     return CommandResult(
         command="",
         message=(
-            f"Counted {before:,} row(s) into {len(data):,} combination(s) of "
+            f"Counted {before:,} row(s) into {frame.rows:,} combination(s) of "
             f"{', '.join(names)}, in _freq"
         ),
         variables_added=["_freq"],
-        changed_rows=len(data),
+        changed_rows=frame.rows,
         data_changed=True,
     )
 
@@ -1410,7 +1421,7 @@ def _count_matching(frame: Frame, where: str) -> int:
     return int(rows[0][0]) if rows else 0
 
 
-def _select(
+def _select_sql(
     frame: Frame,
     ctx: DatasetContext,
     extra: list[tuple[str, str]] | None = None,
@@ -1418,8 +1429,13 @@ def _select(
     rename: dict[str, str] | None = None,
     only: list[str] | None = None,
     where: str = "",
-) -> pd.DataFrame:
-    """Build the data as the command leaves it, and read it back."""
+) -> str:
+    """The query describing the data as the command leaves it.
+
+    Returned rather than run: the result's only destination is the working
+    Parquet file, so it goes there directly instead of being read into Python
+    and written back out again.
+    """
     replace = replace or {}
     rename = rename or {}
     names = only if only is not None else list(ctx.variables)
@@ -1446,36 +1462,33 @@ def _select(
     if where:
         sql += f" WHERE {where}"
     sql += f" ORDER BY {ordinal}"
-    columns, rows = run_sql(sql)
-    return pd.DataFrame(rows, columns=columns)
+    return sql
 
 
-def _as_numbers(data: pd.DataFrame, names: list[str]) -> pd.DataFrame:
-    """Turn a true/false column into 1/0, because Stata has no true or false.
+def _as_number(frame: Frame, expression: str) -> str:
+    """Turn a true/false expression into 1/0, because Stata has no true or false.
 
     `gen adult = age >= 18` is a number in Stata, and everything downstream
     assumes that: `egen total = sum(adult)` and `collapse (sum) adult` are
     arithmetic, and a chart of it is a chart of a count. DuckDB answers a
     comparison with a BOOLEAN, which cannot be summed at all - the binder
     refuses `sum(BOOLEAN)` outright - so the column has to become what Stata
-    would have made it before anything else sees it.
+    would have made it before it is written.
 
-    Missing stays missing: a nullable integer, not a zero.
+    The type is asked of DuckDB rather than guessed, because an expression can
+    reach a boolean in more ways than a comparison: `inlist(...)`, a function,
+    a nested case. DESCRIBE binds the query without running it, so this costs a
+    parse and no scan.
+
+    Missing stays missing: a cast of NULL is NULL, not a zero.
     """
-    for name in names:
-        if name in data.columns and data[name].dtype == "bool" or (
-            name in data.columns and str(data[name].dtype) == "boolean"
-        ):
-            data[name] = data[name].astype("Int64")
-        elif name in data.columns and data[name].dtype == object:
-            # An object column of True/False/None, which is how a nullable
-            # boolean arrives through the row-by-row read.
-            values = data[name].dropna().unique().tolist()
-            if values and all(isinstance(value, bool) for value in values):
-                data[name] = data[name].map(
-                    lambda value: None if value is None else int(value)
-                ).astype("Int64")
-    return data
+    sql = (
+        f"DESCRIBE SELECT {expression} AS {quote_ident(ROW_ORDER)} "
+        f"FROM read_parquet({_quote_path(str(frame.path))})"
+    )
+    _, rows = run_sql(sql)
+    boolean = bool(rows) and str(rows[0][1]).strip().upper() == "BOOLEAN"
+    return f"CAST({expression} AS INTEGER)" if boolean else expression
 
 
 def _check_new_name(frame: Frame, name: str) -> None:
