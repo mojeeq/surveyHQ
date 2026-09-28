@@ -790,6 +790,10 @@ function RelationshipsTab({
                       <option value="exact">Exactly, as stored</option>
                       <option value="text">As text</option>
                       <option value="number">As numbers</option>
+                      <option value="digits">By the numbers inside them</option>
+                      <option value="alphanumeric">
+                        Ignoring punctuation and capitalisation
+                      </option>
                     </select>
                   </Field>
                   <label className="mb-4 flex items-center gap-2 text-sm text-ink-700">
@@ -832,12 +836,13 @@ function RelationshipsTab({
 
               {selected.key_match !== 'exact' && (
                 <p className="mt-1 text-xs text-ink-600 dark:text-dark-600">
-                  The keys are converted to{' '}
-                  {selected.key_match === 'text' ? 'text' : 'numbers'} on both sides
-                  before they are compared, so <code>41</code> and{' '}
-                  <code>&quot;41&quot;</code> count as the same household. Ids that differ
-                  by more than how they are written still will not match, and the merge
-                  says so when nothing lines up.
+                  {KEY_MATCH_NOTE[selected.key_match]} The merge says so when a
+                  conversion lines up no rows at all
+                  {selected.key_match === 'digits' ||
+                  selected.key_match === 'alphanumeric'
+                    ? ', or when it makes two different ids into one'
+                    : ''}
+                  .
                 </p>
               )}
             </div>
@@ -857,6 +862,24 @@ function RelationshipsTab({
       )}
     </Card>
   )
+}
+
+/** What each way of matching keys actually does, in the order they are offered. */
+const KEY_MATCH_NOTE: Record<Exclude<KeyMatch, 'exact'>, string> = {
+  text:
+    'Both keys are compared as text, trimmed, and a whole number is written whole - ' +
+    'so 41 and "41" are the same household, and so is " 41".',
+  number:
+    'Both keys are read as numbers, and a value that is not one matches nothing ' +
+    'rather than stopping the merge.',
+  digits:
+    'Only the digits in each key are kept, and read as the number they spell - so ' +
+    '"H0041" and 41 are the same household. Leading zeros and anything that is not ' +
+    'a digit are ignored, which means "P0041" would match too.',
+  alphanumeric:
+    'Punctuation, spaces and capitalisation are ignored and the letters are kept - ' +
+    'so "INT-2024/A1" and "int2024a1" are the same interview, while A1 and B1 stay ' +
+    'different.',
 }
 
 function MergeModal({

@@ -6,9 +6,9 @@ safely: converting "H0041" to a number fails, and converting 41 to text gives
 "41", which is not "H0041" either.
 
 Where the two really are the same households written two ways - a survey run
-twice, one export quoting its ids and the next not - the person who knows the
-survey can now say so on the relationship, and the merge converts both sides
-the way they asked.
+twice, one export quoting its ids and the next not, or "H0041" written against
+41 - the person who knows the survey can now say so on the relationship, and
+the merge converts both sides the way they asked.
 
 Existing relationships get `exact`, which is what they have always done.
 """
@@ -21,7 +21,7 @@ down_revision = "20260927_05"
 branch_labels = None
 depends_on = None
 
-MATCHES = ("exact", "text", "number")
+MATCHES = ("exact", "text", "number", "digits", "alphanumeric")
 TYPE_NAME = "relationship_key_match"
 
 

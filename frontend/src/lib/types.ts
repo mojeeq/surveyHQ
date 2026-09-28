@@ -27,12 +27,15 @@ export type Cardinality =
  * How a relationship's two keys are lined up before they are compared.
  *
  * `exact` compares the columns as stored and is the only one that cannot
- * quietly match the wrong rows, so it is the default. The other two are a
- * statement about the data that only a person can make: the same household is
- * written "0041" in one export and 41 in the next, and nothing in the files
- * says so.
+ * quietly match the wrong rows, so it is the default. The rest are a statement
+ * about the data that only a person can make: the same household is written
+ * "0041" in one export and 41 in the next, or "H0041" against 41, and nothing
+ * in the files says so.
+ *
+ * `digits` and `alphanumeric` throw part of the key away, which can also make
+ * two different ids into one. The merge counts that and warns.
  */
-export type KeyMatch = 'exact' | 'text' | 'number'
+export type KeyMatch = 'exact' | 'text' | 'number' | 'digits' | 'alphanumeric'
 
 export interface Relationship {
   id: string

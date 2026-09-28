@@ -238,11 +238,30 @@ def key_expression(qualified: str, stored: str, match: KeyMatch) -> str:
     """One side of the join condition, converted the way the relationship says.
 
     `qualified` is the column already quoted and prefixed with its table alias,
-    because these expressions mention it more than once.
+    because these expressions mention it more than once. Nothing here comes from
+    a person: the patterns are fixed and the only thing the relationship chooses
+    is which of them to use, so no expression a caller typed reaches the SQL.
     """
     if match is KeyMatch.exact:
         return qualified
     numeric = kind_of(stored) == "a number"
+
+    # Both of these go through _as_text first, and have to. A numeric key is a
+    # DOUBLE, and casting 41.0 straight to text gives "41.0" - whose digits are
+    # 410. Rendering it whole first gives "41", which is the id.
+    if match is KeyMatch.digits:
+        # Everything that is not a digit goes, and then the digits are read as
+        # the number they spell - which is what drops the leading zeros, so
+        # "H0041" and 41 arrive at the same place. Nothing left after stripping
+        # means an id with no digits in it at all, which TRY_CAST turns into a
+        # null that matches nothing.
+        return f"TRY_CAST({_only(_as_text(qualified, numeric), '[^0-9]')} AS DOUBLE)"
+
+    if match is KeyMatch.alphanumeric:
+        # The letters are part of the id here, so they stay; the punctuation,
+        # the spaces and the capitalisation are what differ between two systems
+        # writing down the same thing.
+        return f"upper({_only(_as_text(qualified, numeric), '[^A-Za-z0-9]')})"
 
     if match is KeyMatch.number:
         if numeric:
@@ -252,6 +271,11 @@ def key_expression(qualified: str, stored: str, match: KeyMatch) -> str:
         # one it meets - which is the 500 this feature exists to answer.
         return f"TRY_CAST(trim({qualified}) AS DOUBLE)"
 
+    return _as_text(qualified, numeric)
+
+
+def _as_text(qualified: str, numeric: bool) -> str:
+    """The key as a person would write it down."""
     if not numeric:
         # Trimmed, because an id that came through a CSV often arrives padded
         # and " 41" is not "41" to anything but a person reading it.
@@ -268,6 +292,17 @@ def key_expression(qualified: str, stored: str, match: KeyMatch) -> str:
         f"CAST({qualified} AS VARCHAR)) "
         f"ELSE CAST({qualified} AS VARCHAR) END"
     )
+
+
+def _only(text_expression: str, unwanted: str) -> str:
+    """A text expression with every character matching `unwanted` removed.
+
+    `unwanted` is one of this module's own literals, never anything a caller
+    supplied. DuckDB matches with RE2, which has no backtracking, so even a
+    pattern that did come from outside could not be made to run away - but none
+    does.
+    """
+    return f"regexp_replace({text_expression}, '{unwanted}', '', 'g')"
 
 
 def join_condition(
@@ -313,6 +348,61 @@ def matched_rows(
     return int(rows[0][0]) if rows else 0
 
 
+TIDYING = (KeyMatch.digits, KeyMatch.alphanumeric)
+
+HOW = {
+    KeyMatch.text: "as text",
+    KeyMatch.number: "as numbers",
+    KeyMatch.digits: "by the numbers inside them",
+    KeyMatch.alphanumeric: "ignoring punctuation and capitalisation",
+}
+
+
+def collision_warning(dataset: Dataset, variable: str, match: KeyMatch) -> list[str]:
+    """A note when ignoring part of an id makes two different ids the same one.
+
+    This is the price of the two modes that throw part of the key away, and it
+    has to be said rather than discovered. "H0041" and "P0041" are a household
+    and a person in plenty of surveys, and matching by the digits inside them
+    makes both of them 41 - after which a merge joins every person to the wrong
+    household and the row count looks entirely reasonable.
+
+    A warning and not a refusal: whether the prefix means anything is a fact
+    about the survey, and somebody choosing this option may well know that it
+    does not. What they cannot do is see it from here, so this shows them.
+    """
+    if match not in TIDYING:
+        return []
+    types = column_types(dataset.storage_path)
+    if variable not in types:
+        return []
+
+    tidied = key_expression(quote_ident(variable), types[variable], match)
+    plain = _as_text(quote_ident(variable), kind_of(types[variable]) == "a number")
+    sql = (
+        f"WITH pairs AS (SELECT {tidied} AS k, {plain} AS original "
+        f"FROM read_parquet({_quote_path(dataset.storage_path)})), "
+        f"clashes AS (SELECT k, count(DISTINCT original) AS n, "
+        f"list(DISTINCT original)[1:3] AS few FROM pairs WHERE k IS NOT NULL "
+        f"GROUP BY 1 HAVING count(DISTINCT original) > 1) "
+        f"SELECT (SELECT count(*) FROM clashes), "
+        f"(SELECT few FROM clashes ORDER BY n DESC, k LIMIT 1)"
+    )
+    _, rows = run_sql(sql)
+    if not rows:
+        return []
+    groups, few = int(rows[0][0] or 0), list(rows[0][1] or [])
+    if not groups:
+        return []
+
+    shown = " and ".join(f"'{value}'" for value in sorted(str(v) for v in few)[:2])
+    return [
+        f"Matching the keys {HOW[match]} makes {groups:,} set(s) of different "
+        f"ids in '{dataset.name}' into one key - {shown}, for instance. If those "
+        f"are not the same thing, this merge is joining the wrong rows."
+    ]
+
+
 def unmatched_warning(
     left: Dataset,
     right: Dataset,
@@ -325,9 +415,8 @@ def unmatched_warning(
         return []
     if matched_rows(left, right, left_variable, right_variable, match):
         return []
-    how = "as text" if match is KeyMatch.text else "as numbers"
     return [
-        f"Matching the keys {how} lined up no rows at all, so nothing from "
+        f"Matching the keys {HOW[match]} lined up no rows at all, so nothing from "
         f"'{right.name}' reached this dataset. The two ids may differ by more "
         f"than how they are written."
     ]

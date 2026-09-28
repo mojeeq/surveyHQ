@@ -1,5 +1,5 @@
 import { useMemo, useRef, useState, useEffect } from 'react'
-import type { Cardinality, Dataset, Relationship } from '@/lib/types'
+import type { Cardinality, Dataset, KeyMatch, Relationship } from '@/lib/types'
 import { Badge } from './ui'
 
 /**
@@ -21,6 +21,15 @@ import { Badge } from './ui'
  * Links are drawn as SVG between the measured card positions, so the lines stay
  * attached when the container is resized, the list changes, or a box is moved.
  */
+
+// Short enough for a row, and specific enough to be worth reading: a key that
+// is being converted changes which rows a merge joins.
+const KEY_MATCH_BADGE: Record<Exclude<KeyMatch, 'exact'>, string> = {
+  text: 'keys as text',
+  number: 'keys as numbers',
+  digits: 'keys by digits',
+  alphanumeric: 'keys loosely',
+}
 
 const CARDINALITY_LABEL: Record<Cardinality, string> = {
   one_to_one: '1 - 1',
@@ -339,9 +348,7 @@ export default function RelationshipMap({
                       shows once a link is selected is a setting nobody finds
                       again when a total comes out wrong. */}
                   {link.key_match !== 'exact' && (
-                    <Badge tone="neutral">
-                      keys as {link.key_match === 'text' ? 'text' : 'numbers'}
-                    </Badge>
+                    <Badge tone="neutral">{KEY_MATCH_BADGE[link.key_match]}</Badge>
                   )}
                   {link.detected && <Badge tone="neutral">detected</Badge>}
                   {!link.is_active && <Badge tone="warning">off</Badge>}

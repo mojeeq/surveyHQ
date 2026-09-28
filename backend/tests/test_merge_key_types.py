@@ -339,3 +339,213 @@ def test_a_conversion_that_lines_nothing_up_says_so(client, auth_headers):
     assert merged.status_code == 201, merged.text
     warnings = merged.json().get("meta", {}).get("warnings", [])
     assert any("lined up no rows at all" in warning for warning in warnings), warnings
+
+
+# --- when the ids differ by more than how they are written -------------------
+#
+# The case the two conversions above cannot reach. "H0041" is not 41 under any
+# cast: the household number is in there, with a letter and three zeros in front
+# of it, and no rule about types can see that. Only somebody who knows the
+# survey can say that the digits are the id and the rest is decoration.
+PREFIXED = pd.DataFrame(
+    {
+        "hhid": ["H0041", "H0042", "H0099"],
+        "province": ["Shefa", "Sanma", "Tafea"],
+    }
+)
+NUMBERED = pd.DataFrame({"hhid": [41.0, 41.0, 42.0], "age": [40.0, 9.0, 33.0]})
+
+
+def _prefixed_project(client, auth_headers, name: str, left=NUMBERED, right=PREFIXED) -> dict:
+    made = client.post("/api/v1/projects", headers=auth_headers, json={"name": name}).json()
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "prefixed.zip",
+                _zip_bytes(
+                    {"px_households.dta": _stata_bytes(right), "px_people.dta": _stata_bytes(left)}
+                ),
+                "application/zip",
+            )
+        },
+        data={"project_id": made["id"]},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+    by_name = {row["name"]: row["id"] for row in uploaded.json()["datasets"]}
+    return {"id": made["id"], **by_name}
+
+
+def test_matching_by_the_digits_joins_H0041_to_41(client, auth_headers):
+    """The case this whole option exists for."""
+    project = _prefixed_project(client, auth_headers, "Digits join")
+    link = _link(
+        client,
+        auth_headers,
+        project["px_people"],
+        project["px_households"],
+        key_match="digits",
+    )
+    merged = client.post(
+        "/api/v1/relationships/merge",
+        headers=auth_headers,
+        json={"name": "People with province", "relationship_id": link["id"], "how": "inner"},
+    )
+    assert merged.status_code == 201, merged.text
+    body = merged.json()
+    # Two people in H0041 and one in H0042. H0099 has nobody.
+    assert body["row_count"] == 3
+    assert "province" in {v["name"] for v in body["variables"]}
+
+
+def test_the_digits_of_a_numeric_key_are_the_number_and_not_its_decimal_point(
+    client, auth_headers
+):
+    """41.0 is a DOUBLE, and its digits as written are "410".
+
+    Which matches nothing, so the side that is already a number has to be
+    rendered whole before anything is stripped from it. Without that this option
+    silently joins no rows for every .dta on the platform - every numeric key
+    read from Stata is a DOUBLE.
+    """
+    project = _prefixed_project(client, auth_headers, "Digits of a double")
+    link = _link(
+        client,
+        auth_headers,
+        project["px_people"],
+        project["px_households"],
+        key_match="digits",
+    )
+    merged = client.post(
+        "/api/v1/relationships/merge",
+        headers=auth_headers,
+        json={"name": "Not 410", "relationship_id": link["id"], "how": "inner"},
+    )
+    assert merged.status_code == 201, merged.text
+    assert merged.json()["row_count"] == 3
+
+
+def test_matching_by_the_digits_warns_when_it_makes_two_ids_into_one(
+    client, auth_headers
+):
+    """The price of throwing part of the key away, said rather than discovered.
+
+    "H0041" and "P0041" are a household and a person in plenty of surveys. By
+    the digits they are both 41, after which a merge joins every person to the
+    wrong household and the row count looks entirely reasonable.
+    """
+    colliding = pd.DataFrame(
+        {"hhid": ["H0041", "P0041", "H0042"], "province": ["Shefa", "Sanma", "Tafea"]}
+    )
+    project = _prefixed_project(
+        client, auth_headers, "Digits collide", right=colliding
+    )
+    link = _link(
+        client,
+        auth_headers,
+        project["px_people"],
+        project["px_households"],
+        key_match="digits",
+    )
+    merged = client.post(
+        "/api/v1/relationships/merge",
+        headers=auth_headers,
+        json={"name": "Colliding", "relationship_id": link["id"]},
+    )
+    assert merged.status_code == 201, merged.text
+    warnings = merged.json().get("meta", {}).get("warnings", [])
+    note = next((w for w in warnings if "into one key" in w), None)
+    assert note is not None, warnings
+    assert "H0041" in note and "P0041" in note
+    assert "px_households" in note
+
+
+def test_a_key_with_no_digits_in_it_matches_nothing_rather_than_failing(
+    client, auth_headers
+):
+    """TRY_CAST again, for the same reason as before: an id like "unknown" has
+    nothing to strip down to, and a blank matches nothing."""
+    project = _prefixed_project(
+        client,
+        auth_headers,
+        "Digits of nothing",
+        right=pd.DataFrame({"hhid": ["H0041", "unknown"], "province": ["Shefa", "Sanma"]}),
+    )
+    link = _link(
+        client,
+        auth_headers,
+        project["px_people"],
+        project["px_households"],
+        key_match="digits",
+    )
+    merged = client.post(
+        "/api/v1/relationships/merge",
+        headers=auth_headers,
+        json={"name": "Some digits", "relationship_id": link["id"], "how": "inner"},
+    )
+    assert merged.status_code == 201, merged.text
+    assert merged.json()["row_count"] == 2
+
+
+def test_matching_alphanumerically_keeps_the_letters_and_drops_the_rest(
+    client, auth_headers
+):
+    """The other half of the mess: the letters carry meaning and the punctuation
+    and the capitalisation do not."""
+    project = _prefixed_project(
+        client,
+        auth_headers,
+        "Alnum join",
+        left=pd.DataFrame({"hhid": ["INT-2024/A1", "INT-2024/A1", "INT-2024/A2"]}),
+        right=pd.DataFrame(
+            {"hhid": ["int2024a1", "int2024a2"], "province": ["Shefa", "Sanma"]}
+        ),
+    )
+    link = _link(
+        client,
+        auth_headers,
+        project["px_people"],
+        project["px_households"],
+        key_match="alphanumeric",
+    )
+    merged = client.post(
+        "/api/v1/relationships/merge",
+        headers=auth_headers,
+        json={"name": "Tidied text", "relationship_id": link["id"], "how": "inner"},
+    )
+    assert merged.status_code == 201, merged.text
+    assert merged.json()["row_count"] == 3
+
+
+def test_matching_alphanumerically_keeps_letters_that_tell_two_ids_apart(
+    client, auth_headers
+):
+    """It drops punctuation and case, and nothing else.
+
+    The letters have to survive, and the way to pin that is two ids whose digits
+    agree and whose letters do not: "HH-1" and "PP-1" are both 1 to anything
+    that throws letters away, and are a household and a person to a person.
+    """
+    project = _prefixed_project(
+        client,
+        auth_headers,
+        "Alnum keeps letters",
+        left=pd.DataFrame({"hhid": ["HH-1", "PP-1"]}),
+        right=pd.DataFrame({"hhid": ["hh1"], "province": ["Shefa"]}),
+    )
+    link = _link(
+        client,
+        auth_headers,
+        project["px_people"],
+        project["px_households"],
+        key_match="alphanumeric",
+    )
+    merged = client.post(
+        "/api/v1/relationships/merge",
+        headers=auth_headers,
+        json={"name": "Only the household", "relationship_id": link["id"], "how": "inner"},
+    )
+    assert merged.status_code == 201, merged.text
+    # Only HH-1. PP-1 has the same digits and is not the same id.
+    assert merged.json()["row_count"] == 1
