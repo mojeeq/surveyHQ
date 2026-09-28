@@ -42,6 +42,9 @@ from app.services.ingest import IngestResult
 from app.services.query_engine import (
     DatasetContext,
     _quote_path,
+    column_types,
+    compatible,
+    kind_of,
     quote_ident,
     run_sql,
 )
@@ -1062,18 +1065,18 @@ def _append(run: Run, rest: str) -> CommandResult:
         raise CommandError(f"'{other.name}' has no data to append")
     _note_read(run, other)
 
-    here_types = _column_types(str(frame.path))
-    there_types = _column_types(str(other.storage_path))
+    here_types = column_types(str(frame.path))
+    there_types = column_types(str(other.storage_path))
     clashes = sorted(
         name
         for name, kind in there_types.items()
-        if name in here_types and _kind_of(here_types[name]) != _kind_of(kind)
+        if name in here_types and not compatible(kind_of(here_types[name]), kind_of(kind))
     )
     if clashes:
         name = clashes[0]
         raise CommandError(
-            f"'{name}' is {_kind_of(here_types[name])} here and "
-            f"{_kind_of(there_types[name])} in '{other.name}', so the rows "
+            f"'{name}' is {kind_of(here_types[name])} here and "
+            f"{kind_of(there_types[name])} in '{other.name}', so the rows "
             f"cannot be stacked"
             + (f" (and {len(clashes) - 1} other(s))" if len(clashes) > 1 else "")
             + ". Make them the same type first."
@@ -1102,28 +1105,6 @@ def _append(run: Run, rest: str) -> CommandResult:
         changed_rows=frame.rows - before,
         data_changed=True,
     )
-
-
-def _column_types(path: str) -> dict[str, str]:
-    """What each column is actually stored as, asked of the file itself.
-
-    Not the variable's `var_type`, which is what the interface offers it as: a
-    column of 1s and 0s is stored as a number and described as categorical, so
-    reading that would have called every 0/1 question text and let it stack on
-    top of a word.
-    """
-    _, rows = run_sql(f"DESCRIBE SELECT * FROM read_parquet({_quote_path(path)})")
-    return {str(row[0]): str(row[1]) for row in rows}
-
-
-def _kind_of(stored: str) -> str:
-    """The grouping append has to care about: what will not stack on what."""
-    stored = stored.upper()
-    if stored.startswith(("VARCHAR", "CHAR", "TEXT", "STRING", "BLOB", "UUID")):
-        return "text"
-    if stored.startswith(("DATE", "TIME", "INTERVAL")):
-        return "a date"
-    return "a number"
 
 
 # What `collapse` can work out, in the spelling Stata uses for it.

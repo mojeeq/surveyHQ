@@ -22,6 +22,7 @@ from app.services.datasets import dataset_is_queryable
 from app.services.query_engine import (
     _quote_path,
     column_types,
+    compatible,
     kind_of,
     quote_ident,
     run_frame,
@@ -218,7 +219,10 @@ def check_key_types(
     # and it has a better message for it than this one would.
     if here is None or there is None:
         return
-    if kind_of(here) == kind_of(there):
+    # Compared for what can be joined rather than for what is called the same:
+    # a 0/1 key and a true/false one hold the same information and DuckDB joins
+    # them without complaint.
+    if compatible(kind_of(here), kind_of(there)):
         return
 
     named = (
