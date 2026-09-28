@@ -24,6 +24,7 @@ from app.services.query_engine import (
     column_types,
     kind_of,
     quote_ident,
+    run_frame,
     run_sql,
 )
 
@@ -380,5 +381,7 @@ def merge_frames(
         f"{join} read_parquet({_quote_path(right.storage_path)}) r "
         f"ON {join_condition(left, right, left_variable, right_variable, match)}"
     )
-    columns_out, rows = run_sql(sql)
-    return pd.DataFrame(rows, columns=columns_out)
+    # Through DuckDB's own conversion rather than a list of lists: building a
+    # Python object per cell cost fourteen seconds and 400 MB of heap on a
+    # 200,000-row join before anything had been done with it.
+    return run_frame(sql)

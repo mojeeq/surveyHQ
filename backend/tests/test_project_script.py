@@ -273,3 +273,47 @@ def test_a_failure_leaves_the_saves_before_it_and_nothing_after(db_session, proj
 def test_an_empty_script_says_there_is_nothing_to_run(db_session, project):
     with pytest.raises(CommandError):
         script(db_session, project, "   \n * only a comment\n")
+
+
+# --- what a command must not quietly drop -----------------------------------
+
+
+def test_a_tagged_missing_survives_every_command_that_touches_the_data(
+    db_session, project
+):
+    """A .a is not the same blank as a plain one, and only a companion says so.
+
+    Ingest writes the tags into a column beside the variable, hidden from the
+    interface. Every command rebuilds the data by listing the variables it is
+    keeping, so a companion missing from that list is a companion dropped -
+    after which `wage` still has its blanks and nothing left saying which of
+    them the field worker marked "refused".
+    """
+    from app.models import Variable, VariableType
+
+    source = db_session.get(Dataset, project["dataset_id"])
+    stored = pd.read_parquet(source.storage_path)
+    stored["wage__mv"] = [None, None, ".a", None, None, ".b"]
+    stored.to_parquet(source.storage_path, index=False)
+    db_session.add(
+        Variable(
+            dataset_id=source.id,
+            name="wage__mv",
+            var_type=VariableType.text,
+            position=len(stored.columns) - 1,
+            is_hidden=True,
+        )
+    )
+    db_session.flush()
+
+    script(
+        db_session,
+        project,
+        "use members\ngen adult = age >= 18\ndrop if age < 12\nsave as adults",
+    )
+    made = dataset_named(db_session, project, "adults")
+    assert made is not None
+    assert "wage__mv" in columns_of(made), "the tags were dropped on the way through"
+    assert sorted(
+        tag for tag in pd.read_parquet(made.storage_path)["wage__mv"] if tag
+    ) == [".a", ".b"]
