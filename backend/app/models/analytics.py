@@ -142,6 +142,11 @@ class ShareLink(UUIDMixin, TimestampMixin, Base):
     # address: a link already pasted into a ministry email is worth being able
     # to switch back on.
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Closed by archiving the project rather than by a person, so unarchiving
+    # can reopen these and leave alone the ones somebody closed on purpose.
+    closed_by_archive: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
     # When the link stops opening, if it was given a date. Held rather than
     # acted on by a job: a link that expires while nobody is watching must
     # already be shut when the next reader arrives, and a nightly sweep would

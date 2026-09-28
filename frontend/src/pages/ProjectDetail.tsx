@@ -6,6 +6,7 @@ import { api } from '@/lib/api'
 import { useToast } from '@/hooks/useToast'
 import { formatNumber, relativeTime } from '@/lib/format'
 import type {
+  ArchiveCost,
   Cardinality,
   Dashboard,
   Dataset,
@@ -41,6 +42,7 @@ export default function ProjectDetail() {
   const toast = useToast()
   const queryClient = useQueryClient()
   const [deleting, setDeleting] = useState(false)
+  const [archiving, setArchiving] = useState(false)
   const [confirmName, setConfirmName] = useState('')
   const [tab, setTab] = useState<'data' | 'model' | 'script' | 'members'>('data')
 
@@ -64,6 +66,40 @@ export default function ProjectDetail() {
   // "manager" here is the role on this project, which is already capped by the
   // user's own role on the server, so this is the only check the UI needs.
   const canManage = project.data?.your_role === 'manager' || project.data?.your_role === 'admin'
+
+  const archived = project.data?.status === 'archived'
+
+  // Asked only while the dialog is open, because it walks the dataset
+  // directories to add them up and the answer is only wanted when somebody is
+  // about to decide.
+  const cost = useQuery({
+    queryKey: ['project-archive', id],
+    queryFn: () => api.get<ArchiveCost>(`/projects/${id}/archive`),
+    enabled: archiving,
+  })
+
+  const archive = useMutation({
+    mutationFn: () => api.post<{ detail: string }>(`/projects/${id}/archive`, {}),
+    onSuccess: (result) => {
+      toast.push(result.detail, 'success')
+      setArchiving(false)
+      queryClient.invalidateQueries({ queryKey: ['project', id] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['datasets'] })
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  const unarchive = useMutation({
+    mutationFn: () => api.post<{ detail: string }>(`/projects/${id}/unarchive`, {}),
+    onSuccess: (result) => {
+      toast.push(result.detail, 'success')
+      queryClient.invalidateQueries({ queryKey: ['project', id] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['datasets'] })
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
 
   const remove = useMutation({
     mutationFn: (contents: 'release' | 'delete') =>
@@ -89,8 +125,24 @@ export default function ProjectDetail() {
         actions={
           <>
             <Badge tone={project.data.status === 'active' ? 'success' : 'neutral'}>
-              {project.data.status}
+              {archived && project.data.archived_at
+                ? `archived ${new Date(project.data.archived_at).toLocaleDateString()}`
+                : project.data.status}
             </Badge>
+            {canManage && !archived && (
+              <button className="btn-secondary" onClick={() => setArchiving(true)}>
+                Archive
+              </button>
+            )}
+            {canManage && archived && (
+              <button
+                className="btn-secondary"
+                onClick={() => unarchive.mutate()}
+                disabled={unarchive.isPending}
+              >
+                Unarchive
+              </button>
+            )}
             {canManage && (
               <button
                 className="btn-secondary text-red-600"
@@ -102,6 +154,85 @@ export default function ProjectDetail() {
           </>
         }
       />
+
+      {archived && (
+        <div className="aero-pane aero-pane-warn mt-4 px-4 py-3 pl-5">
+          <p className="text-sm text-ink-800 dark:text-dark-800">
+            This project is archived. Its survey data has been removed to free
+            disk; its datasets, dashboards, charts, indicators, quality checks,
+            relationships and script are all still here, and every figure reads
+            empty until the export is imported again.
+          </p>
+          {canManage && (
+            <p className="mt-1 text-xs text-ink-600 dark:text-dark-600">
+              Unarchive to import the data back in. The datasets kept their
+              names, so a replacement import lands in the same ones and the
+              dashboards pointed at them start working again.
+            </p>
+          )}
+        </div>
+      )}
+
+      {archiving && (
+        <Modal
+          open
+          onClose={() => setArchiving(false)}
+          title={`Archive "${project.data.name}"`}
+          footer={
+            <>
+              <button className="btn-secondary" onClick={() => setArchiving(false)}>
+                Cancel
+              </button>
+              <button
+                className="btn-primary"
+                onClick={() => archive.mutate()}
+                disabled={archive.isPending}
+              >
+                {cost.data ? `Archive and free ${cost.data.human}` : 'Archive'}
+              </button>
+            </>
+          }
+        >
+          <p className="text-sm text-ink-600 dark:text-dark-600">
+            Archiving deletes the survey data and keeps everything built on it.
+            It is what to do with a round that is finished with but whose
+            dashboards you still want.
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <div>
+              <p className="text-xs font-semibold text-ink-700 dark:text-dark-700">
+                Deleted
+              </p>
+              <ul className="mt-1 space-y-0.5 text-xs text-ink-600 dark:text-dark-600">
+                <li>
+                  The data in {cost.data?.datasets ?? project.data.dataset_count}{' '}
+                  dataset(s){cost.data ? `, ${cost.data.human}` : ''}
+                </li>
+                <li>Earlier versions of it kept for rollback</li>
+              </ul>
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-ink-700 dark:text-dark-700">Kept</p>
+              <ul className="mt-1 space-y-0.5 text-xs text-ink-600 dark:text-dark-600">
+                <li>Every dataset's name, variables and row count</li>
+                <li>Dashboards, charts, indicators and their history</li>
+                <li>Quality checks, alert rules, relationships, the script</li>
+                <li>Boundary layers, backgrounds and logos</li>
+              </ul>
+            </div>
+          </div>
+          {(cost.data?.share_links ?? 0) > 0 && (
+            <p className="mt-3 text-xs text-amber-700 dark:text-amber-300">
+              {cost.data?.share_links} open share link(s) will be closed, so nobody
+              opens a dashboard of blank charts. Unarchiving reopens them.
+            </p>
+          )}
+          <p className="mt-3 text-xs text-ink-500">
+            Reversible, but not by itself: unarchiving opens the project for work
+            again and the figures come back when the export is imported.
+          </p>
+        </Modal>
+      )}
 
       {deleting && (
         <Modal
@@ -142,6 +273,10 @@ export default function ProjectDetail() {
             alert rules and the alerts they raised, relationships, and this project's dashboards.
             It cannot be undone. Connections are kept: a connection is a server and its
             credentials, which outlive the project.
+          </p>
+          <p className="mt-2 text-sm text-ink-600">
+            If what you want is the disk back rather than the project gone,{' '}
+            <strong>Archive</strong> deletes the data and keeps the dashboards.
           </p>
           <Field
             label={`Type "${project.data.name}" to confirm the second one`}
@@ -198,7 +333,12 @@ export default function ProjectDetail() {
                       {dataset.name}
                     </Link>
                     <span className="shrink-0 text-xs tabular-nums text-ink-400">
-                      {formatNumber(dataset.row_count)} rows
+                      {/* The count is what the dataset held, and on an archived
+                          project it no longer holds it. Saying the number on its
+                          own would read as data that is still there. */}
+                      {dataset.status === 'archived'
+                        ? `${formatNumber(dataset.row_count)} rows, data archived`
+                        : `${formatNumber(dataset.row_count)} rows`}
                     </span>
                   </li>
                 ))}

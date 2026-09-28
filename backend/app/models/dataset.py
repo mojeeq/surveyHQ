@@ -28,6 +28,11 @@ class DatasetStatus(str, enum.Enum):
     processing = "processing"
     ready = "ready"
     failed = "failed"
+    # The project was archived and this dataset's file removed. Its name,
+    # variables and counts are all still here, which is what tells this apart
+    # from `failed`: nothing went wrong, and re-importing the export fills it
+    # back in.
+    archived = "archived"
 
 
 class DatasetSource(str, enum.Enum):
