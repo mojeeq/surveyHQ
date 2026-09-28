@@ -586,3 +586,29 @@ def test_a_duckdb_complaint_reaches_the_browser_without_the_sql_it_is_about(
     assert "Could not convert string 'H1' to DOUBLE" in detail
     assert "LINE 1" not in detail
     assert ".parquet" not in detail and "/srv/" not in detail
+
+
+def test_the_setting_is_reported_by_the_list_the_page_actually_reads(
+    client, auth_headers
+):
+    """The relationship list is what the page draws from, not the PATCH reply.
+
+    Two places serialised a relationship, each with its own hand-written list of
+    fields, and only one of them was fixed. The setting was stored, and the
+    select went back to "exactly, as stored" the moment the page refreshed -
+    which looks exactly like a setting that does not work.
+    """
+    project = _mixed_project(client, auth_headers, "Key match listed")
+    link = _link(
+        client,
+        auth_headers,
+        project["mx_people"],
+        project["mx_households"],
+        key_match="text",
+    )
+    listed = client.get(
+        f"/api/v1/relationships?project_id={project['id']}", headers=auth_headers
+    )
+    assert listed.status_code == 200, listed.text
+    found = next(row for row in listed.json() if row["id"] == link["id"])
+    assert found["key_match"] == "text"

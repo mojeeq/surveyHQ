@@ -59,20 +59,10 @@ def list_relationships(
             continue
         if not (scope.allows(left.project_id) and scope.allows(right.project_id)):
             continue
-        output.append(
-            RelationshipOut(
-                **{
-                    field: getattr(relationship, field)
-                    for field in (
-                        "id", "project_id", "left_dataset_id", "right_dataset_id",
-                        "left_variable", "right_variable", "cardinality",
-                        "is_active", "detected", "created_at",
-                    )
-                },
-                left_name=left.name,
-                right_name=right.name,
-            )
-        )
+        # The same serialiser as every other route. It had its own copy of the
+        # field list, which is how a new column came to be missing from the one
+        # response the page actually draws from.
+        output.append(_to_out(relationship, db, left, right))
     return output
 
 
@@ -330,15 +320,26 @@ def _get(relationship_id: str, db: DbSession, user: User) -> DatasetRelationship
     return relationship
 
 
-def _to_out(relationship: DatasetRelationship, db: DbSession) -> RelationshipOut:
+def _to_out(
+    relationship: DatasetRelationship,
+    db: DbSession,
+    left: Dataset | None = None,
+    right: Dataset | None = None,
+) -> RelationshipOut:
     """The row, plus the two dataset names the diagram labels itself with.
 
     Read off the model rather than copied field by field. A hand-written list
     leaves a new column out of every response silently, defaulted by the schema
-    and looking for all the world like the stored value.
+    and looking for all the world like the stored value - which is exactly what
+    happened, in the listing, where it was least visible and mattered most.
+
+    The two datasets can be passed in by a caller that has already loaded them,
+    so listing a project's relationships does not fetch each one twice.
     """
-    left = db.get(Dataset, relationship.left_dataset_id)
-    right = db.get(Dataset, relationship.right_dataset_id)
+    if left is None:
+        left = db.get(Dataset, relationship.left_dataset_id)
+    if right is None:
+        right = db.get(Dataset, relationship.right_dataset_id)
     out = RelationshipOut.model_validate(relationship)
     out.left_name = left.name if left else ""
     out.right_name = right.name if right else ""
