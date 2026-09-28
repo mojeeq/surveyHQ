@@ -503,6 +503,35 @@ def run_sql(sql: str, params: list[Any] | None = None) -> tuple[list[str], list[
         con.close()
 
 
+def column_types(path: str) -> dict[str, str]:
+    """What each column is actually stored as, asked of the file itself.
+
+    Not the variable's `var_type`, which is what the interface offers it as: a
+    column of household ids stored as numbers is described categorical, so
+    reading that would call an id text and a 0/1 answer text as well.
+    """
+    _, rows = run_sql(f"DESCRIBE SELECT * FROM read_parquet({_quote_path(path)})")
+    return {str(row[0]): str(row[1]) for row in rows}
+
+
+def kind_of(stored: str) -> str:
+    """A stored type as a person would say it.
+
+    Grouped rather than reported exactly, because the question these answer is
+    whether two columns hold the same kind of thing: a key stored DOUBLE on one
+    side and BIGINT on the other is a number both times and joins perfectly
+    well, and saying "DOUBLE is not BIGINT" would stop something that works.
+    """
+    upper = (stored or "").upper()
+    if "TIMESTAMP" in upper or upper == "DATE":
+        return "a date"
+    if upper == "BOOLEAN":
+        return "true or false"
+    if any(token in upper for token in ("INT", "DOUBLE", "FLOAT", "DECIMAL", "HUGEINT")):
+        return "a number"
+    return "text"
+
+
 def _is_missing(info: VariableInfo, value: Any) -> bool:
     """True for a null, a blank, or one of Stata's tagged missings."""
     if value is None:

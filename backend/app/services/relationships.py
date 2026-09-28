@@ -19,7 +19,13 @@ from sqlalchemy.orm import Session
 from app.core.logging import get_logger
 from app.models import Cardinality, Dataset, DatasetRelationship
 from app.services.datasets import dataset_is_queryable
-from app.services.query_engine import _quote_path, quote_ident, run_sql
+from app.services.query_engine import (
+    _quote_path,
+    column_types,
+    kind_of,
+    quote_ident,
+    run_sql,
+)
 
 logger = get_logger(__name__)
 
@@ -181,6 +187,45 @@ def store(
 # --- merging ----------------------------------------------------------------
 
 
+def check_key_types(
+    left: Dataset,
+    right: Dataset,
+    left_variable: str,
+    right_variable: str,
+) -> None:
+    """Refuse a join between a text key and a numeric one, in those words.
+
+    Survey data does this constantly: one export writes the household id as
+    "H0041" and the next as 41, or an id arrives quoted from a CSV and unquoted
+    from a .dta. DuckDB answers such a join by casting the text side to a number
+    and failing on the first value that is not one - and a ConversionException is
+    not a ValueError, so it went past the endpoint's 422 handler and the merge
+    came back a bare 500 with nothing in it anybody could act on.
+
+    Read from the files rather than from the variables' `var_type`, which is the
+    semantic type the interface offers and not what the column holds.
+    """
+    here = column_types(left.storage_path).get(left_variable)
+    there = column_types(right.storage_path).get(right_variable)
+    # A column that is not in the file at all is the caller's own check to make,
+    # and it has a better message for it than this one would.
+    if here is None or there is None:
+        return
+    if kind_of(here) == kind_of(there):
+        return
+
+    named = (
+        f"'{left_variable}'"
+        if left_variable == right_variable
+        else f"'{left_variable}' and '{right_variable}'"
+    )
+    raise ValueError(
+        f"{named}: the key is {kind_of(here)} in '{left.name}' and "
+        f"{kind_of(there)} in '{right.name}', so the two cannot be joined on it. "
+        f"Make them the same type on both sides first."
+    )
+
+
 def merge_frames(
     left: Dataset,
     right: Dataset,
@@ -196,6 +241,8 @@ def merge_frames(
     join happens over Parquet, so only the columns asked for are read and the
     memory cost is the result rather than both inputs.
     """
+    check_key_types(left, right, left_variable, right_variable)
+
     right_columns = [v.name for v in right.variables]
     if columns:
         wanted = [c for c in columns if c in right_columns]
