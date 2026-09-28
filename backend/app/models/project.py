@@ -35,6 +35,13 @@ class ProjectStatus(str, enum.Enum):
     active = "active"
     paused = "paused"
     closed = "closed"
+    # The survey data has been removed to reclaim the disk, and everything built
+    # on it kept: the datasets' names and variables, the dashboards, charts,
+    # indicators, quality rules, relationships and the project's script. A round
+    # that is finished with should not have to be deleted to stop costing
+    # storage, and deleting it threw away months of somebody's work along with
+    # the microdata.
+    archived = "archived"
 
 
 class Project(UUIDMixin, TimestampMixin, Base):
@@ -45,6 +52,12 @@ class Project(UUIDMixin, TimestampMixin, Base):
     description: Mapped[str] = mapped_column(Text, default="")
     status: Mapped[ProjectStatus] = mapped_column(
         Enum(ProjectStatus, name="project_status"), default=ProjectStatus.active
+    )
+    # When the data was removed, which is what the interface dates the archive
+    # by. Held rather than derived from updated_at, which moves whenever anybody
+    # renames anything.
+    archived_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
     )
     # The field period, used for progress against the calendar
     starts_on: Mapped[dt.date | None] = mapped_column(Date)

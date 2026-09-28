@@ -21,6 +21,9 @@ const STATUS_TONE: Record<ProjectStatus, 'success' | 'warning' | 'neutral'> = {
   active: 'success',
   paused: 'warning',
   closed: 'neutral',
+  // Not a warning: archiving is a thing somebody chose to do, and the project
+  // is intact apart from its data.
+  archived: 'neutral',
 }
 
 export default function Projects() {

@@ -72,6 +72,45 @@ A member's role on a project never exceeds their own role. Adding a viewer to a
 project as manager does not make them an editor of anything; membership widens
 what someone can reach, never what they are allowed to do.
 
+### Archiving a project
+
+A finished round goes on costing disk. The survey data is nearly all of it - a
+census is tens of gigabytes of Parquet - while the dashboards, indicators,
+quality checks and script built on it are a few kilobytes of description. Until
+now the only way to reclaim the one was to delete the other with it.
+
+**Archive** separates them. It deletes the survey data and keeps everything
+else:
+
+| Deleted | Kept |
+| --- | --- |
+| The Parquet files holding the rows | Every dataset's name, variables, labels and row count |
+| Earlier versions kept for rollback | Dashboards and their widgets, colours and pages |
+| | Charts, indicators and their history |
+| | Quality checks and their results, alert rules and the alerts they raised |
+| | Relationships and the project's script |
+| | Boundary layers, dashboard backgrounds and logos |
+
+The dialog says how much disk it will free before you agree to it, because that
+is the reason for doing it.
+
+Afterwards the project is marked archived with the date, its datasets say "data
+archived" beside the count they used to hold, and every figure reads empty. Open
+share links are closed - a live link showing a dashboard of blank charts reads
+as a broken platform to whoever you sent it to - and are closed rather than
+deleted, so the same address works again later.
+
+Importing into an archived project and running its script are both refused with
+a reason, since either would leave half of it holding data and the project still
+saying it holds none.
+
+**Unarchive** opens the project for work again. It cannot bring the rows back -
+they were deleted, which was the point - so the figures return when you import
+the export again. The datasets kept their names, so a replacement import lands
+in the same ones and the dashboards pointed at them start working without
+anything being rebuilt. Share links the archive closed are reopened; links you
+closed yourself are left as you left them.
+
 ### Deleting a project
 
 **Delete project** asks what should happen to its contents, because both answers
@@ -90,6 +129,9 @@ are reasonable:
 The second cannot be undone, so it asks you to type the project's name first.
 Connections are kept either way: a connection is a server and a set of
 credentials, which outlive the project pointed at it.
+
+If what you want is the disk back rather than the project gone, archive it
+instead.
 
 ## Relating and merging datasets
 

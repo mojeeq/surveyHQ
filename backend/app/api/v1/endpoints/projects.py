@@ -37,6 +37,7 @@ from app.schemas.project import (
     ScriptOut,
     ScriptRunIn,
 )
+from app.services import archive as archiving
 from app.services import project_script, stata
 from app.services.audit import record
 from app.services.dashboard_assets import remove_all
@@ -114,6 +115,94 @@ def update_project(
         detail={key: str(value) for key, value in fields.items()},
     )
     return _to_detail(project, db, user)
+
+
+@router.get("/{project_id}/archive", response_model=dict)
+def describe_archive(project_id: str, db: DbSession, user: CurrentUser) -> dict[str, Any]:
+    """What archiving this project would take, asked before it is done.
+
+    The confirmation has to be able to say the number: "frees 4.2 GB" is the
+    reason somebody is doing this, and a dialog that could not name it would be
+    asking them to guess.
+    """
+    project = _editable_project(project_id, db, user, Role.manager)
+    freed = archiving.measure(db, project.id)
+    return {
+        "bytes": freed,
+        # Formatted here rather than in the browser, so the dialog and the
+        # message that follows it phrase the same number the same way.
+        "human": archiving.human_size(freed),
+        "datasets": db.scalar(
+            select(func.count(Dataset.id)).where(Dataset.project_id == project.id)
+        )
+        or 0,
+        "share_links": len(archiving.open_links(db, project.id)),
+        "archived": archiving.is_archived(project),
+    }
+
+
+@router.post("/{project_id}/archive", response_model=Message)
+def archive_project(project_id: str, db: DbSession, user: CurrentUser) -> Message:
+    """Remove the project's survey data, keep everything built on it.
+
+    The alternative was deleting, which also took the dashboards, indicators,
+    quality rules and script - none of them large, all of them somebody's work -
+    to reclaim space the microdata was using.
+    """
+    project = _editable_project(project_id, db, user, Role.manager)
+    if archiving.is_archived(project):
+        raise HTTPException(status_code=422, detail=f"'{project.name}' is already archived.")
+
+    outcome = archiving.archive(db, project)
+    db.commit()
+    record(
+        db,
+        user=user,
+        action="project.archive",
+        entity_type="project",
+        entity_id=project.id,
+        detail={
+            "datasets": str(outcome.datasets),
+            "bytes_freed": str(outcome.bytes_freed),
+            "links_closed": str(outcome.links_closed),
+        },
+    )
+    return Message(
+        detail=(
+            f"'{project.name}' archived: {outcome.summary}. Its datasets, "
+            f"dashboards and script are all still here."
+        )
+    )
+
+
+@router.post("/{project_id}/unarchive", response_model=Message)
+def unarchive_project(project_id: str, db: DbSession, user: CurrentUser) -> Message:
+    """Open the project for work again. The data returns when it is re-imported."""
+    project = _editable_project(project_id, db, user, Role.manager)
+    if not archiving.is_archived(project):
+        raise HTTPException(status_code=422, detail=f"'{project.name}' is not archived.")
+
+    outcome = archiving.unarchive(db, project)
+    db.commit()
+    record(
+        db,
+        user=user,
+        action="project.unarchive",
+        entity_type="project",
+        entity_id=project.id,
+        detail={"links_reopened": str(outcome.links_reopened)},
+    )
+    waiting = (
+        f" {outcome.datasets_waiting} dataset(s) are waiting for their data."
+        if outcome.datasets_waiting
+        else ""
+    )
+    reopened = (
+        f" {outcome.links_reopened} share link(s) reopened."
+        if outcome.links_reopened
+        else ""
+    )
+    return Message(detail=f"'{project.name}' is active again.{waiting}{reopened}")
 
 
 @router.delete("/{project_id}", response_model=Message)
@@ -418,27 +507,20 @@ def _counts(project_id: str, db: DbSession) -> tuple[int, int, int]:
 
 
 def _to_out(project: Project, db: DbSession, user: User) -> ProjectOut:
+    """The project, plus the counts and the role the model does not carry.
+
+    Read off the model rather than copied field by field. A hand-written list
+    leaves a new column out of every response silently, defaulted by the schema
+    and looking for all the world like the stored value - which is exactly what
+    archived_at did until this stopped being a list.
+    """
     datasets, dashboards, members = _counts(project.id, db)
-    return ProjectOut(
-        **{
-            field: getattr(project, field)
-            for field in (
-                "id",
-                "name",
-                "slug",
-                "description",
-                "status",
-                "starts_on",
-                "ends_on",
-                "created_at",
-                "updated_at",
-            )
-        },
-        dataset_count=datasets,
-        dashboard_count=dashboards,
-        member_count=members,
-        your_role=effective_role(db, user, project.id),
-    )
+    out = ProjectOut.model_validate(project)
+    out.dataset_count = datasets
+    out.dashboard_count = dashboards
+    out.member_count = members
+    out.your_role = effective_role(db, user, project.id)
+    return out
 
 
 # --- the project's script ---------------------------------------------------
@@ -482,7 +564,11 @@ def run_script(
     not unwound, so a script fixed at line nine does not redo lines one to
     eight.
     """
-    _visible_project(project_id, db, user)
+    project = _visible_project(project_id, db, user)
+    try:
+        archiving.refuse_if_archived(project, "running its script")
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     try:
         outcome = project_script.run(db, project_id, payload.text)
     except stata.ScriptError as exc:

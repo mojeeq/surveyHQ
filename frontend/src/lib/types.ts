@@ -34,6 +34,16 @@ export type Cardinality =
  */
 export type KeyMatch = 'exact' | 'text' | 'number'
 
+/** What archiving a project would take, asked before it is done. */
+export interface ArchiveCost {
+  bytes: number
+  /** The same number as a person would say it, formatted by the server. */
+  human: string
+  datasets: number
+  share_links: number
+  archived: boolean
+}
+
 export interface Relationship {
   id: string
   project_id: string | null
@@ -63,7 +73,13 @@ export interface DetectedRelationship {
   overlap: number
 }
 
-export type ProjectStatus = 'active' | 'paused' | 'closed'
+/**
+ * `archived` means the survey data has been removed to reclaim the disk and
+ * everything built on it kept: the datasets' names and variables, the
+ * dashboards, indicators, quality rules and the project's script. Widgets read
+ * empty until the export is imported again.
+ */
+export type ProjectStatus = 'active' | 'paused' | 'closed' | 'archived'
 
 export interface ProjectMember {
   id: string
@@ -79,6 +95,8 @@ export interface Project {
   slug: string
   description: string
   status: ProjectStatus
+  /** When the data was removed, if it has been. */
+  archived_at: string | null
   starts_on: string | null
   ends_on: string | null
   created_at: string
@@ -112,7 +130,12 @@ export interface Variable {
   is_hidden: boolean
 }
 
-export type DatasetStatus = 'pending' | 'processing' | 'ready' | 'failed'
+/**
+ * `archived` means the project was archived and this dataset's file removed.
+ * Its name, variables and counts are all still here, which is what tells it
+ * apart from `failed`: nothing went wrong, and re-importing fills it back in.
+ */
+export type DatasetStatus = 'pending' | 'processing' | 'ready' | 'failed' | 'archived'
 
 /** A frame of areas - enumeration areas, districts, villages - a map draws. */
 export interface BoundaryLayer {

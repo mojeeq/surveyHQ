@@ -27,6 +27,8 @@ class ProjectOut(BaseModel):
     slug: str
     description: str = ""
     status: ProjectStatus
+    # When the data was removed, for a page that wants to date the archive.
+    archived_at: dt.datetime | None = None
     starts_on: dt.date | None = None
     ends_on: dt.date | None = None
     created_at: dt.datetime

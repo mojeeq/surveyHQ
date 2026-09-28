@@ -38,6 +38,7 @@ from app.models import (
     Job,
     JobStatus,
     JobType,
+    Project,
     Role,
     Variable,
 )
@@ -55,6 +56,7 @@ from app.schemas.dataset import (
 )
 from app.schemas.monitoring import JobOut
 from app.schemas.query import FilterGroup
+from app.services import archive as archiving
 from app.services import project_script, stata
 from app.services.audit import record
 from app.services.datasets import (
@@ -252,6 +254,15 @@ async def upload_dataset(
     uploads = list(file)
     if not uploads:
         raise HTTPException(status_code=422, detail="Choose a file to upload")
+
+    # An archived project has had its data removed on purpose, and importing
+    # into one would quietly un-archive half of it: some datasets holding rows
+    # again and the project still saying it holds none.
+    if project_id:
+        try:
+            archiving.refuse_if_archived(db.get(Project, project_id), "importing data")
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     names = [Path(item.filename or "upload.dat").name for item in uploads]
     suffixes = [Path(item).suffix.lower() for item in names]
