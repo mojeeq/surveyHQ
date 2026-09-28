@@ -38,15 +38,26 @@ class KeyMatch(str, enum.Enum):
     outright when the two sides are stored differently, because a text key and
     a numeric one cannot be compared without deciding which to convert.
 
-    The other two are that decision, said out loud on the relationship. A
-    survey run twice writes the same household as "0041" and as 41, and nothing
-    in the data says they are the same household - only the person who knows
-    the survey does.
+    The rest are that decision, said out loud on the relationship. A survey run
+    twice writes the same household as "0041" and as 41, or as "H0041" against
+    41, and nothing in the data says they are the same household - only the
+    person who knows the survey does.
+
+    Each is an intent rather than a step, which is why there is no way to
+    combine them: "compare the numbers inside the ids" is a thing somebody means
+    about their data, where "strip letters, then unpad, then cast" is a puzzle
+    to be assembled and got wrong.
     """
 
     exact = "exact"
     text = "text"
     number = "number"
+    # H0041 against 41: the digits are the id and the rest is decoration. Leading
+    # zeros go with them, because what is compared is the number they spell.
+    digits = "digits"
+    # INT-2024/a1 against int2024a1: here the letters carry meaning and only the
+    # punctuation and the capitalisation do not.
+    alphanumeric = "alphanumeric"
 
 
 class DatasetRelationship(UUIDMixin, TimestampMixin, Base):

@@ -245,6 +245,7 @@ def run_merge_fast(
     from app.services.query_engine import QueryError
     from app.services.relationships import (
         check_key_types,
+        collision_warning,
         join_condition,
         unmatched_warning,
     )
@@ -317,6 +318,8 @@ def run_merge_fast(
     warnings: list[str] = unmatched_warning(
         left, right, relationship.left_variable, relationship.right_variable, match
     )
+    warnings += collision_warning(left, relationship.left_variable, match)
+    warnings += collision_warning(right, relationship.right_variable, match)
     if derivation.get("how", "left") == "left" and row_count > int(left.row_count or 0):
         warnings.append(
             f"The join produced {row_count:,} rows from {left.row_count:,}, because "

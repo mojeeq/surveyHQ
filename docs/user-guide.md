@@ -125,19 +125,31 @@ means deciding which side to convert, and no rule can decide that safely.
 That decision is yours to make, and this is where you make it. A survey run
 twice writes the same household as `0041` in one export and as `41` in the next;
 an id read from a CSV arrives quoted where the same id from a .dta arrives as a
-number; an enumerator writes "not known" in one cell and keeps the whole column
-text. In each of those the two ids are the same household, and nothing in the
-files says so - only you know. Set **as text** or **as numbers** and both sides
-are converted that way before they are compared: `41` and `"41"` then count as
-the same household, padding and a trailing `.0` are ignored, and a value that is
-not a number matches nothing rather than stopping the merge.
+number; one system writes `H0041` where another writes `41`; an interview is
+`INT-2024/A1` in the tracking sheet and `int2024a1` in the export. In each of
+those the two ids are the same thing, and nothing in the files says so - only
+you know.
 
-Ids that differ by more than how they are written still will not match. `H0041`
-is not `41` under any conversion. When a conversion lines up no rows at all the
-merge still runs - a left join writes out the left dataset with blanks beside it
-- so it says so in the dataset's warnings rather than leaving you to notice.
-A link using a conversion is marked on the list, because it changes which rows
-a merge joins and a setting that only appears once a link is selected is one
+| Match keys | What it compares |
+| --- | --- |
+| Exactly, as stored | The columns as they are, and nothing else. Refused when one side is text and the other numbers. |
+| As text | Both as text, trimmed, with a whole number written whole - so `41`, `"41"` and `" 41"` are one household. |
+| As numbers | Both as numbers. A value that is not one matches nothing rather than stopping the merge. |
+| By the numbers inside them | Only the digits, read as the number they spell - so `H0041` and `41` are one household, and leading zeros go with the letters. |
+| Ignoring punctuation and capitalisation | Letters kept, punctuation and spaces and case dropped - so `INT-2024/A1` and `int2024a1` are one interview, while `A1` and `B1` stay different. |
+
+The last two throw part of the key away, and that can make two ids that are not
+the same thing into one: `H0041` and `P0041` are a household and a person in
+plenty of surveys, and by the digits inside them both are `41`. The merge counts
+that and says so - "makes 2 set(s) of different ids in 'households' into one key
+- 'H0041' and 'P0041', for instance" - because after it happens the row count
+looks entirely reasonable and every person is joined to the wrong household.
+
+When a conversion lines up no rows at all the merge still runs: a left join
+writes out the left dataset with blanks beside it and looks built. So that is
+reported too, in the dataset's warnings, rather than left for you to notice. A
+link using a conversion is marked on the list, because it changes which rows a
+merge joins and a setting that only appears once a link is selected is one
 nobody finds again when a total comes out wrong.
 
 The diagram lays itself out from the cardinalities - the interview table on top,
