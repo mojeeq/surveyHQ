@@ -117,6 +117,29 @@ each becomes its own dataset when you upload the archive.
 Click a link to correct it. Changing anything marks it as yours, and detecting
 again never reverts it.
 
+**Match keys** is how the two key columns are lined up before they are compared.
+It stays at **exactly, as stored** unless you change it, and a merge is refused
+outright when one side holds text and the other numbers - because comparing them
+means deciding which side to convert, and no rule can decide that safely.
+
+That decision is yours to make, and this is where you make it. A survey run
+twice writes the same household as `0041` in one export and as `41` in the next;
+an id read from a CSV arrives quoted where the same id from a .dta arrives as a
+number; an enumerator writes "not known" in one cell and keeps the whole column
+text. In each of those the two ids are the same household, and nothing in the
+files says so - only you know. Set **as text** or **as numbers** and both sides
+are converted that way before they are compared: `41` and `"41"` then count as
+the same household, padding and a trailing `.0` are ignored, and a value that is
+not a number matches nothing rather than stopping the merge.
+
+Ids that differ by more than how they are written still will not match. `H0041`
+is not `41` under any conversion. When a conversion lines up no rows at all the
+merge still runs - a left join writes out the left dataset with blanks beside it
+- so it says so in the dataset's warnings rather than leaving you to notice.
+A link using a conversion is marked on the list, because it changes which rows
+a merge joins and a setting that only appears once a link is selected is one
+nobody finds again when a total comes out wrong.
+
 The diagram lays itself out from the cardinalities - the interview table on top,
 its rosters hanging below - which is right until a project has enough tables
 that the lines cross each other. **Drag a box** to move it, and the links

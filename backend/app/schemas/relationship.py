@@ -4,7 +4,7 @@ import datetime as dt
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models.relationship import Cardinality
+from app.models.relationship import Cardinality, KeyMatch
 
 
 class RelationshipOut(BaseModel):
@@ -18,6 +18,9 @@ class RelationshipOut(BaseModel):
     right_variable: str
     cardinality: Cardinality
     is_active: bool
+    # How the two keys are lined up before they are compared. `exact` unless
+    # somebody said the ids are the same household written two ways.
+    key_match: KeyMatch = KeyMatch.exact
     detected: bool
     created_at: dt.datetime
     # Filled in by the endpoint so the diagram can label itself without a
@@ -32,6 +35,7 @@ class RelationshipIn(BaseModel):
     left_variable: str
     right_variable: str
     cardinality: Cardinality = Cardinality.one_to_many
+    key_match: KeyMatch = KeyMatch.exact
 
 
 class RelationshipUpdate(BaseModel):
@@ -39,6 +43,7 @@ class RelationshipUpdate(BaseModel):
     right_variable: str | None = None
     cardinality: Cardinality | None = None
     is_active: bool | None = None
+    key_match: KeyMatch | None = None
 
 
 class DetectedRelationship(BaseModel):

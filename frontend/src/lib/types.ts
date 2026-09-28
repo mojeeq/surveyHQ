@@ -23,6 +23,17 @@ export type Cardinality =
   | 'many_to_one'
   | 'many_to_many'
 
+/**
+ * How a relationship's two keys are lined up before they are compared.
+ *
+ * `exact` compares the columns as stored and is the only one that cannot
+ * quietly match the wrong rows, so it is the default. The other two are a
+ * statement about the data that only a person can make: the same household is
+ * written "0041" in one export and 41 in the next, and nothing in the files
+ * says so.
+ */
+export type KeyMatch = 'exact' | 'text' | 'number'
+
 export interface Relationship {
   id: string
   project_id: string | null
@@ -32,6 +43,7 @@ export interface Relationship {
   right_variable: string
   cardinality: Cardinality
   is_active: boolean
+  key_match: KeyMatch
   /** Still as detected, i.e. nobody has corrected it. */
   detected: boolean
   created_at: string

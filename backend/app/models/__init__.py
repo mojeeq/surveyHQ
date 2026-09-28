@@ -51,6 +51,7 @@ from app.models.project import (
 from app.models.relationship import (
     Cardinality,
     DatasetRelationship,
+    KeyMatch,
 )
 from app.models.system import (
     AuditLog,
@@ -111,4 +112,5 @@ __all__ = [
     "ProjectStatus",
     "DatasetRelationship",
     "Cardinality",
+    "KeyMatch",
 ]
