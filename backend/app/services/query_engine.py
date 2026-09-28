@@ -571,19 +571,54 @@ def column_types(path: str) -> dict[str, str]:
 def kind_of(stored: str) -> str:
     """A stored type as a person would say it.
 
-    Grouped rather than reported exactly, because the question these answer is
-    whether two columns hold the same kind of thing: a key stored DOUBLE on one
-    side and BIGINT on the other is a number both times and joins perfectly
-    well, and saying "DOUBLE is not BIGINT" would stop something that works.
+    Grouped rather than reported exactly, because what these answer is whether
+    two columns hold the same sort of thing. A key stored DOUBLE on one side and
+    BIGINT on the other is a number both times and joins perfectly well, and
+    saying "DOUBLE is not BIGINT" would refuse something that works.
+
+    Matched on the start of the name and not anywhere in it: INTERVAL contains
+    INT and is not a number, and DECIMAL(18,3) has to be read by its first word
+    rather than the whole of it.
+
+    "a number" means arithmetic can be done on it, which is why BOOLEAN is not
+    one - `floor(BOOLEAN)` is an error, and a caller building arithmetic from
+    this would write SQL DuckDB refuses to bind. Whether a boolean and a number
+    can nonetheless be compared or stacked is a different question, and
+    `compatible` is where it is answered.
     """
-    upper = (stored or "").upper()
-    if "TIMESTAMP" in upper or upper == "DATE":
+    upper = (stored or "").strip().upper()
+    if upper.startswith(("DATE", "TIME", "INTERVAL")):
         return "a date"
-    if upper == "BOOLEAN":
+    if upper.startswith("BOOL"):
         return "true or false"
-    if any(token in upper for token in ("INT", "DOUBLE", "FLOAT", "DECIMAL", "HUGEINT")):
+    if upper.startswith(
+        (
+            "TINYINT", "SMALLINT", "INTEGER", "INT", "BIGINT", "HUGEINT",
+            "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT",
+            "DOUBLE", "FLOAT", "REAL", "DECIMAL", "NUMERIC",
+        )
+    ):
         return "a number"
+    # VARCHAR and friends, and anything unrecognised. A STRUCT or a LIST is
+    # opaque, and text is the safer thing to call it: it stops the column being
+    # silently stacked onto a number.
     return "text"
+
+
+# Kinds that are different to say and the same to work with.
+INTERCHANGEABLE = ({"a number", "true or false"},)
+
+
+def compatible(one: str, other: str) -> bool:
+    """Whether two kinds can be compared with, or stacked on, each other.
+
+    Not equality: 0/1 and true/false are the same information, and DuckDB
+    compares and stacks them without complaining, so treating them as different
+    would refuse a join and an append that both work.
+    """
+    if one == other:
+        return True
+    return any({one, other} <= group for group in INTERCHANGEABLE)
 
 
 def _is_missing(info: VariableInfo, value: Any) -> bool:
