@@ -238,8 +238,21 @@ def run_merge_fast(
     right: Any,
 ) -> None:
     """Join Parquet to Parquet and COPY the result directly to the target."""
+    import duckdb
+
     from app.services import datasets as dataset_service
     from app.services.ingest import IngestResult
+    from app.services.query_engine import QueryError
+    from app.services.relationships import (
+        check_key_types,
+        join_condition,
+        unmatched_warning,
+    )
+
+    match = relationship.key_match
+    check_key_types(
+        left, right, relationship.left_variable, relationship.right_variable, match
+    )
 
     derivation = target.derivation or {}
     right_names = [v.name for v in right.variables]
@@ -257,17 +270,33 @@ def run_merge_fast(
     left_names = {v.name for v in left.variables}
     prefix = derivation.get("prefix", "")
     destination = dataset_service.dataset_directory(target.id) / f"data-{uuid4().hex}.parquet"
-    row_count, output_names = columnar.copy_join_to_parquet(
-        left_path=left.storage_path,
-        right_path=right.storage_path,
-        left_key=relationship.left_variable,
-        right_key=relationship.right_variable,
-        right_columns=wanted,
-        left_columns=left_names,
-        destination=destination,
-        how=derivation.get("how", "left"),
-        prefix=prefix,
-    )
+    try:
+        row_count, output_names = columnar.copy_join_to_parquet(
+            left_path=left.storage_path,
+            right_path=right.storage_path,
+            on=join_condition(
+                left,
+                right,
+                relationship.left_variable,
+                relationship.right_variable,
+                match,
+            ),
+            right_key=relationship.right_variable,
+            right_columns=wanted,
+            left_columns=left_names,
+            destination=destination,
+            how=derivation.get("how", "left"),
+            prefix=prefix,
+        )
+    except duckdb.Error as exc:
+        # The canonical merge runs the same join through run_sql, which turns a
+        # DuckDB complaint into a QueryError - a ValueError, which the endpoint
+        # answers with a 422 carrying the message. Straight from DuckDB it is
+        # none of those, so anything the check above does not foresee used to
+        # reach the browser as a bare 500.
+        logger.warning("Columnar merge failed: %s", exc)
+        destination.unlink(missing_ok=True)
+        raise QueryError(f"The merge could not be built: {exc}") from exc
 
     labels = {v.name: v.label for v in left.variables if v.label}
     value_labels = {v.name: v.value_labels for v in left.variables if v.value_labels}
@@ -285,7 +314,9 @@ def run_merge_fast(
         if variable.value_labels:
             value_labels.setdefault(alias, variable.value_labels)
 
-    warnings: list[str] = []
+    warnings: list[str] = unmatched_warning(
+        left, right, relationship.left_variable, relationship.right_variable, match
+    )
     if derivation.get("how", "left") == "left" and row_count > int(left.row_count or 0):
         warnings.append(
             f"The join produced {row_count:,} rows from {left.row_count:,}, because "

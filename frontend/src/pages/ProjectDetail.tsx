@@ -9,6 +9,7 @@ import type {
   Cardinality,
   Dashboard,
   Dataset,
+  KeyMatch,
   Page,
   Project,
   ProjectMember,
@@ -775,6 +776,22 @@ function RelationshipsTab({
                       <option value="many_to_many">Many to many</option>
                     </select>
                   </Field>
+                  <Field label="Match keys">
+                    <select
+                      className="input w-52"
+                      value={selected.key_match}
+                      onChange={(event) =>
+                        update.mutate({
+                          id: selected.id,
+                          patch: { key_match: event.target.value as KeyMatch },
+                        })
+                      }
+                    >
+                      <option value="exact">Exactly, as stored</option>
+                      <option value="text">As text</option>
+                      <option value="number">As numbers</option>
+                    </select>
+                  </Field>
                   <label className="mb-4 flex items-center gap-2 text-sm text-ink-700">
                     <input
                       type="checkbox"
@@ -811,6 +828,17 @@ function RelationshipsTab({
                     Remove
                   </button>
                 </div>
+              )}
+
+              {selected.key_match !== 'exact' && (
+                <p className="mt-1 text-xs text-ink-600 dark:text-dark-600">
+                  The keys are converted to{' '}
+                  {selected.key_match === 'text' ? 'text' : 'numbers'} on both sides
+                  before they are compared, so <code>41</code> and{' '}
+                  <code>&quot;41&quot;</code> count as the same household. Ids that differ
+                  by more than how they are written still will not match, and the merge
+                  says so when nothing lines up.
+                </p>
               )}
             </div>
           )}

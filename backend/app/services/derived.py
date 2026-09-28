@@ -16,7 +16,7 @@ from app.core.logging import get_logger
 from app.models import Dataset, DatasetRelationship
 from app.services.datasets import _apply_ingest, dataset_directory
 from app.services.ingest import ingest_frame
-from app.services.relationships import merge_frames
+from app.services.relationships import merge_frames, unmatched_warning
 
 logger = get_logger(__name__)
 
@@ -38,6 +38,7 @@ def run_merge(
         how=derivation.get("how", "left"),
         columns=derivation.get("columns") or None,
         prefix=derivation.get("prefix", ""),
+        match=relationship.key_match,
     )
 
     labels = {v.name: v.label for v in left.variables if v.label}
@@ -50,7 +51,13 @@ def run_merge(
         if variable.value_labels:
             value_labels.setdefault(alias, variable.value_labels)
 
-    warnings: list[str] = []
+    warnings: list[str] = unmatched_warning(
+        left,
+        right,
+        relationship.left_variable,
+        relationship.right_variable,
+        relationship.key_match,
+    )
     if derivation.get("how") == "left" and len(frame) > left.row_count:
         # A left join that grows the row count means the right side had several
         # matches per key, which is a fact about the data worth stating.

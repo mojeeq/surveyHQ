@@ -334,6 +334,15 @@ export default function RelationshipMap({
                   on <code className="text-[11px]">{link.left_variable}</code>
                 </span>
                 <span className="ml-auto flex items-center gap-1.5">
+                  {/* Said on the row as well as in the panel: a converted key
+                      changes which rows a merge joins, and a setting that only
+                      shows once a link is selected is a setting nobody finds
+                      again when a total comes out wrong. */}
+                  {link.key_match !== 'exact' && (
+                    <Badge tone="neutral">
+                      keys as {link.key_match === 'text' ? 'text' : 'numbers'}
+                    </Badge>
+                  )}
                   {link.detected && <Badge tone="neutral">detected</Badge>}
                   {!link.is_active && <Badge tone="warning">off</Badge>}
                 </span>

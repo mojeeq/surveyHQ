@@ -130,6 +130,7 @@ def create_relationship(
         left_variable=payload.left_variable,
         right_variable=payload.right_variable,
         cardinality=payload.cardinality,
+        key_match=payload.key_match,
         detected=False,
     )
     db.add(relationship)
@@ -330,17 +331,15 @@ def _get(relationship_id: str, db: DbSession, user: User) -> DatasetRelationship
 
 
 def _to_out(relationship: DatasetRelationship, db: DbSession) -> RelationshipOut:
+    """The row, plus the two dataset names the diagram labels itself with.
+
+    Read off the model rather than copied field by field. A hand-written list
+    leaves a new column out of every response silently, defaulted by the schema
+    and looking for all the world like the stored value.
+    """
     left = db.get(Dataset, relationship.left_dataset_id)
     right = db.get(Dataset, relationship.right_dataset_id)
-    return RelationshipOut(
-        **{
-            field: getattr(relationship, field)
-            for field in (
-                "id", "project_id", "left_dataset_id", "right_dataset_id",
-                "left_variable", "right_variable", "cardinality",
-                "is_active", "detected", "created_at",
-            )
-        },
-        left_name=left.name if left else "",
-        right_name=right.name if right else "",
-    )
+    out = RelationshipOut.model_validate(relationship)
+    out.left_name = left.name if left else ""
+    out.right_name = right.name if right else ""
+    return out
