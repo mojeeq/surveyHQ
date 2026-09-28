@@ -135,6 +135,11 @@ def install_query_runtime() -> None:
         from app.services import fast_ingest, ingest
 
         original_ingest_file = ingest.ingest_file
+        # Kept under its own name, as the replaced append below is, and for the
+        # same reason: once this has run the per-column version is otherwise
+        # unreachable, including from a test that wants to hold the two to the
+        # same contract.
+        ingest.build_metadata_per_column = ingest.build_metadata_from_parquet
         ingest.build_metadata_from_parquet = fast_ingest.build_metadata_from_parquet_fast
         ingest.dataframe_preview = fast_ingest.dataframe_preview_fast
 

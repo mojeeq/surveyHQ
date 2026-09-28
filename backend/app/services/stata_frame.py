@@ -26,12 +26,18 @@ import tempfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
-
-import pandas as pd
+from uuid import uuid4
 
 from app.models import Dataset
-from app.services.ingest import ingest_frame
-from app.services.query_engine import DatasetContext, VariableInfo
+from app.services import ingest
+from app.services.ingest import MISSING_TAG_SUFFIX, VariableMeta
+from app.services.query_engine import (
+    DatasetContext,
+    VariableInfo,
+    _quote_path,
+    copy_to_parquet,
+    run_sql,
+)
 
 
 class FrameError(ValueError):
@@ -157,10 +163,17 @@ def load(workspace: Workspace, dataset: Dataset) -> Frame:
 def write(
     workspace: Workspace,
     frame: Frame,
-    data: pd.DataFrame,
+    sql: str,
     renamed: dict[str, str] | None = None,
 ) -> None:
     """Put the new shape of the data back into the workspace.
+
+    The command hands over the query that describes its result rather than the
+    result itself, and DuckDB writes it straight to Parquet. It used to hand
+    over a frame, which meant every value in the table became a Python object
+    on the way past: fourteen seconds and 400 MB of heap for a 200,000-row
+    census file, paid again by every line of the script. Nothing here needs the
+    values - the next command reads the file too - so nothing reads them.
 
     The variable metadata is rebuilt from what was actually written rather than
     edited alongside it, so a command that drops a column cannot leave its
@@ -170,10 +183,21 @@ def write(
     labels = {renamed.get(name, name): text for name, text in frame.labels.items()}
     values = {renamed.get(name, name): pairs for name, pairs in frame.value_labels.items()}
 
-    result = ingest_frame(data, labels, values, workspace.step(), [])
+    destination = workspace.step() / f"data-{uuid4().hex}.parquet"
+    copy_to_parquet(sql, str(destination))
+    settle(frame, destination, labels, values)
 
-    frame.path = Path(result.parquet_path)
-    frame.rows = result.row_count
+
+def settle(
+    frame: Frame,
+    path: Path,
+    labels: dict[str, str],
+    values: dict[str, dict[str, str]],
+) -> None:
+    """Point the frame at a file and describe what is in it."""
+    frame.path = Path(path)
+    frame.rows = row_count(path)
+    metas = variables_of(path, labels, values)
     frame.variables = {
         meta.name: VariableInfo(
             name=meta.name,
@@ -183,8 +207,51 @@ def write(
             missing_tags=list(meta.missing_tags or []),
             storage_type=str(getattr(meta, "storage_type", "") or ""),
         )
-        for meta in result.variables
+        for meta in metas
     }
     kept = set(frame.variables)
     frame.labels = {name: text for name, text in labels.items() if name in kept}
     frame.value_labels = {name: pairs for name, pairs in values.items() if name in kept}
+
+
+def variables_of(
+    path: Path,
+    labels: dict[str, str],
+    values: dict[str, dict[str, str]],
+) -> list[VariableMeta]:
+    """Describe a Parquet file's columns, companions included.
+
+    Reached through the module so that the batched profiler the performance
+    runtime installs is used where it is installed.
+
+    The canonical profiler leaves the tagged-missing companion columns out,
+    which is right for a variable picker and wrong here: a command lists the
+    variables it is keeping, so a companion missing from that list is a
+    companion dropped from the data, and the variable it belongs to no longer
+    knows which of its blanks were .a and which were .b.
+    """
+    metas = ingest.build_metadata_from_parquet(path, labels, values)
+    named = {meta.name for meta in metas}
+    for position, (name, storage) in enumerate(columns_of(path), start=len(metas)):
+        if name.endswith(MISSING_TAG_SUFFIX) and name not in named:
+            metas.append(
+                VariableMeta(
+                    name=name,
+                    var_type="text",
+                    storage_type=storage,
+                    position=position,
+                    is_hidden=True,
+                )
+            )
+    return metas
+
+
+def columns_of(path: Path) -> list[tuple[str, str]]:
+    """Each column and what it is stored as, read from the file's own schema."""
+    _, rows = run_sql(f"DESCRIBE SELECT * FROM read_parquet({_quote_path(str(path))})")
+    return [(str(row[0]), str(row[1])) for row in rows]
+
+
+def row_count(path: Path) -> int:
+    _, rows = run_sql(f"SELECT COUNT(*) FROM read_parquet({_quote_path(str(path))})")
+    return int(rows[0][0]) if rows else 0
