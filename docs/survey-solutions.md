@@ -161,15 +161,33 @@ Network or DNS. From the host:
 If the server uses a self-signed certificate, turn off **Verify the server's TLS
 certificate** on the connection - only on a network you trust.
 
-**"... is a link-local address" or "... points at this server itself"**
+**"... points at this server itself" or "... is a link-local address"**
 The platform will not fetch a survey server from `127.0.0.1`, `localhost`, or
 the `169.254.x.x` range. The first two are SurveyHQ's own container rather than
-a Survey Solutions server, and the third is where cloud providers put the
-metadata service that hands out machine credentials to anything that asks - so
-a URL pointing there, whether mistyped or planted, is refused rather than
-followed. A server on your own network is fine: `10.x`, `192.168.x` and
-`172.16-31.x` are all allowed, because that is where Survey Solutions usually
-lives. Enter the address as it is reached from the SurveyHQ host.
+a Survey Solutions server, and the third is not a survey server either. A server
+on your own network is fine: `10.x`, `192.168.x` and `172.16-31.x` are all
+allowed, because that is where Survey Solutions usually lives. Enter the address
+as it is reached from the SurveyHQ host.
+
+**"... is a cloud provider's metadata service"**
+Every cloud provider answers, on one fixed address, with the credentials of the
+machine asking - to anything on that machine able to make an HTTP request. A
+connection URL pointing there would have SurveyHQ fetch its own host's keys and
+show them to you, so those addresses are refused whether the URL was mistyped or
+somebody talked you into entering it:
+
+| Address | Provider |
+| --- | --- |
+| `169.254.169.254` | AWS, Azure, Google Cloud, DigitalOcean, Hetzner, Oracle |
+| `fd00:ec2::254` | AWS over IPv6 |
+| `100.100.100.200` | Alibaba Cloud |
+| `192.0.0.192` | Oracle Cloud, older instances |
+
+They are named one at a time rather than by range, and have to be: `fd00:ec2::254`
+sits in `fd00::/7`, which is where an organisation numbers its own IPv6 network,
+and refusing that range would refuse your own Survey Solutions server along with
+it. The same address written another way - in full, or tunnelled inside an IPv6
+one - is recognised too, since it reaches the same machine.
 
 **"Too many connection tests"**
 Testing a connection makes this server fetch a URL you chose, so it is capped at
