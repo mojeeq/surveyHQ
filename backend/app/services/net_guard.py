@@ -10,8 +10,16 @@ Private LAN ranges are deliberately allowed. Survey Solutions is very often
 installed on an organisation's own network, and a monitoring tool that could not
 reach 10.0.0.5 would be useless to exactly the statistics offices this is for.
 What is refused is loopback - which inside the API container means the API
-itself, never a survey server - and link-local, which is where cloud providers
-put the unauthenticated metadata service that hands out machine credentials.
+itself, never a survey server - and the unauthenticated metadata services that
+hand out machine credentials to anything able to make a request from the
+instance.
+
+Those are named one address at a time, and cannot be a range. The IPv4 one is
+link-local, so refusing that whole range costs nothing; the others are not.
+AWS answers on fd00:ec2::254, which sits in the same fd00::/7 an organisation
+numbers its own IPv6 network from, and Alibaba answers on 100.100.100.200,
+which looks like an ordinary routable address. Refusing either range would
+break exactly the installations this platform is for.
 """
 
 from __future__ import annotations
@@ -25,18 +33,81 @@ class UnsafeAddressError(ValueError):
     """The URL points somewhere this platform will not fetch from."""
 
 
-def _refused(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> str:
+# The unauthenticated instance metadata services. Each hands out the machine's
+# own credentials to anything that can make an HTTP request from it, which is
+# what turns a planted URL into a credential leak.
+#
+# 169.254.169.254 is also link-local and would be refused below regardless. It
+# is named here anyway: what makes it refused should be that it is the metadata
+# service, not a property of the range it happens to sit in.
+METADATA_ADDRESSES = frozenset(
+    ipaddress.ip_address(address)
+    for address in (
+        "169.254.169.254",  # AWS, Azure, GCP, DigitalOcean, Hetzner, Oracle
+        "fd00:ec2::254",  # AWS over IPv6, which is not a link-local address
+        "100.100.100.200",  # Alibaba Cloud, in a range that looks routable
+        "192.0.0.192",  # Oracle Cloud's older endpoint
+    )
+)
+
+
+def _candidates(
+    address: ipaddress.IPv4Address | ipaddress.IPv6Address,
+) -> list[ipaddress.IPv4Address | ipaddress.IPv6Address]:
+    """The address, and any IPv4 address carried inside it.
+
+    `::ffff:100.100.100.200` and `2002:6464:64c8::1` both end up at
+    100.100.100.200. Python's own `is_loopback` and `is_link_local` see through
+    the first of those; nothing sees through the second, and comparing against a
+    list of addresses sees through neither. So each form is judged on its own as
+    well as whole.
+
+    Not exhaustive - NAT64 and other tunnels can carry an address in ways this
+    does not unpick. This is a guard against a mistyped or planted URL, not a
+    sandbox, and it says so here rather than implying more than it does.
+    """
+    found = [address]
+    for embedded in (
+        getattr(address, "ipv4_mapped", None),
+        getattr(address, "sixtofour", None),
+    ):
+        if embedded is not None:
+            found.append(embedded)
+    # teredo is (server, client); the client is the host behind the tunnel.
+    teredo = getattr(address, "teredo", None)
+    if teredo:
+        found.append(teredo[1])
+    return found
+
+
+def _verdict(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> str:
     if address.is_loopback:
         return (
             "points at this server itself. Enter the address of the Survey "
             "Solutions server as it is reached from here."
         )
     if address.is_link_local:
-        # 169.254.169.254 and its IPv6 equivalent; also everything else in the
-        # range, none of which is a survey server.
+        # Everything else in the range, none of which is a survey server.
         return "is a link-local address, which cannot be a Survey Solutions server."
     if address.is_multicast or address.is_reserved or address.is_unspecified:
         return "is not a routable address."
+    return ""
+
+
+def _refused(address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> str:
+    candidates = _candidates(address)
+    # Asked of every form first, and before anything else, so that an address
+    # which is both - ::ffff:169.254.169.254 is link-local as well - is refused
+    # for the reason worth telling somebody about.
+    if any(candidate in METADATA_ADDRESSES for candidate in candidates):
+        return (
+            "is a cloud provider's metadata service, which hands out this "
+            "machine's own credentials rather than survey data."
+        )
+    for candidate in candidates:
+        reason = _verdict(candidate)
+        if reason:
+            return reason
     return ""
 
 

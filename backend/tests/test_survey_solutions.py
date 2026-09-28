@@ -312,7 +312,7 @@ def test_a_redirect_to_the_metadata_service_is_not_followed():
     )
     with (
         SurveySolutionsClient(BASE, "user", "pass") as client,
-        pytest.raises(SurveySolutionsError, match="link-local"),
+        pytest.raises(SurveySolutionsError, match="metadata service"),
     ):
         client.list_questionnaires()
 
