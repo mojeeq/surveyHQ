@@ -377,6 +377,7 @@ export default function ProjectDetail() {
       ) : tab === 'model' ? (
         <RelationshipsTab
           projectId={id}
+          projectName={project.data.name}
           datasets={datasets.data?.items ?? []}
           relationships={relationships.data ?? []}
           canManage={canManage}
@@ -708,11 +709,13 @@ function AddMemberModal({
  */
 function RelationshipsTab({
   projectId,
+  projectName,
   datasets,
   relationships,
   canManage,
 }: {
   projectId: string
+  projectName: string
   datasets: Dataset[]
   relationships: Relationship[]
   canManage: boolean
@@ -824,6 +827,10 @@ function RelationshipsTab({
             relationships={relationships}
             selectedId={selected?.id ?? null}
             storageKey={projectId}
+            // Dropped from the front of every box. Eight tables all called
+            // "Palau Census 2025 something" spend most of their width saying
+            // what the page already says at the top.
+            projectName={projectName}
             onSelect={setSelected}
           />
 
