@@ -769,6 +769,14 @@ variable, so there is no filter a click could stand for.
 Any Explore result can be saved as a chart. Saved charts live under
 **Dashboards → Saved charts**, each showing live data.
 
+Each dashboard in the list shows a small picture of itself: where its widgets
+sit on its first page, and what kind each one is - something plotted, a list, a
+single number, a map or a note - drawn on the dashboard's own background
+colour. It is the shape of the board rather than its numbers, so the list opens
+as fast whether it holds three dashboards or thirty. Under the name you get how
+many widgets there are on the whole board, how many pages if there is more than
+one, and when it last changed.
+
 The **project** dropdown at the top narrows both tabs at once. A dashboard
 carries a project of its own; a chart takes one from its dataset, so the two
 agree about where something lives without anybody keeping them in step. Leave

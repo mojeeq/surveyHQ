@@ -174,6 +174,37 @@ class DashboardDetail(DashboardOut):
     widgets: list[WidgetOut] = Field(default_factory=list)
 
 
+class SketchBlock(BaseModel):
+    """One widget, as small as it can be described and still be drawn.
+
+    What a thumbnail of a board needs is where its widgets are and what kind
+    they are. Not their titles, their configs or their chart references: the
+    list page draws a shape, and sending a census board's full widget list to
+    draw a shape 240 pixels wide would be sending a hundred times what is used.
+
+    The layout is passed on as it is stored, which is sometimes empty - a
+    widget added before anybody dragged it has no position of its own. Filling
+    that in is the board's rule, not this schema's, and it is applied in the
+    one place that already owns it.
+    """
+
+    kind: WidgetType
+    layout: dict[str, Any] = Field(default_factory=dict)
+
+
+class DashboardCard(DashboardOut):
+    """A dashboard as the list page shows it: its shape, not its contents.
+
+    `sketch` is the first page only, which is what opening the board would
+    show, and `widget_count` is the whole board, which is what tells you
+    whether there is more behind the first page.
+    """
+
+    sketch: list[SketchBlock] = Field(default_factory=list)
+    widget_count: int = 0
+    page_count: int = 1
+
+
 class DashboardViewIn(BaseModel):
     """A named filter selection saved against a dashboard."""
 

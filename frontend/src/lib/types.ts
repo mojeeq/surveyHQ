@@ -607,6 +607,15 @@ export interface Dashboard {
   created_at: string
   updated_at: string
   widgets?: Widget[]
+  /**
+   * The first page's widgets, as little as it takes to draw the board small.
+   * Sent by the list endpoint only: a card draws a thumbnail from it, and the
+   * board itself has the real widgets.
+   */
+  sketch?: { kind: WidgetType; layout: Record<string, unknown> }[]
+  /** Every widget on the board, not just the first page's. */
+  widget_count?: number
+  page_count?: number
 }
 
 /** One step of a board's drill-down hierarchy, e.g. province then district. */
