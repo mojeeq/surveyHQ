@@ -40,6 +40,13 @@ import {
   panelDefault,
 } from "@/components/dashboard/shared";
 import { Field, Loading, Modal, Section, useOpenSections } from "@/components/ui";
+import type { WidgetAnswers } from "@/lib/widget-defaults";
+import {
+  looksLikeAnUnsplitGps,
+  widgetConfig,
+  widgetLayout,
+  widgetTitle,
+} from "@/lib/widget-defaults";
 import {
   PER_CHECK_VIEWS,
   QUALITY_CHARTS,
@@ -66,25 +73,6 @@ const WIDGET_KINDS: { value: string; label: string }[] = [
   { value: "html", label: "Embedded HTML" },
   { value: "freshness", label: "How recent the data is" },
 ];
-
-function looksLikeAnUnsplitGps(
-  variables: { name: string; var_type: string }[],
-): boolean {
-  const words = (name: string) => name.toLowerCase().split(/[^a-z0-9]+/);
-  const hasCoordinate = variables.some(
-    (v) =>
-      v.var_type === "numeric" &&
-      words(v.name).some((w) => w === "latitude" || w === "lat"),
-  );
-  if (hasCoordinate) return false;
-  return variables.some(
-    (v) =>
-      v.var_type !== "numeric" &&
-      words(v.name).some((w) =>
-        ["gps", "geopoint", "gpspoint", "location", "coordinates", "latlon"].includes(w),
-      ),
-  );
-}
 
 /**
  * The two questions a data quality panel asks: what to plot, and how to draw it.
@@ -263,83 +251,43 @@ export function AddWidgetModal({
     enabled: kind === "map" && Boolean(datasetId),
   });
 
+  /** Everything the dialog has collected, in the shape the defaults want. */
+  const answers = (): WidgetAnswers => ({
+    chartName: charts.data?.find((c) => c.id === chartId)?.name,
+    datasetName: datasets.data?.items.find((d) => d.id === datasetId)?.name,
+    indicatorName: indicators.data?.find((i) => i.id === indicatorId)?.name,
+    latitude,
+    longitude,
+    measureAgg,
+    measureVariable,
+    detail,
+    tiles,
+    basemap,
+    freshnessDatasets,
+    html,
+    qualityView,
+    qualityChart,
+    qualityLimit,
+    showBreakdown,
+    showTrend,
+    hasBreakdownVariable: Boolean(chosenIndicator?.breakdown_variable),
+    content,
+    deadline,
+    deadlineLabel,
+    caption,
+  });
+
   const add = useMutation({
     mutationFn: () =>
       api.post(`/dashboards/${dashboardId}/widgets`, {
-        title:
-          title ||
-          (kind === "chart"
-            ? charts.data?.find((c) => c.id === chartId)?.name
-            : kind === "quality"
-              ? `Data quality: ${datasets.data?.items.find((d) => d.id === datasetId)?.name ?? ""}`
-              : kind === "map"
-                ? "Interview locations"
-                : kind === "html"
-                  ? "Embedded content"
-                  : kind === "freshness"
-                    ? "Data freshness"
-                    : kind === "countdown"
-                      ? deadlineLabel || "Countdown"
-                      : indicators.data?.find((i) => i.id === indicatorId)
-                          ?.name) ||
-          "Widget",
+        title: widgetTitle(kind, title, answers()),
         widget_type: kind,
         chart_id: kind === "chart" ? chartId : null,
         indicator_id: kind === "indicator" ? indicatorId : null,
         dataset_id: kind === "quality" || kind === "map" ? datasetId : null,
         page,
-        config: {
-          ...(kind === "map"
-            ? {
-                latitude,
-                longitude,
-                measure_agg: measureAgg,
-                measure_variable: measureAgg === "count" ? "" : measureVariable,
-                detail,
-                ...(tiles.trim() ? { tiles: tiles.trim() } : {}),
-                ...(basemap !== "streets" ? { basemap } : {}),
-              }
-            : kind === "freshness"
-              ? {
-                  dataset_ids: freshnessDatasets,
-                  warn_hours: 24,
-                  critical_hours: 72,
-                }
-              : kind === "html"
-                ? { html }
-                : kind === "quality"
-                  ? {
-                      quality_view: qualityView,
-                      ...(qualityChart ? { quality_chart: qualityChart } : {}),
-                      ...(qualityLimit ? { quality_limit: qualityLimit } : {}),
-                    }
-                  : kind === "indicator"
-                    ? { show_breakdown: showBreakdown, show_trend: showTrend }
-                    : kind === "text"
-                      ? { content }
-                      : kind === "countdown"
-                        ? // A local datetime from the browser; sent as an instant so the
-                          // count reads the same wherever the dashboard is opened.
-                          {
-                            target: new Date(deadline).toISOString(),
-                            label: deadlineLabel,
-                          }
-                        : {}),
-          ...(caption.trim() ? { caption: caption.trim() } : {}),
-        },
-        layout:
-          kind === "map"
-            ? { w: 6, h: 6 }
-            : kind === "freshness"
-              ? { w: 4, h: 4 }
-              : kind === "countdown"
-                ? { w: 3, h: 3 }
-                : kind === "indicator"
-                  ? // A tile with a chart under it needs the room for one.
-                    showBreakdown && chosenIndicator?.breakdown_variable
-                    ? { w: 4, h: 5 }
-                    : { w: 3, h: 3 }
-                  : { w: 6, h: 4 },
+        config: widgetConfig(kind, answers()),
+        layout: widgetLayout(kind, answers()),
       }),
     onSuccess: () => {
       toast.push("Widget added", "success");
