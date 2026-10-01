@@ -179,6 +179,21 @@ const tooltipBase = {
   padding: [8, 12] as [number, number],
   textStyle: { color: INK.primary, ...BASE_TEXT },
   extraCssText: 'box-shadow: 0 10px 30px rgba(15,23,42,.12); border-radius: 8px;',
+  // Hung off <body> rather than off the chart, so it is not cut in half by the
+  // widget it belongs to.
+  //
+  // ECharts keeps a tooltip inside its chart while it fits, so most of them
+  // never had a problem. One wider than the chart cannot be kept inside, and
+  // that one got as far as the widget's edge and was cut: a donut of interview
+  // statuses in a quarter-width panel showed "rovedByHeadquarters" and half a
+  // percentage, which is the one widget on the board where the label is the
+  // whole point. A dashboard widget is a card with its contents clipped, which
+  // is right for the contents and wrong for a tooltip, and a tooltip is not
+  // contents - it is a thing that floats over the page.
+  //
+  // ECharts gives the floating element a z-index far above anything this
+  // interface uses, so it also reads over an expanded widget and over a modal.
+  appendToBody: true,
 }
 
 export interface BuildOptions {

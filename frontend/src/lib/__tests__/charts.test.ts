@@ -15,8 +15,14 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { MAX_SERIES, buildChartOption, buildSparkline, themeColors } from '@/lib/charts'
-import type { QueryColumn, QueryResult } from '@/lib/types'
+import {
+  BOX_MEASURES,
+  MAX_SERIES,
+  buildChartOption,
+  buildSparkline,
+  themeColors,
+} from '@/lib/charts'
+import type { ChartType, QueryColumn, QueryResult } from '@/lib/types'
 
 function column(name: string, type: 'dimension' | 'measure'): QueryColumn {
   return { name, label: name, type, data_type: type === 'measure' ? 'number' : 'text' }
@@ -371,5 +377,83 @@ describe('an empty result', () => {
   it('survives a result with no measure at all', () => {
     const noMeasure = result([column('province', 'dimension')], [['Shefa'], ['Sanma']])
     expect(() => buildChartOption(noMeasure, 'bar', {})).not.toThrow()
+  })
+})
+
+// --- where the tooltip is hung ----------------------------------------------
+
+describe('a tooltip that is wider than the widget it belongs to', () => {
+  /**
+   * Every chart that has a tooltip hangs it off <body>.
+   *
+   * A dashboard widget is a card with its contents clipped, which is right for
+   * the contents. A tooltip is not contents - it floats over the page - and
+   * one cut off at the card's edge is the one case where the label is the
+   * whole point: a donut of interview statuses in a quarter-width panel showed
+   * "rovedByHeadquarters" and half a percentage.
+   *
+   * It only bites when the tooltip is wider than the chart, because ECharts
+   * keeps one inside while it fits. That is why it has to be every chart
+   * rather than the ones somebody noticed: whether a label is too long is a
+   * property of the data, not of the chart type.
+   */
+  // Every kind that draws a tooltip from one dimension and one measure. The
+  // two left out need their own shape to draw at all, and have their own
+  // assertions below - leaving them to a `if (tooltip)` guard here would let
+  // this whole block pass on a build that had stopped drawing tooltips.
+  const everyKind: ChartType[] = [
+    'bar', 'horizontal_bar', 'stacked_bar', 'horizontal_stacked_bar',
+    'line', 'area', 'pie', 'donut', 'scatter', 'heatmap', 'gauge', 'funnel',
+  ]
+
+  it.each(everyKind)('hangs %s off the body, not the chart', (kind) => {
+    const option = buildChartOption(
+      simple([['Torba', 120], ['Sanma', 90], ['Shefa', 60]]),
+      kind,
+    ) as { tooltip?: { appendToBody?: boolean } }
+    expect(option.tooltip?.appendToBody).toBe(true)
+  })
+
+  it('hangs the sparkline off the body too', () => {
+    const option = buildSparkline([
+      { t: '2026-02-01', v: 1 },
+      { t: '2026-02-02', v: 4 },
+      { t: '2026-02-03', v: 2 },
+    ]) as { tooltip?: { appendToBody?: boolean } }
+    expect(option.tooltip?.appendToBody).toBe(true)
+  })
+
+  it('hangs a population pyramid off the body', () => {
+    const option = buildChartOption(
+      result(
+        [
+          column('age_band', 'dimension'),
+          column('sex', 'dimension'),
+          column('people', 'measure'),
+        ],
+        [
+          ['0-4', 'Male', 410],
+          ['0-4', 'Female', 395],
+          ['5-9', 'Male', 380],
+          ['5-9', 'Female', 372],
+        ],
+      ),
+      'population_pyramid',
+    ) as { tooltip?: { appendToBody?: boolean } }
+    expect(option.tooltip?.appendToBody).toBe(true)
+  })
+
+  it('hangs a box plot off the body', () => {
+    const option = buildChartOption(
+      result(
+        [
+          column('province', 'dimension'),
+          ...BOX_MEASURES.map((measure) => column(measure.alias, 'measure')),
+        ],
+        [['Torba', 12, 22, 31, 44, 68]],
+      ),
+      'boxplot',
+    ) as { tooltip?: { appendToBody?: boolean } }
+    expect(option.tooltip?.appendToBody).toBe(true)
   })
 })

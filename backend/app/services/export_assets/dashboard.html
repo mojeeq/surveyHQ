@@ -225,6 +225,11 @@
     backgroundColor: '#ffffff', borderColor: INK.grid, borderWidth: 1, padding: [8, 12],
     textStyle: Object.assign({ color: INK.primary }, FACE),
     extraCssText: 'box-shadow: 0 10px 30px rgba(15,23,42,.12); border-radius: 8px;',
+    // Off <body>, or a tooltip wider than its card is cut off at the card's
+    // edge. A card clips its contents, which is right for the contents; a
+    // tooltip floats over the page and is not contents. Same reasoning, and
+    // the same one line, as lib/charts.ts in the frontend.
+    appendToBody: true,
   }
   var STATUS = { ok: '#2aa876', warning: '#c2872f', critical: '#d94f4f', unknown: '#8d8a83' }
   var app = document.getElementById('app')
@@ -828,7 +833,7 @@
       instance.setOption({
         color: PALETTE,
         grid: { left: 8, right: 30, top: 10, bottom: 6, containLabel: true },
-        tooltip: { trigger: 'axis' },
+        tooltip: Object.assign({}, TOOLTIP, { trigger: 'axis' }),
         xAxis: { type: 'value' },
         yAxis: { type: 'category', data: breakdown.map(function (p) { return p[0] }) },
         series: [{
