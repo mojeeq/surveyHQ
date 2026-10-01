@@ -42,6 +42,7 @@ from app.schemas.analytics import (
     ChartCreate,
     ChartOut,
     ChartUpdate,
+    DashboardCard,
     DashboardCreate,
     DashboardDetail,
     DashboardOut,
@@ -54,6 +55,7 @@ from app.schemas.analytics import (
     HtmlSnippetOut,
     HtmlSnippetUpdate,
     PageMove,
+    SketchBlock,
     WidgetCommentIn,
     WidgetCommentOut,
     WidgetCommentPatch,
@@ -579,10 +581,18 @@ def delete_snippet(snippet_id: str, db: DbSession, user: RequireAnalyst) -> Mess
 # --- dashboards ------------------------------------------------------------
 
 
-@router.get("", response_model=list[DashboardOut])
+# How many blocks a thumbnail draws before it stops.
+#
+# A board with more widgets than this on one page is already past the point
+# where another rectangle tells the reader anything, and the cap is what keeps
+# a list of twenty boards from carrying a thousand of them.
+SKETCH_LIMIT = 40
+
+
+@router.get("", response_model=list[DashboardCard])
 def list_dashboards(
     db: DbSession, user: CurrentUser, project_id: str = ""
-) -> list[Dashboard]:
+) -> list[DashboardCard]:
     statement = restrict(
         select(Dashboard).order_by(Dashboard.updated_at.desc()),
         scope_for(db, user).filter(Dashboard.project_id),
@@ -593,7 +603,50 @@ def list_dashboards(
             if project_id == "none"
             else Dashboard.project_id == project_id
         )
-    return list(db.scalars(statement).all())
+    dashboards = list(db.scalars(statement).all())
+    shapes = _shapes_of(db, [dashboard.id for dashboard in dashboards])
+
+    cards = []
+    for dashboard in dashboards:
+        card = DashboardCard.model_validate(dashboard)
+        shape = shapes.get(dashboard.id, {})
+        card.sketch = shape.get("sketch", [])
+        card.widget_count = shape.get("widget_count", 0)
+        # A board with no named pages is one unnamed page, not none.
+        card.page_count = max(1, len(dashboard.pages or []))
+        cards.append(card)
+    return cards
+
+
+def _shapes_of(db: DbSession, dashboard_ids: list[str]) -> dict[str, dict[str, Any]]:
+    """The shape of each board's first page, in one query for all of them.
+
+    One query rather than one per board, and four columns of it: asking
+    each dashboard for its `widgets` relationship would be a round trip per
+    card and would carry every config on the board back with it.
+
+    Widgets are ordered the way the board orders them, because a widget with no
+    stored position is placed by its turn in that order, and a thumbnail that
+    put the unplaced ones somewhere else would not be a thumbnail of the board.
+    """
+    if not dashboard_ids:
+        return {}
+
+    rows = db.execute(
+        select(Widget.dashboard_id, Widget.widget_type, Widget.layout, Widget.page)
+        .where(Widget.dashboard_id.in_(dashboard_ids))
+        .order_by(Widget.position, Widget.created_at)
+    ).all()
+
+    shapes: dict[str, dict[str, Any]] = {
+        dashboard_id: {"sketch": [], "widget_count": 0} for dashboard_id in dashboard_ids
+    }
+    for dashboard_id, widget_type, layout, page in rows:
+        shape = shapes[dashboard_id]
+        shape["widget_count"] += 1
+        if page == 0 and len(shape["sketch"]) < SKETCH_LIMIT:
+            shape["sketch"].append(SketchBlock(kind=widget_type, layout=layout or {}))
+    return shapes
 
 
 @router.post("", response_model=DashboardDetail, status_code=201)

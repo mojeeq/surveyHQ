@@ -7,6 +7,7 @@ import { useToast } from '@/hooks/useToast'
 import { relativeTime } from '@/lib/format'
 import type { Chart, Dashboard } from '@/lib/types'
 import ChartCard from '@/components/ChartCard'
+import DashboardSketch from '@/components/DashboardSketch'
 import CrosstabTable from '@/components/CrosstabTable'
 import ErrorBoundary from '@/components/ErrorBoundary'
 import ProjectPicker from '@/components/ProjectPicker'
@@ -152,47 +153,15 @@ export default function Dashboards() {
           ) : (
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
               {dashboards.data.map((dashboard) => (
-                <article key={dashboard.id} className="card flex flex-col p-5">
-                  <div className="flex items-start justify-between gap-2">
-                    <Link
-                      to={`/dashboards/${dashboard.id}`}
-                      className="text-base font-semibold text-ink-900 hover:text-brand-700 dark:text-dark-900 dark:hover:text-brand-400"
-                    >
-                      {dashboard.name}
-                    </Link>
-                    {dashboard.is_public && (
-                      <Badge tone="info" icon="⇗">
-                        Shared
-                      </Badge>
-                    )}
-                  </div>
-                  {dashboard.description && (
-                    <p className="mt-1 line-clamp-2 text-sm text-ink-500">
-                      {dashboard.description}
-                    </p>
-                  )}
-                  <div className="mt-4 flex items-center justify-between border-t border-ink-100 pt-3">
-                    <span className="text-xs text-ink-400">
-                      Updated {relativeTime(dashboard.updated_at)}
-                    </span>
-                    <div className="flex gap-1">
-                      <Link to={`/dashboards/${dashboard.id}`} className="btn-ghost btn-sm">
-                        Open
-                      </Link>
-                      {can('analyst') && (
-                        <button
-                          className="btn-ghost btn-sm text-red-600"
-                          onClick={() => {
-                            if (confirm(`Delete the dashboard "${dashboard.name}"?`))
-                              removeDashboard.mutate(dashboard.id)
-                          }}
-                        >
-                          Delete
-                        </button>
-                      )}
-                    </div>
-                  </div>
-                </article>
+                <DashboardCard
+                  key={dashboard.id}
+                  dashboard={dashboard}
+                  canDelete={can('analyst')}
+                  onDelete={() => {
+                    if (confirm(`Delete the dashboard "${dashboard.name}"?`))
+                      removeDashboard.mutate(dashboard.id)
+                  }}
+                />
               ))}
             </div>
           ))}
@@ -309,6 +278,87 @@ export default function Dashboards() {
         <ProjectPicker value={projectId} onChange={setProjectId} />
       </Modal>
     </>
+  )
+}
+
+/**
+ * One dashboard in the list, with a picture of itself.
+ *
+ * The thumbnail is the card: a list of names and timestamps says nothing about
+ * which board is the one with the map on it, and the shape of a board is what
+ * people actually recognise it by. It is drawn from the layout the list
+ * endpoint sends, so a card costs nothing to draw beyond the list it is
+ * already on.
+ */
+function DashboardCard({
+  dashboard,
+  canDelete,
+  onDelete,
+}: {
+  dashboard: Dashboard
+  canDelete: boolean
+  onDelete: () => void
+}) {
+  const to = `/dashboards/${dashboard.id}`
+  const widgets = dashboard.widget_count ?? 0
+  const pages = dashboard.page_count ?? 1
+  const hidden = widgets - (dashboard.sketch?.length ?? 0)
+
+  // A board whose later pages or capped first page hold widgets the picture
+  // does not would otherwise look emptier than it is.
+  const made = [
+    `${widgets} widget${widgets === 1 ? '' : 's'}`,
+    pages > 1 ? `${pages} pages` : hidden > 0 ? `${hidden} not shown` : '',
+    relativeTime(dashboard.updated_at),
+  ].filter(Boolean)
+
+  return (
+    <article className="card group flex flex-col overflow-hidden">
+      <div className="relative">
+        <Link to={to} className="block" aria-label={`Open ${dashboard.name}`}>
+          <DashboardSketch
+            widgets={dashboard.sketch ?? []}
+            appearance={dashboard.appearance}
+            className="h-40 border-b border-ink-100 dark:border-dark-200"
+          />
+        </Link>
+        {/* On the picture rather than beside the title: a badge in the title
+            row wraps the name of any board called more than two words. */}
+        {dashboard.is_public && (
+          <span className="absolute right-2 top-2">
+            <Badge tone="info" icon="⇗">
+              Shared
+            </Badge>
+          </span>
+        )}
+      </div>
+
+      <div className="flex flex-1 flex-col p-5">
+        <Link
+          to={to}
+          className="text-base font-semibold text-ink-900 hover:text-brand-700 dark:text-dark-900 dark:hover:text-brand-400"
+        >
+          {dashboard.name}
+        </Link>
+        {dashboard.description && (
+          <p className="mt-1 line-clamp-2 text-sm text-ink-500">{dashboard.description}</p>
+        )}
+
+        <div className="mt-auto flex items-center justify-between gap-2 border-t border-ink-100 pt-3 dark:border-dark-200">
+          <span className="text-xs text-ink-400">{made.join(' \u00b7 ')}</span>
+          <div className="flex shrink-0 gap-1">
+            <Link to={to} className="btn-ghost btn-sm">
+              Open
+            </Link>
+            {canDelete && (
+              <button className="btn-ghost btn-sm text-red-600" onClick={onDelete}>
+                Delete
+              </button>
+            )}
+          </div>
+        </div>
+      </div>
+    </article>
   )
 }
 
