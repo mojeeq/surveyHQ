@@ -399,13 +399,48 @@ function pivot(result: QueryResult) {
       if (!seriesNames.includes(seriesName)) seriesNames.push(seriesName)
       lookup.set(`${category}||${seriesName}`, Number(row[valIndex] ?? 0))
     }
-    const kept = seriesNames.slice(0, MAX_SERIES)
+    // Folded, not sliced. The tail used to be cut off here, so a cross-tab of
+    // twelve education levels drew eight of them: every stacked bar came up a
+    // third short, and nothing on the chart said the rest of the people were
+    // missing. Categories have always folded into "Other" a few lines down -
+    // this is the same rule for the series, and it keeps the count inside the
+    // palette, which is the reason there is a limit at all.
+    const valueOf = (name: string, category: string) =>
+      lookup.get(`${category}||${name}`) ?? null
+    const total = (name: string) =>
+      categories.reduce((sum, category) => sum + Number(valueOf(name, category) ?? 0), 0)
+
+    let drawn = seriesNames.map((name) => ({
+      name,
+      data: categories.map((category) => valueOf(name, category)),
+    }))
+    if (seriesNames.length > MAX_SERIES) {
+      const biggest = [...seriesNames].sort((a, b) => total(b) - total(a))
+      const kept = new Set(biggest.slice(0, MAX_SERIES - 1))
+      const rest = seriesNames.filter((name) => !kept.has(name))
+      drawn = [
+        ...seriesNames
+          .filter((name) => kept.has(name))
+          .map((name) => ({
+            name,
+            data: categories.map((category) => valueOf(name, category)),
+          })),
+        {
+          name: `Other (${rest.length})`,
+          // Null only where every folded series was null for that category, so
+          // a gap stays a gap and does not become a zero.
+          data: categories.map((category) =>
+            rest.every((name) => valueOf(name, category) === null)
+              ? null
+              : rest.reduce((sum, name) => sum + Number(valueOf(name, category) ?? 0), 0),
+          ),
+        },
+      ]
+    }
+
     return {
       categories,
-      series: kept.map((name) => ({
-        name,
-        data: categories.map((category) => lookup.get(`${category}||${name}`) ?? null),
-      })),
+      series: drawn,
       valueLabel: measures[0].label || measures[0].name,
       categoryLabel: dimensions[0].label || dimensions[0].name,
     }
