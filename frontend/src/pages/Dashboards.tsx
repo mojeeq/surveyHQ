@@ -6,6 +6,15 @@ import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { relativeTime } from '@/lib/format'
 import type { Chart, Dashboard } from '@/lib/types'
+import type { Direction, Sortable } from '@/lib/collections'
+import { arrange } from '@/lib/collections'
+import { useRemembered } from '@/hooks/useRemembered'
+import CollectionBar, {
+  SortHeader,
+  VIEW_MODES,
+  type SortOption,
+  type ViewMode,
+} from '@/components/CollectionBar'
 import ChartCard from '@/components/ChartCard'
 import DashboardSketch from '@/components/DashboardSketch'
 import CrosstabTable from '@/components/CrosstabTable'
@@ -23,6 +32,26 @@ import {
   PageHeader,
   Tabs,
 } from '@/components/ui'
+
+/** What the dashboard list can be ordered by. */
+const ORDERS: Record<string, (dashboard: Dashboard) => Sortable> = {
+  updated: (dashboard) => dashboard.updated_at,
+  name: (dashboard) => dashboard.name,
+  widgets: (dashboard) => dashboard.widget_count ?? 0,
+  pages: (dashboard) => dashboard.page_count ?? 1,
+  created: (dashboard) => dashboard.created_at,
+}
+
+const SORTS: SortOption[] = [
+  { key: 'updated', label: 'Last updated' },
+  { key: 'name', label: 'Name' },
+  { key: 'widgets', label: 'Widgets' },
+  { key: 'pages', label: 'Pages' },
+  { key: 'created', label: 'Created' },
+]
+
+const SORT_KEYS = Object.keys(ORDERS)
+const DIRECTIONS: readonly Direction[] = ['asc', 'desc']
 
 type LibraryChart = Chart & {
   dataset_name: string
@@ -70,6 +99,30 @@ export default function Dashboards() {
   const visibleCharts = datasetId
     ? (charts.data ?? []).filter((chart) => chart.dataset_id === datasetId)
     : (charts.data ?? [])
+
+  const [search, setSearch] = useState('')
+  // The endpoint already sends these most-recently-updated first, so that is
+  // the default and the page opens exactly as it did before.
+  const [sort, setSort] = useRemembered('dashboards.sort', 'updated', SORT_KEYS)
+  const [direction, setDirection] = useRemembered<Direction>(
+    'dashboards.direction',
+    'desc',
+    DIRECTIONS,
+  )
+  const [view, setView] = useRemembered<ViewMode>('dashboards.view', 'cards', VIEW_MODES)
+
+  const allBoards = dashboards.data ?? []
+  const shownBoards = arrange(allBoards, {
+    query: search,
+    searchable: (dashboard) => [dashboard.name, dashboard.description],
+    read: ORDERS[sort] ?? ORDERS.updated,
+    direction,
+  })
+
+  const orderBy = (column: string, next: Direction) => {
+    setSort(column)
+    setDirection(next)
+  }
 
   const create = useMutation({
     mutationFn: () =>
@@ -126,11 +179,41 @@ export default function Dashboards() {
       />
 
       <div className="mt-4">
+        {tab === 'dashboards' && !dashboards.isLoading && !dashboards.error && allBoards.length > 0 && (
+          <CollectionBar
+            noun="dashboard"
+            shown={shownBoards.length}
+            total={allBoards.length}
+            query={search}
+            onQuery={setSearch}
+            sort={sort}
+            onSort={setSort}
+            direction={direction}
+            onDirection={setDirection}
+            options={SORTS}
+            view={view}
+            onView={setView}
+          />
+        )}
+
         {tab === 'dashboards' &&
           (dashboards.isLoading ? (
             <Loading />
           ) : dashboards.error ? (
             <ErrorNote error={dashboards.error} />
+          ) : allBoards.length && !shownBoards.length ? (
+            <Card>
+              <EmptyState
+                icon="▦"
+                title="No dashboards match your search"
+                description="Try fewer words, or a different spelling."
+                action={
+                  <button className="btn-secondary btn-sm" onClick={() => setSearch('')}>
+                    Clear the search
+                  </button>
+                }
+              />
+            </Card>
           ) : !dashboards.data?.length ? (
             <Card>
               <EmptyState
@@ -150,9 +233,21 @@ export default function Dashboards() {
                 }
               />
             </Card>
+          ) : view === 'list' ? (
+            <DashboardRows
+              dashboards={shownBoards}
+              sort={sort}
+              direction={direction}
+              onSort={orderBy}
+              canDelete={can('analyst')}
+              onDelete={(dashboard) => {
+                if (confirm(`Delete the dashboard "${dashboard.name}"?`))
+                  removeDashboard.mutate(dashboard.id)
+              }}
+            />
           ) : (
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-              {dashboards.data.map((dashboard) => (
+              {shownBoards.map((dashboard) => (
                 <DashboardCard
                   key={dashboard.id}
                   dashboard={dashboard}
@@ -290,6 +385,92 @@ export default function Dashboards() {
  * endpoint sends, so a card costs nothing to draw beyond the list it is
  * already on.
  */
+/**
+ * The same dashboards as rows, for comparing rather than recognising.
+ *
+ * The thumbnail is what makes a card worth having, and a row has no room for
+ * one - so a row earns its place by showing what a card cannot: every board's
+ * widget count and page count lined up in a column you can read down.
+ */
+function DashboardRows({
+  dashboards,
+  sort,
+  direction,
+  onSort,
+  canDelete,
+  onDelete,
+}: {
+  dashboards: Dashboard[]
+  sort: string
+  direction: Direction
+  onSort: (column: string, direction: Direction) => void
+  canDelete: boolean
+  onDelete: (dashboard: Dashboard) => void
+}) {
+  return (
+    <div className="card overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead className="border-b border-ink-200 text-xs uppercase tracking-wide text-ink-500 dark:border-dark-200 dark:text-dark-500">
+          <tr>
+            <SortHeader label="Dashboard" column="name" sort={sort} direction={direction} onSort={onSort} />
+            <SortHeader label="Widgets" column="widgets" sort={sort} direction={direction} onSort={onSort} align="right" />
+            <SortHeader label="Pages" column="pages" sort={sort} direction={direction} onSort={onSort} align="right" />
+            <SortHeader label="Updated" column="updated" sort={sort} direction={direction} onSort={onSort} />
+            <th className="px-3 py-2 text-right font-medium">Actions</th>
+          </tr>
+        </thead>
+        <tbody>
+          {dashboards.map((dashboard) => (
+            <tr
+              key={dashboard.id}
+              className="border-b border-ink-100 last:border-0 hover:bg-ink-50 dark:border-dark-200 dark:hover:bg-dark-100"
+            >
+              <td className="px-3 py-2.5">
+                <div className="flex items-center gap-2">
+                  <Link
+                    to={`/dashboards/${dashboard.id}`}
+                    className="font-medium text-ink-900 hover:text-brand-700 dark:text-dark-900 dark:hover:text-brand-400"
+                  >
+                    {dashboard.name}
+                  </Link>
+                  {dashboard.is_public && (
+                    <Badge tone="info" icon="⇗">
+                      Shared
+                    </Badge>
+                  )}
+                </div>
+                {dashboard.description && (
+                  <p className="line-clamp-1 text-xs text-ink-500 dark:text-dark-500">
+                    {dashboard.description}
+                  </p>
+                )}
+              </td>
+              <td className="px-3 py-2.5 text-right tabular-nums">{dashboard.widget_count ?? 0}</td>
+              <td className="px-3 py-2.5 text-right tabular-nums">{dashboard.page_count ?? 1}</td>
+              <td className="whitespace-nowrap px-3 py-2.5 text-ink-500 dark:text-dark-500">
+                {relativeTime(dashboard.updated_at)}
+              </td>
+              <td className="whitespace-nowrap px-3 py-2.5 text-right">
+                <Link to={`/dashboards/${dashboard.id}`} className="btn-ghost btn-sm">
+                  Open
+                </Link>
+                {canDelete && (
+                  <button
+                    className="btn-ghost btn-sm text-red-600"
+                    onClick={() => onDelete(dashboard)}
+                  >
+                    Delete
+                  </button>
+                )}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 function DashboardCard({
   dashboard,
   canDelete,
