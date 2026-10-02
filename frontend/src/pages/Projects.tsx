@@ -6,6 +6,15 @@ import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { formatNumber, relativeTime } from '@/lib/format'
 import type { Project, ProjectStatus } from '@/lib/types'
+import type { Direction, Sortable } from '@/lib/collections'
+import { arrange } from '@/lib/collections'
+import { useRemembered } from '@/hooks/useRemembered'
+import CollectionBar, {
+  SortHeader,
+  VIEW_MODES,
+  type SortOption,
+  type ViewMode,
+} from '@/components/CollectionBar'
 import {
   Badge,
   Card,
@@ -16,6 +25,28 @@ import {
   Modal,
   PageHeader,
 } from '@/components/ui'
+
+/** What the list can be ordered by, and where each order reads its value. */
+const ORDERS: Record<string, (project: Project) => Sortable> = {
+  name: (project) => project.name,
+  updated: (project) => project.updated_at,
+  status: (project) => project.status,
+  datasets: (project) => project.dataset_count,
+  dashboards: (project) => project.dashboard_count,
+  members: (project) => project.member_count,
+}
+
+const SORTS: SortOption[] = [
+  { key: 'name', label: 'Name' },
+  { key: 'updated', label: 'Last updated' },
+  { key: 'status', label: 'Status' },
+  { key: 'datasets', label: 'Datasets' },
+  { key: 'dashboards', label: 'Dashboards' },
+  { key: 'members', label: 'Members' },
+]
+
+const SORT_KEYS = Object.keys(ORDERS)
+const DIRECTIONS: readonly Direction[] = ['asc', 'desc']
 
 const STATUS_TONE: Record<ProjectStatus, 'success' | 'warning' | 'neutral'> = {
   active: 'success',
@@ -32,10 +63,34 @@ export default function Projects() {
   const queryClient = useQueryClient()
   const [creating, setCreating] = useState(false)
 
+  const [query, setQuery] = useState('')
+  // The server already sends these ordered by name, so that is the default:
+  // the page looks the same on opening as it always has.
+  const [sort, setSort] = useRemembered('projects.sort', 'name', SORT_KEYS)
+  const [direction, setDirection] = useRemembered<Direction>(
+    'projects.direction',
+    'asc',
+    DIRECTIONS,
+  )
+  const [view, setView] = useRemembered<ViewMode>('projects.view', 'cards', VIEW_MODES)
+
   const projects = useQuery({
     queryKey: ['projects'],
     queryFn: () => api.get<Project[]>('/projects'),
   })
+
+  const all = projects.data ?? []
+  const shown = arrange(all, {
+    query,
+    searchable: (project) => [project.name, project.description, project.status],
+    read: ORDERS[sort] ?? ORDERS.name,
+    direction,
+  })
+
+  const orderBy = (column: string, next: Direction) => {
+    setSort(column)
+    setDirection(next)
+  }
 
   return (
     <>
@@ -51,10 +106,40 @@ export default function Projects() {
         }
       />
 
+      {!projects.isLoading && !projects.error && all.length > 0 && (
+        <CollectionBar
+          noun="project"
+          shown={shown.length}
+          total={all.length}
+          query={query}
+          onQuery={setQuery}
+          sort={sort}
+          onSort={setSort}
+          direction={direction}
+          onDirection={setDirection}
+          options={SORTS}
+          view={view}
+          onView={setView}
+        />
+      )}
+
       {projects.isLoading ? (
         <Loading />
       ) : projects.error ? (
         <ErrorNote error={projects.error} retry={() => projects.refetch()} />
+      ) : all.length && !shown.length ? (
+        <Card>
+          <EmptyState
+            icon="◫"
+            title="No projects match your search"
+            description="Try fewer words, or a different spelling."
+            action={
+              <button className="btn-secondary btn-sm" onClick={() => setQuery('')}>
+                Clear the search
+              </button>
+            }
+          />
+        </Card>
       ) : !projects.data?.length ? (
         <Card>
           <EmptyState
@@ -74,9 +159,11 @@ export default function Projects() {
             }
           />
         </Card>
+      ) : view === 'list' ? (
+        <ProjectRows projects={shown} sort={sort} direction={direction} onSort={orderBy} />
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {projects.data.map((project) => (
+          {shown.map((project) => (
             <article key={project.id} className="card flex flex-col p-5">
               <div className="flex items-start justify-between gap-2">
                 <Link
@@ -128,6 +215,85 @@ export default function Projects() {
         />
       )}
     </>
+  )
+}
+
+/**
+ * The same projects as rows: more of them on a screen, and comparable.
+ *
+ * Cards are better for recognising one project; a table is better for the
+ * question a table answers, which is "which of these has no datasets in it
+ * yet" or "which was touched last".
+ */
+function ProjectRows({
+  projects,
+  sort,
+  direction,
+  onSort,
+}: {
+  projects: Project[]
+  sort: string
+  direction: Direction
+  onSort: (column: string, direction: Direction) => void
+}) {
+  return (
+    <div className="card overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead className="border-b border-ink-200 text-xs uppercase tracking-wide text-ink-500 dark:border-dark-200 dark:text-dark-500">
+          <tr>
+            <SortHeader label="Project" column="name" sort={sort} direction={direction} onSort={onSort} />
+            <SortHeader label="Status" column="status" sort={sort} direction={direction} onSort={onSort} />
+            <SortHeader label="Datasets" column="datasets" sort={sort} direction={direction} onSort={onSort} align="right" />
+            <SortHeader label="Dashboards" column="dashboards" sort={sort} direction={direction} onSort={onSort} align="right" />
+            <SortHeader label="Members" column="members" sort={sort} direction={direction} onSort={onSort} align="right" />
+            <SortHeader label="Updated" column="updated" sort={sort} direction={direction} onSort={onSort} />
+            <th className="px-3 py-2 text-left font-medium">Your role</th>
+          </tr>
+        </thead>
+        <tbody>
+          {projects.map((project) => (
+            <tr
+              key={project.id}
+              className="border-b border-ink-100 last:border-0 hover:bg-ink-50 dark:border-dark-200 dark:hover:bg-dark-100"
+            >
+              <td className="px-3 py-2.5">
+                <Link
+                  to={`/projects/${project.id}`}
+                  className="font-medium text-ink-900 hover:text-brand-700 dark:text-dark-900 dark:hover:text-brand-400"
+                >
+                  {project.name}
+                </Link>
+                {project.description && (
+                  <p className="line-clamp-1 text-xs text-ink-500 dark:text-dark-500">
+                    {project.description}
+                  </p>
+                )}
+              </td>
+              <td className="px-3 py-2.5">
+                <Badge tone={STATUS_TONE[project.status]}>{project.status}</Badge>
+              </td>
+              <td className="px-3 py-2.5 text-right tabular-nums">
+                {formatNumber(project.dataset_count)}
+              </td>
+              <td className="px-3 py-2.5 text-right tabular-nums">
+                {formatNumber(project.dashboard_count)}
+              </td>
+              <td className="px-3 py-2.5 text-right tabular-nums">
+                {formatNumber(project.member_count)}
+              </td>
+              <td className="whitespace-nowrap px-3 py-2.5 text-ink-500 dark:text-dark-500">
+                {relativeTime(project.updated_at)}
+              </td>
+              <td className="px-3 py-2.5 text-ink-500 dark:text-dark-500">
+                {project.your_role && project.your_role !== 'admin'
+                  ? project.your_role
+                  : 'Administrator'}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }
 
