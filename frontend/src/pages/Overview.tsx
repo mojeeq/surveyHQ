@@ -7,14 +7,16 @@ import { buildSparkline, STATUS_COLORS } from '@/lib/charts'
 import { formatNumber, formatValue, relativeTime } from '@/lib/format'
 import type { Alert, Dataset, IndicatorValue, MonitoringSummary, Page } from '@/lib/types'
 import ProjectFilter, { projectParam } from '@/components/ProjectFilter'
+import type { BadgeTone } from '@/components/ui'
 import { Badge, Card, EmptyState, ErrorNote, Loading, PageHeader, Stat } from '@/components/ui'
 
-const STATE_TONE = {
-  ok: { tone: 'success', icon: '✓', label: 'On track' },
+// See Monitoring.tsx: the unremarkable state goes unmarked.
+const STATE_TONE: Record<string, { tone: BadgeTone; icon?: string; label: string }> = {
+  ok: { tone: 'success', label: 'On track' },
   warning: { tone: 'warning', icon: '▲', label: 'Watch' },
   critical: { tone: 'danger', icon: '■', label: 'Critical' },
   unknown: { tone: 'neutral', icon: '-', label: 'No data' },
-} as const
+}
 
 export default function Overview() {
   // Null is every project at once, which is what the page has always shown.

@@ -19,6 +19,7 @@ import {
   Spinner,
   Toggle,
 } from '@/components/ui'
+import type { BadgeTone } from '@/components/ui'
 
 /**
  * Every zone the browser knows, so the times are set where the fieldwork is.
@@ -215,12 +216,12 @@ export default function Connections() {
 }
 
 function SyncBadge({ connection }: { connection: Connection }) {
-  const map = {
-    success: { tone: 'success', icon: '✓', label: 'Synced' },
+  const map: Record<string, { tone: BadgeTone; icon?: string; label: string }> = {
+    success: { tone: 'success', label: 'Synced' },
     failed: { tone: 'danger', icon: '⚠', label: 'Failed' },
     running: { tone: 'warning', icon: '◷', label: 'Running' },
     never: { tone: 'neutral', icon: '-', label: 'Never synced' },
-  } as const
+  }
   const state = map[connection.last_sync_status]
   return (
     <Badge tone={state.tone} icon={state.icon}>
@@ -366,8 +367,8 @@ function ConnectionModal({
         <div
           className={`mb-4 rounded-card border px-3 py-2 text-sm ${
             testResult.ok
-              ? 'border-emerald-200 bg-emerald-50 text-emerald-800'
-              : 'border-red-200 bg-red-50 text-red-800'
+              ? 'border-ink-200 bg-ink-50 text-ink-700'
+              : 'border-ink-900 bg-ink-800 text-white'
           }`}
         >
           {testResult.message}

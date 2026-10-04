@@ -165,7 +165,7 @@ function Users() {
               </td>
               <td>
                 {user.is_active ? (
-                  <Badge tone="success" icon="✓">
+                  <Badge tone="success">
                     Active
                   </Badge>
                 ) : (
@@ -376,8 +376,8 @@ function ApiKeys() {
       subtitle="For scripts and integrations. Send as the X-API-Key header."
     >
       {created && (
-        <div className="mb-4 rounded-card border border-emerald-200 bg-emerald-50 p-3">
-          <p className="text-sm font-medium text-emerald-900">
+        <div className="mb-4 rounded-card border border-ink-300 bg-ink-50 p-3">
+          <p className="text-sm font-medium text-ink-900">
             Copy this key now. It is not shown again.
           </p>
           <code className="mt-2 block break-all rounded bg-white px-2 py-1.5 text-xs">
