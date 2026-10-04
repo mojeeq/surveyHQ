@@ -235,7 +235,7 @@ export default function Layout() {
               >
                 <BellIcon />
                 {notifications.length > 0 && (
-                  <span className="absolute right-1 top-1 grid h-4 min-w-4 place-items-center rounded-full bg-red-500 px-1 text-[9px] font-bold text-white ring-2 ring-white dark:ring-slate-950">
+                  <span className="absolute right-1 top-1 grid h-4 min-w-4 place-items-center rounded-full bg-ink-900 px-1 text-[9px] font-bold text-white ring-2 ring-white dark:bg-dark-800 dark:text-dark-100 dark:ring-slate-950">
                     {notifications.length > 9 ? '9+' : notifications.length}
                   </span>
                 )}

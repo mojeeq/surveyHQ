@@ -18,6 +18,7 @@ import type {
 import ChartCard from '@/components/ChartCard'
 import ProjectFilter, { datasetProjectParam, projectParam } from '@/components/ProjectFilter'
 import FilterBuilder, { emptyFilter } from '@/components/FilterBuilder'
+import type { BadgeTone } from '@/components/ui'
 import {
   Badge,
   Card,
@@ -30,12 +31,14 @@ import {
   Spinner,
 } from '@/components/ui'
 
-const STATE = {
-  ok: { tone: 'success', icon: '✓', label: 'On track' },
+// On track carries no glyph: the state nobody has to act on should not be
+// decorated, and the three that do keep theirs.
+const STATE: Record<string, { tone: BadgeTone; icon?: string; label: string }> = {
+  ok: { tone: 'success', label: 'On track' },
   warning: { tone: 'warning', icon: '▲', label: 'Watch' },
   critical: { tone: 'danger', icon: '■', label: 'Critical' },
   unknown: { tone: 'neutral', icon: '-', label: 'No data' },
-} as const
+}
 
 export default function Monitoring() {
   const { can } = useAuth()

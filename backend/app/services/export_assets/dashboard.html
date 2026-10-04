@@ -231,7 +231,10 @@
     // the same one line, as lib/charts.ts in the frontend.
     appendToBody: true,
   }
-  var STATUS = { ok: '#2aa876', warning: '#c2872f', critical: '#d94f4f', unknown: '#8d8a83' }
+  // Greyscale severity, light to dark, matching STATUS_COLORS in
+  // lib/charts.ts. An exported board is the one most likely to be printed
+  // or photocopied, where a green bar and a red bar are the same bar.
+  var STATUS = { ok: '#9a9a9a', warning: '#6f6f6f', critical: '#333333', unknown: '#cfcfcf' }
   var app = document.getElementById('app')
   var page = 0
   var chosen = {}

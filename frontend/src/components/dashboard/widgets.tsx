@@ -215,7 +215,7 @@ export function CountdownWidget({ payload }: { payload: any }) {
   if (remaining <= 0) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-1 text-center">
-        <p className="text-2xl font-semibold text-red-600">
+        <p className="text-2xl font-semibold text-ink-900 dark:text-dark-900">
           {payload.expired_text || "Time is up"}
         </p>
         <p className="text-xs text-ink-500">
@@ -456,11 +456,11 @@ export function QualityWidget({
             </li>
           ))}
           {!failing.length && (
-            <li className="aero-pane aero-pane-ok px-3 py-2 pl-4 text-emerald-600">
-              <p className="font-medium text-emerald-900 dark:text-emerald-200">
+            <li className="aero-pane aero-pane-ok px-3 py-2 pl-4 text-ink-600">
+              <p className="font-medium text-ink-800 dark:text-dark-800">
                 Every active check passed
               </p>
-              <p className="mt-0.5 text-[0.87em] text-emerald-800/90 dark:text-emerald-200/80">
+              <p className="mt-0.5 text-[0.87em] text-ink-600 dark:text-dark-600">
                 {payload.name}
               </p>
             </li>
@@ -604,10 +604,10 @@ export function Variance({
       : "behind target";
   return (
     <p
-      className={`mt-1 text-sm font-medium ${
+      className={`mt-1 text-sm ${
         good
-          ? "text-emerald-700 dark:text-emerald-400"
-          : "text-rose-700 dark:text-rose-400"
+          ? "font-medium text-ink-600 dark:text-dark-600"
+          : "font-semibold text-ink-900 dark:text-dark-900"
       }`}
     >
       {over ? "+" : "-"}

@@ -418,7 +418,7 @@ function DatasetCard({
 }
 
 function StatusBadge({ status }: { status: Dataset['status'] }) {
-  if (status === 'ready') return <Badge tone="success" icon="✓">Ready</Badge>
+  if (status === 'ready') return <Badge tone="success">Ready</Badge>
   if (status === 'failed') return <Badge tone="danger" icon="⚠">Failed</Badge>
   return <Badge tone="warning" icon="◷">{status}</Badge>
 }

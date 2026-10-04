@@ -65,12 +65,19 @@ export function EmptyState({
 
 // A quiet border of the tone's own colour, which is what stops a square badge
 // reading as a button.
+//
+// The severity tones are greys rather than the usual green-amber-red, and they
+// separate by weight: a state nobody has to act on sits back in the page, and
+// one that needs attention comes forward as a filled dark pill. Colour is a
+// poor carrier here anyway - the label is doing the work, a quarter of the
+// room cannot rely on red against green, and a wall of traffic lights reads as
+// decoration rather than as a finding.
 const BADGE_TONES = {
   neutral: 'bg-ink-100 text-ink-700 border-ink-200 dark:bg-dark-200 dark:text-dark-700 dark:border-dark-300',
   info: 'bg-brand-50 text-brand-700 border-brand-200 dark:bg-brand-500/10 dark:text-brand-400 dark:border-brand-500/30',
-  success: 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-500/10 dark:text-emerald-400 dark:border-emerald-500/30',
-  warning: 'bg-amber-50 text-amber-800 border-amber-200 dark:bg-amber-500/10 dark:text-amber-400 dark:border-amber-500/30',
-  danger: 'bg-red-50 text-red-700 border-red-200 dark:bg-red-500/10 dark:text-red-400 dark:border-red-500/30',
+  success: 'bg-ink-50 text-ink-700 border-ink-200 dark:bg-dark-200/60 dark:text-dark-700 dark:border-dark-300',
+  warning: 'bg-ink-200 text-ink-800 border-ink-300 dark:bg-dark-300 dark:text-dark-800 dark:border-dark-400',
+  danger: 'bg-ink-800 text-white border-ink-900 dark:bg-dark-800 dark:text-dark-100 dark:border-dark-900',
 } as const
 
 export type BadgeTone = keyof typeof BADGE_TONES
@@ -616,12 +623,13 @@ export function Stat({
   hint?: ReactNode
   tone?: BadgeTone
 }) {
+  // Same greyscale as the badges: weight, not hue, says how much it matters.
   const accents: Record<BadgeTone, string> = {
     neutral: 'text-ink-900 dark:text-dark-900',
     info: 'text-brand-700 dark:text-brand-400',
-    success: 'text-emerald-700 dark:text-emerald-400',
-    warning: 'text-amber-700 dark:text-amber-400',
-    danger: 'text-red-700 dark:text-red-400',
+    success: 'text-ink-700 dark:text-dark-700',
+    warning: 'text-ink-800 dark:text-dark-800',
+    danger: 'text-ink-900 dark:text-dark-900',
   }
   return (
     <div className="card px-5 py-4">

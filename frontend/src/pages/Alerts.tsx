@@ -128,7 +128,7 @@ export default function Alerts() {
             ) : !alerts.data?.length ? (
               <Card>
                 <EmptyState
-                  icon="✓"
+                  icon="◎"
                   title="Nothing to worry about"
                   description={
                     statusFilter === 'open'

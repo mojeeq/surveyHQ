@@ -12,11 +12,13 @@ const ToastContext = createContext<{ push: (message: string, level?: ToastLevel)
 )
 
 const TONES: Record<ToastLevel, string> = {
-  success: 'border-emerald-200 bg-emerald-50 text-emerald-900',
+  success: 'border-ink-300 bg-ink-50 text-ink-900',
   error: 'border-red-200 bg-red-50 text-red-900',
   info: 'border-brand-200 bg-brand-50 text-brand-900',
 }
-const ICONS: Record<ToastLevel, string> = { success: '✓', error: '⚠', info: 'ℹ' }
+// Nothing for a success: the message says what happened, and a glyph on
+// every confirmation is noise. The two that interrupt you keep theirs.
+const ICONS: Partial<Record<ToastLevel, string>> = { error: '⚠', info: 'ℹ' }
 
 export function ToastProvider({ children }: { children: ReactNode }) {
   const [toasts, setToasts] = useState<Toast[]>([])
@@ -37,7 +39,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             role="status"
             className={`flex items-start gap-2 rounded-card border px-4 py-3 text-sm shadow-pop ${TONES[toast.level]}`}
           >
-            <span aria-hidden>{ICONS[toast.level]}</span>
+            {ICONS[toast.level] && <span aria-hidden>{ICONS[toast.level]}</span>}
             <span className="flex-1">{toast.message}</span>
             <button
               onClick={() => setToasts((c) => c.filter((t) => t.id !== toast.id))}

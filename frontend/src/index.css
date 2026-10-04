@@ -489,12 +489,12 @@
      a row of coloured circles is the other thing every generated interface
      does. */
   .aero-pane-warn {
-    @apply border-amber-300/70 bg-amber-50 dark:border-amber-500/40 dark:bg-amber-500/10;
-    box-shadow: inset 3px 0 0 theme('colors.amber.500');
+    @apply border-ink-400/70 bg-ink-100 dark:border-dark-400 dark:bg-dark-300/60;
+    box-shadow: inset 3px 0 0 theme('colors.ink.700');
   }
   .aero-pane-ok {
-    @apply border-emerald-300/70 bg-emerald-50 dark:border-emerald-500/40 dark:bg-emerald-500/10;
-    box-shadow: inset 3px 0 0 theme('colors.emerald.600');
+    @apply border-ink-300/70 bg-ink-50 dark:border-dark-300 dark:bg-dark-200/50;
+    box-shadow: inset 3px 0 0 theme('colors.ink.400');
   }
   .dark .aero-pane-warn,
   .dark .aero-pane-ok {

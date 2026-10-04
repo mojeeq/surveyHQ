@@ -159,7 +159,7 @@ export default function Quality() {
   if (!datasets.data?.items.length) {
     return (
       <Card>
-        <EmptyState icon="✓" title="No datasets to check" description="Import data first." />
+        <EmptyState icon="▤" title="No datasets to check" description="Import data first." />
       </Card>
     )
   }
@@ -229,7 +229,7 @@ export default function Quality() {
       {!inProject.length ? (
         <Card>
           <EmptyState
-            icon="✓"
+            icon="▤"
             title="No datasets in this project"
             description="Checks are defined per dataset, so choose a project that has some."
           />
@@ -272,7 +272,7 @@ export default function Quality() {
       ) : !rules.data?.length ? (
         <Card>
           <EmptyState
-            icon="✓"
+            icon="◎"
             title="No checks configured"
             description="Add a check, or accept one of the recommendations above, to start monitoring data quality."
           />
@@ -296,7 +296,7 @@ export default function Quality() {
                             Failing
                           </Badge>
                         ) : (
-                          <Badge tone="success" icon="✓">
+                          <Badge tone="success">
                             Passing
                           </Badge>
                         ))}
@@ -308,7 +308,7 @@ export default function Quality() {
                           <div className="mt-2 flex items-center gap-3">
                             <div className="h-1.5 w-40 overflow-hidden rounded-full bg-ink-100">
                               <div
-                                className={`h-full rounded-full ${failed ? 'bg-red-500' : 'bg-emerald-500'}`}
+                                className={`h-full rounded-full ${failed ? 'bg-ink-800 dark:bg-dark-800' : 'bg-ink-400 dark:bg-dark-400'}`}
                                 style={{
                                   width: `${Math.min(result.failure_rate * 100, 100).toFixed(1)}%`,
                                 }}
@@ -459,7 +459,7 @@ function FailuresModal({ rule, onClose }: { rule: QualityRule; onClose: () => vo
       ) : failures.error ? (
         <ErrorNote error={failures.error} />
       ) : !failures.data?.rows.length ? (
-        <EmptyState icon="✓" title="No failed records" description="This rule currently finds no matching rows." />
+        <EmptyState icon="▤" title="No failed records" description="This rule currently finds no matching rows." />
       ) : (
         <>
           <p className="mb-3 text-sm text-ink-500">
