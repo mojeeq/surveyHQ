@@ -5,6 +5,7 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { formatBytes, formatNumber, relativeTime } from '@/lib/format'
+import { share, summarise } from '@/lib/inventory'
 import type { ArchiveImport, Dataset, Job, Page, Project } from '@/lib/types'
 import ImportReview, { type Review } from '@/components/ImportReview'
 import BoundaryLibrary from '@/components/BoundaryLibrary'
@@ -97,6 +98,15 @@ export default function Datasets() {
     return groups
   }, [datasets.data, projects.data, showParadata])
 
+  // What the whole shelf comes to, and what each project is of it. Computed
+  // from the same filtered list the groups are built from, so hiding paradata
+  // moves the totals too rather than leaving them quietly describing a
+  // different set of datasets than the one on screen.
+  const totals = useMemo(
+    () => summarise(grouped.flatMap((group) => group.datasets)),
+    [grouped],
+  )
+
   const hiddenParadata = (datasets.data?.items ?? []).filter((d) =>
     d.tags.includes('paradata'),
   ).length
@@ -135,6 +145,25 @@ export default function Datasets() {
           )
         }
       />
+
+      {totals.count > 0 && (
+        <div className="mb-5 flex flex-wrap items-end gap-x-10 gap-y-3 border-b border-ink-200 pb-4 dark:border-dark-200">
+          <Figure label="Projects" value={formatNumber(grouped.length)} />
+          <Figure label="Datasets" value={formatNumber(totals.count)} />
+          <Figure label="Rows" value={formatNumber(totals.rows)} />
+          <Figure label="On disk" value={formatBytes(totals.bytes)} />
+          {totals.unready > 0 && (
+            <Figure
+              label="Not ready"
+              value={formatNumber(totals.unready)}
+              hint="still importing, or failed"
+            />
+          )}
+          {totals.updated && (
+            <Figure label="Last import" value={relativeTime(totals.updated)} />
+          )}
+        </div>
+      )}
 
       <div className="mb-4 flex flex-wrap items-center gap-3">
         <input
@@ -207,7 +236,8 @@ export default function Datasets() {
         <div className="space-y-8">
           {grouped.map((group) => (
             <section key={group.id || 'shared'}>
-              <header className="mb-3 flex flex-wrap items-center gap-3 border-b border-ink-200 pb-2">
+              <header className="mb-3 border-b border-ink-200 pb-2.5 dark:border-dark-200">
+                <div className="flex flex-wrap items-center gap-3">
                 <button
                   className="text-ink-400 hover:text-ink-700"
                   onClick={() => toggleGroup(group.id)}
@@ -216,7 +246,7 @@ export default function Datasets() {
                 >
                   {collapsed[group.id] ? '▸' : '▾'}
                 </button>
-                <h2 className="text-sm font-semibold text-ink-800">
+                <h2 className="text-sm font-semibold text-ink-800 dark:text-dark-800">
                   {group.id ? (
                     <Link to={`/projects/${group.id}`} className="hover:text-brand-700">
                       {group.name}
@@ -225,10 +255,12 @@ export default function Datasets() {
                     group.name
                   )}
                 </h2>
-                <span className="text-xs text-ink-400">
-                  {group.datasets.length} dataset{group.datasets.length === 1 ? '' : 's'}
-                </span>
 
+                {/* Destructive actions sit to the right, away from the
+                    project's own name. 'Delete all' beside a title is a
+                    mis-click waiting to happen, and it is not what the
+                    row is for. */}
+                <div className="ml-auto flex flex-wrap items-center gap-1">
                 {can('manager') && group.datasets.length > 0 && (
                   <>
                     <button
@@ -267,19 +299,24 @@ export default function Datasets() {
 
                 {can('manager') && (
                   <button
-                    className="btn-ghost btn-sm ml-auto"
+                    className="btn-ghost btn-sm"
                     onClick={() => setUploadInto(group.id)}
                   >
                     + Upload into {group.id ? 'this project' : 'the shared area'}
                   </button>
                 )}
+                </div>
+                </div>
+                <GroupMeasure
+                  datasets={group.datasets}
+                  totalRows={totals.rows}
+                  indent={Boolean(group.id)}
+                />
               </header>
 
-              {collapsed[group.id] ? null : !group.datasets.length ? (
-                <p className="py-3 text-sm text-ink-400">
-                  Nothing here yet.
-                </p>
-              ) : (
+              {/* The header line already says an empty project is empty, so
+                  there is nothing to repeat here. */}
+              {collapsed[group.id] || !group.datasets.length ? null : (
                 <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
                   {group.datasets.map((dataset) => (
                     <DatasetCard
@@ -317,6 +354,83 @@ export default function Datasets() {
         onClose={() => setUploadInto(null)}
       />
     </>
+  )
+}
+
+/** One figure in the masthead. A number and what it counts, nothing drawn. */
+function Figure({ label, value, hint }: { label: string; value: string; hint?: string }) {
+  return (
+    <div>
+      <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-500 dark:text-dark-500">
+        {label}
+      </p>
+      <p className="mt-0.5 text-2xl font-semibold tabular-nums text-ink-900 dark:text-dark-900">
+        {value}
+      </p>
+      {hint && <p className="text-[11px] text-ink-400 dark:text-dark-400">{hint}</p>}
+    </div>
+  )
+}
+
+/**
+ * What a project holds, on one line, whether or not it is expanded.
+ *
+ * The bar is this group's share of every row in the workspace, drawn against a
+ * track of fixed width so the three groups are read against each other rather
+ * than each against itself. One measure, one hue: length is already carrying
+ * the magnitude, so a second colour would only repeat it. The percentage is
+ * printed beside the bar because a reader who cannot see the fill still needs
+ * the number, and because a bar at 3% and a bar at 6% are the same bar at this
+ * size.
+ */
+function GroupMeasure({
+  datasets,
+  totalRows,
+  indent,
+}: {
+  datasets: Dataset[]
+  totalRows: number
+  indent: boolean
+}) {
+  const totals = summarise(datasets)
+  if (!totals.count) {
+    return (
+      <p className={`mt-1.5 text-xs text-ink-400 dark:text-dark-400 ${indent ? 'pl-6' : 'pl-6'}`}>
+        Nothing here yet
+      </p>
+    )
+  }
+  const fraction = share(totals.rows, totalRows)
+  const percent = fraction * 100
+  // Below a tenth of a percent, a rounded "0%" beside a visible sliver reads
+  // as a bug rather than as a small number.
+  const label = percent > 0 && percent < 0.1 ? '<0.1%' : `${percent.toFixed(percent < 10 ? 1 : 0)}%`
+  const parts = [
+    `${formatNumber(totals.count)} dataset${totals.count === 1 ? '' : 's'}`,
+    `${formatNumber(totals.rows)} rows`,
+    formatBytes(totals.bytes),
+    totals.updated ? `updated ${relativeTime(totals.updated)}` : null,
+    totals.unready ? `${totals.unready} not ready` : null,
+  ].filter(Boolean)
+
+  return (
+    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 pl-6">
+      <div
+        className="h-1.5 w-40 shrink-0 overflow-hidden rounded-full bg-ink-200 dark:bg-dark-300"
+        role="img"
+        aria-label={`${label} of all rows in the workspace`}
+        title={`${formatNumber(totals.rows)} of ${formatNumber(totalRows)} rows across every project`}
+      >
+        <div
+          className="h-full rounded-full bg-brand-600"
+          style={{ width: `${Math.max(fraction * 100, totals.rows > 0 ? 2 : 0)}%` }}
+        />
+      </div>
+      <span className="text-xs font-medium tabular-nums text-ink-700 dark:text-dark-700">
+        {label}
+      </span>
+      <span className="text-xs text-ink-500 dark:text-dark-500">{parts.join(' · ')}</span>
+    </div>
   )
 }
 
