@@ -443,13 +443,7 @@ function DatasetCard({
         <p className="mt-1 line-clamp-2 text-sm text-ink-500">{dataset.description}</p>
       )}
 
-      <dl className="mt-4 grid grid-cols-3 gap-2 text-center">
-        <div>
-          <dt className="text-[11px] uppercase text-ink-400">Rows</dt>
-          <dd className="text-sm font-semibold tabular-nums">
-            {formatNumber(dataset.row_count)}
-          </dd>
-        </div>
+      <dl className="mt-4 grid grid-cols-2 gap-2 text-center">
         <div>
           <dt className="text-[11px] uppercase text-ink-400">Columns</dt>
           <dd className="text-sm font-semibold tabular-nums">{dataset.column_count}</dd>
