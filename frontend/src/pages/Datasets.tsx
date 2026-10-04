@@ -5,7 +5,7 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { formatBytes, formatNumber, relativeTime } from '@/lib/format'
-import { share, summarise } from '@/lib/inventory'
+import { summarise } from '@/lib/inventory'
 import type { ArchiveImport, Dataset, Job, Page, Project } from '@/lib/types'
 import ImportReview, { type Review } from '@/components/ImportReview'
 import BoundaryLibrary from '@/components/BoundaryLibrary'
@@ -150,7 +150,6 @@ export default function Datasets() {
         <div className="mb-5 flex flex-wrap items-end gap-x-10 gap-y-3 border-b border-ink-200 pb-4 dark:border-dark-200">
           <Figure label="Projects" value={formatNumber(grouped.length)} />
           <Figure label="Datasets" value={formatNumber(totals.count)} />
-          <Figure label="Rows" value={formatNumber(totals.rows)} />
           <Figure label="On disk" value={formatBytes(totals.bytes)} />
           {totals.unready > 0 && (
             <Figure
@@ -307,11 +306,7 @@ export default function Datasets() {
                 )}
                 </div>
                 </div>
-                <GroupMeasure
-                  datasets={group.datasets}
-                  totalRows={totals.rows}
-                  indent={Boolean(group.id)}
-                />
+                <GroupSummary datasets={group.datasets} />
               </header>
 
               {/* The header line already says an empty project is empty, so
@@ -375,61 +370,32 @@ function Figure({ label, value, hint }: { label: string; value: string; hint?: s
 /**
  * What a project holds, on one line, whether or not it is expanded.
  *
- * The bar is this group's share of every row in the workspace, drawn against a
- * track of fixed width so the three groups are read against each other rather
- * than each against itself. One measure, one hue: length is already carrying
- * the magnitude, so a second colour would only repeat it. The percentage is
- * printed beside the bar because a reader who cannot see the fill still needs
- * the number, and because a bar at 3% and a bar at 6% are the same bar at this
- * size.
+ * Text, not a bar. The only measure worth comparing projects on here would be
+ * one somebody acts on, and neither row count nor file size is that: nobody
+ * reorders their week on learning one project holds more rows than another.
+ * What does get acted on is on this line - how many datasets, when the project
+ * last received anything, and whether something in it failed to import.
  */
-function GroupMeasure({
-  datasets,
-  totalRows,
-  indent,
-}: {
-  datasets: Dataset[]
-  totalRows: number
-  indent: boolean
-}) {
+function GroupSummary({ datasets }: { datasets: Dataset[] }) {
   const totals = summarise(datasets)
   if (!totals.count) {
-    return (
-      <p className={`mt-1.5 text-xs text-ink-400 dark:text-dark-400 ${indent ? 'pl-6' : 'pl-6'}`}>
-        Nothing here yet
-      </p>
-    )
+    return <p className="mt-1 pl-6 text-xs text-ink-400 dark:text-dark-400">Nothing here yet</p>
   }
-  const fraction = share(totals.rows, totalRows)
-  const percent = fraction * 100
-  // Below a tenth of a percent, a rounded "0%" beside a visible sliver reads
-  // as a bug rather than as a small number.
-  const label = percent > 0 && percent < 0.1 ? '<0.1%' : `${percent.toFixed(percent < 10 ? 1 : 0)}%`
   const parts = [
     `${formatNumber(totals.count)} dataset${totals.count === 1 ? '' : 's'}`,
-    `${formatNumber(totals.rows)} rows`,
     formatBytes(totals.bytes),
     totals.updated ? `updated ${relativeTime(totals.updated)}` : null,
-    totals.unready ? `${totals.unready} not ready` : null,
   ].filter(Boolean)
 
   return (
-    <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 pl-6">
-      <div
-        className="h-1.5 w-40 shrink-0 overflow-hidden rounded-full bg-ink-200 dark:bg-dark-300"
-        role="img"
-        aria-label={`${label} of all rows in the workspace`}
-        title={`${formatNumber(totals.rows)} of ${formatNumber(totalRows)} rows across every project`}
-      >
-        <div
-          className="h-full rounded-full bg-brand-600"
-          style={{ width: `${Math.max(fraction * 100, totals.rows > 0 ? 2 : 0)}%` }}
-        />
-      </div>
-      <span className="text-xs font-medium tabular-nums text-ink-700 dark:text-dark-700">
-        {label}
-      </span>
+    <div className="mt-1 flex flex-wrap items-center gap-x-2.5 gap-y-1 pl-6">
       <span className="text-xs text-ink-500 dark:text-dark-500">{parts.join(' · ')}</span>
+      {/* The one thing on this line anybody has to do something about. */}
+      {totals.unready > 0 && (
+        <Badge tone="danger">
+          {formatNumber(totals.unready)} not ready
+        </Badge>
+      )}
     </div>
   )
 }
