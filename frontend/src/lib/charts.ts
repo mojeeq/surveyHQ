@@ -90,23 +90,13 @@ export const SERIES_COLORS = CHART_THEMES.default.colors
 /** Single-hue ramp for magnitude (heatmaps). Light to dark. */
 export const SEQUENTIAL_RAMP = ['#cde2fb', '#9ec5f4', '#6da7ec', '#3987e5', '#256abf', '#184f95']
 
-/**
- * Severity as a greyscale ramp, light to dark, rather than green to red.
- *
- * Ordered so that the darker a bar, a dot or a slice is, the more it wants
- * looking at. That keeps severity readable for the quarter of any room who
- * cannot separate red from green, keeps it readable in a printed or
- * photocopied report, and stops a board reading as decoration. `unknown` sits
- * lightest on purpose: nothing measured is not the same as nothing wrong, and
- * it should not pull the eye.
- */
 export const STATUS_COLORS = {
-  ok: '#9a9a9a',
-  good: '#9a9a9a',
-  warning: '#6f6f6f',
-  serious: '#525252',
-  critical: '#333333',
-  unknown: '#cfcfcf',
+  ok: '#0ca30c',
+  good: '#0ca30c',
+  warning: '#fab219',
+  serious: '#ec835a',
+  critical: '#d03b3b',
+  unknown: '#898781',
 } as const
 
 const INK = {
