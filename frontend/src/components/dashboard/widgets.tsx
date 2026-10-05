@@ -604,10 +604,10 @@ export function Variance({
       : "behind target";
   return (
     <p
-      className={`mt-1 text-sm ${
+      className={`mt-1 text-sm font-medium ${
         good
-          ? "font-medium text-ink-600 dark:text-dark-600"
-          : "font-semibold text-ink-900 dark:text-dark-900"
+          ? "text-emerald-700 dark:text-emerald-400"
+          : "text-rose-700 dark:text-rose-400"
       }`}
     >
       {over ? "+" : "-"}
