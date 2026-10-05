@@ -183,15 +183,7 @@ export function ProjectScript({ projectId }: { projectId: string }) {
                   {entry.command && (
                     <div className="text-ink-700 dark:text-dark-700">. {entry.command}</div>
                   )}
-                  {/* A line that failed is the one worth finding in a long
-                      log, so it carries the weight rather than a colour. */}
-                  <div
-                    className={
-                      entry.ok
-                        ? 'text-ink-600 dark:text-dark-600'
-                        : 'font-semibold text-ink-900 dark:text-dark-900'
-                    }
-                  >
+                  <div className={entry.ok ? 'text-green-700' : 'text-red-700'}>
                     {entry.message}
                   </div>
                 </div>
