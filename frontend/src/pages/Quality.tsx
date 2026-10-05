@@ -308,7 +308,7 @@ export default function Quality() {
                           <div className="mt-2 flex items-center gap-3">
                             <div className="h-1.5 w-40 overflow-hidden rounded-full bg-ink-100">
                               <div
-                                className={`h-full rounded-full ${failed ? 'bg-ink-800 dark:bg-dark-800' : 'bg-ink-400 dark:bg-dark-400'}`}
+                                className={`h-full rounded-full ${failed ? 'bg-red-500' : 'bg-emerald-500'}`}
                                 style={{
                                   width: `${Math.min(result.failure_rate * 100, 100).toFixed(1)}%`,
                                 }}
