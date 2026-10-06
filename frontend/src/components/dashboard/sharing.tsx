@@ -72,123 +72,91 @@ export function PublicLinkBar({
   };
 
   return (
-    <div className="mb-4 overflow-hidden rounded-card border border-brand-200 bg-white dark:border-brand-500/30 dark:bg-dark-50">
-      {/* A rail rather than a wash across the whole strip. A tinted bar the
-          width of the page reads as a browser warning; this reads as a
-          property of the dashboard, which is what it is. */}
-      <div className="border-l-4 border-brand-500 px-4 py-3">
-        <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-          <p className="text-[11px] font-semibold uppercase tracking-wide text-brand-700 dark:text-brand-400">
-            Public link
-          </p>
-          <div className="flex items-center gap-1">
-            <button className="btn-ghost btn-sm" onClick={() => copy(url)}>
-              Copy
-            </button>
-            <a
-              className="btn-ghost btn-sm"
-              href={url}
-              target="_blank"
-              rel="noreferrer"
-            >
-              Open
-            </a>
-          </div>
-        </div>
+    // One row, no panel. A share link is a property of the dashboard, like the
+    // "Data as of" line below it - not an announcement that needs a tinted box
+    // and a coloured rail to be noticed.
+    <div className="mb-3 flex flex-wrap items-baseline gap-x-3 gap-y-1 border-b border-ink-200 pb-2.5 text-sm dark:border-dark-200">
+      <span className="text-ink-500 dark:text-dark-500">Public link</span>
+      <a
+        className="break-all font-mono text-xs text-ink-900 hover:underline dark:text-dark-900"
+        href={url}
+        target="_blank"
+        rel="noreferrer"
+      >
+        {url}
+      </a>
+      <button
+        className="btn-ghost btn-sm -my-1"
+        onClick={() => copy(url)}
+      >
+        Copy
+      </button>
+      <span className="text-xs text-ink-400 dark:text-dark-400">
+        Anyone holding it can view the dashboard, so treat it like the data.
+      </span>
 
-        {/* The address is what somebody came to this bar for, so it is the
-            largest thing in it rather than a footnote after the sentence
-            explaining it. Selectable on its own line: a token wraps badly
-            inside a paragraph, and half a token pasted is no link at all. */}
-        <p className="mt-1.5 select-all break-all font-mono text-sm text-ink-900 dark:text-dark-900">
-          {url}
-        </p>
-        <p className="mt-1 max-w-2xl text-xs text-ink-500 dark:text-dark-500">
-          Anyone holding this link can view the dashboard without signing in.
-          It is unguessable, so it is safe to send to one person and unsafe to
-          publish anywhere you would not publish the data.
-        </p>
-
-        {dashboard.public_hostname && (
-          <div className="mt-3 border-t border-ink-200 pt-3 dark:border-dark-200">
-            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-              <p className="text-[11px] font-semibold uppercase tracking-wide text-ink-500 dark:text-dark-500">
-                Also answers on
-              </p>
-              {canEdit && (
-                <button
-                  className="btn-ghost btn-sm text-red-600"
-                  onClick={() => save.mutate("")}
-                  disabled={save.isPending}
-                >
-                  Remove the name
-                </button>
-              )}
-            </div>
-            <a
-              className="mt-1.5 inline-block break-all font-mono text-sm text-brand-700 hover:underline dark:text-brand-400"
-              href={`https://${dashboard.public_hostname}`}
-              target="_blank"
-              rel="noreferrer"
-            >
-              {dashboard.public_hostname}
-            </a>
-            <p className="mt-1 max-w-2xl text-xs text-ink-500 dark:text-dark-500">
-              A name is meant to be typed from memory, so unlike the link above
-              it is not a secret: anyone who guesses it reaches this dashboard.
-            </p>
-          </div>
-        )}
-
-        {canEdit && !dashboard.public_hostname && domain && !naming && (
-          <button
-            className="btn-ghost btn-sm mt-2 -ml-2"
-            onClick={() => setNaming(true)}
+      {dashboard.public_hostname && (
+        <>
+          <span className="basis-full" />
+          <span className="text-ink-500 dark:text-dark-500">Also at</span>
+          <a
+            className="break-all font-mono text-xs text-ink-900 hover:underline dark:text-dark-900"
+            href={`https://${dashboard.public_hostname}`}
+            target="_blank"
+            rel="noreferrer"
           >
-            Give it a memorable name…
-          </button>
-        )}
+            {dashboard.public_hostname}
+          </a>
+          <span className="text-xs text-ink-400 dark:text-dark-400">
+            Guessable, unlike the link above.
+          </span>
+          {canEdit && (
+            <button
+              className="btn-ghost btn-sm -my-1 text-red-600"
+              onClick={() => save.mutate("")}
+              disabled={save.isPending}
+            >
+              Remove
+            </button>
+          )}
+        </>
+      )}
 
-        {canEdit && naming && domain && (
-          <div className="mt-3 border-t border-ink-200 pt-3 dark:border-dark-200">
-            <div className="flex flex-wrap items-center gap-1.5">
-              <input
-                className="input w-56 py-1 text-sm"
-                placeholder="labour-force"
-                value={label}
-                autoFocus
-                onChange={(event) => setLabel(event.target.value)}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && label.trim())
-                    save.mutate(label.trim());
-                  if (event.key === "Escape") setNaming(false);
-                }}
-              />
-              <span className="font-mono text-sm text-ink-600 dark:text-dark-600">
-                .{domain}
-              </span>
-              <button
-                className="btn-primary btn-sm"
-                onClick={() => save.mutate(label.trim())}
-                disabled={!label.trim() || save.isPending}
-              >
-                Assign
-              </button>
-              <button
-                className="btn-ghost btn-sm"
-                onClick={() => setNaming(false)}
-              >
-                Cancel
-              </button>
-            </div>
-            <p className="mt-1.5 text-xs text-ink-500 dark:text-dark-500">
-              A name is meant to be typed from memory, so it is not a secret the
-              way the link above is: anyone who guesses it reaches this
-              dashboard.
-            </p>
-          </div>
-        )}
-      </div>
+      {canEdit && !dashboard.public_hostname && domain && !naming && (
+        <button className="btn-ghost btn-sm -my-1" onClick={() => setNaming(true)}>
+          Give it a name…
+        </button>
+      )}
+
+      {canEdit && naming && domain && (
+        <>
+          <span className="basis-full" />
+          <input
+            className="input w-56 py-1 text-sm"
+            placeholder="labour-force"
+            value={label}
+            autoFocus
+            onChange={(event) => setLabel(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && label.trim()) save.mutate(label.trim());
+              if (event.key === "Escape") setNaming(false);
+            }}
+          />
+          <span className="font-mono text-xs text-ink-600 dark:text-dark-600">
+            .{domain}
+          </span>
+          <button
+            className="btn-primary btn-sm -my-1"
+            onClick={() => save.mutate(label.trim())}
+            disabled={!label.trim() || save.isPending}
+          >
+            Assign
+          </button>
+          <button className="btn-ghost btn-sm -my-1" onClick={() => setNaming(false)}>
+            Cancel
+          </button>
+        </>
+      )}
     </div>
   );
 }
