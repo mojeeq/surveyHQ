@@ -41,20 +41,43 @@ def zone(name: str) -> ZoneInfo:
         return ZoneInfo("UTC")
 
 
-def last_occurrence(times: list[str], now: dt.datetime, timezone: str) -> dt.datetime | None:
+def valid_weekday(day: int) -> bool:
+    """Monday is 0, Sunday is 6 - the same numbering as date.weekday()."""
+    return isinstance(day, int) and 0 <= day <= 6
+
+
+def last_occurrence(
+    times: list[str],
+    now: dt.datetime,
+    timezone: str,
+    days: list[int] | None = None,
+) -> dt.datetime | None:
     """The most recent scheduled moment at or before `now`, as an instant.
 
     None when nothing is scheduled. Yesterday's last time counts: a check at
     00:30 is looking back at an 18:00 slot, not forward at tomorrow's.
+
+    `days` restricts it to certain weekdays, which is what "every Monday at
+    08:00" needs. Empty or None means every day, which is what a connection
+    syncing twice daily has always meant.
+
+    The look-back is a full week rather than two days because of those
+    weekdays: asked on a Thursday when the only slot is Monday 08:00, the last
+    occurrence is three days behind, and a two-day window would report that
+    nothing had ever been scheduled and so nothing was ever due.
     """
     valid = sorted(t.strip() for t in times if valid_time(t))
     if not valid:
         return None
+    wanted = {day for day in (days or []) if valid_weekday(day)}
 
     tz = zone(timezone)
     local = now.astimezone(tz)
     candidates: list[dt.datetime] = []
-    for day in (local.date(), local.date() - dt.timedelta(days=1)):
+    for back in range(8):
+        day = local.date() - dt.timedelta(days=back)
+        if wanted and day.weekday() not in wanted:
+            continue
         for text in valid:
             hour, minute = (int(part) for part in text.split(":"))
             # Built in the zone rather than converted into it, so the moment
@@ -75,10 +98,11 @@ def is_due(
     interval_minutes: int,
     last_sync_at: dt.datetime | None,
     now: dt.datetime,
+    days: list[int] | None = None,
 ) -> bool:
-    """Whether an automatic import should be started now."""
+    """Whether scheduled work should be started now."""
     if mode == "daily":
-        occurrence = last_occurrence(times, now, timezone)
+        occurrence = last_occurrence(times, now, timezone, days)
         if occurrence is None:
             return False
         if last_sync_at is None:

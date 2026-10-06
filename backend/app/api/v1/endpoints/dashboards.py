@@ -21,7 +21,10 @@ from app.api.deps import (
 )
 from app.core.security import hash_password, new_public_token
 from app.db.base import utcnow
+from pathlib import Path
+
 from app.models import (
+    DashboardSnapshot,
     BoundaryLayer,
     Chart,
     Dashboard,
@@ -41,6 +44,8 @@ from app.models import (
 from app.schemas.analytics import (
     ChartCreate,
     ChartOut,
+    DashboardSnapshotOut,
+    SnapshotSchedule,
     ChartUpdate,
     DashboardCard,
     DashboardCreate,
@@ -70,7 +75,7 @@ from app.schemas.query import (
     QueryResult,
     QuerySpec,
 )
-from app.services import boundary_store, multiselect, quality, static_export
+from app.services import boundary_store, multiselect, quality, snapshots, static_export
 from app.services.audit import record
 from app.services.boundaries import Areas
 from app.services.dashboard_assets import (
@@ -1134,6 +1139,129 @@ def export_dashboard_html(dashboard_id: str, db: DbSession, user: CurrentUser) -
         media_type="text/html; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{name}.html"'},
     )
+
+
+@router.get("/{dashboard_id}/snapshot-schedule", response_model=SnapshotSchedule)
+def read_snapshot_schedule(
+    dashboard_id: str, db: DbSession, user: CurrentUser
+) -> SnapshotSchedule:
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    return SnapshotSchedule(
+        enabled=dashboard.snapshot_enabled,
+        times=list(dashboard.snapshot_times or []),
+        days=list(dashboard.snapshot_days or []),
+        timezone=dashboard.snapshot_timezone or "UTC",
+        keep=dashboard.snapshot_keep or 12,
+    )
+
+
+@router.put("/{dashboard_id}/snapshot-schedule", response_model=SnapshotSchedule)
+def set_snapshot_schedule(
+    dashboard_id: str, payload: SnapshotSchedule, db: DbSession, user: RequireAnalyst
+) -> SnapshotSchedule:
+    """When to keep a copy of this board.
+
+    Turning it on with no time set would be a schedule that never fires and
+    says it is on, so that is refused rather than stored.
+    """
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    if payload.enabled and not payload.times:
+        raise HTTPException(
+            status_code=422,
+            detail="Choose at least one time of day to keep a copy at",
+        )
+    dashboard.snapshot_enabled = payload.enabled
+    dashboard.snapshot_times = list(payload.times)
+    dashboard.snapshot_days = list(payload.days)
+    dashboard.snapshot_timezone = payload.timezone
+    dashboard.snapshot_keep = payload.keep
+    record(
+        db,
+        user=user,
+        action="dashboard.snapshot_schedule",
+        entity_type="dashboard",
+        entity_id=dashboard_id,
+        detail={"enabled": payload.enabled, "times": list(payload.times)},
+    )
+    db.commit()
+    return payload
+
+
+@router.get("/{dashboard_id}/snapshots", response_model=list[DashboardSnapshotOut])
+def list_snapshots(
+    dashboard_id: str, db: DbSession, user: CurrentUser
+) -> list[DashboardSnapshot]:
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    return list(
+        db.scalars(
+            select(DashboardSnapshot)
+            .where(DashboardSnapshot.dashboard_id == dashboard.id)
+            .order_by(DashboardSnapshot.taken_at.desc())
+        ).all()
+    )
+
+
+@router.post(
+    "/{dashboard_id}/snapshots", response_model=DashboardSnapshotOut, status_code=201
+)
+def create_snapshot(
+    dashboard_id: str, db: DbSession, user: RequireAnalyst
+) -> DashboardSnapshot:
+    """Keep a copy of the board as it stands, now."""
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    snapshot = snapshots.take(
+        db,
+        dashboard,
+        render=lambda widget: _render_widget(db, widget, None),
+        user_id=user.id,
+    )
+    record(
+        db,
+        user=user,
+        action="dashboard.snapshot",
+        entity_type="dashboard",
+        entity_id=dashboard_id,
+        detail={"snapshot": snapshot.id},
+    )
+    db.commit()
+    db.refresh(snapshot)
+    return snapshot
+
+
+@router.get("/{dashboard_id}/snapshots/{snapshot_id}.html")
+def read_snapshot_html(
+    dashboard_id: str, snapshot_id: str, db: DbSession, user: CurrentUser
+) -> Response:
+    """The board as it stood, served from disk."""
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    snapshot = db.get(DashboardSnapshot, snapshot_id)
+    if snapshot is None or snapshot.dashboard_id != dashboard.id:
+        raise HTTPException(status_code=404, detail="No such snapshot")
+    path = Path(snapshot.storage_path or "")
+    if not snapshot.storage_path or not path.exists():
+        # The row outliving its file is recoverable information, so it says so
+        # rather than serving an empty page that looks like an empty board.
+        raise HTTPException(
+            status_code=410, detail="This snapshot's file is no longer on disk"
+        )
+    return Response(
+        content=path.read_bytes(),
+        media_type="text/html; charset=utf-8",
+    )
+
+
+@router.delete("/{dashboard_id}/snapshots/{snapshot_id}", response_model=Message)
+def delete_snapshot(
+    dashboard_id: str, snapshot_id: str, db: DbSession, user: RequireAnalyst
+) -> Message:
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    snapshot = db.get(DashboardSnapshot, snapshot_id)
+    if snapshot is None or snapshot.dashboard_id != dashboard.id:
+        raise HTTPException(status_code=404, detail="No such snapshot")
+    snapshots.discard_file(snapshot)
+    db.delete(snapshot)
+    db.commit()
+    return Message(detail="Snapshot deleted")
 
 
 @router.get("/{dashboard_id}/share-links", response_model=list[ShareLinkOut])

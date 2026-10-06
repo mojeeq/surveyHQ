@@ -57,6 +57,12 @@ celery_app.conf.beat_schedule = {
         "task": "app.workers.tasks.run_all_quality_checks",
         "schedule": crontab(minute=15, hour="*/6"),
     },
+    # Every ten minutes, so a slot set to 08:00 is caught shortly after it
+    # opens. Each board checks its own schedule; this only asks.
+    "take-due-dashboard-snapshots": {
+        "task": "app.workers.tasks.take_due_snapshots",
+        "schedule": 600.0,
+    },
     "prune-old-records": {
         "task": "app.workers.tasks.prune_history",
         "schedule": crontab(minute=30, hour=3),

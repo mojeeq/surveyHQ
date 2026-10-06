@@ -3,7 +3,9 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.services.scheduling import valid_time, valid_timezone, valid_weekday
 
 from app.models.analytics import ChartType, WidgetType
 from app.schemas.query import QuerySpec
@@ -323,3 +325,52 @@ class HtmlSnippetOut(BaseModel):
     project_id: str | None = None
     created_at: dt.datetime
     updated_at: dt.datetime
+
+
+class SnapshotSchedule(BaseModel):
+    """When to keep a copy of the board, and how many to keep."""
+
+    enabled: bool = False
+    # "HH:MM", validated against the same pattern connections use.
+    times: list[str] = Field(default_factory=list)
+    # Monday 0 through Sunday 6. Empty is every day.
+    days: list[int] = Field(default_factory=list)
+    timezone: str = "UTC"
+    keep: int = Field(default=12, ge=1, le=365)
+
+    @field_validator("times")
+    @classmethod
+    def _times_are_times(cls, value: list[str]) -> list[str]:
+        for text in value:
+            if not valid_time(text):
+                raise ValueError(f"{text!r} is not a time of day, e.g. 08:00")
+        return value
+
+    @field_validator("days")
+    @classmethod
+    def _days_are_weekdays(cls, value: list[int]) -> list[int]:
+        for day in value:
+            if not valid_weekday(day):
+                raise ValueError("A weekday is 0 (Monday) through 6 (Sunday)")
+        # Sorted and deduplicated so [2, 0, 0] and [0, 2] are the same schedule
+        # rather than two spellings of it.
+        return sorted(set(value))
+
+    @field_validator("timezone")
+    @classmethod
+    def _timezone_is_real(cls, value: str) -> str:
+        if not valid_timezone(value):
+            raise ValueError(f"{value!r} is not a time zone this server knows")
+        return value
+
+
+class DashboardSnapshotOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    dashboard_id: str
+    label: str
+    taken_at: dt.datetime
+    size_bytes: int = 0
+    is_automatic: bool = False
+    created_by: str | None = None

@@ -842,3 +842,23 @@ export interface ApiKeyOut {
   last_used_at: string | null
   revoked: boolean
 }
+
+export interface SnapshotSchedule {
+  enabled: boolean
+  /** "HH:MM", read in `timezone`. */
+  times: string[]
+  /** Monday 0 through Sunday 6. Empty means every day. */
+  days: number[]
+  timezone: string
+  keep: number
+}
+
+export interface DashboardSnapshot {
+  id: string
+  dashboard_id: string
+  label: string
+  taken_at: string
+  size_bytes: number
+  is_automatic: boolean
+  created_by: string | null
+}

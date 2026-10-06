@@ -9,7 +9,16 @@ from __future__ import annotations
 
 import datetime as dt
 
-from app.services.scheduling import is_due, last_occurrence, valid_time, valid_timezone
+import datetime as dt
+
+from app.services.scheduling import (
+    is_due,
+    last_occurrence,
+    valid_time,
+    valid_timezone,
+    valid_weekday,
+    zone,
+)
 
 VANUATU = "Pacific/Efate"  # UTC+11, no daylight saving
 
@@ -114,3 +123,61 @@ def test_a_zone_that_no_longer_exists_falls_back_rather_than_failing():
     """Wrong by hours beats an import that never runs at all."""
     occurrence = last_occurrence(["06:00"], utc("2026-03-10T20:00"), "Middle/Earth")
     assert occurrence == utc("2026-03-10T06:00")
+
+
+# --- weekdays ---------------------------------------------------------------
+# Monday is 0, matching date.weekday(). 2026-03-09 is a Monday.
+
+WEEKLY = {"mode": "daily", "timezone": VANUATU, "interval_minutes": 60}
+
+
+def test_a_weekday_slot_is_found_days_later():
+    # Asked on the Thursday, the last Monday 08:00 is three days behind. The
+    # old two-day window would have reported nothing scheduled at all.
+    occurrence = last_occurrence(
+        ["08:00"], utc("2026-03-12T00:00"), VANUATU, days=[0]
+    )
+    assert occurrence is not None
+    assert occurrence.astimezone(zone(VANUATU)).date() == dt.date(2026, 3, 9)
+
+
+def test_a_weekday_slot_finds_the_most_recent_one_not_an_older_one():
+    # Saturday 7 March. The Monday behind it is the 2nd, not the 23rd of
+    # February: a schedule that reached further back would report a slot that
+    # a run since has already covered.
+    occurrence = last_occurrence(["08:00"], utc("2026-03-07T00:00"), VANUATU, days=[0])
+    assert occurrence is not None
+    assert occurrence.astimezone(zone(VANUATU)).date() == dt.date(2026, 3, 2)
+
+
+def test_no_days_means_every_day():
+    everyday = last_occurrence(["08:00"], utc("2026-03-12T00:00"), VANUATU)
+    restricted = last_occurrence(["08:00"], utc("2026-03-12T00:00"), VANUATU, days=[0, 1, 2, 3, 4, 5, 6])
+    assert everyday == restricted
+
+
+def test_weekly_runs_once_not_every_tick():
+    # 2026-03-09 08:00 in Vanuatu is 2026-03-08T21:00Z.
+    after = utc("2026-03-08T21:05")
+    assert is_due(**WEEKLY, times=["08:00"], days=[0], last_sync_at=None, now=after)
+    # Having run at the slot, it is not due again until the next Monday.
+    taken = utc("2026-03-08T21:01")
+    assert not is_due(**WEEKLY, times=["08:00"], days=[0], last_sync_at=taken, now=after)
+    next_week = utc("2026-03-15T21:05")
+    assert is_due(**WEEKLY, times=["08:00"], days=[0], last_sync_at=taken, now=next_week)
+
+
+def test_a_different_weekday_is_never_due():
+    # Only Tuesdays, asked on the Monday after the Tuesday slot would have run.
+    assert not is_due(
+        **WEEKLY, times=["08:00"], days=[1], last_sync_at=utc("2026-03-10T21:01"),
+        now=utc("2026-03-08T21:05"),
+    )
+
+
+def test_an_out_of_range_weekday_is_ignored_not_obeyed():
+    # A 7 is not a day. Dropping it leaves no wanted days, which means every
+    # day - the alternative is a schedule that silently never fires.
+    assert valid_weekday(0) and valid_weekday(6)
+    assert not valid_weekday(7) and not valid_weekday(-1)
+    assert last_occurrence(["08:00"], utc("2026-03-12T00:00"), VANUATU, days=[7]) is not None
