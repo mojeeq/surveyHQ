@@ -16,18 +16,20 @@ that was never written is worse than no row.
 
 from __future__ import annotations
 
+import contextlib
 import datetime as dt
+from collections.abc import Callable
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
+from app.db.base import utcnow
 from app.models.analytics import Dashboard, DashboardSnapshot
 from app.services import static_export
 from app.services.scheduling import is_due, zone
-from app.db.base import utcnow
 
 # Monday first, matching date.weekday() and the UI's own order.
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
@@ -137,7 +139,9 @@ def discard_file(snapshot: DashboardSnapshot) -> None:
     """
     if not snapshot.storage_path:
         return
-    try:
+    # Suppressed rather than handled: the row is going either way, and a
+    # delete that fails because somebody already cleared the disk would
+    # otherwise leave a row pointing at nothing, which is the state this is
+    # trying to avoid.
+    with contextlib.suppress(OSError):
         Path(snapshot.storage_path).unlink(missing_ok=True)
-    except OSError:
-        pass
