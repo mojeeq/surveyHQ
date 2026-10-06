@@ -253,7 +253,8 @@ export function SavedViews({
   /** The selection a new view would store: page, filters and drill path. */
   current: DashboardSavedView["state"];
   activeId: string;
-  onApply: (view: DashboardSavedView) => void;
+  /** null clears back to the board with nothing applied. */
+  onApply: (view: DashboardSavedView | null) => void;
 }) {
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -319,6 +320,8 @@ export function SavedViews({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [saved]);
 
+  const active = saved.find((view) => view.id === activeId) ?? null;
+
   // Nothing saved and no way to save one: a reader of a link with no published
   // views has nothing this bar can offer, so it stays out of the way.
   if (!saved.length && isPublic) return null;
@@ -331,66 +334,73 @@ export function SavedViews({
       >
         Views
       </span>
-      {saved.map((view) => {
-        const active = view.id === activeId;
-        // One skin for both halves, so the name and its menu read as a single
-        // chip rather than a pill with its right end sliced off.
-        const skin = active
-          ? "border-brand-500 bg-brand-500 text-white hover:bg-brand-600"
-          : "border-ink-300 bg-white text-ink-700 hover:bg-ink-50 dark:border-dark-300 dark:bg-dark-50 dark:text-dark-700 dark:hover:bg-dark-200";
-        return (
-          <span key={view.id} className="flex items-stretch">
-            <button
-              className={`border py-1 pl-3 text-sm ${
-                isPublic ? "rounded-full pr-3" : "rounded-l-full border-r-0 pr-2"
-              } ${skin}`}
-              title={view.description || `Open "${view.name}"`}
-              onClick={() => onApply(view)}
-            >
-              {view.name}
-              {view.is_default && (
-                <span className="ml-1.5 opacity-60" title="The board opens on this view">
-                  · default
-                </span>
-              )}
-            </button>
-            {!isPublic && (
-              <WidgetMenu
-                label={view.name}
-                always
-                className={`shrink-0 rounded-r-full border px-2 ${skin}`}
-                groups={[
-                  [
-                    ...(canPublish
-                      ? [
-                          view.is_default
-                            ? {
-                                label: "Stop opening on this view",
-                                onClick: () =>
-                                  setDefault.mutate({ view, on: false }),
-                              }
-                            : {
-                                label: "Open the board on this view",
-                                onClick: () =>
-                                  setDefault.mutate({ view, on: true }),
-                              },
-                        ]
-                      : []),
-                    {
-                      label: "Delete this view",
-                      danger: true,
-                      onClick: () => {
-                        if (confirm(`Delete the view "${view.name}"?`))
-                          remove.mutate(view);
-                      },
-                    },
-                  ],
-                ]}
-              />
+      {/* One control rather than a chip per view. A board with a dozen saved
+          readings wrapped the row onto three lines and pushed the board down
+          the page; a picker is the same information at a fixed height. */}
+      <WidgetMenu
+        label="saved views"
+        always
+        className={`flex items-center gap-1.5 rounded-full border px-3 py-1 text-sm ${
+          active
+            ? "border-brand-500 bg-brand-500 text-white hover:bg-brand-600"
+            : "border-ink-300 bg-white text-ink-700 hover:bg-ink-50 dark:border-dark-300 dark:bg-dark-50 dark:text-dark-700 dark:hover:bg-dark-200"
+        }`}
+        trigger={
+          <>
+            <span>{active ? active.name : "Everything"}</span>
+            {active?.is_default && (
+              <span className="opacity-60">· default</span>
             )}
-          </span>
-        );
-      })}
+            <span aria-hidden className="opacity-60">
+              ▾
+            </span>
+          </>
+        }
+        groups={[
+          // Which reading to open. The one in force carries the menu's own
+          // mark, so the trigger is not the only thing saying where you are.
+          [
+            {
+              label: "Everything",
+              checked: !active,
+              onClick: () => onApply(null),
+            },
+            ...saved.map((view) => ({
+              label: view.is_default ? `${view.name} · default` : view.name,
+              checked: view.id === activeId,
+              onClick: () => onApply(view),
+            })),
+          ],
+          // What to do to the one you are on.
+          isPublic || !active
+            ? []
+            : [
+                ...(canPublish
+                  ? [
+                      active.is_default
+                        ? {
+                            label: "Stop opening on this view",
+                            onClick: () =>
+                              setDefault.mutate({ view: active, on: false }),
+                          }
+                        : {
+                            label: "Open the board on this view",
+                            onClick: () =>
+                              setDefault.mutate({ view: active, on: true }),
+                          },
+                    ]
+                  : []),
+                {
+                  label: "Delete this view",
+                  danger: true,
+                  onClick: () => {
+                    if (confirm(`Delete the view "${active.name}"?`))
+                      remove.mutate(active);
+                  },
+                },
+              ],
+        ]}
+      />
       {!isPublic && (
         <button
           className="rounded-full border border-dashed border-ink-400 px-3 py-1 text-sm text-ink-600 hover:border-brand-500 hover:text-brand-700 dark:border-dark-400 dark:text-dark-600"

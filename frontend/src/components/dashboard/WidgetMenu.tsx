@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 
 import { createPortal } from "react-dom";
 
@@ -33,6 +33,7 @@ export function WidgetMenu({
   label,
   always,
   className,
+  trigger,
   onOpen,
 }: {
   /** Items in bands, drawn with a rule between them. Empty bands are dropped. */
@@ -46,6 +47,11 @@ export function WidgetMenu({
    * floating beside a half-round pill reads as a pill with its end cut off.
    */
   className?: string;
+  /**
+   * What the button shows, for a caller that is not a widget's overflow menu.
+   * A views picker needs the name of the view it is on, not three dots.
+   */
+  trigger?: ReactNode;
   /**
    * Called as the menu opens, to settle anything the items depend on.
    *
@@ -144,6 +150,8 @@ export function WidgetMenu({
         aria-haspopup="menu"
         aria-expanded={open}
       >
+        {trigger ?? (
+        <>
         {/* Three dots, drawn rather than typed: the character for them is
             missing from enough fonts to come out as a box. */}
         <svg
@@ -157,6 +165,8 @@ export function WidgetMenu({
           <circle cx="8" cy="8" r="1.5" />
           <circle cx="13" cy="8" r="1.5" />
         </svg>
+        </>
+        )}
       </button>
       {open &&
         at &&
