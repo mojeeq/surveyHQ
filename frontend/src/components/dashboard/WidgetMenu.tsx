@@ -32,6 +32,7 @@ export function WidgetMenu({
   groups,
   label,
   always,
+  className,
   onOpen,
 }: {
   /** Items in bands, drawn with a rule between them. Empty bands are dropped. */
@@ -39,6 +40,12 @@ export function WidgetMenu({
   label: string;
   /** Show the button without hovering, e.g. while the board is being arranged. */
   always?: boolean;
+  /**
+   * Replaces the button's own skin, for a caller that needs it to be part of
+   * something else - the right half of a view chip, say, where a ghost button
+   * floating beside a half-round pill reads as a pill with its end cut off.
+   */
+  className?: string;
   /**
    * Called as the menu opens, to settle anything the items depend on.
    *
@@ -124,7 +131,9 @@ export function WidgetMenu({
     <>
       <button
         ref={button}
-        className={`btn-ghost btn-sm shrink-0 px-1.5 text-ink-500 transition-opacity ${
+        className={`${
+          className ?? "btn-ghost btn-sm shrink-0 px-1.5 text-ink-500"
+        } transition-opacity ${
           always || open
             ? "opacity-100"
             : "opacity-0 focus:opacity-100 group-hover:opacity-100"

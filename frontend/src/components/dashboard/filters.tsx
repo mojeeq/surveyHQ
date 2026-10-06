@@ -285,13 +285,20 @@ export function SavedViews({
     onError: (error: Error) => toast.push(error.message, "error"),
   });
 
-  const makeDefault = useMutation({
-    mutationFn: (view: DashboardSavedView) =>
+  // Both directions. Setting a default was offered and clearing one was not,
+  // so the only way back out of "opens on this view" was to delete the view.
+  const setDefault = useMutation({
+    mutationFn: ({ view, on }: { view: DashboardSavedView; on: boolean }) =>
       api.patch(`/dashboards/${dashboardId}/views/${view.id}`, {
-        is_default: true,
+        is_default: on,
       }),
-    onSuccess: () => {
-      toast.push("This view is what the board opens on", "success");
+    onSuccess: (_result, { on }) => {
+      toast.push(
+        on
+          ? "This view is what the board opens on"
+          : "The board now opens unfiltered",
+        "success",
+      );
       queryClient.invalidateQueries({ queryKey: key });
     },
     onError: (error: Error) => toast.push(error.message, "error"),
@@ -324,58 +331,69 @@ export function SavedViews({
       >
         Views
       </span>
-      {saved.map((view) => (
-        <span key={view.id} className="flex items-center">
-          <button
-            className={`rounded-l-full border px-3 py-1 text-sm ${
-              view.id === activeId
-                ? "border-brand-500 bg-brand-500 text-white"
-                : "border-slate-300 bg-white/70 text-slate-700 hover:bg-brand-50 dark:border-slate-600 dark:bg-slate-900/50 dark:text-slate-200 dark:hover:bg-slate-800"
-            }`}
-            title={view.description || `Open "${view.name}"`}
-            onClick={() => onApply(view)}
-          >
-            {view.name}
-            {view.is_default && (
-              <span
-                className="ml-1.5 text-xs opacity-70"
-                title="Opens by default"
-              >
-                default
-              </span>
-            )}
-          </button>
-          {!isPublic && (
-            <WidgetMenu
-              label="⋯"
-              always
-              groups={[
-                [
-                  ...(canPublish && !view.is_default
-                    ? [
-                        {
-                          label: "Open the board on this view",
-                          onClick: () => makeDefault.mutate(view),
-                        },
-                      ]
-                    : []),
-                  {
-                    label: "Delete this view",
-                    danger: true,
-                    onClick: () => {
-                      if (confirm(`Delete the view "${view.name}"?`))
-                        remove.mutate(view);
+      {saved.map((view) => {
+        const active = view.id === activeId;
+        // One skin for both halves, so the name and its menu read as a single
+        // chip rather than a pill with its right end sliced off.
+        const skin = active
+          ? "border-brand-500 bg-brand-500 text-white hover:bg-brand-600"
+          : "border-ink-300 bg-white text-ink-700 hover:bg-ink-50 dark:border-dark-300 dark:bg-dark-50 dark:text-dark-700 dark:hover:bg-dark-200";
+        return (
+          <span key={view.id} className="flex items-stretch">
+            <button
+              className={`border py-1 pl-3 text-sm ${
+                isPublic ? "rounded-full pr-3" : "rounded-l-full border-r-0 pr-2"
+              } ${skin}`}
+              title={view.description || `Open "${view.name}"`}
+              onClick={() => onApply(view)}
+            >
+              {view.name}
+              {view.is_default && (
+                <span className="ml-1.5 opacity-60" title="The board opens on this view">
+                  · default
+                </span>
+              )}
+            </button>
+            {!isPublic && (
+              <WidgetMenu
+                label={view.name}
+                always
+                className={`shrink-0 rounded-r-full border px-2 ${skin}`}
+                groups={[
+                  [
+                    ...(canPublish
+                      ? [
+                          view.is_default
+                            ? {
+                                label: "Stop opening on this view",
+                                onClick: () =>
+                                  setDefault.mutate({ view, on: false }),
+                              }
+                            : {
+                                label: "Open the board on this view",
+                                onClick: () =>
+                                  setDefault.mutate({ view, on: true }),
+                              },
+                        ]
+                      : []),
+                    {
+                      label: "Delete this view",
+                      danger: true,
+                      onClick: () => {
+                        if (confirm(`Delete the view "${view.name}"?`))
+                          remove.mutate(view);
+                      },
                     },
-                  },
-                ],
-              ]}
-            />
-          )}
-        </span>
-      ))}
+                  ],
+                ]}
+              />
+            )}
+          </span>
+        );
+      })}
       {!isPublic && (
         <button
-          className="rounded-full border border-dashed border-slate-400 px-3 py-1 text-sm text-slate-600 hover:border-brand-500 hover:text-brand-700 dark:text-slate-300"
+          className="rounded-full border border-dashed border-ink-400 px-3 py-1 text-sm text-ink-600 hover:border-brand-500 hover:text-brand-700 dark:border-dark-400 dark:text-dark-600"
           title="Save the filters, page and drill position you are looking at"
           onClick={() => {
             const name = prompt(
