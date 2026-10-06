@@ -825,12 +825,15 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         activeId={openedView.id}
         labelColor={appearance.filter_color}
         onApply={(view) => {
-          setOpenedView({ id: view.id, name: view.name })
-          setActivePage(view.state.page ?? 0)
+          // null is "Everything": the same path, with the empty state, so
+          // leaving a view goes through exactly the code that enters one
+          // rather than a second way of clearing that can drift from it.
+          setOpenedView(view ? { id: view.id, name: view.name } : { id: '', name: '' })
+          setActivePage(view?.state.page ?? 0)
           // After the page, because changing pages clears both of these.
           setTimeout(() => {
-            setFilterValues(view.state.filters ?? {})
-            setPath(view.state.drill ?? [])
+            setFilterValues(view?.state.filters ?? {})
+            setPath(view?.state.drill ?? [])
             setPicked(null)
           }, 0)
         }}
