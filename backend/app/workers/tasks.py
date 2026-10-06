@@ -20,6 +20,7 @@ from app.models import (
     AlertRule,
     AlertStatus,
     Connection,
+    Dashboard,
     Dataset,
     DatasetSource,
     Indicator,
@@ -31,7 +32,7 @@ from app.models import (
     SyncRun,
     SyncStatus,
 )
-from app.services import stata
+from app.services import snapshots, stata
 from app.services.datasets import (
     ArchiveImport,
     load_archive_as_datasets,
@@ -689,3 +690,50 @@ def prune_history() -> dict[str, int]:
     return removed
 
 
+
+
+@celery_app.task(name="app.workers.tasks.take_due_snapshots")
+def take_due_snapshots() -> dict[str, Any]:
+    """Capture the boards whose moment has come, and prune what they keep.
+
+    Each dashboard decides for itself whether it is owed one, the same way a
+    connection decides whether its import is due - a clock time on a chosen
+    weekday, read in the board's own zone, with nothing having run since it
+    passed.
+
+    One board failing does not stop the rest: a widget whose dataset was
+    archived raises while it renders, and the other boards scheduled for the
+    same minute should still be captured.
+    """
+    # Imported here rather than at module scope: the renderer lives with the
+    # API, and importing that at worker start-up pulls the whole app in before
+    # the worker has settled.
+    from app.api.v1.endpoints.dashboards import _render_widget
+
+    taken: list[str] = []
+    failed: list[dict[str, str]] = []
+    now = utcnow()
+    with session_scope() as db:
+        boards = db.scalars(
+            select(Dashboard).where(Dashboard.snapshot_enabled.is_(True))
+        ).all()
+        for dashboard in boards:
+            if not snapshots.due(dashboard, now):
+                continue
+            try:
+                snapshot = snapshots.take(
+                    db,
+                    dashboard,
+                    render=lambda widget: _render_widget(db, widget, None),
+                    automatic=True,
+                    now=now,
+                )
+                snapshots.prune(db, dashboard)
+                db.commit()
+                taken.append(snapshot.id)
+            except Exception as error:  # noqa: BLE001 - one board must not stop the rest
+                db.rollback()
+                logger.exception("Snapshot failed for dashboard %s", dashboard.id)
+                failed.append({"dashboard": dashboard.id, "error": str(error)})
+
+    return {"taken": len(taken), "failed": failed}

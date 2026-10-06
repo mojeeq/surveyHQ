@@ -44,6 +44,7 @@ import AssignProject from '@/components/AssignProject'
 
 
 import ShareLinks from '@/components/ShareLinks'
+import Snapshots from '@/components/dashboard/Snapshots'
 
 import DashboardFilters,{
 controlsForPage,
@@ -123,6 +124,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
   const [editingWidget, setEditingWidget] = useState<Widget | null>(null)
   const [width, setWidth] = useState(1200)
   const [sharing, setSharing] = useState(false)
+  const [keeping, setKeeping] = useState(false)
 
   const isPublic = Boolean(publicToken)
   const basePath = isPublic ? `/public/dashboards/${publicToken}` : `/dashboards/${id}`
@@ -779,6 +781,9 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
                   >
                     Share
                   </button>
+                  <button className="btn-secondary" onClick={() => setKeeping(true)}>
+                    Keep a copy
+                  </button>
                 </>
               )}
             </>
@@ -792,6 +797,14 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
 
       {sharing && !isPublic && (
         <ShareLinks dashboard={dashboard.data!} onClose={() => setSharing(false)} />
+      )}
+
+      {keeping && !isPublic && (
+        <Snapshots
+          dashboard={dashboard.data!}
+          canEdit={can('analyst')}
+          onClose={() => setKeeping(false)}
+        />
       )}
 
       {/* Everything the dashboard is read for sits on the canvas: the filters

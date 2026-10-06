@@ -225,8 +225,43 @@ class Dashboard(UUIDMixin, TimestampMixin, Base):
         JSON, default=list, server_default=text("'[]'")
     )
     refresh_interval_seconds: Mapped[int] = mapped_column(Integer, default=0)
+
+    # Keeping the board as it stood, on a schedule. A saved view remembers a
+    # filter selection and nothing else, so a board opened through one shows
+    # today's numbers however it is named; these columns are what makes "how
+    # did it look on the 7th" answerable at all.
+    snapshot_enabled: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
+    # "HH:MM" in snapshot_timezone, the same spelling connections use.
+    snapshot_times: Mapped[list] = mapped_column(
+        JSON, default=list, server_default=text("'[]'")
+    )
+    # Weekdays, Monday 0 through Sunday 6. Empty means every day, so a daily
+    # schedule needs nothing set rather than all seven listed.
+    snapshot_days: Mapped[list] = mapped_column(
+        JSON, default=list, server_default=text("'[]'")
+    )
+    snapshot_timezone: Mapped[str] = mapped_column(
+        String(64), default="UTC", server_default=text("'UTC'")
+    )
+    # How many to keep. Each one carries the data behind every widget, so an
+    # unbounded weekly schedule fills a disk quietly over a year.
+    snapshot_keep: Mapped[int] = mapped_column(
+        Integer, default=12, server_default=text("12")
+    )
+    last_snapshot_at: Mapped[dt.datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
     created_by: Mapped[str | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    snapshots: Mapped[list["DashboardSnapshot"]] = relationship(
+        back_populates="dashboard",
+        cascade="all, delete-orphan",
+        order_by="DashboardSnapshot.taken_at.desc()",
     )
 
     views: Mapped[list[DashboardView]] = relationship(
@@ -240,6 +275,51 @@ class Dashboard(UUIDMixin, TimestampMixin, Base):
         cascade="all, delete-orphan",
         order_by="Widget.position",
     )
+
+
+class DashboardSnapshot(UUIDMixin, TimestampMixin, Base):
+    """The board as it stood at one moment, kept.
+
+    A saved view is a filter selection; the numbers under it are always
+    today's. So a board read every Monday cannot answer "what did we have a
+    fortnight ago" from its views, however they are named - and naming them
+    after dates, which is what people reach for, makes it look as though it
+    can.
+
+    A snapshot is the other half: the same self-contained file the export
+    button produces, carrying the data behind every widget at the grain its
+    filters need, written to disk and listed against the dashboard. Opening
+    one shows that Monday, not this one.
+
+    The file sits on disk rather than in a column because it holds every
+    widget's data and a year of weekly snapshots would otherwise be a table
+    nobody can back up.
+    """
+
+    __tablename__ = "dashboard_snapshots"
+
+    dashboard_id: Mapped[str] = mapped_column(
+        ForeignKey("dashboards.id", ondelete="CASCADE"), index=True
+    )
+    # What to call it in the list, e.g. "Monday 12 October 2026, 08:00". Held
+    # rather than formatted on read: it was written in the board's zone at the
+    # time, and a reader in another one should still see the moment it meant.
+    label: Mapped[str] = mapped_column(String(200), nullable=False)
+    taken_at: Mapped[dt.datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, index=True
+    )
+    storage_path: Mapped[str] = mapped_column(Text, default="")
+    size_bytes: Mapped[int] = mapped_column(Integer, default=0)
+    # Taken by the schedule rather than by somebody pressing the button. Worth
+    # knowing when pruning: a hand-taken snapshot was taken for a reason.
+    is_automatic: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default=text("false")
+    )
+    created_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    dashboard: Mapped[Dashboard] = relationship(back_populates="snapshots")
 
 
 class Widget(UUIDMixin, TimestampMixin, Base):
