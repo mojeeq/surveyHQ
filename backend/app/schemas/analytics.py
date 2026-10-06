@@ -5,10 +5,9 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from app.services.scheduling import valid_time, valid_timezone, valid_weekday
-
 from app.models.analytics import ChartType, WidgetType
 from app.schemas.query import QuerySpec
+from app.services.scheduling import valid_time, valid_timezone, valid_weekday
 
 
 class SavedQueryCreate(BaseModel):

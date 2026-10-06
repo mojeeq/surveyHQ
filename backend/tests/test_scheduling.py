@@ -9,8 +9,6 @@ from __future__ import annotations
 
 import datetime as dt
 
-import datetime as dt
-
 from app.services.scheduling import (
     is_due,
     last_occurrence,

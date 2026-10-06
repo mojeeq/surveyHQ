@@ -258,7 +258,7 @@ class Dashboard(UUIDMixin, TimestampMixin, Base):
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
 
-    snapshots: Mapped[list["DashboardSnapshot"]] = relationship(
+    snapshots: Mapped[list[DashboardSnapshot]] = relationship(
         back_populates="dashboard",
         cascade="all, delete-orphan",
         order_by="DashboardSnapshot.taken_at.desc()",

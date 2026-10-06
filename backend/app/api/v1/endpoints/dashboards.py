@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime as dt
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Annotated, Any
 
 from fastapi import APIRouter, File, HTTPException, Response, UploadFile
@@ -21,13 +22,11 @@ from app.api.deps import (
 )
 from app.core.security import hash_password, new_public_token
 from app.db.base import utcnow
-from pathlib import Path
-
 from app.models import (
-    DashboardSnapshot,
     BoundaryLayer,
     Chart,
     Dashboard,
+    DashboardSnapshot,
     DashboardView,
     Dataset,
     HtmlSnippet,
@@ -44,13 +43,12 @@ from app.models import (
 from app.schemas.analytics import (
     ChartCreate,
     ChartOut,
-    DashboardSnapshotOut,
-    SnapshotSchedule,
     ChartUpdate,
     DashboardCard,
     DashboardCreate,
     DashboardDetail,
     DashboardOut,
+    DashboardSnapshotOut,
     DashboardUpdate,
     DashboardViewIn,
     DashboardViewOut,
@@ -61,6 +59,7 @@ from app.schemas.analytics import (
     HtmlSnippetUpdate,
     PageMove,
     SketchBlock,
+    SnapshotSchedule,
     WidgetCommentIn,
     WidgetCommentOut,
     WidgetCommentPatch,

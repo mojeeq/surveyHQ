@@ -2,8 +2,8 @@
 import datetime as dt
 
 from sqlalchemy import select
+
 from app.services import snapshots
-from app.services.scheduling import is_due
 
 
 def test_due_respects_weekday_time_and_last_run():
@@ -194,11 +194,11 @@ def test_pruning_keeps_the_newest_and_spares_hand_taken_ones(client, auth_header
         dropped = service.prune(db, dashboard)
         db.commit()
         left = sorted(
-            (row.label for row in db.scalars(
+            row.label for row in db.scalars(
                 select(DashboardSnapshot).where(
                     DashboardSnapshot.dashboard_id == dashboard.id
                 )
-            ).all())
+            ).all()
         )
 
     assert dropped == 2
