@@ -318,7 +318,7 @@ async def upload_dataset(
             status_code=413,
             detail=(
                 f"This upload is {int(declared) / (1024 * 1024):,.0f} MB and the "
-                f"limit is {settings.max_upload_mb} MB. Raise MAX_UPLOAD_MB in "
+                f"limit is {settings.max_upload_label}. Raise MAX_UPLOAD_MB in "
                 ".env and restart, or upload the archive's files separately."
             ),
         )
@@ -360,7 +360,7 @@ async def upload_dataset(
                         raise HTTPException(
                             status_code=413,
                             detail=(
-                                f"This upload exceeds the {settings.max_upload_mb} MB " "limit"
+                                f"This upload exceeds the {settings.max_upload_label} limit"
                             ),
                         )
                     handle.write(chunk)

@@ -582,7 +582,7 @@ function UploadModal({
     if (limitMb > 0 && total > limitMb * 1024 * 1024) {
       setError(
         `${chosen.length > 1 ? 'These files come to' : `${chosen[0].file.name} is`} ` +
-          `${formatBytes(total)} and the limit is ${limitMb} MB. ` +
+          `${formatBytes(total)} and the limit is ${formatBytes(limitMb * 1024 * 1024)}. ` +
           'Raise MAX_UPLOAD_MB in .env and restart, or upload them one at a time.',
       )
       return

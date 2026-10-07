@@ -454,7 +454,7 @@ with a local tile service.
 |---|---|---|
 | Areas in one layer | **20,000** | Refused on upload, naming the count. Load the level above it, or split the frame by region into several layers. |
 | Places on one map | **50,000** | Drawn in descending order of value; the rest are dropped and the map says "showing the busiest only" under it. Filter the dashboard to narrow it. |
-| Upload size | **`MAX_UPLOAD_MB`**, 512 MB by default | Refused, naming the limit. |
+| Upload size | **`MAX_UPLOAD_MB`**, 20 GB by default | Refused, naming the limit. |
 
 The 50,000 counts distinct *places*, not interviews, because points are grouped
 by coordinate first. A census that enumerates every household at its own GPS

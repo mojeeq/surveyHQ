@@ -44,7 +44,7 @@ Everything lives in `.env`. Values worth attention:
 | `DASHBOARD_DOMAIN` | The domain shared dashboards are named under, e.g. `dash.example.org`. Needs the wildcard DNS record and certificate above. Empty hides the feature. |
 | `CORS_ORIGINS` | Comma separated. Must include your real domain in production. |
 | `WEB_PORT` | Host port for the web interface. Default 8080. |
-| `MAX_UPLOAD_MB` | The upload ceiling, and the only one: nginx no longer enforces a second. An upload over it is refused with a message naming the size and the limit, before the body is transferred. It also bounds how far a zip may expand once opened - twenty times this - so an archive built to exhaust memory is refused rather than unpacked. |
+| `MAX_UPLOAD_MB` | The upload ceiling, and the only one: nginx no longer enforces a second. Default 20480, which is 20 GB, so a national census export goes in whole. An upload over it is refused with a message naming the size and the limit, before the body is transferred. It also bounds how far a zip may expand once opened - twenty times this - so an archive built to exhaust memory is refused rather than unpacked. See *What a large upload costs* below before raising it further. |
 | `SIGNUP_ENABLED` | Whether anyone reaching the sign-in page may create their own account. **Off by default** - see below before turning it on. |
 | `RATE_LIMIT_ENABLED` | Caps sign-in attempts and requests to shared dashboards. Leave it on. Turn it off only if every visitor reaches you from one address, as behind some corporate proxies, where they would share one budget. |
 | `SYNC_TICK_MINUTES` | How often the scheduler checks for due imports. A connection set to import at a time of day cannot be honoured more precisely than this. |
@@ -403,6 +403,47 @@ The default is sized for one field team. For a larger operation:
 - **Large datasets** - DuckDB is capped at 2 GB per query in
   `backend/app/services/query_engine.py` (`memory_limit`). Raise it if the host
   has the RAM.
+
+### What a large upload costs
+
+`MAX_UPLOAD_MB` defaults to 20 GB, which is sized for a national census export
+going in whole rather than being split by hand. What that ceiling costs is disk,
+not memory, and the path is already built for it - but the disk arithmetic is
+worth doing before anyone sends a file that large.
+
+**Memory is not the constraint.** The body is streamed to disk a megabyte at a
+time, never assembled in memory, and anything over 48 MB is handed to the worker
+rather than parsed while the request is held open. nginx adds no ceiling of its
+own and buffers nothing (`client_max_body_size 0`, `proxy_request_buffering
+off`), so a 20 GB upload does not pass through the web container's disk on its
+way past.
+
+**Allow for about twice the file while it is in flight.** The multipart body is
+spooled to a temporary file first and then copied into `/data/uploads`, so both
+copies exist for the length of the upload. The Parquet it becomes is extra
+again, though usually far smaller than the Stata or CSV it came from.
+
+The spool goes to the API container's temporary directory rather than to the
+`/data` volume. On a default Docker install both sit on the same filesystem and
+it makes no difference. If you have deliberately put `/data` on a separate,
+larger disk, set `TMPDIR` on the `api` service to a directory on that volume, or
+the transfer will run out of space on the smaller one while the big disk sits
+half empty.
+
+**Timeouts are not a ceiling on how long an upload may take.** The hour on the
+upload path is an idle timeout - nginx measures the gap between successive
+reads, not the total - so a slow but steady transfer is not cut off at any size.
+A transfer that stalls for an hour is.
+
+**The zip expansion budget scales with this setting**, at twenty times the
+limit, which is 400 GB at the default. That is past any disk an archive would be
+unpacked onto, so at this limit the guard no longer meaningfully bounds a
+deliberately built zip bomb - it would fill the disk and fail on space instead.
+Uploading requires the Manager role, so this is a question about who you have
+given that role to rather than an open door. If some of them are people you
+would not trust with a crafted archive, lower `MAX_UPLOAD_MB` to the largest
+file you actually need, or lower `MAX_EXPANSION_FACTOR` in
+`backend/app/services/archives.py`.
 
 ## Troubleshooting
 

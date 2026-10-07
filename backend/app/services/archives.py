@@ -73,11 +73,16 @@ def max_extracted_bytes() -> int:
 
 
 def _too_big(budget: int) -> IngestError:
+    # Said in gigabytes once there are gigabytes of it. The budget is a multiple
+    # of the upload limit, so at the shipped default it runs to hundreds of
+    # gigabytes, and "409,600 MB" asks the reader to do division before they can
+    # tell whether the message is about them.
+    gigabytes = budget / (1024 * 1024 * 1024)
+    size = f"{gigabytes:,.0f} GB" if gigabytes >= 1 else f"{budget / (1024 * 1024):,.0f} MB"
     return IngestError(
-        "The files inside this archive expand to more than "
-        f"{budget / (1024 * 1024):,.0f} MB. Raise MAX_UPLOAD_MB in .env and "
-        "restart if the export really is this large, or upload its files "
-        "one at a time."
+        f"The files inside this archive expand to more than {size}. Raise "
+        "MAX_UPLOAD_MB in .env and restart if the export really is this large, "
+        "or upload its files one at a time."
     )
 
 
