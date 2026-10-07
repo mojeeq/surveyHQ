@@ -66,23 +66,36 @@ _CHUNK = 1024 * 1024
 def max_extracted_bytes() -> int:
     """The most an archive may expand to, read from configuration each time.
 
-    A module constant would be fixed at import, and MAX_UPLOAD_MB is the knob
-    an administrator turns when their exports outgrow the default.
+    Module constants would be fixed at import, and both knobs here are ones an
+    administrator turns when their exports outgrow the defaults.
+
+    Two bounds, smaller wins. The proportional one asks what a real export of
+    this size could plausibly come to; the absolute one asks what the machine
+    could plausibly be asked to hold. Proportional alone was sound while the
+    upload limit was 512 MB and absurd once it was 20 GB, where it permitted
+    400 GB - more than any disk an archive would be unpacked onto, so nothing
+    was being bounded in practice.
     """
-    return settings.max_upload_mb * 1024 * 1024 * MAX_EXPANSION_FACTOR
+    proportional = settings.max_upload_mb * 1024 * 1024 * MAX_EXPANSION_FACTOR
+    ceiling = settings.max_extracted_gb * 1024 * 1024 * 1024
+    return min(proportional, ceiling)
 
 
 def _too_big(budget: int) -> IngestError:
-    # Said in gigabytes once there are gigabytes of it. The budget is a multiple
-    # of the upload limit, so at the shipped default it runs to hundreds of
-    # gigabytes, and "409,600 MB" asks the reader to do division before they can
-    # tell whether the message is about them.
+    # Said in gigabytes once there are gigabytes of it: "409,600 MB" asks the
+    # reader to do division before they can tell whether the message is theirs.
     gigabytes = budget / (1024 * 1024 * 1024)
     size = f"{gigabytes:,.0f} GB" if gigabytes >= 1 else f"{budget / (1024 * 1024):,.0f} MB"
+    # Name the knob that is actually holding, not the other one. Two bounds
+    # decide this budget, and telling somebody to raise MAX_UPLOAD_MB while the
+    # ceiling is what binds sends them to a setting they can raise all day
+    # without the refusal changing.
+    ceiling = settings.max_extracted_gb * 1024 * 1024 * 1024
+    knob = "MAX_EXTRACTED_GB" if budget >= ceiling else "MAX_UPLOAD_MB"
     return IngestError(
         f"The files inside this archive expand to more than {size}. Raise "
-        "MAX_UPLOAD_MB in .env and restart if the export really is this large, "
-        "or upload its files one at a time."
+        f"{knob} in .env and restart if the export really is this large, or "
+        "upload its files one at a time."
     )
 
 

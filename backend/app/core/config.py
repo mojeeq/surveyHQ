@@ -111,6 +111,13 @@ class Settings(BaseSettings):
     # is in flight, since the multipart body is spooled to a temporary file
     # before it is copied into place.
     max_upload_mb: int = 20480
+    # The backstop on how far a zip may expand once it is opened. The budget is
+    # a multiple of the upload limit, which is a sound rule at a small limit and
+    # runaway at a large one: at 20 GB it came to 400 GB, past any disk an
+    # archive would be unpacked onto, so the guard had stopped guarding. The
+    # smaller of the two bounds wins, which leaves the proportional rule in
+    # charge wherever it was already doing its job.
+    max_extracted_gb: int = 64
 
     # Mail
     smtp_host: str = ""

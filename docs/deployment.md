@@ -44,7 +44,8 @@ Everything lives in `.env`. Values worth attention:
 | `DASHBOARD_DOMAIN` | The domain shared dashboards are named under, e.g. `dash.example.org`. Needs the wildcard DNS record and certificate above. Empty hides the feature. |
 | `CORS_ORIGINS` | Comma separated. Must include your real domain in production. |
 | `WEB_PORT` | Host port for the web interface. Default 8080. |
-| `MAX_UPLOAD_MB` | The upload ceiling, and the only one: nginx no longer enforces a second. Default 20480, which is 20 GB, so a national census export goes in whole. An upload over it is refused with a message naming the size and the limit, before the body is transferred. It also bounds how far a zip may expand once opened - twenty times this - so an archive built to exhaust memory is refused rather than unpacked. See *What a large upload costs* below before raising it further. |
+| `MAX_UPLOAD_MB` | The upload ceiling, and the only one: nginx no longer enforces a second. Default 20480, which is 20 GB, so a national census export goes in whole. An upload over it is refused with a message naming the size and the limit, before the body is transferred. It also bounds how far a zip may expand once opened - twenty times this, or `MAX_EXTRACTED_GB`, whichever is smaller. See *What a large upload costs* below before raising it further. |
+| `MAX_EXTRACTED_GB` | The backstop on how far a zip may expand, whatever the upload limit is. Default 64. Twenty times the upload limit is a sound rule at a small limit and a runaway one at a large one, so the smaller of the two bounds wins and an archive built to exhaust the machine is refused rather than unpacked. A refusal names whichever of the two knobs is the one holding. |
 | `SIGNUP_ENABLED` | Whether anyone reaching the sign-in page may create their own account. **Off by default** - see below before turning it on. |
 | `RATE_LIMIT_ENABLED` | Caps sign-in attempts and requests to shared dashboards. Leave it on. Turn it off only if every visitor reaches you from one address, as behind some corporate proxies, where they would share one budget. |
 | `SYNC_TICK_MINUTES` | How often the scheduler checks for due imports. A connection set to import at a time of day cannot be honoured more precisely than this. |
@@ -435,15 +436,18 @@ upload path is an idle timeout - nginx measures the gap between successive
 reads, not the total - so a slow but steady transfer is not cut off at any size.
 A transfer that stalls for an hour is.
 
-**The zip expansion budget scales with this setting**, at twenty times the
-limit, which is 400 GB at the default. That is past any disk an archive would be
-unpacked onto, so at this limit the guard no longer meaningfully bounds a
-deliberately built zip bomb - it would fill the disk and fail on space instead.
-Uploading requires the Manager role, so this is a question about who you have
-given that role to rather than an open door. If some of them are people you
-would not trust with a crafted archive, lower `MAX_UPLOAD_MB` to the largest
-file you actually need, or lower `MAX_EXPANSION_FACTOR` in
-`backend/app/services/archives.py`.
+**The zip expansion budget does not scale past `MAX_EXTRACTED_GB`.** How far an
+archive may expand is twenty times the upload limit or that ceiling, whichever
+is smaller - 64 GB by default. The proportional rule alone was sound at a 512 MB
+upload limit, where it comes to 10 GB, and meaningless at 20 GB, where it comes
+to 400 GB: more than any disk an archive would be unpacked onto, so a zip built
+to exhaust the machine would have filled the disk and failed on space rather
+than been refused. The ceiling is what keeps the guard a guard at any upload
+limit.
+
+Raise `MAX_EXTRACTED_GB` if a genuine export is refused. The refusal names
+whichever of the two knobs is the one holding, so you are not sent to a setting
+you can raise without the answer changing.
 
 ## Troubleshooting
 
