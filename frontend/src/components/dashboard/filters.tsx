@@ -13,6 +13,7 @@ import { useToast } from "@/hooks/useToast";
 import type {
   Chart,
   DashboardSavedView,
+  DashboardSnapshot,
   Dataset,
   DrillLevel,
   DrillStep,
@@ -228,11 +229,16 @@ export function clickedVariable(
  * categorical variables with a manageable number of values are offered: a
  * dropdown of 40,000 interview keys is not a filter.
  */
-/** The saved views bar: pick one, save the current selection, tidy up.
+/** How many dated copies the picker lists before sending you to the panel. */
+const SHOWN_COPIES = 6;
+
+/** The views picker: which reading to open, which day to look back at, and the
+ *  housekeeping for the one you are on.
  *
- *  Deliberately a row of chips rather than a dropdown. A dropdown hides how
- *  many readings a board has and which one you are looking at, and the whole
- *  point of a view is to be one click from the board as it opens.
+ *  One control holds all of it because both questions get asked in the same
+ *  breath - people were naming saved views after dates to answer the second
+ *  one - and the answers come from the same place: a view is a selection this
+ *  board applies, a copy is this board as it stood, kept on a schedule.
  */
 export function SavedViews({
   basePath,
@@ -243,6 +249,7 @@ export function SavedViews({
   activeId,
   labelColor,
   onApply,
+  onOpenSnapshots,
 }: {
   basePath: string;
   dashboardId: string;
@@ -255,6 +262,8 @@ export function SavedViews({
   activeId: string;
   /** null clears back to the board with nothing applied. */
   onApply: (view: DashboardSavedView | null) => void;
+  /** Opens the panel that holds the schedule and the full list of copies. */
+  onOpenSnapshots?: () => void;
 }) {
   const toast = useToast();
   const queryClient = useQueryClient();
@@ -263,6 +272,16 @@ export function SavedViews({
   const views = useQuery({
     queryKey: key,
     queryFn: () => api.get<DashboardSavedView[]>(`${basePath}/views`),
+  });
+
+  // The dated copies belong in this menu because this is where somebody looks
+  // for "the one from last Monday" - they were naming saved views after dates
+  // to get it. A reader of a shared link is not asked for: the endpoint needs
+  // a signed-in user, so the request would only 401.
+  const copies = useQuery({
+    queryKey: ["dashboard-snapshots", dashboardId],
+    queryFn: () => api.get<DashboardSnapshot[]>(`/dashboards/${dashboardId}/snapshots`),
+    enabled: !isPublic,
   });
 
   const save = useMutation({
@@ -321,6 +340,32 @@ export function SavedViews({
   }, [saved]);
 
   const active = saved.find((view) => view.id === activeId) ?? null;
+  // Newest first from the server; a handful here and the rest behind the
+  // panel, so one board's year of weekly copies does not become a menu
+  // nobody can reach the bottom of.
+  const kept = (copies.data ?? []).slice(0, SHOWN_COPIES);
+
+  // A copy is opened, not applied: the board stays on whatever view it is on,
+  // and the frozen one comes up beside it. An <a href> cannot carry the
+  // Authorization header, so it is fetched and shown from an object URL, and
+  // the tab is opened inside the click rather than after the await - a window
+  // opened once a promise settles is no longer a user gesture, and Safari
+  // blocks it.
+  const openCopy = async (snapshot: DashboardSnapshot) => {
+    const tab = window.open("", "_blank");
+    try {
+      const file = await api.getBlob(
+        `/dashboards/${dashboardId}/snapshots/${snapshot.id}.html`,
+      );
+      const url = URL.createObjectURL(file);
+      if (tab) tab.location.href = url;
+      else window.location.href = url;
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch (error) {
+      tab?.close();
+      toast.push((error as Error).message, "error");
+    }
+  };
 
   // Nothing saved and no way to save one: a reader of a link with no published
   // views has nothing this bar can offer, so it stays out of the way.
@@ -371,6 +416,26 @@ export function SavedViews({
               onClick: () => onApply(view),
             })),
           ],
+          // The dated copies. Separated into their own band because choosing
+          // one is a different act: a view changes what this board shows, a
+          // copy opens the board as it was in a tab of its own.
+          isPublic || !kept.length
+            ? []
+            : [
+                ...kept.map((snapshot) => ({
+                  label: snapshot.label,
+                  onClick: () => openCopy(snapshot),
+                })),
+                ...(onOpenSnapshots &&
+                (copies.data ?? []).length > SHOWN_COPIES
+                  ? [
+                      {
+                        label: `All ${(copies.data ?? []).length} copies…`,
+                        onClick: onOpenSnapshots,
+                      },
+                    ]
+                  : []),
+              ],
           // What to do to the one you are on.
           isPublic || !active
             ? []
