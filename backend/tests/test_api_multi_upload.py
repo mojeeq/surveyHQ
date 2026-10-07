@@ -164,3 +164,194 @@ def test_labels_must_line_up_with_the_files(client, auth_headers, project):
         data={"project_id": project, "labels": '["11"]', "version_column": "version"},
     )
     assert response.status_code == 422, response.text
+
+
+def _stata(name: str, rows: int) -> bytes:
+    """One plain data file, the way a roster level leaves a census export."""
+    frame = pd.DataFrame(
+        {
+            "interview__key": [f"{name}-{i:04d}" for i in range(rows)],
+            "value": list(range(rows)),
+        }
+    )
+    buffer = io.BytesIO()
+    frame.to_stata(buffer, write_index=False, version=118)
+    return buffer.getvalue()
+
+
+def test_several_data_files_each_become_their_own_dataset(client, auth_headers, project):
+    """A census round is several tables, not several rounds of one table.
+
+    The household file, the person roster and the paradata leave Survey
+    Solutions as separate .dta files. Appending them would be nonsense, so each
+    gets its own dataset - and until this worked, choosing them together was
+    refused outright and people were told to zip files the platform was about
+    to unzip again.
+    """
+    response = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files=[
+            ("file", ("household.dta", _stata("hh", 9), "application/octet-stream")),
+            ("file", ("roster_pp.dta", _stata("pp", 30), "application/octet-stream")),
+            ("file", ("interview_actions.dta", _stata("ia", 4), "application/octet-stream")),
+        ],
+        data={"project_id": project},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+
+    by_name = {d["name"]: d for d in body["datasets"]}
+    # Named after themselves. One shared name would have been a collision, and
+    # naming only the first leaves the others called nothing in particular.
+    assert set(by_name) == {"household", "roster_pp", "interview_actions"}
+    assert by_name["household"]["row_count"] == 9
+    assert by_name["roster_pp"]["row_count"] == 30
+    assert by_name["interview_actions"]["row_count"] == 4
+    assert sorted(body["created"]) == ["household", "interview_actions", "roster_pp"]
+    assert body["appended"] == [] and body["replaced"] == []
+    assert body["rows"] == 43
+    # Each lands in the project it was uploaded to. The shared area would
+    # publish census microdata to every user on the platform.
+    assert all(d["project_id"] == project for d in body["datasets"])
+
+
+def test_one_data_file_still_answers_with_the_dataset_itself(client, auth_headers, project):
+    """The single-file shape is what everything reading this route expects."""
+    response = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files=[("file", ("just_one.dta", _stata("one", 5), "application/octet-stream"))],
+        data={"project_id": project, "name": "Named by hand"},
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert "datasets" not in body
+    assert body["name"] == "Named by hand"
+    assert body["row_count"] == 5
+
+
+def test_a_mixture_of_archives_and_data_files_is_refused(client, auth_headers, project):
+    """Appending archives and making a dataset per file are different acts.
+
+    A selection holding both has no single meaning, and guessing one would
+    quietly do the other.
+    """
+    response = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files=[
+            ("file", ("export.zip", _archive(1, 3, with_late_variable=False), "application/zip")),
+            ("file", ("stray.dta", _stata("s", 3), "application/octet-stream")),
+        ],
+        data={"project_id": project},
+    )
+    assert response.status_code == 422
+    assert "mixture" in response.json()["detail"]
+
+
+def test_a_version_column_on_data_files_is_refused_rather_than_ignored(
+    client, auth_headers, project
+):
+    """It writes each file's label into the rows that file brought, so the
+    rounds an append merged stay tellable apart. Nothing is merged here, so the
+    column would be one constant per dataset - and silently writing it would
+    teach somebody it had done something."""
+    response = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files=[
+            ("file", ("a.dta", _stata("a", 3), "application/octet-stream")),
+            ("file", ("b.dta", _stata("b", 3), "application/octet-stream")),
+        ],
+        data={"project_id": project, "labels": '["1", "2"]', "version_column": "version"},
+    )
+    assert response.status_code == 422
+    assert "append" in response.json()["detail"]
+
+
+def test_the_worker_fills_every_dataset_a_queued_upload_made(client, auth_headers, monkeypatch, project):
+    """The path the interface actually uses.
+
+    Every upload from the browser asks for a review, and a review is always
+    handed to the worker - so the inline branch above is not what a person
+    exercises. The worker carried one dataset id and read only the first file;
+    with several, the rest would have been written to disk and then left as
+    empty dataset records.
+    """
+    from types import SimpleNamespace
+
+    from app.workers.tasks import run_upload_import
+
+    monkeypatch.setattr(run_upload_import, "delay", lambda *a: SimpleNamespace(id="queued-test"))
+    # Anything over the inline limit goes to the worker. Lowering it is how a
+    # test reaches that branch without a 48 MB fixture.
+    monkeypatch.setattr("app.api.v1.endpoints.datasets.INLINE_IMPORT_LIMIT", 1)
+    response = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files=[
+            ("file", ("household.dta", _stata("hh", 7), "application/octet-stream")),
+            ("file", ("roster_pp.dta", _stata("pp", 21), "application/octet-stream")),
+        ],
+        data={"project_id": project},
+    )
+    assert response.status_code == 201, response.text
+    job_id = response.json()["id"]
+
+    result = run_upload_import.run(job_id)
+    reported = {d["name"]: d["rows"] for d in result["datasets"]}
+    assert reported == {"household": 7, "roster_pp": 21}
+    assert result["rows"] == 28
+
+
+def test_a_queued_upload_from_the_previous_release_still_finishes(
+    client, auth_headers, monkeypatch, project, db_session
+):
+    """A job queued before this change carries dataset_id and no dataset_ids.
+
+    It is sitting in Redis across the deploy that introduces the list. Reading
+    only the new key would fail it, and somebody's upload would be lost to a
+    release note nobody read.
+    """
+    from types import SimpleNamespace
+
+    from app.models import Job
+    from app.workers.tasks import run_upload_import
+
+    monkeypatch.setattr(run_upload_import, "delay", lambda *a: SimpleNamespace(id="queued-test"))
+    monkeypatch.setattr("app.api.v1.endpoints.datasets.INLINE_IMPORT_LIMIT", 1)
+    response = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files=[("file", ("legacy.dta", _stata("lg", 6), "application/octet-stream"))],
+        data={"project_id": project},
+    )
+    assert response.status_code == 201, response.text
+    job_id = response.json()["id"]
+
+    job = db_session.get(Job, job_id)
+    job.params = {k: v for k, v in job.params.items() if k != "dataset_ids"}
+    db_session.commit()
+
+    result = run_upload_import.run(job_id)
+    assert [d["rows"] for d in result["datasets"]] == [6]
+
+
+def test_naming_one_dataset_while_uploading_several_is_refused(client, auth_headers, project):
+    """Each file becomes its own dataset, so a single name fits none of them.
+
+    Applying it to all would make several datasets sharing a name; applying it
+    to the first is a coin toss; ignoring it teaches somebody it worked.
+    """
+    response = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files=[
+            ("file", ("a.dta", _stata("a", 3), "application/octet-stream")),
+            ("file", ("b.dta", _stata("b", 3), "application/octet-stream")),
+        ],
+        data={"project_id": project, "name": "One name for all of them"},
+    )
+    assert response.status_code == 422
+    assert "one at a time" in response.json()["detail"]

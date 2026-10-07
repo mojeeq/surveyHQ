@@ -130,7 +130,7 @@ def _queue_import(
     db: DbSession,
     *,
     user: Any,
-    dataset: Dataset | None,
+    datasets: list[Dataset],
     upload_paths: list[Path],
     filenames: list[str],
     written: int,
@@ -143,7 +143,8 @@ def _queue_import(
     review: bool = False,
 ) -> Job:
     """Hand a large upload to the worker and answer with the job watching it."""
-    title = f"Import {filenames[0]}" if len(filenames) == 1 else f"Import {len(filenames)} archives"
+    dataset = datasets[0] if datasets else None
+    title = f"Import {filenames[0]}" if len(filenames) == 1 else f"Import {len(filenames)} files"
     job = Job(
         job_type=JobType.ingest,
         status=JobStatus.queued,
@@ -151,7 +152,11 @@ def _queue_import(
         params={
             "upload_paths": [str(path) for path in upload_paths],
             "filenames": filenames,
+            # dataset_id is kept beside the list so a job queued by the
+            # previous release, still waiting when this one starts, is not
+            # orphaned by the rename.
             "dataset_id": dataset.id if dataset else "",
+            "dataset_ids": [one.id for one in datasets],
             "project_id": project_id or "",
             "combine_all": combine_all,
             "name_prefix": name_prefix,
@@ -275,12 +280,17 @@ async def upload_dataset(
                     "archive, or one of: " + ", ".join(sorted(SUPPORTED_EXTENSIONS))
                 ),
             )
-    if len(uploads) > 1 and any(suffix != ".zip" for suffix in suffixes):
+    # Several archives append together; several data files each become their
+    # own dataset. Both are useful and they are different operations, so a
+    # mixture of the two has no single meaning and is refused rather than
+    # guessed at.
+    if len(uploads) > 1 and len({suffix == ".zip" for suffix in suffixes}) > 1:
         raise HTTPException(
             status_code=422,
             detail=(
-                "Uploading several files at once appends export archives "
-                "together, so every one of them has to be a .zip."
+                "Upload either several .zip archives, which are appended "
+                "together, or several data files, which each become their own "
+                "dataset. Not a mixture of the two."
             ),
         )
 
@@ -325,31 +335,68 @@ async def upload_dataset(
 
     settings.ensure_directories()
     archive = suffix == ".zip"
-    # An archive creates its own datasets, one per member file, so there is no
-    # single record to make up front - and making one would leave an empty
-    # dataset behind whenever the archive turned out to hold several tables.
-    dataset = (
-        None
-        if archive
-        else create_dataset_record(
-            db,
-            name=name.strip() or Path(filename).stem,
-            description=description,
-            source=DatasetSource.upload,
-            source_ref=filename,
-            tags=[t.strip() for t in tags.split(",") if t.strip()],
-            created_by=user.id,
-            project_id=project_id or None,
+    # A version column writes each file's label into the rows it brought, which
+    # is what tells apart the rounds an append has merged. Nothing is merged
+    # when each file becomes its own dataset, so there is nothing to tell apart
+    # and the column would be a constant. Saying so beats writing it anyway.
+    # A name names one dataset. Several data files each become their own, named
+    # after the file they came from, so a name given here could apply to at most
+    # one of them - and quietly applying it to all would make several datasets
+    # with the same name, or to the first only would be a coin toss.
+    if name.strip() and not archive and len(names) > 1:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "These files each become their own dataset, named after the "
+                "file. Upload them without a name, or one at a time to name "
+                "them yourself."
+            ),
         )
+    if stamp_column and not archive:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "A version column belongs to an append. These files each become "
+                "their own dataset, so the name of the file is already the answer."
+            ),
+        )
+    # An archive creates its own datasets, one per member file, so there is no
+    # record to make up front - and making one would leave an empty dataset
+    # behind whenever the archive turned out to hold several tables.
+    #
+    # Data files get one record each. A census round arrives as one file per
+    # roster level - the interview, the person roster, the paradata - and those
+    # are different tables, so appending them would be nonsense and a single
+    # record would describe only the first.
+    chosen_tags = [t.strip() for t in tags.split(",") if t.strip()]
+    datasets: list[Dataset] = (
+        []
+        if archive
+        else [
+            create_dataset_record(
+                db,
+                # Several files are refused a name above, so this is either
+                # the one file's chosen name or the file's own stem.
+                name=name.strip() or Path(one).stem,
+                description=description,
+                source=DatasetSource.upload,
+                source_ref=one,
+                tags=chosen_tags,
+                created_by=user.id,
+                project_id=project_id or None,
+            )
+            for one in names
+        ]
     )
+    dataset = datasets[0] if datasets else None
 
     saved: list[Path] = []
     written = 0
     try:
         for index, (item, item_suffix) in enumerate(zip(uploads, suffixes, strict=True)):
             target = settings.uploads_path / (
-                f"{dataset.id}{item_suffix}"
-                if dataset is not None and index == 0
+                f"{datasets[index].id}{item_suffix}"
+                if index < len(datasets)
                 else f"{uuid4().hex}{item_suffix}"
             )
             saved.append(target)
@@ -377,7 +424,7 @@ async def upload_dataset(
         return _queue_import(
             db,
             user=user,
-            dataset=dataset,
+            datasets=datasets,
             upload_paths=saved,
             filenames=names,
             written=written,
@@ -415,11 +462,12 @@ async def upload_dataset(
                 )
                 outcome = merge_imports(outcome, step)
         else:
-            # No replay here: a single file always creates a dataset of its
-            # own rather than replacing one, so there is no recorded history
-            # to put back. Only an archive matches its member files onto
-            # datasets that already exist.
-            load_file_into_dataset(db, dataset, saved[0])
+            # No replay here: a data file always creates a dataset of its own
+            # rather than replacing one, so there is no recorded history to put
+            # back. Only an archive matches its member files onto datasets that
+            # already exist.
+            for one, path in zip(datasets, saved, strict=True):
+                load_file_into_dataset(db, one, path)
     except IngestError as exc:
         db.commit()  # keep the failed record so the user can see why
         raise HTTPException(status_code=422, detail=str(exc)) from exc
@@ -482,10 +530,32 @@ async def upload_dataset(
         action="upload_dataset",
         entity_type="dataset",
         entity_id=dataset.id,
-        detail={"filename": filename, "rows": dataset.row_count},
+        detail=(
+            {"filename": filename, "rows": dataset.row_count}
+            if len(datasets) == 1
+            else {"files": names, "datasets": len(datasets), "rows": sum(
+                one.row_count or 0 for one in datasets
+            )}
+        ),
     )
     db.commit()
-    db.refresh(dataset)
+    for one in datasets:
+        db.refresh(one)
+    # Several files made several datasets, which is the shape an archive import
+    # already answers in and the interface already knows how to show. One file
+    # keeps answering with the dataset itself, so nothing that reads this route
+    # for a single upload has to change.
+    if len(datasets) > 1:
+        return ArchiveImportOut(
+            datasets=[DatasetOut.model_validate(one) for one in datasets],
+            # Every one is new: a data file never matches onto a dataset that
+            # already exists, which is what separates this from an archive.
+            created=[one.name for one in datasets],
+            warnings=sorted(
+                {w for one in datasets for w in (one.meta or {}).get("warnings", [])}
+            ),
+            rows=sum(one.row_count or 0 for one in datasets),
+        )
     return DatasetDetail.model_validate(dataset)
 
 
