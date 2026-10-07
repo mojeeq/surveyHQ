@@ -322,6 +322,17 @@ Two things it will tell you rather than let pass quietly:
 A file too large to hold in memory is read in chunks automatically. Nothing
 changes for you except that the import reports it.
 
+**Several data files at once** each become their own dataset, named after the
+file. That is the shape a census round arrives in: the household file, the
+person roster and the paradata are different tables, so they are not appended
+onto one another. Choose all of them together and you get one dataset each, in
+the project you picked.
+
+That is a different operation from choosing several **archives**, which appends
+them together as described above, so a selection holding both is refused rather
+than guessed at. Naming a dataset applies to one file: upload them one at a
+time if you want to choose the names yourself.
+
 An upload over 48 MB is handed to the background worker rather than read while
 you wait: the browser says *Importing…* and watches it, and a census roster
 export that takes minutes no longer depends on a connection staying open for

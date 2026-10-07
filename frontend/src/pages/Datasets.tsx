@@ -577,6 +577,17 @@ function UploadModal({
     // Checked here as well as on the server, because the alternative is
     // spending twenty minutes uploading a file that was always going to be
     // refused. The limit comes from the server, so the two cannot drift.
+    // The two multi-file operations are different, and the server refuses a
+    // mixture rather than guessing. Saying so here saves sending the files
+    // first and being told afterwards.
+    const zips = chosen.filter((item) => item.file.name.toLowerCase().endsWith('.zip')).length
+    if (zips && zips !== chosen.length) {
+      setError(
+        'Choose either several .zip archives, which are appended together, or ' +
+          'several data files, which each become their own dataset. Not a mixture.',
+      )
+      return
+    }
     const limitMb = info.data?.max_upload_mb ?? 0
     const total = chosen.reduce((sum, item) => sum + item.file.size, 0)
     if (limitMb > 0 && total > limitMb * 1024 * 1024) {
@@ -593,8 +604,14 @@ function UploadModal({
     const form = new FormData()
     for (const item of chosen) form.append('file', item.file)
     const first = chosen[0].file
-    form.append('name', name || (isZip ? '' : first.name.replace(/\.[^.]+$/, '')))
-    if (chosen.length > 1 || versionColumn.trim()) {
+    // A name belongs to one dataset. Several data files each become their own,
+    // named after the file, so there is nothing here for a name to apply to.
+    const several = chosen.length > 1 && !isZip
+    form.append(
+      'name',
+      several ? '' : name || (isZip ? '' : first.name.replace(/\.[^.]+$/, '')),
+    )
+    if (isZip && (chosen.length > 1 || versionColumn.trim())) {
       // Parallel to the files, in the order they will be imported.
       form.append('labels', JSON.stringify(chosen.map((item) => item.label)))
       form.append('version_column', versionColumn.trim())
@@ -698,7 +715,7 @@ function UploadModal({
 
       <Field
         label="Data file"
-        hint="Stata (.dta), SPSS (.sav), CSV, tab-delimited, Excel, or .zip archives. Choose several archives to append them together."
+        hint="Stata (.dta), SPSS (.sav), CSV, tab-delimited, Excel, or .zip archives. Choose several data files to load each as its own dataset, or several archives to append them together."
       >
         <input
           ref={fileRef}
@@ -721,7 +738,34 @@ function UploadModal({
         />
       </Field>
 
-      {chosen.length > 1 && (
+      {chosen.length > 1 && !isZip && (
+        <div className="mb-4 rounded-card border border-brand-200 bg-brand-50 p-3">
+          {/* Nothing is appended and nothing is ordered here, so this panel
+              lists the files and stops. The order buttons and the version
+              column below belong to appending archives, and offering them
+              would describe an operation that is not about to happen. */}
+          <p className="text-sm text-brand-900">
+            Each of these becomes <strong>its own dataset</strong>, named after
+            its file. That is what a census round looks like: the interview
+            level, each roster and the paradata are different tables, so they
+            are not appended onto one another.
+          </p>
+          <ul className="mt-2 space-y-1.5">
+            {chosen.map((item) => (
+              <li key={item.file.name} className="flex items-center gap-2 text-sm">
+                <span className="min-w-0 flex-1 truncate text-brand-900">
+                  {item.file.name}
+                </span>
+                <span className="shrink-0 text-xs text-brand-800/70">
+                  {formatBytes(item.file.size)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {chosen.length > 1 && isZip && (
         <div className="mb-4 rounded-card border border-brand-200 bg-brand-50 p-3">
           <p className="text-sm text-brand-900">
             These are imported <strong>in this order</strong>: the first under the

@@ -580,25 +580,33 @@ def run_upload_import(self: Any, job_id: str) -> dict[str, Any]:
                     "rows": outcome.rows,
                 }
             else:
-                dataset = db.get(Dataset, str(params.get("dataset_id") or ""))
-                if dataset is None:
+                # One record per file. dataset_id is the single-record shape the
+                # previous release queued with, read here so a job already
+                # waiting when this one starts is still finished rather than
+                # failed.
+                wanted = [str(one) for one in (params.get("dataset_ids") or [])]
+                if not wanted:
+                    wanted = [str(params.get("dataset_id") or "")]
+                targets = [db.get(Dataset, one) for one in wanted]
+                if not targets or any(one is None for one in targets):
                     raise IngestError("The dataset record for this upload is gone.")
-                load_file_into_dataset(db, dataset, upload_paths[0])
+                if len(targets) != len(upload_paths):
+                    raise IngestError("This upload no longer matches the datasets it was for.")
+                for one, path in zip(targets, upload_paths, strict=True):
+                    load_file_into_dataset(db, one, path)
                 db.flush()
+                dataset = targets[0]
                 summary = {
                     "datasets": [
-                        {
-                            "id": dataset.id,
-                            "name": dataset.name,
-                            "rows": dataset.row_count,
-                        }
+                        {"id": one.id, "name": one.name, "rows": one.row_count}
+                        for one in targets
                     ],
-                    "rows": dataset.row_count,
+                    "rows": sum(one.row_count or 0 for one in targets),
                     "columns": dataset.column_count,
                 }
             if review:
                 candidates, changes = prepare(
-                    db, outcome.datasets if archive else [dataset], before
+                    db, outcome.datasets if archive else targets, before
                 )
                 # A single-file upload allocated a pending row before queuing;
                 # retain its identity and expected version on acceptance.
