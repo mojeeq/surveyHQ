@@ -87,7 +87,7 @@ async def refuse_oversized_upload(request: Request, call_next):  # type: ignore[
                 content={
                     "detail": (
                         f"This upload is {int(declared) / (1024 * 1024):,.0f} MB and "
-                        f"the limit is {settings.max_upload_mb} MB. Raise "
+                        f"the limit is {settings.max_upload_label}. Raise "
                         "MAX_UPLOAD_MB in .env and restart, or upload the "
                         "archive's files one at a time."
                     )

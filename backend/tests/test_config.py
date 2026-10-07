@@ -67,7 +67,7 @@ def test_default_when_unset():
         ("PUBLIC_URL", "http://example.org:8083"),
         ("SMTP_FROM", "SurveyHQ <no-reply@example.org>"),
         ("STORAGE_DIR", "/data"),
-        ("MAX_UPLOAD_MB", "512"),
+        ("MAX_UPLOAD_MB", "20480"),
         ("SYNC_TICK_MINUTES", "5"),
     ],
 )

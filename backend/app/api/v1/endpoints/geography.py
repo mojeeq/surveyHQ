@@ -130,7 +130,7 @@ async def upload_layer(
     if len(raw) > limit:
         raise HTTPException(
             status_code=413,
-            detail=f"This file is larger than the {settings.max_upload_mb} MB upload limit",
+            detail=f"This file is larger than the {settings.max_upload_label} upload limit",
         )
 
     try:

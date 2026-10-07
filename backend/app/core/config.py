@@ -103,7 +103,14 @@ class Settings(BaseSettings):
 
     # Storage
     storage_dir: str = "/data"
-    max_upload_mb: int = 512
+    # 20 GB. A census export of a whole country's households in Stata form runs
+    # to several gigabytes, and the point of this platform is that such a file
+    # goes in without being split by hand. The transfer itself is streamed to
+    # disk a megabyte at a time and imported by the worker, so the ceiling costs
+    # disk rather than memory - but note it costs it twice over while an upload
+    # is in flight, since the multipart body is spooled to a temporary file
+    # before it is copied into place.
+    max_upload_mb: int = 20480
 
     # Mail
     smtp_host: str = ""
@@ -186,6 +193,22 @@ class Settings(BaseSettings):
             self.duckdb_temp_path,
         ):
             path.mkdir(parents=True, exist_ok=True)
+
+    @property
+    def max_upload_label(self) -> str:
+        """The upload ceiling as a person would say it.
+
+        Every message that names the limit reads it from here. Spelled in
+        megabytes it was fine at 512 and absurd at 20480, and an error that
+        quotes an absurd number reads as a bug in the platform rather than as
+        a file that is too big.
+        """
+        megabytes = self.max_upload_mb
+        if megabytes >= 1024 and megabytes % 1024 == 0:
+            return f"{megabytes // 1024} GB"
+        if megabytes >= 1024:
+            return f"{megabytes / 1024:.1f} GB"
+        return f"{megabytes} MB"
 
     @property
     def mail_enabled(self) -> bool:
