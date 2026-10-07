@@ -837,6 +837,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         current={{ page, filters: filterValues, drill: path }}
         activeId={openedView.id}
         labelColor={appearance.filter_color}
+        onOpenSnapshots={() => setKeeping(true)}
         onApply={(view) => {
           // null is "Everything": the same path, with the empty state, so
           // leaving a view goes through exactly the code that enters one
