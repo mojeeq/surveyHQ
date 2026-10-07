@@ -54,3 +54,7 @@ frontend/test-results/
 # Generated rather than committed so the in-app help cannot drift from
 # the documentation it is made of.
 frontend/src/help/content.generated.ts
+
+# Files staged for 'make import'. The directory is kept, its contents are not.
+incoming/*
+!incoming/README.md
