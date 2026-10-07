@@ -457,6 +457,62 @@ docker compose logs worker --tail=50
 docker compose restart worker beat
 ```
 
+**A board's scheduled copies never appear**
+
+Two containers have to be alive for a schedule to fire. `beat` decides what is
+due and sends it; `worker` runs it. The schedule is saved either way, so a board
+that is set up correctly and still has no copies is almost always one of these
+failing silently.
+
+Work down the list - each step rules out the one above it:
+
+```bash
+docker compose ps beat                                  # Up, and not Restarting
+docker compose logs --tail=100 beat | grep "due task"   # a line every ten minutes
+docker compose logs --tail=200 worker | grep take_due_snapshots
+```
+
+A ticking scheduler says so once every ten minutes:
+
+```
+Scheduler: Sending due task take-due-dashboard-snapshots
+```
+
+`Up` with nothing in the log is the case worth knowing about: beat started and
+then wedged, which `docker compose ps` cannot see. Note that `celery inspect
+ping` answers for workers only - beat does not speak that protocol, so a failed
+ping there proves nothing.
+
+If beat is sending and the worker never mentions the task, the queue is the
+problem rather than the schedule. `take_due_snapshots` has no route of its own,
+so it goes to the `default` queue, which the `worker` service reads; a worker
+started on a narrower `--queues` list than the default compose file's will leave
+the task sitting in Redis.
+
+The database settles it when the logs have rolled over. A board with the
+schedule on and nothing taken, well past its time, has never been visited:
+
+```bash
+docker compose exec -T postgres sh -c 'psql -U "$POSTGRES_USER" -d "$POSTGRES_DB"' <<'SQL'
+select name, snapshot_times, snapshot_timezone, last_snapshot_at
+  from dashboards where snapshot_enabled;
+SQL
+```
+
+(The credentials are read inside the container, where they are set - `$POSTGRES_USER`
+is not a variable in your own shell.)
+
+Restart both when either is wedged, since a stale worker and a stale beat look
+identical from outside:
+
+```bash
+docker compose restart worker beat
+```
+
+The honest end-to-end test is still to set a board's time two or three minutes
+out and wait for the copy to appear in its Views picker. Nothing short of that
+exercises the renderer.
+
 **"Stored secret could not be decrypted"**
 
 `ENCRYPTION_KEY` changed since the credentials were saved. Restore the old key

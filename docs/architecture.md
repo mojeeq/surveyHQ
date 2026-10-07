@@ -325,11 +325,14 @@ Celery handles anything that outlives a request:
 | `schedule_due_syncs` | Every `SYNC_TICK_MINUTES` - decides which connections are due |
 | `refresh_all_indicators` | Every `MONITOR_TICK_MINUTES` - recomputes indicators, stores a snapshot, evaluates alert rules |
 | `run_all_quality_checks` | Every six hours |
+| `take_due_snapshots` | Every ten minutes - keeps a copy of each dashboard whose time has come, and prunes past what it keeps |
 | `prune_history` | Nightly - trims snapshots, resolved alerts, old results and jobs |
 
 Indicator snapshots are what make trends possible: each refresh writes a
 timestamped value, so every indicator carries its own history without anyone
-configuring a time series.
+configuring a time series. A dashboard copy is a different thing that shares the
+name: a whole board frozen to a file, rendered by the same code as the HTML
+export, kept so a figure quoted on a Monday can be shown again as it was read.
 
 A connection is due either on an interval - every N minutes since its last
 import - or at times of day it lists, read in its own timezone.
