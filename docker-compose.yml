@@ -109,6 +109,11 @@ services:
     environment: *backend-env
     volumes:
       - survey-data:/data
+      # Where a file copied to the server is imported from. Read-only, and a
+      # bind rather than a copy into the volume: a census roster is gigabytes,
+      # and `docker compose cp` of one would write it to disk a second time
+      # for no reason. See "Importing from the server" in docs/deployment.md.
+      - ./incoming:/incoming:ro
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }

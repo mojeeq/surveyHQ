@@ -405,6 +405,52 @@ The default is sized for one field team. For a larger operation:
   `backend/app/services/query_engine.py` (`memory_limit`). Raise it if the host
   has the RAM.
 
+### Importing from the server
+
+A browser upload is the wrong tool for a census round. A 2.3 GB roster export
+wants one connection held open for the whole transfer, roughly twice its size
+in transient disk, and agreement from every proxy in the way about how large a
+request body may be - and losing the connection at 90% means starting again.
+Cloudflare, for one, caps request bodies between 100 MB and 200 MB on its
+non-enterprise plans, which no setting in this platform can lift.
+
+Copy the file to the server with something that resumes, and import it there:
+
+```bash
+rsync -P "Fiji Census 2017 Household- FINAL.dta" server:~/surveyHQ/incoming/
+```
+
+```bash
+make import FILE="/incoming/Fiji Census 2017 Household- FINAL.dta" PROJECT="Fiji Census 2017"
+```
+
+`./incoming` beside `docker-compose.yml` is mounted read-only into the API
+container as `/incoming`, so `FILE` is that path, not the host's. It is a bind
+rather than a copy into the data volume, so a gigabyte file is not written to
+disk a second time just to be read once.
+
+The import runs through the same code the upload route uses, so what lands is
+indistinguishable from an uploaded dataset: the same parsing, variable and
+value labels, Parquet, dataset record and audit entry. Your file is left where
+you put it - the upload route deletes its copy because the copy is its own.
+
+Several files at once, each becoming its own dataset:
+
+```bash
+docker compose exec api python -m app.cli import \
+  /incoming/household.dta /incoming/roster_pp.dta /incoming/interview_actions.dta \
+  --project "Fiji Census 2017"
+```
+
+A `.zip` is unpacked into one dataset per member file, the same as uploading
+one. `--help` lists the rest: `--name`, `--description`, `--tags`, `--mode` and
+`--user`, which records who imported it. Without `--user` it is attributed to
+the first administrator, and the command says whose name it used before it
+starts.
+
+Delete the staged file afterwards. It is a second copy of confidential
+microdata sitting outside the platform's own storage, and nothing prunes it.
+
 ### What a large upload costs
 
 `MAX_UPLOAD_MB` defaults to 20 GB, which is sized for a national census export

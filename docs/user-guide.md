@@ -329,6 +329,11 @@ all of them. An upload over the platform's limit is refused before it is sent,
 with the size and the limit in the message - the limit is `MAX_UPLOAD_MB` on
 the server, and an administrator can raise it.
 
+For a whole census round, ask your administrator to import it from the server
+instead. A multi-gigabyte export goes in without a browser or a proxy in the
+way, and arrives as exactly the same kind of dataset. *Importing from the
+server* in the deployment guide has the steps.
+
 Stata and SPSS are the best choice because they carry variable labels and value
 labels; those are read and used everywhere in the interface.
 

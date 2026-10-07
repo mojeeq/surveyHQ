@@ -81,6 +81,11 @@ reset-password: ## Reset a password: make reset-password EMAIL=you@org PASS=news
 	@test -n "$(EMAIL)" || (echo "Usage: make reset-password EMAIL=you@org PASS=newsecret" && exit 1)
 	$(COMPOSE) exec api python -m app.cli reset-password "$(EMAIL)" "$(PASS)"
 
+.PHONY: import
+import: ## Import a file staged in ./incoming: make import FILE=/incoming/roster.dta PROJECT="Fiji Census 2017"
+	@test -n "$(FILE)" || (echo 'Usage: make import FILE=/incoming/file.dta [PROJECT="Name"] [NAME="Dataset"]' && exit 1)
+	$(COMPOSE) exec api python -m app.cli import "$(FILE)" $(if $(PROJECT),--project "$(PROJECT)") $(if $(NAME),--name "$(NAME)") $(if $(USER_EMAIL),--user "$(USER_EMAIL)")
+
 .PHONY: backup
 backup: ## Back up the database and stored datasets into ./backups
 	./scripts/backup.sh
