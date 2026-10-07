@@ -38,6 +38,7 @@ x-backend-env: &backend-env
   REDIS_URL: redis://redis:6379/0
   STORAGE_DIR: /data
   MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-20480}
+  MAX_EXTRACTED_GB: ${MAX_EXTRACTED_GB:-64}
   SMTP_HOST: ${SMTP_HOST:-}
   SMTP_PORT: ${SMTP_PORT:-587}
   SMTP_USER: ${SMTP_USER:-}

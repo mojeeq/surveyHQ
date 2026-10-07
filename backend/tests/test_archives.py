@@ -16,10 +16,12 @@ import pytest
 from app.services.archives import (
     SOURCE_COLUMN,
     _copy_member,
+    _too_big,
     combine,
     extract_members,
     group_by_schema,
     is_archive,
+    max_extracted_bytes,
 )
 from app.services.ingest import IngestError
 
@@ -235,3 +237,52 @@ def test_a_normal_archive_is_unaffected(tmp_path):
     members = extract_members(archive, tmp_path / "out")
     assert [member.name for member in members] == ["round1.dta"]
     assert len(members[0].frame) == 10
+
+
+def test_the_ceiling_caps_a_budget_the_upload_limit_would_let_run_away(monkeypatch):
+    """Twenty times the upload limit stops being a bound at a large limit.
+
+    The rule was written when an upload could be 512 MB, where twenty times it
+    is 10 GB and genuinely finite. At the 20 GB limit the same rule permits
+    400 GB - more than any disk an archive would be unpacked onto, so a zip
+    built to exhaust the machine would have filled it and failed on space
+    rather than been refused.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "max_upload_mb", 20480)
+    monkeypatch.setattr(settings, "max_extracted_gb", 64)
+
+    assert max_extracted_bytes() == 64 * 1024**3
+
+
+def test_the_proportional_rule_still_decides_where_it_was_already_working(monkeypatch):
+    """The cap is a backstop, not a replacement.
+
+    A modest upload limit gets the smaller, stricter budget it always had. A
+    ceiling that quietly raised it would be a loosening dressed up as a guard.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "max_upload_mb", 512)
+    monkeypatch.setattr(settings, "max_extracted_gb", 64)
+
+    assert max_extracted_bytes() == 10 * 1024**3
+
+
+def test_the_refusal_names_whichever_knob_is_actually_holding(monkeypatch):
+    """Advice that cannot work is worse than no advice.
+
+    Two bounds decide this budget, and whoever is refused will do what the
+    message says. Told to raise MAX_UPLOAD_MB while the ceiling is what binds,
+    they can raise it all day and watch the same refusal come back.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "max_extracted_gb", 64)
+
+    monkeypatch.setattr(settings, "max_upload_mb", 20480)
+    assert "MAX_EXTRACTED_GB" in str(_too_big(max_extracted_bytes()))
+
+    monkeypatch.setattr(settings, "max_upload_mb", 512)
+    assert "MAX_UPLOAD_MB" in str(_too_big(max_extracted_bytes()))
