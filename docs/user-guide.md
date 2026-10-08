@@ -1585,7 +1585,7 @@ The platform inspects a dataset and recommends checks that suit it - duplicate
 interview keys, unusually short interviews, missing GPS, variables with high
 missingness. Accept one and it is created and run immediately.
 
-The eight check types:
+The nine check types:
 
 | Check | Flags |
 |---|---|
@@ -1597,6 +1597,43 @@ The eight check types:
 | Missing GPS | Records with no usable coordinates |
 | Constant answers | Interviewers recording the same answer for everyone |
 | Cross-variable consistency | Rows where one variable should relate to another but does not |
+| Logic condition | Rows meeting a condition you write yourself |
+
+#### Logic conditions
+
+The first eight each answer one fixed question. **Logic condition** is the one
+you write, for the rules that are particular to your questionnaire: a
+respondent under 18 recorded as married, an interview that ends before it
+starts, a household total that does not equal its parts.
+
+You build the condition the same way you build a filter anywhere else, with
+two additions:
+
+- **Add group** puts a bracket around part of it, so `and` and `or` can be
+  mixed. `(age under 18 and married) or (age over 90 and in work)` is two
+  groups joined by "any".
+- Each row can compare against **a variable** instead of a value, which is how
+  `end_date` earlier than `start_date` is said. Only the six comparisons that
+  mean something between two columns are offered there: a column cannot be
+  "one of" or "contain" another one.
+
+**Which rows are the problem** chooses how you would rather phrase it:
+
+- *Flag rows that match* - you describe what is wrong. This is how the other
+  eight checks read.
+- *Flag rows that do NOT match* - you state what must be true and the check
+  finds the rows that break it, the way Stata's `assert` is written.
+
+A row is **left unjudged, not flagged**, when a value the condition needs is
+missing, in both directions. Asserting that `end_date` is at or after
+`start_date` will not report the interviews that have no end date yet. That is
+deliberate: a logic check that also reported missing values would quietly be a
+second Missing values check, and the two would double-count the same records in
+your tolerance. Use a Missing values check for those.
+
+One consequence worth knowing: because the unjudged rows fall out of both
+directions, the matching and non-matching counts do not always add up to every
+row. The gap is exactly the rows that could not be checked.
 
 Each check has a **tolerance**: the share of flagged rows it will accept before
 reporting a failure. Zero means any occurrence fails - right for duplicate

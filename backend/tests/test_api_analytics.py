@@ -2181,3 +2181,207 @@ def test_the_csv_of_a_table_with_no_cell_values_is_one_column(
     assert lines[0] == "region"
     assert all("," not in line for line in lines)
     assert "Total" not in lines
+
+
+def _logic_rule(client, auth_headers, dataset_id, condition, flag="match", name="Logic"):
+    created = client.post(
+        "/api/v1/monitoring/quality-rules",
+        headers=auth_headers,
+        json={
+            "name": name,
+            "dataset_id": dataset_id,
+            "check_type": "logic",
+            "config": {"condition": condition, "flag": flag},
+            "threshold": 0.0,
+        },
+    )
+    assert created.status_code == 201, created.text
+    rule = created.json()["id"]
+    result = client.post(
+        f"/api/v1/monitoring/quality-rules/{rule}/run", headers=auth_headers
+    )
+    assert result.status_code == 200, result.text
+    return rule, result.json()
+
+
+def test_a_logic_check_counts_the_rows_meeting_its_condition(
+    client, auth_headers, dataset_id
+):
+    """The sample has 200 rows with ages drawn from 18..69 inclusive."""
+    _, under30 = _logic_rule(
+        client,
+        auth_headers,
+        dataset_id,
+        {"op": "and", "conditions": [{"variable": "age", "operator": "lt", "value": 30}], "groups": []},
+    )
+    assert under30["total_rows"] == 200
+    assert 0 < under30["failed_rows"] < 200
+
+    # The same condition asserted instead of described: the two have to add up
+    # to every row, which is the check that `no_match` really negates.
+    _, not_under30 = _logic_rule(
+        client,
+        auth_headers,
+        dataset_id,
+        {"op": "and", "conditions": [{"variable": "age", "operator": "lt", "value": 30}], "groups": []},
+        flag="no_match",
+        name="Logic asserted",
+    )
+    assert under30["failed_rows"] + not_under30["failed_rows"] == 200
+
+
+def test_a_logic_check_takes_nested_and_or_groups(client, auth_headers, dataset_id):
+    """(age < 25 AND sex == 1) OR (age > 65 AND sex == 2).
+
+    Counted against the two halves run separately, so a tree that silently
+    flattened into one AND or one OR would not match.
+    """
+    young_men = {
+        "op": "and",
+        "conditions": [
+            {"variable": "age", "operator": "lt", "value": 25},
+            {"variable": "sex", "operator": "eq", "value": 1},
+        ],
+        "groups": [],
+    }
+    old_women = {
+        "op": "and",
+        "conditions": [
+            {"variable": "age", "operator": "gt", "value": 65},
+            {"variable": "sex", "operator": "eq", "value": 2},
+        ],
+        "groups": [],
+    }
+    _, left = _logic_rule(client, auth_headers, dataset_id, young_men, name="Left")
+    _, right = _logic_rule(client, auth_headers, dataset_id, old_women, name="Right")
+    _, both = _logic_rule(
+        client,
+        auth_headers,
+        dataset_id,
+        {"op": "or", "conditions": [], "groups": [young_men, old_women]},
+        name="Either",
+    )
+    # The two halves cannot overlap - no row is both under 25 and over 65 - so
+    # the union is exactly the sum, and a flattened tree would not give it.
+    assert both["failed_rows"] == left["failed_rows"] + right["failed_rows"]
+    assert both["failed_rows"] > 0
+
+
+def test_a_logic_check_compares_one_variable_with_another(
+    client, auth_headers, dataset_id
+):
+    """age against income: two columns, no literal anywhere in the condition."""
+    _, above = _logic_rule(
+        client,
+        auth_headers,
+        dataset_id,
+        {
+            "op": "and",
+            "conditions": [
+                {"variable": "income", "operator": "gt", "other_variable": "age"}
+            ],
+            "groups": [],
+        },
+    )
+    # Income is normal around 1000 and age tops out at 69, so every row with
+    # both present qualifies. Ten incomes are blank in the fixture and a row
+    # missing either side is not judged.
+    assert above["failed_rows"] == 190
+    assert above["total_rows"] == 200
+
+
+def test_a_missing_value_is_not_a_logic_violation_in_either_direction(
+    client, auth_headers, dataset_id
+):
+    """Ten of the 200 fixture rows have no income.
+
+    Asserting a relation that holds for every row where both sides are present
+    must flag none of them. Guarding the comparison with IS NOT NULL would turn
+    those ten UNKNOWNs into FALSE, and the NOT() that `no_match` wraps the tree
+    in would then report all ten - making every assertion a missingness check
+    as well. The `match` direction leaves them out whichever way it is written,
+    so only this direction can tell the two apart.
+    """
+    income_over_age = {
+        "op": "and",
+        "conditions": [
+            {"variable": "income", "operator": "gt", "other_variable": "age"}
+        ],
+        "groups": [],
+    }
+    _, violations = _logic_rule(
+        client, auth_headers, dataset_id, income_over_age, flag="no_match", name="Assert"
+    )
+    assert violations["total_rows"] == 200
+    assert violations["failed_rows"] == 0
+
+    # The two directions leave the ten unjudged rows out of both, so unlike a
+    # literal condition they do not add up to every row. That gap IS the ten.
+    _, matches = _logic_rule(
+        client, auth_headers, dataset_id, income_over_age, name="Describe"
+    )
+    assert matches["failed_rows"] == 190
+    assert matches["failed_rows"] + violations["failed_rows"] == 190
+
+
+def test_a_variable_comparison_refuses_an_operator_that_cannot_mean_anything(
+    client, auth_headers, dataset_id
+):
+    created = client.post(
+        "/api/v1/monitoring/quality-rules",
+        headers=auth_headers,
+        json={
+            "name": "Nonsense",
+            "dataset_id": dataset_id,
+            "check_type": "logic",
+            "config": {
+                "condition": {
+                    "op": "and",
+                    "conditions": [
+                        {
+                            "variable": "age",
+                            "operator": "contains",
+                            "other_variable": "income",
+                        }
+                    ],
+                    "groups": [],
+                },
+                "flag": "match",
+            },
+            "threshold": 0.0,
+        },
+    )
+    assert created.status_code == 201, created.text
+    # A rule that cannot run records a failed result saying why, rather than
+    # throwing: these also run on a schedule, where an exception is a silence.
+    ran = client.post(
+        f"/api/v1/monitoring/quality-rules/{created.json()['id']}/run",
+        headers=auth_headers,
+    )
+    assert ran.status_code == 200, ran.text
+    assert ran.json()["passed"] is False
+    assert "another variable" in ran.json()["message"]
+    # And it names the operators that would have worked.
+    assert "gte" in ran.json()["message"]
+
+
+def test_a_logic_check_with_no_condition_says_so(client, auth_headers, dataset_id):
+    created = client.post(
+        "/api/v1/monitoring/quality-rules",
+        headers=auth_headers,
+        json={
+            "name": "Empty",
+            "dataset_id": dataset_id,
+            "check_type": "logic",
+            "config": {"condition": {"op": "and", "conditions": [], "groups": []}},
+            "threshold": 0.0,
+        },
+    )
+    assert created.status_code == 201, created.text
+    ran = client.post(
+        f"/api/v1/monitoring/quality-rules/{created.json()['id']}/run",
+        headers=auth_headers,
+    )
+    assert ran.status_code == 200, ran.text
+    assert ran.json()["passed"] is False
+    assert "at least one condition" in ran.json()["message"]

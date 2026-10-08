@@ -123,6 +123,7 @@ def run_check(ctx: DatasetContext, rule: QualityRule) -> CheckOutcome:
         CheckType.interview_duration: _check_duration,
         CheckType.gps_missing: _check_gps,
         CheckType.constant_value: _check_constant,
+        CheckType.logic: _check_logic,
     }[rule.check_type]
     return handler(ctx, config, total)
 
@@ -293,6 +294,66 @@ def _check_consistency(ctx: DatasetContext, config: dict, total: int) -> CheckOu
             f"{left} {symbols[operator]} {right}."
         ),
         details={"variable": left, "other_variable": right, "operator": operator},
+    )
+
+
+# A logic rule's two halves: the condition, and which side of it is the
+# problem. Shared by the count here and the failing-row preview in
+# quality_failures, because a preview listing different rows from the ones it
+# counted is worse than no preview.
+LOGIC_FLAGS = ("match", "no_match")
+
+
+def logic_condition(ctx: DatasetContext, config: dict) -> tuple[str, list[Any]]:
+    """The SQL that selects a logic rule's failing rows, and its parameters.
+
+    `flag` says which rows are the failures. "match" is the normal direction -
+    you describe what is wrong, as every other check does. "no_match" is the
+    assertion direction, where you state what must hold and the violations are
+    counted, which is how anybody coming from Stata's `assert` thinks.
+
+    A row the condition cannot judge, because a value it needs is missing, is
+    not a failure in either direction. SQL gives UNKNOWN there and drops it,
+    and negating UNKNOWN leaves it UNKNOWN, so this falls out of the dialect
+    rather than being arranged - but it is the behaviour that was wanted:
+    missing values are the Missing values check's subject, and a logic check
+    that also reported them would make every assertion a second missingness
+    check nobody asked for.
+    """
+    raw = config.get("condition") or {}
+    try:
+        condition = FilterGroup.model_validate(raw)
+    except Exception as exc:  # noqa: BLE001 - a bad rule is a 400, not a 500
+        raise QueryError("This rule's condition cannot be read.") from exc
+    if condition.is_empty():
+        raise QueryError("A logic check needs at least one condition.")
+
+    flag = str(config.get("flag", "match"))
+    if flag not in LOGIC_FLAGS:
+        raise QueryError(f"Unknown logic flag '{flag}'. Use 'match' or 'no_match'.")
+
+    builder = SQLBuilder(ctx)
+    where = builder.filter_sql(condition)
+    if not where:
+        raise QueryError("A logic check needs at least one condition.")
+    return (where if flag == "match" else f"NOT ({where})"), list(builder.params)
+
+
+def _check_logic(ctx: DatasetContext, config: dict, total: int) -> CheckOutcome:
+    """Rows meeting a condition the rule's author wrote."""
+    where, params = logic_condition(ctx, config)
+    failed = _count_where(ctx, where, params)
+    rate = failed / total
+    matching = str(config.get("flag", "match")) == "match"
+    return CheckOutcome(
+        passed=True,
+        failed_rows=failed,
+        total_rows=total,
+        message=(
+            f"{failed:,} of {total:,} rows ({rate:.1%}) "
+            + ("match this condition." if matching else "do not hold to this condition.")
+        ),
+        details={"flag": "match" if matching else "no_match", "matched": failed},
     )
 
 
