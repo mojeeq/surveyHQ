@@ -132,3 +132,136 @@ html[data-surface='aero'] .nav-selected {
     rgba(0, 0, 0, 0.14) 100%
   ) !important;
 }
+
+/*
+ * A dashboard's page tabs.
+ *
+ * Flat draws them as text with an underline under the open one. Aero drew a
+ * tab as a thing: the open one is a lit panel standing out of the strip with
+ * its top corners rounded, the closed ones lie flush until the pointer is
+ * over them. That difference - one tab raised, the rest flush - is what makes
+ * a tab strip read as tabs rather than as a row of links.
+ *
+ * Only paint here: background, shadow, radius. No box metrics, so the strip
+ * lays out identically on both surfaces and switching cannot reflow a
+ * dashboard. Colour is left alone as well, because a dashboard's appearance
+ * can set the tab colour inline and an !important here would overrule the
+ * choice the user made.
+ */
+html[data-surface='aero'] .page-tabs {
+  background-image: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.5) 0%,
+    rgba(226, 233, 242, 0.35) 100%
+  ) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.7) !important;
+  border-top-left-radius: 0.375rem;
+  border-top-right-radius: 0.375rem;
+}
+
+html[data-surface='aero'].dark .page-tabs,
+html[data-surface='aero'] .dark .page-tabs {
+  background-image: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.05) 0%,
+    rgba(255, 255, 255, 0.01) 100%
+  ) !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.06) !important;
+}
+
+/* Closed tabs: flush, and the hover is the hint that they are pressable. */
+html[data-surface='aero'] .page-tab {
+  border-top-left-radius: 0.3125rem;
+  border-top-right-radius: 0.3125rem;
+}
+
+html[data-surface='aero'] .page-tab:hover:not(.page-tab-on) {
+  background-image: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.45) 0%,
+    rgba(255, 255, 255, 0.12) 100%
+  ) !important;
+}
+
+html[data-surface='aero'].dark .page-tab:hover:not(.page-tab-on),
+html[data-surface='aero'] .dark .page-tab:hover:not(.page-tab-on) {
+  background-image: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.08) 0%,
+    rgba(255, 255, 255, 0.02) 100%
+  ) !important;
+}
+
+/* The open tab: lit from above, with the hard stop halfway down that the
+   buttons use, and a shadow thrown sideways rather than down - it is standing
+   in the strip, not floating over it, so nothing falls below its base where
+   the accent rule is. */
+html[data-surface='aero'] .page-tab-on {
+  background-image: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.95) 0%,
+    rgba(255, 255, 255, 0.72) 49.9%,
+    rgba(255, 255, 255, 0.6) 50%,
+    rgba(240, 244, 250, 0.72) 100%
+  ) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.95),
+    inset 1px 0 0 rgba(255, 255, 255, 0.6),
+    inset -1px 0 0 rgba(255, 255, 255, 0.6),
+    -1px 0 2px -1px rgba(15, 23, 42, 0.18),
+    1px 0 2px -1px rgba(15, 23, 42, 0.18) !important;
+}
+
+html[data-surface='aero'].dark .page-tab-on,
+html[data-surface='aero'] .dark .page-tab-on {
+  background-image: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.16) 0%,
+    rgba(255, 255, 255, 0.07) 49.9%,
+    rgba(255, 255, 255, 0.05) 50%,
+    rgba(255, 255, 255, 0.02) 100%
+  ) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.14),
+    inset 1px 0 0 rgba(255, 255, 255, 0.07),
+    inset -1px 0 0 rgba(255, 255, 255, 0.07),
+    -1px 0 2px -1px rgba(0, 0, 0, 0.5),
+    1px 0 2px -1px rgba(0, 0, 0, 0.5) !important;
+}
+
+/* The page controls at the end of the strip. `.btn-ghost` copies `.btn` in
+   rather than carrying the class, so the button rules above miss it, and it
+   sets `box-shadow: none !important` - which is why these name it directly
+   and lean on specificity to win. Gloss on hover only: three glass buttons
+   sitting there permanently would compete with the open tab. */
+html[data-surface='aero'] .page-tabs .btn-ghost:hover:not(:disabled) {
+  background-image: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.5) 0%,
+    rgba(255, 255, 255, 0.18) 49.9%,
+    rgba(0, 0, 0, 0.02) 50%,
+    rgba(0, 0, 0, 0.06) 100%
+  ) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    0 1px 2px rgba(15, 23, 42, 0.12) !important;
+}
+
+html[data-surface='aero'] .page-tabs .btn-ghost:active:not(:disabled) {
+  background-image: none !important;
+  box-shadow: inset 0 2px 4px rgba(15, 23, 42, 0.18) !important;
+}
+
+html[data-surface='aero'].dark .page-tabs .btn-ghost:hover:not(:disabled),
+html[data-surface='aero'] .dark .page-tabs .btn-ghost:hover:not(:disabled) {
+  background-image: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.12) 0%,
+    rgba(255, 255, 255, 0.04) 49.9%,
+    rgba(0, 0, 0, 0.06) 50%,
+    rgba(0, 0, 0, 0.12) 100%
+  ) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.1),
+    0 1px 2px rgba(0, 0, 0, 0.4) !important;
+}

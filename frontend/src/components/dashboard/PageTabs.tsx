@@ -99,7 +99,11 @@ export function PageTabs({
     // a twelfth tab came to rest between "Rename" and "Delete page", where it
     // reads as one of the controls rather than as a page.
     <div
-      className={`mb-4 flex flex-wrap items-end justify-between gap-x-2 border-b ${
+      // `page-tabs`, `page-tab` and `page-tab-on` carry no styling of their own.
+      // They are there for the Aero surface to hang its gloss on, in aero.css,
+      // which can tell an open tab from a closed one only if the markup says
+      // which is which. Nothing matches them on the flat surface.
+      className={`page-tabs mb-4 flex flex-wrap items-end justify-between gap-x-2 border-b ${
         onDark ? "border-white/25" : "border-ink-200"
       } ${band ? "rounded-lg px-2" : ""}`}
       style={band ? { backgroundColor: band } : undefined}
@@ -116,7 +120,7 @@ export function PageTabs({
                   ? "Double-click to rename, or use the Rename button"
                   : undefined
               }
-              className={`whitespace-nowrap border-b-2 px-3.5 py-2.5 text-sm font-medium transition-colors ${
+              className={`page-tab ${active === index ? "page-tab-on" : ""} whitespace-nowrap border-b-2 px-3.5 py-2.5 text-sm font-medium transition-colors ${
                 active === index
                   ? onDark
                     ? "border-white text-white"
