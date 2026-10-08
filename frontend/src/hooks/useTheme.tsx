@@ -1,5 +1,7 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 
+import type { SidebarColour } from '@/lib/sidebar'
+
 export type Theme = 'light' | 'dark' | 'system'
 
 /** How the furniture is drawn, which is a separate question from light or dark.
@@ -14,6 +16,8 @@ export type Surface = 'flat' | 'aero'
 
 const STORAGE_KEY = 'theme'
 const SURFACE_KEY = 'surface'
+const PINNED_KEY = 'sidebar-pinned'
+const COLOUR_KEY = 'sidebar-colour'
 
 function getSystemTheme(): 'light' | 'dark' {
   if (typeof window === 'undefined' || !window.matchMedia) return 'light'
@@ -29,6 +33,26 @@ function getStoredTheme(): Theme {
 function getStoredSurface(): Surface {
   if (typeof window === 'undefined') return 'flat'
   return window.localStorage.getItem(SURFACE_KEY) === 'aero' ? 'aero' : 'flat'
+}
+
+/** Pinned unless they have said otherwise: absent is the shell as it was. */
+function getStoredPinned(): boolean {
+  if (typeof window === 'undefined') return true
+  return window.localStorage.getItem(PINNED_KEY) !== 'false'
+}
+
+/**
+ * A stored colour, if it is one.
+ *
+ * Only six-digit hex is accepted. Whatever is in localStorage went through a
+ * colour input, but it is still the one preference that gets written straight
+ * into a style attribute, and a value from storage is not worth trusting on
+ * the strength of where it usually comes from.
+ */
+function getStoredColour(): SidebarColour {
+  if (typeof window === 'undefined') return null
+  const stored = window.localStorage.getItem(COLOUR_KEY)
+  return stored && /^#[0-9a-fA-F]{6}$/.test(stored) ? stored : null
 }
 
 function applyTheme(resolved: 'light' | 'dark') {
@@ -52,6 +76,12 @@ type ThemeContextValue = {
   surface: Surface
   setSurface: (surface: Surface) => void
   toggleSurface: () => void
+  /** Whether the side pane stays open. Unpinned, it is a rail until hovered. */
+  sidebarPinned: boolean
+  setSidebarPinned: (pinned: boolean) => void
+  /** The side pane's colour, or null for the one the platform ships with. */
+  sidebarColour: SidebarColour
+  setSidebarColour: (colour: SidebarColour) => void
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null)
@@ -59,6 +89,8 @@ const ThemeContext = createContext<ThemeContextValue | null>(null)
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<Theme>(() => getStoredTheme())
   const [surface, setSurfaceState] = useState<Surface>(() => getStoredSurface())
+  const [sidebarPinned, setPinnedState] = useState<boolean>(() => getStoredPinned())
+  const [sidebarColour, setColourState] = useState<SidebarColour>(() => getStoredColour())
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>(() =>
     theme === 'system' ? getSystemTheme() : theme,
   )
@@ -96,6 +128,22 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   const toggleSurface = () => setSurface(surface === 'aero' ? 'flat' : 'aero')
 
+  const setSidebarPinned = (next: boolean) => {
+    setPinnedState(next)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(PINNED_KEY, String(next))
+    }
+  }
+
+  const setSidebarColour = (next: SidebarColour) => {
+    setColourState(next)
+    if (typeof window === 'undefined') return
+    // Removed rather than stored as "null", so the default stays the absence
+    // of a choice and a later change to it reaches everybody who never picked.
+    if (next) window.localStorage.setItem(COLOUR_KEY, next)
+    else window.localStorage.removeItem(COLOUR_KEY)
+  }
+
   const setTheme = (next: Theme) => {
     setThemeState(next)
     if (typeof window !== 'undefined') {
@@ -108,8 +156,20 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }
 
   const value = useMemo(
-    () => ({ theme, resolvedTheme, setTheme, toggleTheme, surface, setSurface, toggleSurface }),
-    [theme, resolvedTheme, surface],
+    () => ({
+      theme,
+      resolvedTheme,
+      setTheme,
+      toggleTheme,
+      surface,
+      setSurface,
+      toggleSurface,
+      sidebarPinned,
+      setSidebarPinned,
+      sidebarColour,
+      setSidebarColour,
+    }),
+    [theme, resolvedTheme, surface, sidebarPinned, sidebarColour],
   )
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>
