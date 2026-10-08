@@ -11,11 +11,13 @@
  * of something.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { Card, Loading, Spinner } from '@/components/ui'
+import { ScriptHelp } from '@/components/ProjectScriptHelp'
 import { api } from '@/lib/api'
+import { insertLine } from '@/lib/script-insert'
 
 interface Script {
   text: string
@@ -37,6 +39,19 @@ export function ProjectScript({ projectId }: { projectId: string }) {
   // comparison rather than a flag somebody has to remember to clear.
   const [saved, setSaved] = useState('')
   const [log, setLog] = useState<{ command: string; message: string; ok: boolean }[]>([])
+
+  const box = useRef<HTMLTextAreaElement>(null)
+
+  /** Put an example where the cursor is, then carry on from the end of it. */
+  const insert = (line: string) => {
+    const area = box.current
+    const { text: next, caret } = insertLine(text, area ? area.selectionStart : text.length, line)
+    setText(next)
+    requestAnimationFrame(() => {
+      area?.focus()
+      area?.setSelectionRange(caret, caret)
+    })
+  }
 
   const script = useQuery({
     queryKey: ['project-script', projectId],
@@ -88,6 +103,7 @@ export function ProjectScript({ projectId }: { projectId: string }) {
         subtitle="Read the project's datasets, put them together, write new ones"
       >
         <textarea
+          ref={box}
           className="input min-h-[280px] font-mono text-sm"
           value={text}
           onChange={(event) => setText(event.target.value)}
@@ -146,6 +162,7 @@ export function ProjectScript({ projectId }: { projectId: string }) {
       </Card>
 
       <div className="space-y-4">
+        <ScriptHelp onInsert={insert} />
         <Card title="Last run">
           {!last ? (
             <p className="text-sm text-ink-500">
