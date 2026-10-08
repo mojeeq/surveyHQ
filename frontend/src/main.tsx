@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import App from './App'
 import { AuthProvider } from '@/hooks/useAuth'
+import PreferenceBridge from '@/components/PreferenceBridge'
 import { DialogProvider } from '@/hooks/useDialog'
 import { ToastProvider } from '@/hooks/useToast'
 import { ThemeProvider } from '@/hooks/useTheme'
@@ -34,6 +35,7 @@ createRoot(document.getElementById('root')!).render(
                 and a dialog has nothing to say that a toast should sit under. */}
             <DialogProvider>
               <AuthProvider>
+                <PreferenceBridge />
                 <App />
               </AuthProvider>
             </DialogProvider>
