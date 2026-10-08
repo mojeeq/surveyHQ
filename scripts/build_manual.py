@@ -237,7 +237,7 @@ def contents(document: Document) -> None:
         ("6", "Explore: tabulations and charts"),
         ("7", "Dashboards"),
         ("8", "Maps and boundaries"),
-        ("9", "Monitoring: indicators and targets"),
+        ("9", "Indicators and targets"),
         ("10", "Data quality"),
         ("11", "Alerts"),
         ("12", "Sharing a dashboard"),
@@ -329,7 +329,7 @@ def chapter_signing_in(document: Document) -> None:
             ["**Connections**", "Survey Solutions servers and their import schedules"],
             ["**Explore**", "Building tabulations and charts"],
             ["**Dashboards**", "Assembling and reading dashboards"],
-            ["**Monitoring**", "Indicators and their targets"],
+            ["**Indicators**", "Tracked numbers and their targets"],
             ["**Data quality**", "Checks and their results"],
             ["**Alerts**", "What has crossed a threshold, and what to do about it"],
             ["**Administration**", "Users, roles and system settings"],
@@ -758,10 +758,10 @@ def chapter_maps(document: Document) -> None:
 
 
 def chapter_monitoring(document: Document) -> None:
-    document.add_heading("9. Monitoring: indicators and targets", level=1)
+    document.add_heading("9. Indicators and targets", level=1)
     para(
         document,
-        "An indicator is one tracked number. **Monitoring → New indicator**: "
+        "An indicator is one tracked number. **Indicators → New indicator**: "
         "name it, pick a dataset, choose the measure, and optionally give it a "
         "target and the thresholds at which it should start worrying you.",
     )
@@ -830,16 +830,37 @@ def chapter_quality(document: Document) -> None:
             ["**Value range**", "Whether values fall between a minimum and a maximum"],
             ["**Duplicates**", "Whether a key, or a combination of columns, repeats"],
             ["**Outliers**", "Whether values sit far outside the usual spread"],
-            ["**Consistency**", "Whether one variable agrees with another"],
             ["**Interview duration**", "Whether interviews were too short to be real"],
             ["**GPS missing**", "Whether a location was recorded"],
             [
                 "**Constant value**",
                 "Whether a variable never changes, which usually means it was never asked",
             ],
+            [
+                "**Logic condition**",
+                "Whether rows meet a condition you write yourself",
+            ],
         ],
     )
     figure(document, "10-quality", "Quality rules and their most recent results.")
+    para(
+        document,
+        "The first seven each answer one fixed question. **Logic condition** is "
+        "the one you write, for the rules particular to your questionnaire: a "
+        "respondent under 18 recorded as married, an interview that ends before "
+        "it starts, a total that does not equal its parts. Conditions can be "
+        "grouped to mix *and* with *or*, and a row can be compared against "
+        "another variable rather than a fixed value. **Start from \u2192 "
+        "Cross-variable consistency** fills in the common case of one variable "
+        "against another.",
+    )
+    para(
+        document,
+        "A row is left unjudged rather than flagged when a value the condition "
+        "needs is missing, whichever way round the condition is phrased. Use a "
+        "Missing values check for those, so the two do not count the same "
+        "records twice.",
+    )
     para(
         document,
         "Failing checks are listed first and in full; passing ones are counted. "
@@ -869,6 +890,16 @@ def chapter_alerts(document: Document) -> None:
         document,
         "Where email has been configured by an administrator, an alert can also "
         "be sent to a list of addresses when it is raised.",
+    )
+    para(
+        document,
+        "On the **Rules** tab, **Test now** evaluates a rule immediately rather "
+        "than waiting for the scheduler, which is how you confirm a threshold "
+        "does what you meant. **Edit** reopens the rule, every part of it, "
+        "including which indicator it watches. **Pause** stops a rule firing "
+        "without deleting it, for the one that is going off every ten minutes "
+        "at two in the morning while somebody looks into it; **Resume** puts it "
+        "back.",
     )
     page_break(document)
 

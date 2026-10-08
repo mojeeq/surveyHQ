@@ -17,6 +17,23 @@ new line, and on a list that is offering you a choice it takes the choice.
 In the **Command** tab, where Enter has to be a new line, **Ctrl+Enter**
 (**Cmd+Enter** on a Mac) runs the script.
 
+Dialogs are the platform's own rather than the browser's, so they carry its
+styling, say what a deletion will cost instead of asking whether you are sure,
+and can refuse a name that is already taken without throwing away what you
+typed.
+
+### How it looks
+
+Two switches sit in the header, and each remembers your choice on this
+computer. Neither changes anything about the data or who can see it.
+
+- **Light or dark**, the moon. Dark follows your operating system until you
+  pick one yourself.
+- **Flat or Aero**, the panel beside it. Flat is the default: plain surfaces
+  and plain buttons. Aero puts the gloss back - panels lit from above, glass
+  buttons, a sunken look for the boxes you type into. Both work in light and
+  dark.
+
 ## Roles
 
 | Role | Can do |
@@ -1573,6 +1590,15 @@ resolve automatically.
 
 **Test now** evaluates the rule immediately rather than waiting for the
 scheduler - useful for confirming a threshold does what you meant.
+
+**Edit** reopens the rule with everything filled in, including which indicator
+it watches, so a threshold set too low or a cooldown that turns out to be an
+hour of silence can be corrected rather than retyped. The rule keeps its
+history, including when it last fired.
+
+**Pause** stops a rule raising anything without deleting it, for the one going
+off every ten minutes at two in the morning while somebody looks into it.
+A paused rule is marked as such in the list. **Resume** puts it back.
 
 Alerts can be acknowledged (someone is looking at it) or resolved (it is dealt
 with).

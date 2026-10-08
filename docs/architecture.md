@@ -368,8 +368,10 @@ and re-uploaded like any other archive.
   match it raises an alert and notifies by in-app message and optionally email.
   A cooldown stops one ongoing problem generating a stream of alerts. When the
   value recovers, open alerts for that rule resolve themselves.
-- **Quality rule** - one of eight check types with a tolerance. The check fails
-  when the share of offending rows exceeds it.
+- **Quality rule** - one of nine check types with a tolerance. The check fails
+  when the share of offending rows exceeds it. Eight ask a fixed question;
+  `logic` carries a condition the rule's author wrote, as a `FilterGroup`
+  compiled by the same builder that compiles a query filter.
 
 ## Project scope
 
