@@ -15,6 +15,7 @@ import type {
   Severity,
 } from '@/lib/types'
 import FilterBuilder, { emptyFilter } from '@/components/FilterBuilder'
+import { LOGIC_PRESETS } from '@/lib/logic-presets'
 import {
   Badge,
   Card,
@@ -27,7 +28,14 @@ import {
   Spinner,
 } from '@/components/ui'
 
-const CHECKS: { value: CheckType; label: string; description: string }[] = [
+const CHECKS: {
+  value: CheckType
+  label: string
+  description: string
+  /** Still runs, and still shown while editing one, but not offered for a new
+   *  check: a Logic condition preset does the same thing without the limits. */
+  retired?: boolean
+}[] = [
   {
     value: 'missing_rate',
     label: 'Missing values',
@@ -66,7 +74,9 @@ const CHECKS: { value: CheckType; label: string; description: string }[] = [
   {
     value: 'consistency',
     label: 'Cross-variable consistency',
-    description: 'Flags rows where one variable should relate to another but does not.',
+    description:
+      'Flags rows where one variable should relate to another but does not. Superseded by the Logic condition preset of the same name, which is not limited to one pair; checks already using it keep working.',
+    retired: true,
   },
   {
     value: 'logic',
@@ -608,11 +618,13 @@ function CheckModal({
             setConfig({})
           }}
         >
-          {CHECKS.map((check) => (
-            <option key={check.value} value={check.value}>
-              {check.label}
-            </option>
-          ))}
+          {CHECKS.filter((check) => !check.retired || check.value === checkType).map(
+            (check) => (
+              <option key={check.value} value={check.value}>
+                {check.label}
+              </option>
+            ),
+          )}
         </select>
       </Field>
 
@@ -743,6 +755,31 @@ function CheckModal({
               <option value="match">Flag rows that match this condition</option>
               <option value="no_match">Flag rows that do NOT match this condition</option>
             </select>
+          </Field>
+          <Field
+            label="Start from"
+            hint="Fills the condition in below. Everything stays editable afterwards, including adding rows the preset does not know about."
+          >
+            <div className="flex flex-wrap gap-2">
+              {LOGIC_PRESETS.map((preset) => (
+                <button
+                  key={preset.id}
+                  className="btn-secondary btn-sm"
+                  title={preset.hint}
+                  onClick={() => {
+                    if (
+                      !condition.conditions.length
+                      || confirm('Replace the condition you have built?')
+                    ) {
+                      setCondition(preset.build(variables))
+                      set({ flag: preset.flag })
+                    }
+                  }}
+                >
+                  {preset.label}
+                </button>
+              ))}
+            </div>
           </Field>
           <Field
             label="Condition"
