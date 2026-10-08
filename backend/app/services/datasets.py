@@ -522,113 +522,131 @@ def load_archive_as_datasets(
             return outcome
 
         for key, member in sorted(by_member_name(members).items()):
-            frame = member.frame.copy()
-            # Every row records the archive it arrived in, not the member file:
-            # the member name is the same in every round, so it would say nothing
-            # about which round a row came from.
-            frame[SOURCE_COLUMN] = archive_name
-            if stamp:
-                column, value = stamp
-                if column in frame.columns:
-                    # Overwriting an answer with a version number would be a
-                    # silent loss of data, so the stamp gives way and says so.
-                    outcome.warnings.append(
-                        f"'{column}' is already a variable in {member.name}, so "
-                        "it was left alone rather than stamped"
-                    )
-                else:
-                    frame[column] = value
+            # One member in memory at a time. take() hands over the member's only
+            # reference, so the frame can be stamped in place rather than copied,
+            # and the finally below drops it before the next file is read. Held
+            # all at once and then copied, a census export needed more memory
+            # than the machine had and the worker was killed mid-import.
+            try:
+                frame, member_labels, member_values = member.take()
+            except IngestError as exc:
+                logger.warning("Skipping %s inside the archive: %s", member.name, exc)
+                outcome.skipped.append(f"{member.name}: {exc}")
+                continue
+            try:
+                # Every row records the archive it arrived in, not the member
+                # file: the member name is the same in every round, so it would
+                # say nothing about which round a row came from.
+                frame[SOURCE_COLUMN] = archive_name
+                if stamp:
+                    column, value = stamp
+                    if column in frame.columns:
+                        # Overwriting an answer with a version number would be a
+                        # silent loss of data, so the stamp gives way and says so.
+                        outcome.warnings.append(
+                            f"'{column}' is already a variable in {member.name}, so "
+                            "it was left alone rather than stamped"
+                        )
+                    else:
+                        frame[column] = value
 
-            existing = find_archive_sibling(
-                db, key, project_id, {str(c) for c in frame.columns}
-            )
-            if existing is not None and dataset_is_queryable(existing):
-                before = existing.row_count
-                if mode == "append":
-                    append_frame_into_dataset(
-                        db, existing, frame, member.variable_labels, member.value_labels
-                    )
-                    outcome.appended.append(
-                        f"{member.name} -> {existing.name} "
-                        f"({before} + {len(frame)} = {existing.row_count} rows)"
-                    )
-                    outcome.rows += len(frame)
-                else:
-                    # Everything built on this dataset points at its id, so the
-                    # row is kept and only its data swapped. Losing a variable is
-                    # the one way that can still break something, so it is
-                    # checked for rather than hoped about.
-                    had = {v.name for v in existing.variables}
-                    labels = dict(member.variable_labels)
-                    labels.setdefault(SOURCE_COLUMN, "Archive this row was imported from")
-                    if stamp:
-                        labels.setdefault(stamp[0], "Questionnaire version of this row")
-                    ingested = ingest_frame(
+                existing = find_archive_sibling(
+                    db, key, project_id, {str(c) for c in frame.columns}
+                )
+                if existing is not None and dataset_is_queryable(existing):
+                    before = existing.row_count
+                    if mode == "append":
+                        append_frame_into_dataset(
+                            db, existing, frame, member_labels, member_values
+                        )
+                        outcome.appended.append(
+                            f"{member.name} -> {existing.name} "
+                            f"({before} + {len(frame)} = {existing.row_count} rows)"
+                        )
+                        outcome.rows += len(frame)
+                    else:
+                        # Everything built on this dataset points at its id, so the
+                        # row is kept and only its data swapped. Losing a variable is
+                        # the one way that can still break something, so it is
+                        # checked for rather than hoped about.
+                        had = {v.name for v in existing.variables}
+                        labels = dict(member_labels)
+                        labels.setdefault(SOURCE_COLUMN, "Archive this row was imported from")
+                        if stamp:
+                            labels.setdefault(stamp[0], "Questionnaire version of this row")
+                        ingested = ingest_frame(
+                            frame,
+                            labels,
+                            member_values,
+                            dataset_directory(existing.id),
+                            [],
+                        )
+                        _apply_ingest(db, existing, ingested)
+                        # Anything recorded against this dataset - a generated
+                        # variable, a hand-written label - is put back before the
+                        # check below, or it would report as lost a variable that
+                        # is about to exist again.
+                        now = {v.name for v in ingested.variables}
+                        if after_replace is not None:
+                            outcome.warnings.extend(after_replace(db, existing))
+                            db.flush()
+                            db.refresh(existing)
+                            now = {v.name for v in existing.variables}
+                        outcome.replaced.append(
+                            f"{member.name} -> {existing.name} "
+                            f"({before} rows replaced by {existing.row_count})"
+                        )
+                        outcome.replaced_ids.append(existing.id)
+                        outcome.rows += existing.row_count
+                        outcome.warnings.extend(
+                            _lost_variable_warnings(db, existing, had, now)
+                        )
+                    outcome.datasets.append(existing)
+                    continue
+
+                stem = Path(member.name).stem
+                dataset = existing or create_dataset_record(
+                    db,
+                    # The member stem is the useful name - VN_LF2024, R_demographics -
+                    # but two surveys in one project can share one, so a prefix is
+                    # offered for telling them apart.
+                    name=f"{name_prefix} {stem}".strip() if name_prefix else stem,
+                    description=f"From {archive_name}",
+                    source=DatasetSource.upload,
+                    source_ref=member.name,
+                    created_by=created_by,
+                    project_id=project_id,
+                    tags=[PARADATA_TAG] if member.is_paradata else [],
+                )
+                labels = dict(member_labels)
+                labels.setdefault(SOURCE_COLUMN, "Archive this row was imported from")
+                if stamp:
+                    labels.setdefault(stamp[0], "Questionnaire version of this row")
+                _apply_ingest(
+                    db,
+                    dataset,
+                    ingest_frame(
                         frame,
                         labels,
-                        member.value_labels,
-                        dataset_directory(existing.id),
+                        member_values,
+                        dataset_directory(dataset.id),
                         [],
-                    )
-                    _apply_ingest(db, existing, ingested)
-                    # Anything recorded against this dataset - a generated
-                    # variable, a hand-written label - is put back before the
-                    # check below, or it would report as lost a variable that
-                    # is about to exist again.
-                    now = {v.name for v in ingested.variables}
-                    if after_replace is not None:
-                        outcome.warnings.extend(after_replace(db, existing))
-                        db.flush()
-                        db.refresh(existing)
-                        now = {v.name for v in existing.variables}
-                    outcome.replaced.append(
-                        f"{member.name} -> {existing.name} "
-                        f"({before} rows replaced by {existing.row_count})"
-                    )
-                    outcome.replaced_ids.append(existing.id)
-                    outcome.rows += existing.row_count
-                    outcome.warnings.extend(
-                        _lost_variable_warnings(db, existing, had, now)
-                    )
-                outcome.datasets.append(existing)
-                continue
-
-            stem = Path(member.name).stem
-            dataset = existing or create_dataset_record(
-                db,
-                # The member stem is the useful name - VN_LF2024, R_demographics -
-                # but two surveys in one project can share one, so a prefix is
-                # offered for telling them apart.
-                name=f"{name_prefix} {stem}".strip() if name_prefix else stem,
-                description=f"From {archive_name}",
-                source=DatasetSource.upload,
-                source_ref=member.name,
-                created_by=created_by,
-                project_id=project_id,
-                tags=[PARADATA_TAG] if member.is_paradata else [],
-            )
-            labels = dict(member.variable_labels)
-            labels.setdefault(SOURCE_COLUMN, "Archive this row was imported from")
-            if stamp:
-                labels.setdefault(stamp[0], "Questionnaire version of this row")
-            _apply_ingest(
-                db,
-                dataset,
-                ingest_frame(
-                    frame,
-                    labels,
-                    member.value_labels,
-                    dataset_directory(dataset.id),
-                    [],
-                ),
-            )
-            meta = dict(dataset.meta or {})
-            meta[ARCHIVE_MEMBER_KEY] = key
-            dataset.meta = meta
-            db.flush()
-            outcome.datasets.append(dataset)
-            outcome.created.append(f"{member.name} -> {dataset.name} ({dataset.row_count} rows)")
-            outcome.rows += dataset.row_count
+                    ),
+                )
+                meta = dict(dataset.meta or {})
+                meta[ARCHIVE_MEMBER_KEY] = key
+                dataset.meta = meta
+                db.flush()
+                outcome.datasets.append(dataset)
+                outcome.created.append(
+                    f"{member.name} -> {dataset.name} ({dataset.row_count} rows)"
+                )
+                outcome.rows += dataset.row_count
+            finally:
+                # Dropped before the next file is read, so the peak is one
+                # member rather than the whole archive. The member released its
+                # own reference in take(), so this is the last one.
+                frame = None
 
         return outcome
     finally:

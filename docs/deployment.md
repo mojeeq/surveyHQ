@@ -604,6 +604,30 @@ The honest end-to-end test is still to set a board's time two or three minutes
 out and wait for the copy to appear in its Views picker. Nothing short of that
 exercises the renderer.
 
+**An import says the worker ran out of memory**
+
+A zip is unpacked and its member files are read one at a time, but one member
+still has to fit in memory as it is read, and a DataFrame is several times the
+size of the file it came from. A 2 GB roster inside an archive can want more
+than a small server has.
+
+```bash
+docker inspect $(docker compose ps -q worker) --format '{{.State.OOMKilled}}'
+```
+
+Import it from the server instead. A file imported that way is read a chunk at
+a time and written straight to Parquet, so its size stops mattering - see
+*Importing from the server* above. Unzip the archive first and import the
+members:
+
+```bash
+unzip incoming/export.zip -d incoming/export/
+docker compose exec api sh -c 'python -m app.cli import /incoming/export/*.dta --project "Census 2025"'
+```
+
+Giving the host more RAM or swap also works, and is the answer if the archive
+path is the one you want to keep using.
+
 **"Stored secret could not be decrypted"**
 
 `ENCRYPTION_KEY` changed since the credentials were saved. Restore the old key

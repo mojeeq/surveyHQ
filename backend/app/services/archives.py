@@ -142,13 +142,53 @@ def _copy_member(
 
 @dataclass
 class ExtractedMember:
-    """One data file found inside an archive."""
+    """One data file found inside an archive.
+
+    The file is on disk; it is read when somebody asks for it and dropped when
+    they say they are done. Holding every member's frame at once was what made
+    a census export impossible to import: four files of a few hundred megabytes
+    each become several gigabytes as DataFrames, and the sum of them was alive
+    simultaneously before the first dataset had been written. The kernel killed
+    the worker, and because the worker died rather than raised, the job sat at
+    "running" until somebody went looking.
+    """
 
     name: str
     path: Path
-    frame: pd.DataFrame
-    variable_labels: dict[str, str] = field(default_factory=dict)
-    value_labels: dict[str, dict[str, str]] = field(default_factory=dict)
+    _loaded: tuple[pd.DataFrame, dict[str, str], dict[str, dict[str, str]]] | None = None
+
+    def load(self) -> tuple[pd.DataFrame, dict[str, str], dict[str, dict[str, str]]]:
+        """Read the file, or hand back what was read before."""
+        if self._loaded is None:
+            self._loaded = read_source(self.path)
+        return self._loaded
+
+    def take(self) -> tuple[pd.DataFrame, dict[str, str], dict[str, dict[str, str]]]:
+        """Read it and hand over ownership, so the caller may change it freely.
+
+        The member stops referencing the frame, which is what makes the copy
+        every caller used to take unnecessary - on the largest member that copy
+        was the allocation that went over the edge.
+        """
+        loaded = self.load()
+        self._loaded = None
+        return loaded
+
+    def release(self) -> None:
+        """Forget the frame. Reading it again re-reads the file."""
+        self._loaded = None
+
+    @property
+    def frame(self) -> pd.DataFrame:
+        return self.load()[0]
+
+    @property
+    def variable_labels(self) -> dict[str, str]:
+        return self.load()[1]
+
+    @property
+    def value_labels(self) -> dict[str, dict[str, str]]:
+        return self.load()[2]
 
     @property
     def columns(self) -> tuple[str, ...]:
@@ -222,23 +262,12 @@ def extract_members(archive_path: Path, destination: Path) -> list[ExtractedMemb
             name = Path(info.filename).name
             target = destination / name
             remaining -= _copy_member(archive, info, target, remaining)
-            try:
-                frame, variable_labels, value_labels = read_source(target)
-            except IngestError as exc:
-                logger.warning("Skipping %s inside the archive: %s", name, exc)
-                continue
-            extracted.append(
-                ExtractedMember(
-                    name=name,
-                    path=target,
-                    frame=frame,
-                    variable_labels=variable_labels,
-                    value_labels=value_labels,
-                )
-            )
+            extracted.append(ExtractedMember(name=name, path=target))
 
-    if not extracted:
-        raise IngestError("None of the files inside the archive could be read.")
+    # No "none of these could be read" check here any more: nothing is read at
+    # this point. _safe_members has already refused an archive holding no data
+    # files, and a member that turns out to be unreadable is reported by
+    # whoever reads it.
     return extracted
 
 
@@ -283,7 +312,10 @@ def combine(members: list[ExtractedMember], strict: bool = False) -> CombineResu
                     + ", ".join(extra[:5])
                     + ("..." if len(extra) > 5 else "")
                 )
-        frame = member.frame.copy()
+        # take() rather than frame.copy(): the member hands over its only
+        # reference, so stamping the source column is safe without a second
+        # copy of a frame that may be gigabytes.
+        frame = member.take()[0]
         frame[SOURCE_COLUMN] = member.name
         frames.append(frame)
 
