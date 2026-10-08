@@ -326,6 +326,7 @@ Celery handles anything that outlives a request:
 | `refresh_all_indicators` | Every `MONITOR_TICK_MINUTES` - recomputes indicators, stores a snapshot, evaluates alert rules |
 | `run_all_quality_checks` | Every six hours |
 | `take_due_snapshots` | Every ten minutes - keeps a copy of each dashboard whose time has come, and prunes past what it keeps |
+| `reap_stale_jobs` | Every ten minutes - fails jobs still claiming to be running past any limit a task could have run to |
 | `prune_history` | Nightly - trims snapshots, resolved alerts, old results and jobs |
 
 Indicator snapshots are what make trends possible: each refresh writes a
@@ -333,6 +334,14 @@ timestamped value, so every indicator carries its own history without anyone
 configuring a time series. A dashboard copy is a different thing that shares the
 name: a whole board frozen to a file, rendered by the same code as the HTML
 export, kept so a figure quoted on a Monday can be shown again as it was read.
+
+A task that raises records its own failure on the job it was running. A task
+whose process is *killed* cannot: nothing in it runs again. Celery notices in
+the main process, and a `task_failure` handler writes the failure onto the job
+instead, so an import stopped by the kernel says so rather than leaving a job
+that claims to be running for ever. `reap_stale_jobs` is the backstop for the
+case that handler cannot cover, where the whole container went away and there
+was nothing left to fire it.
 
 A connection is due either on an interval - every N minutes since its last
 import - or at times of day it lists, read in its own timezone.

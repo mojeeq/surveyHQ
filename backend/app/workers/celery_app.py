@@ -41,6 +41,7 @@ celery_app.conf.update(
         "app.workers.tasks.refresh_all_indicators": {"queue": "monitoring"},
         "app.workers.tasks.run_all_quality_checks": {"queue": "quality"},
         "app.workers.tasks.prune_history": {"queue": "maintenance"},
+        "app.workers.tasks.reap_stale_jobs": {"queue": "maintenance"},
     },
 )
 
@@ -61,6 +62,13 @@ celery_app.conf.beat_schedule = {
     # opens. Each board checks its own schedule; this only asks.
     "take-due-dashboard-snapshots": {
         "task": "app.workers.tasks.take_due_snapshots",
+        "schedule": 600.0,
+    },
+    # Often enough that a job left behind by a worker that went away is not
+    # still claiming to be running an hour later, cheap enough to be free: it
+    # is one indexed query that normally matches nothing.
+    "reap-stale-jobs": {
+        "task": "app.workers.tasks.reap_stale_jobs",
         "schedule": 600.0,
     },
     "prune-old-records": {

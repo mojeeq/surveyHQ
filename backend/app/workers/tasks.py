@@ -8,6 +8,7 @@ import tempfile
 from pathlib import Path
 from typing import Any
 
+from celery.signals import task_failure
 from sqlalchemy import select
 
 from app.core.config import settings
@@ -745,3 +746,84 @@ def take_due_snapshots() -> dict[str, Any]:
                 failed.append({"dashboard": dashboard.id, "error": str(error)})
 
     return {"taken": len(taken), "failed": failed}
+
+
+# A task that raises marks its own job failed. A task whose *process* is killed
+# cannot: the kernel takes it mid-statement and nothing in it runs again. That
+# is not hypothetical - a census archive read entirely into memory was killed by
+# the OOM killer, and the job it had been running sat at "running" for hours
+# while the interface waited on it. Celery notices (WorkerLostError in the main
+# process) and these two make sure the job row hears about it.
+OUT_OF_MEMORY_HINT = (
+    "The worker ran out of memory reading this file and was stopped. Import it "
+    "from the server instead, which reads large files a piece at a time: see "
+    "'Importing from the server' in the deployment guide."
+)
+
+
+def _fail_job(db: Any, job: Job, reason: str) -> None:
+    job.status = JobStatus.failed
+    job.finished_at = utcnow()
+    job.progress = 100.0
+    job.error = reason
+
+
+@task_failure.connect
+def record_task_failure(
+    sender: Any = None, task_id: str = "", exception: Any = None, **_: Any
+) -> None:
+    """Mark the job behind a task that died without being able to say so.
+
+    Runs in the main process, which survives a child being killed, so this is
+    the last chance to turn a job nobody will ever finish into one that says
+    why. A task that handled its own failure has already set a status and is
+    left alone.
+    """
+    if not task_id:
+        return
+    # WorkerLostError means the process was taken away rather than the code
+    # failing, and on an import that is almost always memory. Naming the likely
+    # cause beats a traceback nobody outside this file can read.
+    lost = type(exception).__name__ == "WorkerLostError"
+    reason = OUT_OF_MEMORY_HINT if lost else (str(exception) or type(exception).__name__)
+    try:
+        with session_scope() as db:
+            job = db.scalar(select(Job).where(Job.celery_task_id == task_id))
+            if job is None or job.status in (JobStatus.success, JobStatus.failed):
+                return
+            _fail_job(db, job, reason)
+            logger.error("Job %s failed with the task that was running it: %s", job.id, reason)
+    except Exception:  # noqa: BLE001 - a failing handler must not mask the failure
+        logger.exception("Could not record the failure of task %s", task_id)
+
+
+@celery_app.task(name="app.workers.tasks.reap_stale_jobs")
+def reap_stale_jobs() -> dict[str, int]:
+    """Fail jobs that cannot still be running, whatever happened to the worker.
+
+    The signal above covers a child process being killed. It cannot cover the
+    whole container going away - a restart, a deploy, the host rebooting - since
+    nothing is left to fire it. Celery will not let a task run longer than its
+    hard time limit, so a job still claiming to be running well past that is
+    finished one way or another, and saying so beats a progress bar that never
+    moves.
+    """
+    # Ten minutes past the hard limit, so a task being killed at the limit has
+    # time to record its own failure before this decides for it.
+    cutoff = utcnow() - dt.timedelta(seconds=celery_app.conf.task_time_limit + 600)
+    failed = 0
+    with session_scope() as db:
+        stale = db.scalars(
+            select(Job).where(Job.status == JobStatus.running, Job.started_at < cutoff)
+        ).all()
+        for job in stale:
+            _fail_job(
+                db,
+                job,
+                "The worker running this stopped before it finished, and it has "
+                "been left behind. Start the import again.",
+            )
+            failed += 1
+    if failed:
+        logger.warning("Failed %s job(s) left running by a worker that went away", failed)
+    return {"failed": failed}
