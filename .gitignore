@@ -55,6 +55,13 @@ frontend/test-results/
 # the documentation it is made of.
 frontend/src/help/content.generated.ts
 
+# The Word manual is built from scripts/build_manual.py and the screenshots in
+# docs/manual/, the same way the help pane is built from docs/. Three megabytes
+# of binary that goes stale the moment the interface moves, and did: the copy
+# that used to live here still called the Indicators page "Monitoring".
+#   pip install python-docx pillow && python scripts/build_manual.py
+docs/SurveyHQ-user-manual.docx
+
 # Files staged for 'make import'. The directory is kept, its contents are not.
 incoming/*
 !incoming/README.md
