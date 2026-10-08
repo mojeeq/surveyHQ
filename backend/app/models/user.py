@@ -5,7 +5,7 @@ from __future__ import annotations
 import datetime as dt
 import enum
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, text
+from sqlalchemy import JSON, Boolean, DateTime, Enum, ForeignKey, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, UUIDMixin
@@ -55,6 +55,11 @@ class User(UUIDMixin, TimestampMixin, Base):
         Boolean, default=False, server_default=text("false")
     )
     last_login_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    # How this person likes the interface, kept against the account so it
+    # follows them to another computer. Only the keys in PreferencesUpdate
+    # ever land here: the column is written from a request body, and a free
+    # bag would be somewhere to park a megabyte of anything.
+    preferences: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'"))
 
     api_keys: Mapped[list[ApiKey]] = relationship(
         back_populates="user", cascade="all, delete-orphan"

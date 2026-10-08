@@ -24,8 +24,10 @@ typed.
 
 ### How it looks
 
-Two switches sit in the header, and each remembers your choice on this
-computer. Neither changes anything about the data or who can see it.
+Three controls sit in the header. None of them changes anything about the
+data or who can see it. They are remembered on this computer, which is the
+right place for how a screen should look: the same account on a laptop in a
+bright field office and on a desk indoors wants different answers.
 
 - **Light or dark**, the moon. Dark follows your operating system until you
   pick one yourself.
@@ -49,7 +51,14 @@ with the page beside it.
 width back. Point at the rail, or tab into it, and it opens over the page
 without moving anything - so a wide crosstab or a dashboard at full width is
 not pushed sideways every time you reach for the navigation. Each icon keeps
-its name as a tooltip. The choice is remembered on this computer.
+its name as a tooltip.
+
+Unlike the three above, **the pin is remembered against your account**. It is
+a working habit rather than a property of the screen in front of you, so it
+follows you: unpin it on the office machine and it is unpinned when you sign
+in from home. A browser that has not seen your account before shows whatever
+it last had for a moment, then settles on your saved answer once you are
+signed in.
 
 
 ## Roles

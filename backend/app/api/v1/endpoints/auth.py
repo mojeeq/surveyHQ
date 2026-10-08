@@ -23,6 +23,7 @@ from app.schemas.auth import (
     ApiKeyOut,
     LoginRequest,
     PasswordChange,
+    PreferencesUpdate,
     SignupRequest,
     Token,
     UserOut,
@@ -172,6 +173,26 @@ def login(payload: LoginRequest, db: DbSession, request: Request) -> Token:
 
 @router.get("/me", response_model=UserOut)
 def read_me(user: CurrentUser) -> User:
+    return user
+
+
+@router.patch("/me/preferences", response_model=UserOut)
+def update_my_preferences(
+    payload: PreferencesUpdate, user: CurrentUser, db: DbSession
+) -> User:
+    """Change some of the caller's preferences, leaving the rest alone.
+
+    A partial body on purpose: the shell saves one setting at a time as it is
+    changed, and sending the whole set each time would let two tabs undo each
+    other's work.
+    """
+    stored = dict(user.preferences or {})
+    stored.update(payload.model_dump(exclude_unset=True))
+    # Reassigned rather than mutated: SQLAlchemy does not track changes inside
+    # a JSON value, so editing the dict in place would not be written.
+    user.preferences = stored
+    db.commit()
+    db.refresh(user)
     return user
 
 

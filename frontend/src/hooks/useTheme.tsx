@@ -1,5 +1,6 @@
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 
+import { api } from '@/lib/api'
 import type { SidebarColour } from '@/lib/sidebar'
 
 export type Theme = 'light' | 'dark' | 'system'
@@ -35,7 +36,16 @@ function getStoredSurface(): Surface {
   return window.localStorage.getItem(SURFACE_KEY) === 'aero' ? 'aero' : 'flat'
 }
 
-/** Pinned unless they have said otherwise: absent is the shell as it was. */
+/**
+ * The last pin state this browser saw.
+ *
+ * The account is where it really lives, but that answer arrives with
+ * /auth/me, a round trip after the first paint. Applying the cached value
+ * immediately means the pane does not jump from 248 to 64 a moment after the
+ * page appears. On a browser that has never seen this account the cache is
+ * absent, the default applies, and the server's answer settles it: one
+ * adjustment, on a machine where there is nothing better to do.
+ */
 function getStoredPinned(): boolean {
   if (typeof window === 'undefined') return true
   return window.localStorage.getItem(PINNED_KEY) !== 'false'
@@ -79,6 +89,14 @@ type ThemeContextValue = {
   /** Whether the side pane stays open. Unpinned, it is a rail until hovered. */
   sidebarPinned: boolean
   setSidebarPinned: (pinned: boolean) => void
+  /**
+   * Take the value stored against the account, once it is known.
+   *
+   * Called by PreferenceBridge when /auth/me returns. Null means the account
+   * has never recorded a choice, in which case whatever this browser was
+   * already showing stands and is written back on the next change.
+   */
+  adoptSidebarPinned: (pinned: boolean | null) => void
   /** The side pane's colour, or null for the one the platform ships with. */
   sidebarColour: SidebarColour
   setSidebarColour: (colour: SidebarColour) => void
@@ -128,11 +146,23 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
 
   const toggleSurface = () => setSurface(surface === 'aero' ? 'flat' : 'aero')
 
-  const setSidebarPinned = (next: boolean) => {
+  const rememberPinned = (next: boolean) => {
     setPinnedState(next)
     if (typeof window !== 'undefined') {
       window.localStorage.setItem(PINNED_KEY, String(next))
     }
+  }
+
+  const setSidebarPinned = (next: boolean) => {
+    rememberPinned(next)
+    // Saved against the account so it follows them to another computer, and
+    // not awaited: the pane has already moved, and a failed save is not worth
+    // putting it back. The browser's copy keeps this machine right either way.
+    void api.patch('/auth/me/preferences', { sidebar_pinned: next }).catch(() => {})
+  }
+
+  const adoptSidebarPinned = (next: boolean | null) => {
+    if (next !== null) rememberPinned(next)
   }
 
   const setSidebarColour = (next: SidebarColour) => {
@@ -166,6 +196,7 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
       toggleSurface,
       sidebarPinned,
       setSidebarPinned,
+      adoptSidebarPinned,
       sidebarColour,
       setSidebarColour,
     }),

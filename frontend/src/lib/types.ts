@@ -15,6 +15,18 @@ export interface User {
   must_change_password: boolean
   created_at: string
   last_login_at: string | null
+  preferences: UserPreferences
+}
+
+/**
+ * The interface settings kept against the account rather than the browser.
+ *
+ * Null means never chosen, which is not the same as chosen-and-false: the
+ * shell applies its own default to the first and the stored answer to the
+ * second.
+ */
+export interface UserPreferences {
+  sidebar_pinned: boolean | null
 }
 
 export type Cardinality =

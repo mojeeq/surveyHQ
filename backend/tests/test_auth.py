@@ -154,3 +154,97 @@ def test_must_change_password_blocks_other_authenticated_endpoints(client, auth_
     )
     assert changed.status_code == 200, changed.text
     assert client.get("/api/v1/datasets", headers=user_headers).status_code == 200
+
+
+def test_a_preference_follows_the_account_and_not_the_browser(client, auth_headers):
+    """Saved against the user, so a different browser sees the same answer."""
+    fresh = client.get("/api/v1/auth/me", headers=auth_headers)
+    assert fresh.status_code == 200, fresh.text
+    # Never set is null rather than a guess, so the client can tell "they chose
+    # open" from "they have not chosen" and apply its own default to the second.
+    assert fresh.json()["preferences"]["sidebar_pinned"] is None
+
+    saved = client.patch(
+        "/api/v1/auth/me/preferences",
+        headers=auth_headers,
+        json={"sidebar_pinned": False},
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["preferences"]["sidebar_pinned"] is False
+
+    # A second request carrying no cookie or local storage of its own: this is
+    # the whole point of the change.
+    again = client.get("/api/v1/auth/me", headers=auth_headers)
+    assert again.json()["preferences"]["sidebar_pinned"] is False
+
+    client.patch(
+        "/api/v1/auth/me/preferences", headers=auth_headers, json={"sidebar_pinned": True}
+    )
+    assert (
+        client.get("/api/v1/auth/me", headers=auth_headers).json()["preferences"][
+            "sidebar_pinned"
+        ]
+        is True
+    )
+
+
+def test_preferences_ignore_anything_not_a_known_setting(client, auth_headers):
+    """The column is written from a request body, so it takes only what it knows."""
+    response = client.patch(
+        "/api/v1/auth/me/preferences",
+        headers=auth_headers,
+        json={"sidebar_pinned": False, "junk": "x" * 10_000, "is_admin": True},
+    )
+    assert response.status_code == 200, response.text
+    assert response.json()["preferences"] == {"sidebar_pinned": False}
+
+    # And nothing was smuggled onto the account itself.
+    me = client.get("/api/v1/auth/me", headers=auth_headers).json()
+    assert "junk" not in me["preferences"]
+    assert me["role"] == "admin"
+
+
+def test_a_partial_update_leaves_other_preferences_alone(client, auth_headers, db_session):
+    """Two settings, one changed: the shell saves them one at a time."""
+    from app.models import User
+
+    user = db_session.query(User).filter(User.email == "admin@example.com").one()
+    user.preferences = {"sidebar_pinned": True, "kept_by_an_older_build": "yes"}
+    db_session.commit()
+
+    client.patch(
+        "/api/v1/auth/me/preferences", headers=auth_headers, json={"sidebar_pinned": False}
+    )
+    db_session.expire_all()
+    after = db_session.query(User).filter(User.email == "admin@example.com").one()
+    assert after.preferences["sidebar_pinned"] is False
+    # Unknown keys already in the column are left where they are rather than
+    # swept away: a rollback to the build that wrote them should find them.
+    assert after.preferences["kept_by_an_older_build"] == "yes"
+
+    user.preferences = {}
+    db_session.commit()
+
+
+def test_an_empty_preferences_body_changes_nothing(client, auth_headers):
+    """Sending no fields must not clear the ones already stored.
+
+    With one setting this looks academic, because a body naming it and a body
+    naming nothing differ only in whether the field is set. It stops being
+    academic the moment a second setting exists: dumping the model without
+    exclude_unset would write null over every preference the caller did not
+    mention, so each save would undo the others. Pinned here, so the mistake
+    is caught before the second setting arrives rather than after.
+    """
+    client.patch(
+        "/api/v1/auth/me/preferences", headers=auth_headers, json={"sidebar_pinned": True}
+    )
+    empty = client.patch("/api/v1/auth/me/preferences", headers=auth_headers, json={})
+    assert empty.status_code == 200, empty.text
+    assert empty.json()["preferences"]["sidebar_pinned"] is True
+
+
+def test_preferences_need_a_signed_in_caller(client):
+    assert client.patch(
+        "/api/v1/auth/me/preferences", json={"sidebar_pinned": False}
+    ).status_code == 401

@@ -78,10 +78,35 @@ class UserUpdate(BaseModel):
         return validate_username(value) if value else None
 
 
+class Preferences(BaseModel):
+    """How somebody likes the interface, as far as the account remembers it.
+
+    Only what belongs to the person rather than to the machine. Light or dark
+    is deliberately absent: the same account on a laptop in a bright field
+    office and on a desk indoors wants different answers, and that is a
+    property of where you are sitting, not of who you are.
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    # Whether the side pane stays open. None means they have never said.
+    sidebar_pinned: bool | None = None
+
+
+class PreferencesUpdate(BaseModel):
+    """A partial update. Fields left out keep whatever is stored."""
+
+    sidebar_pinned: bool | None = None
+
+
 class UserOut(UserBase):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
+    # Validated out of the stored JSON rather than passed through, so a key
+    # that predates a rename, or one written before this schema existed, is
+    # dropped instead of reaching the client as something it cannot read.
+    preferences: Preferences = Field(default_factory=Preferences)
     # The UI blocks on this: an account whose password someone else chose should
     # not be usable until the holder has set their own.
     must_change_password: bool = False
