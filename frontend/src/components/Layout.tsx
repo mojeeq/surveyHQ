@@ -49,7 +49,7 @@ const NAV_GROUPS: NavGroup[] = [
   {
     label: 'Monitor',
     items: [
-      { to: '/monitoring', label: 'Fieldwork', icon: 'monitoring' },
+      { to: '/monitoring', label: 'Indicators', icon: 'monitoring' },
       { to: '/quality', label: 'Data quality', icon: 'quality' },
       { to: '/alerts', label: 'Alerts', icon: 'alerts' },
     ],

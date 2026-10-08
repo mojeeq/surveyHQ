@@ -44,7 +44,7 @@ or dashboard and click the project button in its header to move it. Moving needs
 manager rights on *both* projects, so nobody can take a dataset out of a project
 they have no say over.
 
-Overview, Monitoring, Data quality and Alerts each have a project filter at the
+Overview, Indicators, Data quality and Alerts each have a project filter at the
 top, so a
 round in the field can be looked at on its own rather than alongside every other
 survey the platform holds. Connections belong to a project too: someone who can
@@ -1496,7 +1496,7 @@ The rest of **Appearance** controls how the dashboard is dressed:
 
 An indicator is one tracked number.
 
-**Monitoring → New indicator**: name it, pick a dataset, choose the measure
+**Indicators → New indicator**: name it, pick a dataset, choose the measure
 (count of records, or an aggregate of a variable), and optionally:
 
 - a **target**, which draws a progress bar,
