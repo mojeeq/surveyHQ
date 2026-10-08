@@ -84,6 +84,22 @@ export function formatBytes(bytes: number): string {
   return `${(bytes / 1024 ** index).toFixed(index === 0 ? 0 : 1)} ${units[index]}`
 }
 
+/** Seconds left, said the way somebody waiting would say it.
+ *
+ *  Precision nobody can act on reads as false precision: "143 seconds left"
+ *  invites you to believe the number, and it is wrong by the time you have read
+ *  it. Rounding to something coarse is the honest version.
+ */
+export function timeLeft(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return ''
+  if (seconds < 10) return 'almost done'
+  if (seconds < 90) return `about ${Math.round(seconds / 5) * 5} seconds left`
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return `about ${minutes} minute${minutes === 1 ? '' : 's'} left`
+  const hours = Math.floor(minutes / 60)
+  return `about ${hours}h ${(minutes % 60).toString().padStart(2, '0')}m left`
+}
+
 export function formatDate(value: string | null | undefined, withTime = false): string {
   if (!value) return '-'
   const date = new Date(value)
