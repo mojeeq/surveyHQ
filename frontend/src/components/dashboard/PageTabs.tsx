@@ -1,3 +1,5 @@
+import { useDialog } from "@/hooks/useDialog";
+
 import "react-grid-layout/css/styles.css";
 
 import "react-resizable/css/styles.css";
@@ -46,6 +48,7 @@ export function PageTabs({
   onMove: (from: number, to: number) => void;
   onRemove: (index: number) => void;
 }) {
+  const ask = useDialog();
   const named = Array.from({ length: count }, (_, index) => ({
     name: pages[index]?.name || `Page ${index + 1}`,
   }));
@@ -57,33 +60,59 @@ export function PageTabs({
         i !== except && page.name.toLowerCase() === name.toLowerCase(),
     );
 
-  const addPage = () => {
-    const name = prompt("Name for the new page")?.trim();
+  /** A usable name nobody else on this dashboard has. Checked before the
+   *  dialog closes, so both complaints are fixed in place rather than retyped.
+   *  The empty case matters: without it, pressing Add on an empty box closes
+   *  the dialog and silently does nothing, which is what the browser prompt
+   *  did and is no reason to keep doing it. */
+  const freeName = (except = -1) => (name: string) => {
+    if (!name) return "Give the page a name, or cancel.";
+    return taken(name, except)
+      ? `This dashboard already has a page called \u201C${name}\u201D.`
+      : null;
+  };
+
+  const addPage = async () => {
+    const name = await ask.prompt({
+      title: "Add a page",
+      label: "Name for the new page",
+      placeholder: "Demographics",
+      confirmLabel: "Add page",
+      validate: freeName(),
+    });
     if (!name) return;
-    if (taken(name)) {
-      alert(`This dashboard already has a page called "${name}".`);
-      return;
-    }
     onChange([...named, { name }]);
     onSelect(count);
   };
 
-  const renamePage = (index: number) => {
-    const name = prompt("Rename this page", named[index].name)?.trim();
+  const renamePage = async (index: number) => {
+    const name = await ask.prompt({
+      title: "Rename this page",
+      label: "Name",
+      defaultValue: named[index].name,
+      confirmLabel: "Rename",
+      validate: freeName(index),
+    });
     if (!name || name === named[index].name) return;
-    if (taken(name, index)) {
-      alert(`This dashboard already has a page called "${name}".`);
-      return;
-    }
     onChange(named.map((page, i) => (i === index ? { name } : page)));
   };
 
-  const removePage = (index: number) => {
+  const removePage = async (index: number) => {
     if (widgetsOnPage > 0) {
-      alert("Move or remove this page\u2019s widgets before deleting it.");
+      await ask.alert({
+        title: "This page still has widgets",
+        message:
+          "Move or remove this page\u2019s widgets before deleting it.",
+      });
       return;
     }
-    if (!confirm(`Delete the page "${named[index].name}"?`)) return;
+    const sure = await ask.confirm({
+      title: `Delete \u201C${named[index].name}\u201D?`,
+      message: "The page goes, and the ones after it move up.",
+      confirmLabel: "Delete page",
+      tone: "danger",
+    });
+    if (!sure) return;
     // Deleted on the server, which renumbers the pages after it along with
     // their widgets. Filtering the list here would leave those widgets on
     // whichever page ended up at their old number.

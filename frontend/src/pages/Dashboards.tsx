@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
+import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
 import { relativeTime } from '@/lib/format'
 import type { Chart, Dashboard } from '@/lib/types'
@@ -62,6 +63,7 @@ type LibraryChart = Chart & {
 export default function Dashboards() {
   const { can } = useAuth()
   const toast = useToast()
+  const ask = useDialog()
   const queryClient = useQueryClient()
   const [tab, setTab] = useState<'dashboards' | 'charts'>('dashboards')
   const [creating, setCreating] = useState(false)
@@ -136,6 +138,15 @@ export default function Dashboards() {
     },
     onError: (error: Error) => toast.push(error.message, 'error'),
   })
+
+  /** The same question in the table and in the cards, asked once. */
+  const confirmDelete = (name: string) =>
+    ask.confirm({
+      title: `Delete \u201C${name}\u201D?`,
+      message: 'Its pages, widgets and saved views go with it. Charts stay.',
+      confirmLabel: 'Delete dashboard',
+      tone: 'danger',
+    })
 
   const removeDashboard = useMutation({
     mutationFn: (id: string) => api.delete(`/dashboards/${id}`),
@@ -240,9 +251,8 @@ export default function Dashboards() {
               direction={direction}
               onSort={orderBy}
               canDelete={can('analyst')}
-              onDelete={(dashboard) => {
-                if (confirm(`Delete the dashboard "${dashboard.name}"?`))
-                  removeDashboard.mutate(dashboard.id)
+              onDelete={async (dashboard) => {
+                if (await confirmDelete(dashboard.name)) removeDashboard.mutate(dashboard.id)
               }}
             />
           ) : (
@@ -252,9 +262,8 @@ export default function Dashboards() {
                   key={dashboard.id}
                   dashboard={dashboard}
                   canDelete={can('analyst')}
-                  onDelete={() => {
-                    if (confirm(`Delete the dashboard "${dashboard.name}"?`))
-                      removeDashboard.mutate(dashboard.id)
+                  onDelete={async () => {
+                    if (await confirmDelete(dashboard.name)) removeDashboard.mutate(dashboard.id)
                   }}
                 />
               ))}
@@ -333,9 +342,14 @@ export default function Dashboards() {
                     <ChartPreview
                       chart={chart}
                       canDelete={can('analyst')}
-                      onDelete={() => {
-                        if (confirm(`Delete the chart "${chart.name}"?`))
-                          removeChart.mutate(chart.id)
+                      onDelete={async () => {
+                        const sure = await ask.confirm({
+                          title: `Delete the chart \u201C${chart.name}\u201D?`,
+                          message: 'Dashboards showing it will lose the panel.',
+                          confirmLabel: 'Delete chart',
+                          tone: 'danger',
+                        })
+                        if (sure) removeChart.mutate(chart.id)
                       }}
                     />
                   </ErrorBoundary>

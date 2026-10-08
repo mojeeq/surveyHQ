@@ -3,6 +3,7 @@ import { useState } from 'react'
 import ReactECharts from 'echarts-for-react'
 import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
+import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
 import { buildSparkline, STATUS_COLORS } from '@/lib/charts'
 import { formatNumber, formatValue, relativeTime } from '@/lib/format'
@@ -43,6 +44,7 @@ const STATE: Record<string, { tone: BadgeTone; icon?: string; label: string }> =
 export default function Monitoring() {
   const { can } = useAuth()
   const toast = useToast()
+  const ask = useDialog()
   const queryClient = useQueryClient()
   const [creating, setCreating] = useState(false)
   const [editing, setEditing] = useState<Indicator | null>(null)
@@ -142,9 +144,14 @@ export default function Monitoring() {
                 definition={definition}
                 canManage={can('manager')}
                 onEdit={definition ? () => setEditing(definition) : undefined}
-                onDelete={() => {
-                  if (confirm(`Delete the indicator "${value.name}"?`))
-                    remove.mutate(value.indicator_id)
+                onDelete={async () => {
+                  const sure = await ask.confirm({
+                    title: `Delete \u201C${value.name}\u201D?`,
+                    message: 'Its history goes with it, and any alert rule watching it stops.',
+                    confirmLabel: 'Delete indicator',
+                    tone: 'danger',
+                  })
+                  if (sure) remove.mutate(value.indicator_id)
                 }}
               />
             )

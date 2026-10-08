@@ -4,6 +4,7 @@ import { useState } from "react";
 
 import { api } from "@/lib/api";
 
+import { useDialog } from "@/hooks/useDialog";
 import { useToast } from "@/hooks/useToast";
 
 import { formatBytes, relativeTime } from "@/lib/format";
@@ -50,6 +51,7 @@ export default function Snapshots({
   onClose: () => void;
 }) {
   const toast = useToast();
+  const ask = useDialog();
   const queryClient = useQueryClient();
   const key = ["dashboard-snapshots", dashboard.id];
 
@@ -263,9 +265,14 @@ export default function Snapshots({
               {canEdit && (
                 <button
                   className="btn-ghost btn-sm ml-auto text-red-600"
-                  onClick={() => {
-                    if (confirm(`Delete the copy from ${snapshot.label}?`))
-                      remove.mutate(snapshot);
+                  onClick={async () => {
+                    const sure = await ask.confirm({
+                      title: `Delete the copy from ${snapshot.label}?`,
+                      message: "The board as it stood that day cannot be recovered.",
+                      confirmLabel: "Delete copy",
+                      tone: "danger",
+                    });
+                    if (sure) remove.mutate(snapshot);
                   }}
                 >
                   Delete

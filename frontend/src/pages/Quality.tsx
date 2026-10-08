@@ -4,6 +4,7 @@ import { useSearchParams } from 'react-router-dom'
 import { api, downloadFile } from '@/lib/api'
 import ProjectFilter from '@/components/ProjectFilter'
 import { useAuth } from '@/hooks/useAuth'
+import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
 import { formatCell, formatNumber, relativeTime, titleCase } from '@/lib/format'
 import type {
@@ -98,6 +99,7 @@ export default function Quality() {
   const [params, setParams] = useSearchParams()
   const { can } = useAuth()
   const toast = useToast()
+  const ask = useDialog()
   const queryClient = useQueryClient()
   const [creating, setCreating] = useState(false)
   const [editing, setEditing] = useState<QualityRule | null>(null)
@@ -380,8 +382,14 @@ export default function Quality() {
                     {can('manager') && (
                       <button
                         className="btn-ghost btn-sm text-red-600"
-                        onClick={() => {
-                          if (confirm(`Delete the check "${rule.name}"?`)) remove.mutate(rule.id)
+                        onClick={async () => {
+                          const sure = await ask.confirm({
+                            title: `Delete \u201C${rule.name}\u201D?`,
+                            message: 'Its results go with it.',
+                            confirmLabel: 'Delete check',
+                            tone: 'danger',
+                          })
+                          if (sure) remove.mutate(rule.id)
                         }}
                       >
                         Delete
@@ -521,6 +529,7 @@ function CheckModal({
   onClose: () => void
 }) {
   const toast = useToast()
+  const ask = useDialog()
   const queryClient = useQueryClient()
   const editing = Boolean(rule)
   const [checkType, setCheckType] = useState<CheckType>(rule?.check_type ?? 'missing_rate')
@@ -766,11 +775,16 @@ function CheckModal({
                   key={preset.id}
                   className="btn-secondary btn-sm"
                   title={preset.hint}
-                  onClick={() => {
-                    if (
+                  onClick={async () => {
+                    const clear =
                       !condition.conditions.length
-                      || confirm('Replace the condition you have built?')
-                    ) {
+                      || (await ask.confirm({
+                        title: 'Replace the condition you have built?',
+                        message: 'The preset starts again from its own rows.',
+                        confirmLabel: 'Replace',
+                        tone: 'danger',
+                      }))
+                    if (clear) {
                       setCondition(preset.build(variables))
                       set({ flag: preset.flag })
                     }

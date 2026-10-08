@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api, downloadFile } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
+import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
 import { relativeTime } from '@/lib/format'
 import type { Connection, SyncRun } from '@/lib/types'
@@ -63,6 +64,7 @@ const BLANK = {
 export default function Connections() {
   const { can } = useAuth()
   const toast = useToast()
+  const ask = useDialog()
   const queryClient = useQueryClient()
   const [editing, setEditing] = useState<Connection | null>(null)
   const [creating, setCreating] = useState(false)
@@ -154,9 +156,15 @@ export default function Connections() {
                       </button>
                       <button
                         className="btn-ghost btn-sm text-red-600"
-                        onClick={() => {
-                          if (confirm(`Delete the connection "${connection.name}"?`))
-                            remove.mutate(connection.id)
+                        onClick={async () => {
+                          const sure = await ask.confirm({
+                            title: `Delete \u201C${connection.name}\u201D?`,
+                            message:
+                              'Datasets already pulled through it stay. Nothing further will sync.',
+                            confirmLabel: 'Delete connection',
+                            tone: 'danger',
+                          })
+                          if (sure) remove.mutate(connection.id)
                         }}
                       >
                         Delete

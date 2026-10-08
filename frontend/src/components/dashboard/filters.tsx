@@ -8,6 +8,7 @@ import "react-resizable/css/styles.css";
 
 import { api } from "@/lib/api";
 
+import { useDialog } from "@/hooks/useDialog";
 import { useToast } from "@/hooks/useToast";
 
 import type {
@@ -266,6 +267,7 @@ export function SavedViews({
   onOpenSnapshots?: () => void;
 }) {
   const toast = useToast();
+  const ask = useDialog();
   const queryClient = useQueryClient();
   const key = ["dashboard-views", dashboardId, basePath];
 
@@ -458,9 +460,14 @@ export function SavedViews({
                 {
                   label: "Delete this view",
                   danger: true,
-                  onClick: () => {
-                    if (confirm(`Delete the view "${active.name}"?`))
-                      remove.mutate(active);
+                  onClick: async () => {
+                    const sure = await ask.confirm({
+                      title: `Delete the view \u201C${active.name}\u201D?`,
+                      message: "The dashboard stays. Only this saved selection goes.",
+                      confirmLabel: "Delete view",
+                      tone: "danger",
+                    });
+                    if (sure) remove.mutate(active);
                   },
                 },
               ],
@@ -470,10 +477,16 @@ export function SavedViews({
         <button
           className="rounded-full border border-dashed border-ink-400 px-3 py-1 text-sm text-ink-600 hover:border-brand-500 hover:text-brand-700 dark:border-dark-400 dark:text-dark-600"
           title="Save the filters, page and drill position you are looking at"
-          onClick={() => {
-            const name = prompt(
-              'Name this view, e.g. "Malampa this week"',
-            )?.trim();
+          onClick={async () => {
+            const name = await ask.prompt({
+              title: "Save this view",
+              label: "Name",
+              placeholder: "Malampa this week",
+              message:
+                "Remembers the filters, page and drill position you are looking at.",
+              confirmLabel: "Save view",
+              validate: (entered) => (entered ? null : "Give the view a name, or cancel."),
+            });
             if (name) save.mutate(name);
           }}
         >

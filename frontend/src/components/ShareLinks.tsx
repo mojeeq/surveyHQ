@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api, downloadFile } from '@/lib/api'
 import { copyText } from '@/lib/clipboard'
+import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
 import { formatNumber, relativeTime } from '@/lib/format'
 import { Badge, Field, Modal, Spinner } from '@/components/ui'
@@ -66,6 +67,7 @@ export default function ShareLinks({
   onClose: () => void
 }) {
   const toast = useToast()
+  const ask = useDialog()
   const queryClient = useQueryClient()
   const [name, setName] = useState('')
   const [password, setPassword] = useState('')
@@ -172,27 +174,45 @@ export default function ShareLinks({
           onCopy={() => copy(link.token, toast)}
           onToggle={() => change.mutate({ id: link.id, is_active: !link.is_active })}
           onExpiry={(expires_at) => change.mutate({ id: link.id, expires_at })}
-          onPassword={() => {
+          onPassword={async () => {
             if (link.has_password) {
-              if (confirm(`Remove the password from "${link.name}"? Anyone with the link will then be able to open it.`))
-                change.mutate({ id: link.id, password: '' })
+              const sure = await ask.confirm({
+                title: `Remove the password from \u201C${link.name}\u201D?`,
+                message: 'Anyone with the link will then be able to open it.',
+                confirmLabel: 'Remove password',
+                tone: 'danger',
+              })
+              if (sure) change.mutate({ id: link.id, password: '' })
               return
             }
-            const chosen = prompt(`Password for "${link.name}"`)
-            if (chosen && chosen.trim()) change.mutate({ id: link.id, password: chosen.trim() })
+            const chosen = await ask.prompt({
+              title: `Password for \u201C${link.name}\u201D`,
+              label: 'Password',
+              message: 'Anyone opening the link will be asked for this.',
+              confirmLabel: 'Set password',
+              validate: (entered) => (entered ? null : 'Enter a password, or cancel.'),
+            })
+            if (chosen) change.mutate({ id: link.id, password: chosen })
           }}
-          onRename={() => {
-            const chosen = prompt('Name this link', link.name)
-            if (chosen && chosen.trim()) change.mutate({ id: link.id, name: chosen.trim() })
+          onRename={async () => {
+            const chosen = await ask.prompt({
+              title: 'Name this link',
+              label: 'Name',
+              defaultValue: link.name,
+              confirmLabel: 'Rename',
+              validate: (entered) => (entered ? null : 'Give the link a name, or cancel.'),
+            })
+            if (chosen) change.mutate({ id: link.id, name: chosen })
           }}
-          onDelete={() => {
-            if (
-              confirm(
-                `Delete "${link.name}"? Closing it instead keeps the address, so it can ` +
-                  'be switched back on later.',
-              )
-            )
-              remove.mutate(link.id)
+          onDelete={async () => {
+            const sure = await ask.confirm({
+              title: `Delete \u201C${link.name}\u201D?`,
+              message:
+                'Closing it instead keeps the address, so it can be switched back on later.',
+              confirmLabel: 'Delete link',
+              tone: 'danger',
+            })
+            if (sure) remove.mutate(link.id)
           }}
         />
       ))}

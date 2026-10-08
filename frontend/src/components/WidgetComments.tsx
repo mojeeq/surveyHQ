@@ -18,6 +18,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { relativeTime } from '@/lib/format'
 import { useAuth } from '@/hooks/useAuth'
+import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
 import type { WidgetComment } from '@/lib/types'
 import { Modal } from '@/components/ui'
@@ -92,6 +93,7 @@ export function WidgetComments({
   onClose: () => void
 }) {
   const toast = useToast()
+  const ask = useDialog()
   const { user, can } = useAuth()
   const queryClient = useQueryClient()
   const [draft, setDraft] = useState('')
@@ -220,8 +222,13 @@ export function WidgetComments({
         {canRemove(comment) && (
           <button
             className="text-danger-600 hover:underline"
-            onClick={() => {
-              if (confirm('Delete this comment?')) remove.mutate(comment.id)
+            onClick={async () => {
+              const sure = await ask.confirm({
+                title: 'Delete this comment?',
+                confirmLabel: 'Delete',
+                tone: 'danger',
+              })
+              if (sure) remove.mutate(comment.id)
             }}
           >
             Delete

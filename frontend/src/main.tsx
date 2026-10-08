@@ -4,6 +4,7 @@ import { BrowserRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import App from './App'
 import { AuthProvider } from '@/hooks/useAuth'
+import { DialogProvider } from '@/hooks/useDialog'
 import { ToastProvider } from '@/hooks/useToast'
 import { ThemeProvider } from '@/hooks/useTheme'
 import './fonts.css'
@@ -29,9 +30,13 @@ createRoot(document.getElementById('root')!).render(
       <QueryClientProvider client={queryClient}>
         <BrowserRouter>
           <ToastProvider>
-            <AuthProvider>
-              <App />
-            </AuthProvider>
+            {/* Inside ToastProvider: answering a dialog often raises a toast,
+                and a dialog has nothing to say that a toast should sit under. */}
+            <DialogProvider>
+              <AuthProvider>
+                <App />
+              </AuthProvider>
+            </DialogProvider>
           </ToastProvider>
         </BrowserRouter>
       </QueryClientProvider>
