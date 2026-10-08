@@ -1585,7 +1585,7 @@ The platform inspects a dataset and recommends checks that suit it - duplicate
 interview keys, unusually short interviews, missing GPS, variables with high
 missingness. Accept one and it is created and run immediately.
 
-The nine check types:
+The eight check types:
 
 | Check | Flags |
 |---|---|
@@ -1596,12 +1596,11 @@ The nine check types:
 | Interview duration | Interviews finished suspiciously fast |
 | Missing GPS | Records with no usable coordinates |
 | Constant answers | Interviewers recording the same answer for everyone |
-| Cross-variable consistency | Rows where one variable should relate to another but does not |
 | Logic condition | Rows meeting a condition you write yourself |
 
 #### Logic conditions
 
-The first eight each answer one fixed question. **Logic condition** is the one
+The first seven each answer one fixed question. **Logic condition** is the one
 you write, for the rules that are particular to your questionnaire: a
 respondent under 18 recorded as married, an interview that ends before it
 starts, a household total that does not equal its parts.
@@ -1634,6 +1633,17 @@ your tolerance. Use a Missing values check for those.
 One consequence worth knowing: because the unjudged rows fall out of both
 directions, the matching and non-matching counts do not always add up to every
 row. The gap is exactly the rows that could not be checked.
+
+**Start from** fills the condition in for you. **Cross-variable consistency**
+was a check type of its own until it became a preset here: it sets up one
+variable against another in the assertion direction, which is how it always
+read. Unlike the old check it is only a starting point, so you can add rows,
+bracket them, or change the direction afterwards.
+
+Checks created as Cross-variable consistency before it became a preset keep
+running untouched, and still open on their own form when you edit them. They
+simply cannot be created new, because the preset does the same thing without
+the one-pair limit.
 
 Each check has a **tolerance**: the share of flagged rows it will accept before
 reporting a failure. Zero means any occurrence fails - right for duplicate
