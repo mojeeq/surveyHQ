@@ -200,6 +200,115 @@ async function detailOf(response: Response): Promise<string> {
   return `Request failed with status ${response.status}`
 }
 
+
+/** How far an upload has got, for a progress bar that means something. */
+export type UploadProgress = {
+  /** Bytes handed to the network so far. */
+  sent: number
+  /** Bytes in the whole request body, a little more than the files themselves. */
+  total: number
+  /** Bytes per second, averaged over the transfer so far. */
+  rate: number
+  /** Seconds left at that rate, or null before there is anything to go on. */
+  remaining: number | null
+}
+
+/**
+ * POST a form and report how far it has got.
+ *
+ * XMLHttpRequest rather than fetch, which the rest of this module uses, for one
+ * reason: fetch has no upload progress event and cannot be given one. On a four
+ * gigabyte census export that leaves a spinner which looks exactly the same
+ * whether the transfer is moving at full speed or died ten minutes ago.
+ *
+ * The contract is the one request() offers - the token and any share grant
+ * attached, an expired session cleared, the server's own message on an error -
+ * because a second way of talking to the API that answers differently is worse
+ * than no progress bar.
+ */
+function uploadWithProgress<T>(
+  path: string,
+  form: FormData,
+  onProgress?: (progress: UploadProgress) => void,
+): Promise<T> {
+  const token = tokenStore.get()
+  const grant = shareGrants.get(shareTokenOf(path))
+
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open('POST', `/api/v1${path}`)
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+    if (grant) xhr.setRequestHeader('X-Share-Grant', grant)
+    // Content-Type is left alone: the browser sets it with the multipart
+    // boundary, and overriding it makes the body unparseable.
+
+    const started = Date.now()
+    xhr.upload.onprogress = (event) => {
+      if (!onProgress || !event.lengthComputable) return
+      // What the browser has handed to the socket, which runs slightly ahead of
+      // what the server has. On a gigabyte transfer the difference is a rounding
+      // error; on a small one the bar is gone before anybody reads it.
+      const seconds = (Date.now() - started) / 1000
+      const rate = seconds > 0 ? event.loaded / seconds : 0
+      onProgress({
+        sent: event.loaded,
+        total: event.total,
+        rate,
+        remaining: rate > 0 ? (event.total - event.loaded) / rate : null,
+      })
+    }
+
+    xhr.onerror = () =>
+      reject(new ApiError(0, 'Could not reach the server. Check that the platform is running.'))
+    xhr.onabort = () => reject(new ApiError(0, 'The upload was cancelled.'))
+
+    xhr.onload = () => {
+      const status = xhr.status
+      let payload: any = null
+      try {
+        payload = xhr.responseText ? JSON.parse(xhr.responseText) : null
+      } catch {
+        /* a body that is not JSON leaves the generic message below */
+      }
+
+      // A locked shared link answers 401 until its password is given. That is
+      // not an expired session and must not sign the user out.
+      if (status === 401 && path.startsWith('/public/')) {
+        reject(new ApiError(401, detailIn(payload, status)))
+        return
+      }
+      if (status === 401) {
+        tokenStore.clear()
+        if (!location.pathname.startsWith('/login') && !location.pathname.startsWith('/shared')) {
+          location.href = '/login'
+        }
+        reject(new ApiError(401, 'Your session has expired. Please sign in again.'))
+        return
+      }
+      if (status < 200 || status >= 300) {
+        reject(
+          new ApiError(
+            status,
+            detailIn(payload, status),
+            Array.isArray(payload?.errors) ? payload.errors : [],
+          ),
+        )
+        return
+      }
+      resolve((status === 204 ? undefined : payload) as T)
+    }
+
+    xhr.send(form)
+  })
+}
+
+/** The server's own words for a failure, or a generic line if it had none. */
+function detailIn(payload: any, status: number): string {
+  if (typeof payload?.detail === 'string') return payload.detail
+  if (Array.isArray(payload?.detail)) return payload.detail[0]?.msg ?? `Request failed with status ${status}`
+  return `Request failed with status ${status}`
+}
+
 export const api = {
   get: async <T>(path: string) => {
     const value = await request<T>(scopedGetPath(path))
@@ -209,7 +318,11 @@ export const api = {
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', body }),
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PUT', body }),
   delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
-  upload: <T>(path: string, form: FormData) => request<T>(path, { method: 'POST', body: form }),
+  upload: <T>(
+    path: string,
+    form: FormData,
+    onProgress?: (progress: UploadProgress) => void,
+  ) => uploadWithProgress<T>(path, form, onProgress),
   blob: (path: string, body?: unknown) =>
     request<Blob>(path, { method: 'POST', body, raw: true }),
   // A GET that returns bytes rather than JSON. An <img src> cannot carry the

@@ -1,10 +1,10 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { api } from '@/lib/api'
+import { api, type UploadProgress } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
-import { formatBytes, formatNumber, relativeTime } from '@/lib/format'
+import { formatBytes, formatNumber, relativeTime, timeLeft } from '@/lib/format'
 import { summarise } from '@/lib/inventory'
 import type { ArchiveImport, Dataset, Job, Page, Project } from '@/lib/types'
 import ImportReview, { type Review } from '@/components/ImportReview'
@@ -23,6 +23,46 @@ import {
 } from '@/components/ui'
 
 const ACCEPTED = '.dta,.sav,.csv,.tab,.tsv,.txt,.xlsx,.xls,.zip'
+
+
+/** How an upload is going: the bar, the numbers, and when it will end.
+ *
+ *  A spinner on a four gigabyte export looks the same whether the transfer is
+ *  moving at full speed or died ten minutes ago, which is the difference
+ *  between waiting and wondering whether to start over.
+ */
+export function UploadBar({ progress }: { progress: UploadProgress }) {
+  const done = progress.total > 0 ? progress.sent / progress.total : 0
+  const finished = progress.sent >= progress.total
+  return (
+    <div className="mb-4">
+      <div className="h-1.5 w-full overflow-hidden rounded-full bg-ink-100 dark:bg-dark-200">
+        <div
+          className="h-full rounded-full bg-brand-500 transition-[width] duration-200"
+          style={{ width: `${Math.min(100, done * 100).toFixed(1)}%` }}
+        />
+      </div>
+      <p className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-xs text-ink-600 dark:text-dark-600">
+        {finished ? (
+          // Every byte is across and the server is reading it. No rate applies
+          // to that, and no honest estimate of it either.
+          <span>Sent {formatBytes(progress.total)}. Reading it now, which takes a few minutes for an export this size.</span>
+        ) : (
+          <>
+            <span className="font-medium text-ink-800 dark:text-dark-800">
+              {Math.floor(done * 100)}%
+            </span>
+            <span>
+              {formatBytes(progress.sent)} of {formatBytes(progress.total)}
+            </span>
+            {progress.rate > 0 && <span>{formatBytes(progress.rate)}/s</span>}
+            {progress.remaining !== null && <span>{timeLeft(progress.remaining)}</span>}
+          </>
+        )}
+      </p>
+    </div>
+  )
+}
 
 export default function Datasets() {
   const { can } = useAuth()
@@ -554,6 +594,7 @@ function UploadModal({
   const [versionColumn, setVersionColumn] = useState('version')
   const [busy, setBusy] = useState(false)
   const [stage, setStage] = useState<'' | 'uploading' | 'importing'>('')
+  const [sent, setSent] = useState<UploadProgress | null>(null)
   const info = useQuery({
     queryKey: ['platform-info'],
     queryFn: () => api.get<{ max_upload_mb: number }>('/system/info'),
@@ -623,7 +664,17 @@ function UploadModal({
     form.append('mode', mode)
     form.append('review', 'true')
     try {
-      let body = await api.upload<Dataset | ArchiveImport | Job | Review>('/datasets/upload', form)
+      let body = await api.upload<Dataset | ArchiveImport | Job | Review>(
+        '/datasets/upload',
+        form,
+        (progress) => {
+          setSent(progress)
+          // The transfer is done and the server is reading it, which is a
+          // different wait and deserves a different word. The bar would
+          // otherwise sit at 100% for as long again.
+          if (progress.sent >= progress.total) setStage('importing')
+        },
+      )
       if (isJob(body)) {
         // Too big to read inside the request, so the worker has it and this
         // watches the job it left behind.
@@ -654,6 +705,7 @@ function UploadModal({
     } finally {
       setBusy(false)
       setStage('')
+      setSent(null)
     }
   }
 
@@ -706,6 +758,7 @@ function UploadModal({
         </>
       }
     >
+      {sent && <UploadBar progress={sent} />}
       {error && (
         <div className="mb-4 rounded-card border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
           {error}
