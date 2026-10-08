@@ -2,7 +2,18 @@ import { createContext, useContext, useEffect, useMemo, useState, type ReactNode
 
 export type Theme = 'light' | 'dark' | 'system'
 
+/** How the furniture is drawn, which is a separate question from light or dark.
+ *
+ *  Aero is the glossy treatment the shell was built with: a lit sidebar, a
+ *  glass header, navigation tiles with a highlight over the top half. The
+ *  redesign flattened it, and both are wanted - so it is a choice rather than
+ *  a commit. It works in either theme, which is why it is not a third value
+ *  of Theme.
+ */
+export type Surface = 'flat' | 'aero'
+
 const STORAGE_KEY = 'theme'
+const SURFACE_KEY = 'surface'
 
 function getSystemTheme(): 'light' | 'dark' {
   if (typeof window === 'undefined' || !window.matchMedia) return 'light'
@@ -15,8 +26,19 @@ function getStoredTheme(): Theme {
   return stored === 'light' || stored === 'dark' || stored === 'system' ? stored : 'system'
 }
 
+function getStoredSurface(): Surface {
+  if (typeof window === 'undefined') return 'flat'
+  return window.localStorage.getItem(SURFACE_KEY) === 'aero' ? 'aero' : 'flat'
+}
+
 function applyTheme(resolved: 'light' | 'dark') {
   document.documentElement.classList.toggle('dark', resolved === 'dark')
+}
+
+function applySurface(surface: Surface) {
+  // On the root element so stylesheets can reach it, even though today only
+  // the shell reads it through the hook.
+  document.documentElement.dataset.surface = surface
 }
 
 type ThemeContextValue = {
@@ -26,12 +48,17 @@ type ThemeContextValue = {
   resolvedTheme: 'light' | 'dark'
   setTheme: (theme: Theme) => void
   toggleTheme: () => void
+  /** 'flat' or 'aero'. Independent of light and dark. */
+  surface: Surface
+  setSurface: (surface: Surface) => void
+  toggleSurface: () => void
 }
 
 const ThemeContext = createContext<ThemeContextValue | null>(null)
 
 export function ThemeProvider({ children }: { children: ReactNode }) {
   const [theme, setThemeState] = useState<Theme>(() => getStoredTheme())
+  const [surface, setSurfaceState] = useState<Surface>(() => getStoredSurface())
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>(() =>
     theme === 'system' ? getSystemTheme() : theme,
   )
@@ -56,6 +83,19 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
     return () => media.removeEventListener('change', onChange)
   }, [theme])
 
+  useEffect(() => {
+    applySurface(surface)
+  }, [surface])
+
+  const setSurface = (next: Surface) => {
+    setSurfaceState(next)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(SURFACE_KEY, next)
+    }
+  }
+
+  const toggleSurface = () => setSurface(surface === 'aero' ? 'flat' : 'aero')
+
   const setTheme = (next: Theme) => {
     setThemeState(next)
     if (typeof window !== 'undefined') {
@@ -68,8 +108,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   }
 
   const value = useMemo(
-    () => ({ theme, resolvedTheme, setTheme, toggleTheme }),
-    [theme, resolvedTheme],
+    () => ({ theme, resolvedTheme, setTheme, toggleTheme, surface, setSurface, toggleSurface }),
+    [theme, resolvedTheme, surface],
   )
 
   return <ThemeContext.Provider value={value}>{children}</ThemeContext.Provider>

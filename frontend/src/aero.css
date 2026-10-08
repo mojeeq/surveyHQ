@@ -1,0 +1,134 @@
+/*
+ * The Aero treatment, as a choice.
+ *
+ * redesign.css replaced the glossy original with a flat design system, and it
+ * does so with !important throughout - so the Aero classes stayed on the
+ * elements while every rule that made them glossy was cancelled. Turning the
+ * surface preference on added a class that nothing acted upon.
+ *
+ * This puts the gloss back, scoped to the choice. Additive rather than a
+ * rewrite of redesign.css: flat is the default and the common path, and
+ * unpicking forty rules to invert it would put the look everybody sees at
+ * risk for the sake of a look some people choose. Nothing here applies unless
+ * data-surface is aero, so flat is exactly what it was.
+ *
+ * !important matches what it is overriding, not because it is nice.
+ *
+ * Imported after redesign.css. The surface is set on the root element by
+ * useTheme before React paints, and absent counts as flat, so there is no
+ * flash of the wrong one.
+ */
+
+/* Panels: lit from above, the way a raised surface is. */
+html[data-surface='aero'] .card {
+  background-image: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.22) 0%,
+    rgba(255, 255, 255, 0.06) 38%,
+    rgba(0, 0, 0, 0.012) 62%,
+    rgba(0, 0, 0, 0.05) 100%
+  ) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 1px 2px rgba(15, 23, 42, 0.12),
+    0 4px 10px -6px rgba(15, 23, 42, 0.25) !important;
+}
+
+html[data-surface='aero'].dark .card,
+html[data-surface='aero'] .dark .card {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 1px 2px rgba(0, 0, 0, 0.4),
+    0 6px 16px -10px rgba(0, 0, 0, 0.8) !important;
+}
+
+/* Buttons: the gloss ends on a hard line halfway down, which is the whole
+   trick. A fade reads as a gradient; a hard stop reads as glass. */
+html[data-surface='aero'] .btn,
+html[data-surface='aero'] .btn-primary,
+html[data-surface='aero'] .btn-secondary,
+html[data-surface='aero'] .btn-danger {
+  background-image: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.28) 0%,
+    rgba(255, 255, 255, 0.1) 49.9%,
+    rgba(0, 0, 0, 0.04) 50%,
+    rgba(0, 0, 0, 0.1) 100%
+  ) !important;
+}
+
+html[data-surface='aero'] .btn-primary {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.4),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.18),
+    0 1px 2px rgba(15, 23, 42, 0.25) !important;
+}
+
+html[data-surface='aero'] .btn-secondary {
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.9),
+    0 1px 2px rgba(15, 23, 42, 0.12) !important;
+}
+
+/* Pressed: the light moves to the bottom, because the surface has gone in. */
+html[data-surface='aero'] .btn:active:not(:disabled) {
+  background-image: none !important;
+  box-shadow: inset 0 2px 4px rgba(15, 23, 42, 0.18) !important;
+}
+
+/* Fields are sunk rather than raised: something you type into is a hole, not
+   a button. The inverse of everything above, and the reason Aero reads as
+   physical at all. */
+html[data-surface='aero'] .input {
+  box-shadow:
+    inset 0 1px 2px rgba(15, 23, 42, 0.1),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.5) !important;
+}
+
+html[data-surface='aero'].dark .input,
+html[data-surface='aero'] .dark .input {
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.45) !important;
+}
+
+/* The shell. These three are the ones redesign.css names directly. */
+html[data-surface='aero'] .aero-sidebar {
+  background-image: linear-gradient(to bottom, #262c37 0%, #1b1f27 42%, #171a21 100%) !important;
+  box-shadow:
+    inset -1px 0 0 rgba(255, 255, 255, 0.06),
+    2px 0 8px -2px rgba(0, 0, 0, 0.45) !important;
+}
+
+html[data-surface='aero'] .aero-glass {
+  background-image: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.75),
+    rgba(236, 241, 247, 0.6)
+  ) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.85),
+    0 1px 2px rgba(15, 23, 42, 0.06) !important;
+}
+
+html[data-surface='aero'].dark .aero-glass,
+html[data-surface='aero'] .dark .aero-glass {
+  background-image: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.06),
+    rgba(255, 255, 255, 0.01)
+  ) !important;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.07),
+    0 1px 2px rgba(0, 0, 0, 0.4) !important;
+}
+
+/* The selected row: Aero's own selection is a lit capsule with a bright rule
+   down its leading edge, not a lighter patch. */
+html[data-surface='aero'] .nav-selected {
+  background-image: linear-gradient(
+    to bottom,
+    rgba(255, 255, 255, 0.26) 0%,
+    rgba(255, 255, 255, 0.08) 49.9%,
+    rgba(0, 0, 0, 0.06) 50%,
+    rgba(0, 0, 0, 0.14) 100%
+  ) !important;
+}

@@ -9,6 +9,9 @@ import { ThemeProvider } from '@/hooks/useTheme'
 import './fonts.css'
 import './index.css'
 import './redesign.css'
+// After the flat stylesheet, because it puts the gloss back where that took
+// it off. Does nothing unless the surface preference is aero.
+import './aero.css'
 
 const queryClient = new QueryClient({
   defaultOptions: {
