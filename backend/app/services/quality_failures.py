@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.models import CheckType, Dataset, QualityRule
-from app.services.quality import rule_filters
+from app.services.quality import logic_condition, rule_filters
 from app.services.query_engine import (
     DatasetContext,
     QueryError,
@@ -139,6 +139,11 @@ def _failure_sql(ctx: DatasetContext, rule: QualityRule) -> tuple[str, list[Any]
             f"AND NOT ({left} {symbols[operator]} {right})"
         )
         return _simple_failure_sql(scoped_sql, condition), scope_params
+
+    if check == CheckType.logic:
+        # The same clause the count used, not a second copy of the logic.
+        condition, params = logic_condition(ctx, config)
+        return _simple_failure_sql(scoped_sql, condition), scope_params + params
 
     if check == CheckType.outliers:
         col = quote_ident(ctx.require(str(config.get("variable"))).name)

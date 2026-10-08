@@ -218,6 +218,12 @@ export interface Condition {
   operator: FilterOperator
   value: unknown
   use_label?: boolean
+  /**
+   * Compare against another column rather than `value`: end_date < start_date.
+   * Set, and `value` and `use_label` are both ignored, and only the six scalar
+   * comparisons are accepted. Absent on every filter saved before it existed.
+   */
+  other_variable?: string | null
 }
 
 export interface FilterGroup {
@@ -746,6 +752,7 @@ export interface Alert {
 export type CheckType =
   | 'missing_rate' | 'value_range' | 'duplicates' | 'outliers'
   | 'consistency' | 'interview_duration' | 'gps_missing' | 'constant_value'
+  | 'logic'
 
 export interface QualityResult {
   id: string

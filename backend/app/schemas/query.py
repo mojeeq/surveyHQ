@@ -117,6 +117,14 @@ class Condition(BaseModel):
     value: Any = None
     # Compare against the labelled value rather than the stored code
     use_label: bool = False
+    # Compare against another column instead of `value`: end_date < start_date,
+    # total != parts. Set it and `value` and `use_label` are both ignored, and
+    # only the six scalar comparisons are allowed - "is one of" and "contains"
+    # have no meaning against a whole column.
+    #
+    # Added after the fact and optional, so every filter saved before it exists
+    # loads unchanged and keeps comparing against a literal.
+    other_variable: str | None = None
 
 
 class FilterGroup(BaseModel):

@@ -68,6 +68,12 @@ const CHECKS: { value: CheckType; label: string; description: string }[] = [
     label: 'Cross-variable consistency',
     description: 'Flags rows where one variable should relate to another but does not.',
   },
+  {
+    value: 'logic',
+    label: 'Logic condition',
+    description:
+      'Flags rows meeting a condition you write: age under 18 and married, or an end date before its start.',
+  },
 ]
 
 type FailurePreview = {
@@ -513,6 +519,12 @@ function CheckModal({
   const [threshold, setThreshold] = useState(String((rule?.threshold ?? 0) * 100))
   const [config, setConfig] = useState<Record<string, unknown>>(rule?.config ?? {})
   const [filters, setFilters] = useState<FilterGroup>(rule?.filters ?? emptyFilter())
+  // A logic rule's condition rides in `config`, which is an untyped bag shared
+  // by every check type. Held as its own state so the builder has a FilterGroup
+  // to work on, and folded back in on save.
+  const [condition, setCondition] = useState<FilterGroup>(
+    (rule?.config?.condition as FilterGroup | undefined) ?? emptyFilter(),
+  )
 
   const dataset = useQuery({
     queryKey: ['dataset', datasetId],
@@ -525,7 +537,7 @@ function CheckModal({
     mutationFn: () => {
       const body = {
         name: name || CHECKS.find((c) => c.value === checkType)?.label,
-        config,
+        config: checkType === 'logic' ? { ...config, condition } : config,
         severity,
         threshold: Number(threshold) / 100,
         filters,
@@ -714,6 +726,35 @@ function CheckModal({
             </select>
           </Field>
           {variableSelect('other_variable', 'Second variable', numeric)}
+        </>
+      )}
+
+      {checkType === 'logic' && (
+        <>
+          <Field
+            label="Which rows are the problem"
+            hint="Describe what is wrong, or state what must hold and let the check find the rows that break it."
+          >
+            <select
+              className="input"
+              value={String(config.flag ?? 'match')}
+              onChange={(event) => set({ flag: event.target.value })}
+            >
+              <option value="match">Flag rows that match this condition</option>
+              <option value="no_match">Flag rows that do NOT match this condition</option>
+            </select>
+          </Field>
+          <Field
+            label="Condition"
+            hint="Group conditions to mix and with or. A row is left unjudged, not flagged, when a value the condition needs is missing - use a Missing values check for those."
+          >
+            <FilterBuilder
+              variables={variables}
+              value={condition}
+              onChange={setCondition}
+              allowVariableComparison
+            />
+          </Field>
         </>
       )}
 

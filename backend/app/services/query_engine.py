@@ -270,11 +270,26 @@ class SQLBuilder:
         joiner = " AND " if group.op == "and" else " OR "
         return joiner.join(parts)
 
+    # The six that mean something between two columns. "is one of" wants a
+    # list and "contains" wants text, and neither reads sensibly against a
+    # whole column, so they are refused rather than quietly reinterpreted.
+    COLUMN_COMPARISONS = {
+        FilterOperator.eq: "=",
+        FilterOperator.ne: "!=",
+        FilterOperator.gt: ">",
+        FilterOperator.gte: ">=",
+        FilterOperator.lt: "<",
+        FilterOperator.lte: "<=",
+    }
+
     def _condition_sql(self, condition: Condition) -> str:
         info = self.ctx.require(condition.variable)
         col = quote_ident(info.name)
         op = condition.operator
         value = condition.value
+
+        if condition.other_variable:
+            return self._column_sql(info, condition)
 
         if condition.use_label and info.value_labels:
             # Translate labels back to the stored codes before filtering
@@ -334,6 +349,36 @@ class SQLBuilder:
             # Keep NULLs out of "not equal" results the way analysts expect
             return f"({col} IS NULL OR {col} != ?)"
         return f"{col} {comparison} ?"
+
+    def _column_sql(self, info: VariableInfo, condition: Condition) -> str:
+        """One column against another.
+
+        Left bare on purpose, with no IS NOT NULL guards. A row missing either
+        value compares as UNKNOWN, and UNKNOWN stays UNKNOWN through the NOT()
+        that "flag rows that do not match" wraps the tree in, so WHERE drops
+        the row in both directions and it is never judged either way. Guarding
+        the sides turns that UNKNOWN into FALSE, and NOT(FALSE) is TRUE: every
+        row with no end date would then be reported as violating
+        `end >= start`, and a logic check would quietly double as a
+        missing-values check. Measured, not reasoned about - a two-row table
+        either way settles it, and the test does exactly that.
+
+        Note this differs from the same operator against a literal, where `ne`
+        deliberately keeps NULLs in: someone filtering "region is not North"
+        wants the blank-region rows, while someone asserting a relation
+        between two columns does not want the rows where it cannot be checked.
+        """
+        other = self.ctx.require(str(condition.other_variable))
+        symbol = self.COLUMN_COMPARISONS.get(condition.operator)
+        if symbol is None:
+            raise QueryError(
+                f"'{condition.operator.value}' cannot compare {info.name} "
+                f"with another variable. Use one of: "
+                f"{', '.join(op.value for op in self.COLUMN_COMPARISONS)}."
+            )
+        left = quote_ident(info.name)
+        right = quote_ident(other.name)
+        return f"({left} {symbol} {right})"
 
     @staticmethod
     def _coerce(info: VariableInfo, value: Any) -> Any:

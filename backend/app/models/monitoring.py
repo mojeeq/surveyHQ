@@ -56,6 +56,7 @@ class CheckType(str, enum.Enum):
     interview_duration = "interview_duration"
     gps_missing = "gps_missing"
     constant_value = "constant_value"
+    logic = "logic"
 
 
 class Indicator(UUIDMixin, TimestampMixin, Base):
