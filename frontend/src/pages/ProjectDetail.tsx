@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { ProjectScript } from '@/components/ProjectScript'
 import { api } from '@/lib/api'
+import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
 import { formatNumber, relativeTime } from '@/lib/format'
 import type {
@@ -721,6 +722,7 @@ function RelationshipsTab({
   canManage: boolean
 }) {
   const toast = useToast()
+  const ask = useDialog()
   const queryClient = useQueryClient()
   const [selected, setSelected] = useState<Relationship | null>(null)
   const [merging, setMerging] = useState<Relationship | null>(null)
@@ -968,8 +970,14 @@ function RelationshipsTab({
                   </button>
                   <button
                     className="btn-ghost btn-sm mb-4 text-red-600"
-                    onClick={() => {
-                      if (confirm('Remove this relationship?')) remove.mutate(selected.id)
+                    onClick={async () => {
+                      const sure = await ask.confirm({
+                        title: 'Remove this relationship?',
+                        message: 'Both datasets stay. Anything built on the join stops working.',
+                        confirmLabel: 'Remove',
+                        tone: 'danger',
+                      })
+                      if (sure) remove.mutate(selected.id)
                     }}
                   >
                     Remove

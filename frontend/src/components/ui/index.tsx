@@ -266,7 +266,9 @@ export function Modal({
    *
    * When Enter should be ignored altogether is in `confirmsOnEnter`.
    */
-  const confirm = (event: KeyboardEvent) => {
+  // Not named `confirm`: it shadowed the global one, which reads as a native
+  // dialog at a glance and trips the check that there are none left.
+  const pressPrimary = (event: KeyboardEvent) => {
     if (!confirmsOnEnter(enterContext(event))) return
 
     const dialog = panel.current
@@ -292,7 +294,7 @@ export function Modal({
         onClose()
         return
       }
-      if (event.key === 'Enter') confirm(event)
+      if (event.key === 'Enter') pressPrimary(event)
     }
     document.addEventListener('keydown', onKey)
     document.body.style.overflow = 'hidden'

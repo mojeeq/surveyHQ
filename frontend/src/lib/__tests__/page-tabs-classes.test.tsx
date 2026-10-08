@@ -14,23 +14,28 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import { describe, expect, it } from 'vitest'
 
 import { PageTabs } from '@/components/dashboard/PageTabs'
+import { DialogProvider } from '@/hooks/useDialog'
 
 const noop = () => {}
 
+// Wrapped because the strip asks for a name and a deletion through the
+// platform's dialogs now, and the hook refuses to run outside its provider.
 const render = (active: number) =>
   renderToStaticMarkup(
-    <PageTabs
-      pages={[{ name: 'Demographic' }, { name: 'Housing' }]}
-      active={active}
-      count={2}
-      canEdit
-      widgetsOnPage={0}
-      onDark={false}
-      onSelect={noop}
-      onChange={noop}
-      onMove={noop}
-      onRemove={noop}
-    />,
+    <DialogProvider>
+      <PageTabs
+        pages={[{ name: 'Demographic' }, { name: 'Housing' }]}
+        active={active}
+        count={2}
+        canEdit
+        widgetsOnPage={0}
+        onDark={false}
+        onSelect={noop}
+        onChange={noop}
+        onMove={noop}
+        onRemove={noop}
+      />
+    </DialogProvider>,
   )
 
 /** Every class on every element, as the browser would see them. */

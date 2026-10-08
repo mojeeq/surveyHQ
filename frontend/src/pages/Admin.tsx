@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
+import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
 import { formatDate, relativeTime } from '@/lib/format'
 import type { ApiKeyOut, Job, Page, Role, User } from '@/lib/types'
@@ -50,6 +51,7 @@ export default function Admin() {
 
 function Users() {
   const toast = useToast()
+  const ask = useDialog()
   const { user: me } = useAuth()
   const queryClient = useQueryClient()
   const [creating, setCreating] = useState(false)
@@ -186,8 +188,14 @@ function Users() {
                     </button>
                     <button
                       className="btn-ghost btn-sm text-red-600"
-                      onClick={() => {
-                        if (confirm(`Delete ${user.email}?`)) remove.mutate(user.id)
+                      onClick={async () => {
+                        const sure = await ask.confirm({
+                          title: `Delete ${user.email}?`,
+                          message: 'They lose access immediately. What they created stays.',
+                          confirmLabel: 'Delete account',
+                          tone: 'danger',
+                        })
+                        if (sure) remove.mutate(user.id)
                       }}
                     >
                       Delete

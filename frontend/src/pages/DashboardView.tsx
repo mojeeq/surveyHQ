@@ -22,6 +22,7 @@ import { copyText } from '@/lib/clipboard'
 
 import { useAuth } from '@/hooks/useAuth'
 
+import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
 
 import { CHART_THEMES } from '@/lib/charts'
@@ -100,6 +101,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
   const { id = '' } = useParams()
   const { can } = useAuth()
   const toast = useToast()
+  const ask = useDialog()
   const queryClient = useQueryClient()
   const [editing, setEditing] = useState(false)
   const [adding, setAdding] = useState(false)
@@ -625,8 +627,14 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
     )
   }
 
-  const addGroup = () => {
-    const name = prompt('Name this group')?.trim()
+  const addGroup = async () => {
+    const name = await ask.prompt({
+      title: 'Add a group',
+      label: 'Name this group',
+      placeholder: 'Response rates',
+      confirmLabel: 'Add group',
+      validate: (entered) => (entered ? null : 'Give the group a name, or cancel.'),
+    })
     if (!name) return
     // Below everything already on the page, so a new group never lands on top
     // of a widget and pushes the board around as it arrives.
@@ -689,8 +697,14 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
     if (canEditBoard) changeGroup(group.id, { collapsed: next })
   }
 
-  const removeGroup = (group: WidgetGroup) => {
-    if (!confirm(`Remove the group "${group.name}"? Its widgets stay on the page.`)) return
+  const removeGroup = async (group: WidgetGroup) => {
+    const sure = await ask.confirm({
+      title: `Remove the group \u201C${group.name}\u201D?`,
+      message: 'Its widgets stay on the page.',
+      confirmLabel: 'Remove group',
+      tone: 'danger',
+    })
+    if (!sure) return
     saveGroups.mutate(allGroups.filter((one) => one.id !== group.id))
   }
 
@@ -1034,9 +1048,14 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
                 }
                 onMove={(toPage) => moveWidget.mutate({ widgetId: widget.id, page: toPage })}
                 onEdit={() => setEditingWidget(widget)}
-                onRemove={() => {
-                  if (confirm(`Remove "${widget.title || 'this widget'}" from the dashboard?`))
-                    removeWidget.mutate(widget.id)
+                onRemove={async () => {
+                  const sure = await ask.confirm({
+                    title: `Remove \u201C${widget.title || 'this widget'}\u201D?`,
+                    message: 'It goes from this dashboard. The chart it draws stays.',
+                    confirmLabel: 'Remove widget',
+                    tone: 'danger',
+                  })
+                  if (sure) removeWidget.mutate(widget.id)
                 }}
                 onSelect={(variable, value) => {
                   // A click on the level the board is currently showing goes

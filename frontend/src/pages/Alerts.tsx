@@ -4,6 +4,7 @@ import { api } from '@/lib/api'
 import ProjectFilter, { projectParam } from '@/components/ProjectFilter'
 import { bodyFrom, formFor, isComplete } from '@/lib/alert-rule-form'
 import { useAuth } from '@/hooks/useAuth'
+import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
 import { formatNumber, relativeTime } from '@/lib/format'
 import type { Alert, AlertRule, Indicator, Severity } from '@/lib/types'
@@ -28,6 +29,7 @@ const SEVERITY = {
 export default function Alerts() {
   const { can } = useAuth()
   const toast = useToast()
+  const ask = useDialog()
   const queryClient = useQueryClient()
   const [tab, setTab] = useState<'alerts' | 'rules'>('alerts')
   const [statusFilter, setStatusFilter] = useState('open')
@@ -279,9 +281,15 @@ export default function Alerts() {
                           </button>
                           <button
                             className="btn-ghost btn-sm text-red-600"
-                            onClick={() => {
-                              if (confirm(`Delete the rule "${rule.name}"?`))
-                                removeRule.mutate(rule.id)
+                            onClick={async () => {
+                              const sure = await ask.confirm({
+                                title: `Delete \u201C${rule.name}\u201D?`,
+                                message:
+                                  'Alerts it has already raised stay. Pause it instead to keep the rule.',
+                                confirmLabel: 'Delete rule',
+                                tone: 'danger',
+                              })
+                              if (sure) removeRule.mutate(rule.id)
                             }}
                           >
                             Delete

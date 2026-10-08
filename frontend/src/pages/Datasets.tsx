@@ -3,6 +3,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { api, type UploadProgress } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
+import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
 import { formatBytes, formatNumber, relativeTime, timeLeft } from '@/lib/format'
 import { summarise } from '@/lib/inventory'
@@ -67,6 +68,7 @@ export function UploadBar({ progress }: { progress: UploadProgress }) {
 export default function Datasets() {
   const { can } = useAuth()
   const toast = useToast()
+  const ask = useDialog()
   const queryClient = useQueryClient()
   const [search, setSearch] = useState('')
   const [uploadInto, setUploadInto] = useState<string | null>(null)
@@ -233,14 +235,15 @@ export default function Datasets() {
           </button>
           <button
             className="btn-ghost btn-sm ml-auto text-red-600"
-            onClick={() => {
-              if (
-                confirm(
-                  `Delete ${selected.size} dataset(s)? Charts, indicators and merges built on ` +
-                    'them will stop working.',
-                )
-              )
-                removeMany.mutate({ ids: [...selected] })
+            onClick={async () => {
+              const sure = await ask.confirm({
+                title: `Delete ${selected.size} dataset${selected.size === 1 ? '' : 's'}?`,
+                message:
+                  'Charts, indicators and merges built on them will stop working.',
+                confirmLabel: 'Delete selected',
+                tone: 'danger',
+              })
+              if (sure) removeMany.mutate({ ids: [...selected] })
             }}
           >
             Delete selected
@@ -321,14 +324,17 @@ export default function Datasets() {
                     </button>
                     <button
                       className="btn-ghost btn-sm text-red-600"
-                      onClick={() => {
-                        if (
-                          confirm(
-                            `Delete all ${group.datasets.length} dataset(s) in ${group.name}? ` +
-                              'Charts, indicators and merges built on them will stop working.',
-                          )
-                        )
-                          removeMany.mutate({ project_id: group.id })
+                      onClick={async () => {
+                        const sure = await ask.confirm({
+                          title: `Delete all ${group.datasets.length} dataset${
+                            group.datasets.length === 1 ? '' : 's'
+                          } in ${group.name}?`,
+                          message:
+                            'Charts, indicators and merges built on them will stop working.',
+                          confirmLabel: 'Delete all',
+                          tone: 'danger',
+                        })
+                        if (sure) removeMany.mutate({ project_id: group.id })
                       }}
                     >
                       Delete all
@@ -360,13 +366,15 @@ export default function Datasets() {
                       canManage={can('manager')}
                       selected={selected.has(dataset.id)}
                       onSelect={can('manager') ? () => toggleOne(dataset.id) : undefined}
-                      onDelete={() => {
-                        if (
-                          confirm(
-                            `Delete "${dataset.name}"? Charts and indicators built on it will stop working.`,
-                          )
-                        )
-                          remove.mutate(dataset.id)
+                      onDelete={async () => {
+                        const sure = await ask.confirm({
+                          title: `Delete \u201C${dataset.name}\u201D?`,
+                          message:
+                            'Charts and indicators built on it will stop working.',
+                          confirmLabel: 'Delete dataset',
+                          tone: 'danger',
+                        })
+                        if (sure) remove.mutate(dataset.id)
                       }}
                     />
                   ))}

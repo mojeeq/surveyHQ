@@ -2,6 +2,7 @@ import { useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
+import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
 import { formatNumber } from '@/lib/format'
 import ProjectPicker from '@/components/ProjectPicker'
@@ -26,6 +27,7 @@ const FORMATS: Record<string, string> = {
 export default function BoundaryLibrary() {
   const { can } = useAuth()
   const toast = useToast()
+  const ask = useDialog()
   const queryClient = useQueryClient()
   const [adding, setAdding] = useState(false)
 
@@ -119,14 +121,16 @@ export default function BoundaryLibrary() {
                       {can('manager') && (
                         <button
                           className="btn-ghost btn-sm text-red-600"
-                          onClick={() => {
-                            if (
-                              confirm(
-                                `Delete "${layer.name}"? Maps drawing it will stop showing ` +
-                                  'their outlines and stop checking recorded areas.',
-                              )
-                            )
-                              remove.mutate(layer.id)
+                          onClick={async () => {
+                            const sure = await ask.confirm({
+                              title: `Delete \u201C${layer.name}\u201D?`,
+                              message:
+                                'Maps drawing it will stop showing their outlines and stop '
+                                + 'checking recorded areas.',
+                              confirmLabel: 'Delete layer',
+                              tone: 'danger',
+                            })
+                            if (sure) remove.mutate(layer.id)
                           }}
                         >
                           Delete

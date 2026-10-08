@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "@/lib/api";
+import { useDialog } from "@/hooks/useDialog";
 import { useToast } from "@/hooks/useToast";
 
 export default function DatasetVersions({
@@ -11,6 +12,7 @@ export default function DatasetVersions({
 }) {
   const client = useQueryClient();
   const toast = useToast();
+  const ask = useDialog();
   const versions = useQuery({
     queryKey: ["dataset-versions", datasetId, version],
     queryFn: () =>
@@ -49,13 +51,13 @@ export default function DatasetVersions({
           <button
             className="btn-secondary btn-sm"
             disabled={restore.isPending}
-            onClick={() => {
-              if (
-                window.confirm(
-                  `Restore version ${v.version}? The current version will also be retained.`,
-                )
-              )
-                restore.mutate(v.version);
+            onClick={async () => {
+              const sure = await ask.confirm({
+                title: `Restore version ${v.version}?`,
+                message: "The current version is kept as well, so nothing is lost.",
+                confirmLabel: "Restore",
+              });
+              if (sure) restore.mutate(v.version);
             }}
           >
             Restore version {v.version}
