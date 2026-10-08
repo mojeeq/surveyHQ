@@ -193,6 +193,47 @@ services:
       postgres: { condition: service_healthy }
     networks: [surveyhq]
 
+  # PROTOTYPE. Not reachable from the application: nothing in the API or the
+  # worker submits jobs to it. It is here so the isolation can be read,
+  # reviewed and argued with before anything depends on it. runner/README.md
+  # says what is tested, what is not, and what is missing before this is a
+  # feature.
+  #
+  #   docker compose --profile sandbox up -d --build runner-r
+  runner-r:
+    profiles: [sandbox]
+    build:
+      context: ./runner/r
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # Everything that makes this safe is here rather than in the image.
+    #
+    # No environment at all. The worker holds SECRET_KEY, ENCRYPTION_KEY and
+    # the database password, and the whole point is that a script cannot read
+    # any of them. An empty map rather than an omitted one, so adding a
+    # variable here has to be a deliberate, visible decision.
+    environment: {}
+    # A network marked internal has no route off the host, so a container on
+    # that and nothing else cannot reach the internet, the API, Postgres or
+    # Redis, whatever the script asks for.
+    networks: [sandbox]
+    # One directory, and nothing of /data: a script sees the job it was given,
+    # not every project's microdata.
+    volumes:
+      - script-work:/work
+    read_only: true
+    tmpfs:
+      - /tmp:size=256m
+    # The ceiling the import path did not have. A script that asks for more
+    # fails with a message instead of letting the kernel kill the worker.
+    mem_limit: ${SANDBOX_MEMORY:-2g}
+    memswap_limit: ${SANDBOX_MEMORY:-2g}
+    cpus: ${SANDBOX_CPUS:-1.0}
+    pids_limit: 128
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+
   web:
     build:
       # The repository root rather than ./frontend. The bundle now carries the
@@ -212,7 +253,17 @@ volumes:
   postgres-data:
   redis-data:
   survey-data:
+  # Jobs in, results out. The only channel between the platform and a script,
+  # because the runner can reach nothing else. PROTOTYPE.
+  script-work:
 
 networks:
   surveyhq:
     driver: bridge
+  # Where a script runs. `internal` is the whole trick: Docker gives a network
+  # marked this way no route off the host, so a container on it and nothing
+  # else cannot reach the internet, the API, the database or Redis - whatever
+  # the script asks for. PROTOTYPE, see runner/README.md.
+  sandbox:
+    driver: bridge
+    internal: true
