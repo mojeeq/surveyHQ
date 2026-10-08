@@ -33,6 +33,24 @@ computer. Neither changes anything about the data or who can see it.
   and plain buttons. Aero puts the gloss back - panels lit from above, glass
   buttons, a sunken look for the boxes you type into. Both work in light and
   dark.
+- **The side pane's colour**, the palette. Nine shades, or any colour you like
+  through the picker - a national statistics office with its own colours can
+  use them. The text follows the colour rather than being fixed, so a pale
+  pane gets dark ink and stays readable.
+
+### Pinning the side pane
+
+The pin at the top of the side pane decides whether it stays open.
+
+**Pinned** is how it has always been: 248 pixels of navigation, always there,
+with the page beside it.
+
+**Unpinned** collapses it to a narrow rail of icons, and the page takes the
+width back. Point at the rail, or tab into it, and it opens over the page
+without moving anything - so a wide crosstab or a dashboard at full width is
+not pushed sideways every time you reach for the navigation. Each icon keeps
+its name as a tooltip. The choice is remembered on this computer.
+
 
 ## Roles
 

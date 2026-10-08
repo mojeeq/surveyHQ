@@ -21,14 +21,9 @@ export function titleFontStack(value?: string): string | undefined {
 }
 
 /** Whether text on this colour has to be light. Null means no colour is set. */
-export function isDark(color?: string): boolean {
-  const hex = (color ?? '').replace('#', '')
-  if (hex.length !== 6) return false
-  const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16))
-  // Rec. 709 luma: the eye takes green as much brighter than blue at the same
-  // number, so averaging the channels would call #0000ff light.
-  return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.5
-}
+// Moved to lib/colour so the shell can ask the same question without importing
+// this module. Re-exported because the dashboard already imports it from here.
+export { isDark } from '@/lib/colour'
 
 /**
  * The dashboard's background image as an object URL.
