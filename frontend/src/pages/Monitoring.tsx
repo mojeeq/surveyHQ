@@ -82,7 +82,7 @@ export default function Monitoring() {
   return (
     <>
       <PageHeader
-        title="Monitoring"
+        title="Indicators"
         description="Track the numbers that tell you whether field work is on course."
         actions={
           <>
