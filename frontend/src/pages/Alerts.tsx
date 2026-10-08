@@ -2,6 +2,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { api } from '@/lib/api'
 import ProjectFilter, { projectParam } from '@/components/ProjectFilter'
+import { bodyFrom, formFor, isComplete } from '@/lib/alert-rule-form'
 import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { formatNumber, relativeTime } from '@/lib/format'
@@ -31,6 +32,7 @@ export default function Alerts() {
   const [tab, setTab] = useState<'alerts' | 'rules'>('alerts')
   const [statusFilter, setStatusFilter] = useState('open')
   const [creating, setCreating] = useState(false)
+  const [editing, setEditing] = useState<AlertRule | null>(null)
   const [project, setProject] = useState<string | null>(null)
 
   const alerts = useQuery({
@@ -66,6 +68,16 @@ export default function Alerts() {
   const removeRule = useMutation({
     mutationFn: (id: string) => api.delete(`/monitoring/alert-rules/${id}`),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['alert-rules'] }),
+  })
+
+  const setActive = useMutation({
+    mutationFn: ({ id, is_active }: { id: string; is_active: boolean }) =>
+      api.patch<AlertRule>(`/monitoring/alert-rules/${id}`, { is_active }),
+    onSuccess: (rule) => {
+      toast.push(rule.is_active ? 'Rule resumed' : 'Rule paused', 'success')
+      queryClient.invalidateQueries({ queryKey: ['alert-rules'] })
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
   })
 
   return (
@@ -249,15 +261,32 @@ export default function Alerts() {
                         Test now
                       </button>
                       {can('manager') && (
-                        <button
-                          className="btn-ghost btn-sm text-red-600"
-                          onClick={() => {
-                            if (confirm(`Delete the rule "${rule.name}"?`))
-                              removeRule.mutate(rule.id)
-                          }}
-                        >
-                          Delete
-                        </button>
+                        <>
+                          {/* Pausing is its own button rather than a field in
+                              the form: it is the one change somebody makes in
+                              a hurry, when a rule is firing all night. */}
+                          <button
+                            className="btn-secondary btn-sm"
+                            onClick={() =>
+                              setActive.mutate({ id: rule.id, is_active: !rule.is_active })
+                            }
+                            disabled={setActive.isPending}
+                          >
+                            {rule.is_active ? 'Pause' : 'Resume'}
+                          </button>
+                          <button className="btn-secondary btn-sm" onClick={() => setEditing(rule)}>
+                            Edit
+                          </button>
+                          <button
+                            className="btn-ghost btn-sm text-red-600"
+                            onClick={() => {
+                              if (confirm(`Delete the rule "${rule.name}"?`))
+                                removeRule.mutate(rule.id)
+                            }}
+                          >
+                            Delete
+                          </button>
+                        </>
                       )}
                     </div>
                   </div>
@@ -268,6 +297,9 @@ export default function Alerts() {
       </div>
 
       {creating && <RuleModal onClose={() => setCreating(false)} />}
+      {editing && (
+        <RuleModal key={editing.id} rule={editing} onClose={() => setEditing(null)} />
+      )}
     </>
   )
 }
@@ -285,40 +317,44 @@ function describeOperator(operator: string): string {
   )
 }
 
-function RuleModal({ onClose }: { onClose: () => void }) {
+/**
+ * One form for making a rule and for changing one.
+ *
+ * Two forms would drift: a field added to the new-rule form and forgotten here
+ * is a setting you can only ever choose once, which is how editing came to be
+ * missing in the first place.
+ */
+function RuleModal({ rule, onClose }: { rule?: AlertRule; onClose: () => void }) {
   const toast = useToast()
   const queryClient = useQueryClient()
-  const [name, setName] = useState('')
-  const [indicatorId, setIndicatorId] = useState('')
-  const [operator, setOperator] = useState('lt')
-  const [value, setValue] = useState('')
-  const [severity, setSeverity] = useState<Severity>('warning')
-  const [cooldown, setCooldown] = useState('60')
-  const [email, setEmail] = useState(false)
-  const [recipients, setRecipients] = useState('')
+  const initial = formFor(rule)
+  const [name, setName] = useState(initial.name)
+  const [indicatorId, setIndicatorId] = useState(initial.indicatorId)
+  const [operator, setOperator] = useState(initial.operator)
+  const [value, setValue] = useState(initial.value)
+  const [severity, setSeverity] = useState<Severity>(initial.severity)
+  const [cooldown, setCooldown] = useState(initial.cooldown)
+  const [email, setEmail] = useState(initial.email)
+  const [recipients, setRecipients] = useState(initial.recipients)
+  const form = { name, indicatorId, operator, value, severity, cooldown, email, recipients }
 
   const indicators = useQuery({
     queryKey: ['indicators'],
     queryFn: () => api.get<Indicator[]>('/monitoring/indicators'),
   })
 
-  const create = useMutation({
-    mutationFn: () =>
-      api.post('/monitoring/alert-rules', {
-        name,
-        indicator_id: indicatorId,
-        condition: { operator, value: Number(value) },
-        severity,
-        cooldown_minutes: Number(cooldown),
-        channels: email ? ['in_app', 'email'] : ['in_app'],
-        recipients: recipients
-          .split(',')
-          .map((item) => item.trim())
-          .filter(Boolean),
-      }),
+  const save = useMutation({
+    mutationFn: () => {
+      const body = bodyFrom(form)
+      return rule
+        ? api.patch(`/monitoring/alert-rules/${rule.id}`, body)
+        : api.post('/monitoring/alert-rules', body)
+    },
     onSuccess: () => {
-      toast.push('Alert rule created', 'success')
+      toast.push(rule ? 'Alert rule saved' : 'Alert rule created', 'success')
       queryClient.invalidateQueries({ queryKey: ['alert-rules'] })
+      // The rule that raised an open alert may now describe it differently.
+      queryClient.invalidateQueries({ queryKey: ['alerts'] })
       onClose()
     },
     onError: (error: Error) => toast.push(error.message, 'error'),
@@ -328,7 +364,7 @@ function RuleModal({ onClose }: { onClose: () => void }) {
     <Modal
       open
       onClose={onClose}
-      title="New alert rule"
+      title={rule ? 'Edit alert rule' : 'New alert rule'}
       footer={
         <>
           <button className="btn-secondary" onClick={onClose}>
@@ -336,10 +372,10 @@ function RuleModal({ onClose }: { onClose: () => void }) {
           </button>
           <button
             className="btn-primary"
-            onClick={() => create.mutate()}
-            disabled={!name || !indicatorId || value === ''}
+            onClick={() => save.mutate()}
+            disabled={!isComplete(form) || save.isPending}
           >
-            Create rule
+            {rule ? 'Save changes' : 'Create rule'}
           </button>
         </>
       }

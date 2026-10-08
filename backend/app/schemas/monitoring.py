@@ -110,6 +110,11 @@ class AlertRuleCreate(BaseModel):
 class AlertRuleUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
+    # Which indicator the rule watches is editable, not only set at creation:
+    # a rule aimed at the wrong one is the commonest thing to want to correct,
+    # and the alternative is deleting it and losing when it last fired. The
+    # route checks the destination the same way creating against it would.
+    indicator_id: str | None = None
     condition: dict[str, Any] | None = None
     severity: Severity | None = None
     channels: list[str] | None = None

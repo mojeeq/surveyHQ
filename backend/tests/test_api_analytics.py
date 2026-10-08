@@ -216,6 +216,83 @@ def test_alert_rule_fires_and_resolves(client, auth_headers, dataset_id):
     assert acknowledged.json()["status"] == "acknowledged"
 
 
+def test_an_alert_rule_can_be_edited_after_it_is_made(client, auth_headers, dataset_id):
+    """Every part of a rule a person can set when creating it, they can change.
+
+    The route takes a partial body, so each field is checked both ways: that it
+    took the new value, and that the fields left out kept theirs.
+    """
+    indicators = [
+        client.post(
+            "/api/v1/monitoring/indicators",
+            headers=auth_headers,
+            json={
+                "name": name,
+                "dataset_id": dataset_id,
+                "spec": {"measures": [{"agg": "count", "alias": "n"}]},
+            },
+        ).json()
+        for name in ("First count", "Second count")
+    ]
+
+    rule = client.post(
+        "/api/v1/monitoring/alert-rules",
+        headers=auth_headers,
+        json={
+            "name": "Draft rule",
+            "indicator_id": indicators[0]["id"],
+            "condition": {"operator": "lt", "value": 10},
+            "severity": "warning",
+            "cooldown_minutes": 60,
+            "channels": ["in_app"],
+            "recipients": [],
+        },
+    ).json()
+
+    edited = client.patch(
+        f"/api/v1/monitoring/alert-rules/{rule['id']}",
+        headers=auth_headers,
+        json={
+            "name": "Interviews falling behind",
+            "indicator_id": indicators[1]["id"],
+            "condition": {"operator": "gte", "value": 250},
+            "severity": "critical",
+            "cooldown_minutes": 15,
+            "channels": ["in_app", "email"],
+            "recipients": ["field@example.org"],
+        },
+    )
+    assert edited.status_code == 200, edited.text
+    after = edited.json()
+    assert after["name"] == "Interviews falling behind"
+    assert after["indicator_id"] == indicators[1]["id"]
+    assert after["condition"] == {"operator": "gte", "value": 250}
+    assert after["severity"] == "critical"
+    assert after["cooldown_minutes"] == 15
+    assert after["channels"] == ["in_app", "email"]
+    assert after["recipients"] == ["field@example.org"]
+
+    # Pausing is the one change with no way to make it before this: the listing
+    # has always drawn a paused rule and nothing could put one in that state.
+    paused = client.patch(
+        f"/api/v1/monitoring/alert-rules/{rule['id']}",
+        headers=auth_headers,
+        json={"is_active": False},
+    )
+    assert paused.status_code == 200, paused.text
+    assert paused.json()["is_active"] is False
+    # A partial body leaves the rest alone rather than resetting it to defaults.
+    assert paused.json()["name"] == "Interviews falling behind"
+    assert paused.json()["cooldown_minutes"] == 15
+
+    listed = client.get("/api/v1/monitoring/alert-rules", headers=auth_headers).json()
+    assert next(r for r in listed if r["id"] == rule["id"])["is_active"] is False
+
+    client.delete(f"/api/v1/monitoring/alert-rules/{rule['id']}", headers=auth_headers)
+    for indicator in indicators:
+        client.delete(f"/api/v1/monitoring/indicators/{indicator['id']}", headers=auth_headers)
+
+
 def test_quality_suggestions_and_run(client, auth_headers, dataset_id):
     suggestions = client.get(
         f"/api/v1/monitoring/datasets/{dataset_id}/quality/suggestions",

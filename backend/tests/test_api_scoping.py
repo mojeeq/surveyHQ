@@ -221,9 +221,58 @@ def test_an_alert_rule_on_another_project_is_not_reachable_by_id(
     assert response.status_code == 404, f"{method} {url} -> {response.status_code}"
 
 
-def test_an_alert_rule_cannot_be_moved_onto_an_unreachable_indicator(
-    client, member_headers, auth_headers, foreign_indicator
+@pytest.fixture
+def home_indicator(client, auth_headers, home_project, stata_file) -> dict:
+    """An indicator the restricted manager can reach, on their own project.
+
+    A second dataset of its own, because `foreign_indicator` moves the shared
+    one into the project this user is kept out of.
+    """
+    with open(stata_file, "rb") as handle:
+        uploaded = client.post(
+            "/api/v1/datasets/upload",
+            headers=auth_headers,
+            files={"file": ("home.dta", handle, "application/octet-stream")},
+            data={"name": "Their own survey"},
+        )
+    assert uploaded.status_code == 201, uploaded.text
+    dataset = uploaded.json()["id"]
+    moved = client.put(
+        f"/api/v1/projects/assign/dataset/{dataset}",
+        headers=auth_headers,
+        json={"project_id": home_project["id"]},
+    )
+    assert moved.status_code == 200, moved.text
+    response = client.post(
+        "/api/v1/monitoring/indicators",
+        headers=auth_headers,
+        json={
+            "name": "Their interviews",
+            "dataset_id": dataset,
+            "spec": {
+                "dimensions": [],
+                "measures": [{"agg": "count", "alias": "value"}],
+                "limit": 1,
+            },
+        },
+    )
+    assert response.status_code == 201, response.text
+    indicator = response.json()
+    yield indicator
+    client.delete(f"/api/v1/monitoring/indicators/{indicator['id']}", headers=auth_headers)
+    client.delete(f"/api/v1/datasets/{dataset}", headers=auth_headers)
+
+
+def test_a_global_alert_rule_is_not_reachable_by_a_user_without_the_shared_area(
+    client, member_headers, auth_headers
 ):
+    """A rule tied to no dataset and no indicator belongs to the shared area.
+
+    This user is confined to their projects, so the rule is out of reach the
+    moment it is created - including to the hand that created it. Worth its own
+    test, because for a long time it was silently standing in for the one below
+    and that one never reached the check it was named after.
+    """
     mine = client.post(
         "/api/v1/monitoring/alert-rules",
         headers=member_headers,
@@ -237,10 +286,51 @@ def test_an_alert_rule_cannot_be_moved_onto_an_unreachable_indicator(
     response = client.patch(
         f"/api/v1/monitoring/alert-rules/{mine.json()['id']}",
         headers=member_headers,
-        json={"indicator_id": foreign_indicator["id"]},
+        json={"name": "Renamed"},
     )
     assert response.status_code == 404, response.text
     client.delete(f"/api/v1/monitoring/alert-rules/{mine.json()['id']}", headers=auth_headers)
+
+
+def test_an_alert_rule_cannot_be_moved_onto_an_unreachable_indicator(
+    client, member_headers, auth_headers, home_indicator, foreign_indicator
+):
+    """The rule is theirs to edit; the indicator they are aiming it at is not.
+
+    Moving a rule onto another project's indicator is a write to that project,
+    so the destination is checked as well as the rule.
+    """
+    mine = client.post(
+        "/api/v1/monitoring/alert-rules",
+        headers=member_headers,
+        json={
+            "name": "My rule",
+            "indicator_id": home_indicator["id"],
+            "condition": {"operator": "lt", "value": 5},
+            "severity": "warning",
+        },
+    )
+    assert mine.status_code == 201, mine.text
+    rule = mine.json()["id"]
+    # Reachable, so a 404 below is the destination being refused and not the
+    # rule being invisible - which is what the earlier version of this test
+    # was actually measuring.
+    renamed = client.patch(
+        f"/api/v1/monitoring/alert-rules/{rule}",
+        headers=member_headers,
+        json={"name": "Renamed by its owner"},
+    )
+    assert renamed.status_code == 200, renamed.text
+
+    response = client.patch(
+        f"/api/v1/monitoring/alert-rules/{rule}",
+        headers=member_headers,
+        json={"indicator_id": foreign_indicator["id"]},
+    )
+    assert response.status_code == 404, response.text
+    still = client.get("/api/v1/monitoring/alert-rules", headers=member_headers).json()
+    assert [r["indicator_id"] for r in still if r["id"] == rule] == [home_indicator["id"]]
+    client.delete(f"/api/v1/monitoring/alert-rules/{rule}", headers=auth_headers)
 
 
 def test_an_alert_raised_by_another_project_cannot_be_acknowledged(
