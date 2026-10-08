@@ -106,7 +106,42 @@ function Brand() {
   )
 }
 
+/** The Aero tile in miniature, lit when it is on.
+ *
+ *  Its whole grammar in 16 pixels: a tile, a highlight over the top half
+ *  ending on a hard line, a bevel. Flat is the same tile without any of it,
+ *  which is the honest picture of what the button does.
+ */
+function SurfaceIcon({ aero }: { aero: boolean }) {
+  return (
+    <svg viewBox="0 0 16 16" width="16" height="16" aria-hidden className="shrink-0">
+      <rect
+        x="2.5"
+        y="2.5"
+        width="11"
+        height="11"
+        rx="2"
+        fill={aero ? 'currentColor' : 'none'}
+        fillOpacity={aero ? 0.22 : 0}
+        stroke="currentColor"
+        strokeWidth="1.3"
+      />
+      {aero && (
+        <>
+          <path d="M3.6 4.2h8.8v3.4H3.6z" fill="currentColor" fillOpacity="0.55" />
+          <path d="M3.6 7.6h8.8" stroke="currentColor" strokeWidth="0.9" strokeOpacity="0.75" />
+        </>
+      )}
+    </svg>
+  )
+}
+
 function SidebarNav({ admin = false, onNavigate }: { admin?: boolean; onNavigate?: () => void }) {
+  // The halo under a tile is half of what makes the icons read as Aero. With
+  // the flat shell it is noise on a plain background, so it follows the choice
+  // rather than being on or off for good.
+  const { surface } = useTheme()
+  const glow = surface === 'aero'
   return (
     <nav className="flex-1 overflow-y-auto px-3 py-4">
       <div className="space-y-5">
@@ -124,7 +159,7 @@ function SidebarNav({ admin = false, onNavigate }: { admin?: boolean; onNavigate
                   onClick={onNavigate}
                   className={({ isActive }) => navRow(isActive)}
                 >
-                  <AppIcon name={item.icon} size={19} glow={false} className="shrink-0" />
+                  <AppIcon name={item.icon} size={19} glow={glow} className="shrink-0" />
                   <span className="truncate">{item.label}</span>
                 </NavLink>
               ))}
@@ -137,12 +172,12 @@ function SidebarNav({ admin = false, onNavigate }: { admin?: boolean; onNavigate
             {/* Help is here for everybody, above Administration, because it is
                 the one entry a reader who is lost will look for by name. */}
             <NavLink to="/help" onClick={onNavigate} className={({ isActive }) => navRow(isActive)}>
-              <AppIcon name="help" size={19} glow={false} className="shrink-0" />
+              <AppIcon name="help" size={19} glow={glow} className="shrink-0" />
               <span className="truncate">Help</span>
             </NavLink>
             {admin && (
               <NavLink to="/admin" onClick={onNavigate} className={({ isActive }) => navRow(isActive)}>
-                <AppIcon name="admin" size={19} glow={false} className="shrink-0" />
+                <AppIcon name="admin" size={19} glow={glow} className="shrink-0" />
                 <span className="truncate">Administration</span>
               </NavLink>
             )}
@@ -155,7 +190,8 @@ function SidebarNav({ admin = false, onNavigate }: { admin?: boolean; onNavigate
 
 export default function Layout() {
   const { user, signOut, can } = useAuth()
-  const { resolvedTheme, toggleTheme } = useTheme()
+  const { resolvedTheme, toggleTheme, surface, toggleSurface } = useTheme()
+  const aero = surface === 'aero'
   const navigate = useNavigate()
   const [menuOpen, setMenuOpen] = useState(false)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
@@ -174,7 +210,11 @@ export default function Layout() {
 
   return (
     <div className="flex min-h-screen bg-slate-50 text-slate-700 dark:bg-slate-950 dark:text-slate-300">
-      <aside className="hidden w-[248px] shrink-0 flex-col border-r border-white/[0.06] bg-slate-950 lg:flex">
+      <aside
+        className={`hidden w-[248px] shrink-0 flex-col border-r border-white/[0.06] lg:flex ${
+          aero ? 'aero-sidebar' : 'bg-slate-950'
+        }`}
+      >
         <div className="flex h-[72px] items-center border-b border-white/[0.06] px-5">
           <Brand />
         </div>
@@ -186,7 +226,11 @@ export default function Layout() {
       </aside>
 
       <div className="flex min-w-0 flex-1 flex-col">
-        <header className="sticky top-0 z-30 flex h-[72px] items-center justify-between gap-3 border-b border-slate-200/80 bg-white/90 px-4 backdrop-blur-xl dark:border-slate-800 dark:bg-slate-950/90 lg:px-7">
+        <header
+          className={`sticky top-0 z-30 flex h-[72px] items-center justify-between gap-3 border-b border-slate-200/80 px-4 dark:border-slate-800 lg:px-7 ${
+            aero ? 'aero-glass' : 'bg-white/90 backdrop-blur-xl dark:bg-slate-950/90'
+          }`}
+        >
           <div className="flex min-w-0 items-center gap-3 lg:hidden">
             <button
               ref={mobileToggleRef}
@@ -217,6 +261,15 @@ export default function Layout() {
           </div>
 
           <div className="flex items-center gap-1.5">
+            <button
+              className="icon-button"
+              onClick={toggleSurface}
+              aria-pressed={aero}
+              aria-label={aero ? 'Use the flat surfaces' : 'Use the Aero surfaces'}
+              title={aero ? 'Flat surfaces' : 'Aero surfaces'}
+            >
+              <SurfaceIcon aero={aero} />
+            </button>
             <button
               className="icon-button"
               onClick={toggleTheme}
