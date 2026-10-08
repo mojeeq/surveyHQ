@@ -1,4 +1,5 @@
 import { lazy, Suspense } from 'react'
+import { PAGES } from '@/lib/pages'
 import { Navigate, Route, Routes } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { api, tokenStore } from '@/lib/api'
@@ -12,22 +13,22 @@ import NotFound from '@/pages/NotFound'
 // Keep only the authentication shell in the startup bundle.  DashboardView and
 // Explore are large analytical workspaces; downloading/parsing them before a
 // user even signs in makes every first load pay for code they may never open.
-const Overview = lazy(() => import('@/pages/Overview'))
-const Projects = lazy(() => import('@/pages/Projects'))
+const Overview = lazy(PAGES['/'])
+const Projects = lazy(PAGES['/projects'])
 const ProjectDetail = lazy(() => import('@/pages/ProjectDetail'))
-const Datasets = lazy(() => import('@/pages/Datasets'))
+const Datasets = lazy(PAGES['/datasets'])
 const DatasetDetail = lazy(() => import('@/pages/DatasetDetail'))
-const Connections = lazy(() => import('@/pages/Connections'))
-const Explore = lazy(() => import('@/pages/Explore'))
-const Dashboards = lazy(() => import('@/pages/Dashboards'))
+const Connections = lazy(PAGES['/connections'])
+const Explore = lazy(PAGES['/explore'])
+const Dashboards = lazy(PAGES['/dashboards'])
 const DashboardView = lazy(() => import('@/pages/DashboardView'))
-const Monitoring = lazy(() => import('@/pages/Monitoring'))
-const Quality = lazy(() => import('@/pages/Quality'))
-const Alerts = lazy(() => import('@/pages/Alerts'))
-const Admin = lazy(() => import('@/pages/Admin'))
+const Monitoring = lazy(PAGES['/monitoring'])
+const Quality = lazy(PAGES['/quality'])
+const Alerts = lazy(PAGES['/alerts'])
+const Admin = lazy(PAGES['/admin'])
 // The documentation is the whole of docs/ rendered into the bundle, so it
 // is a chunk of its own that only a reader who opens Help ever downloads.
-const Help = lazy(() => import('@/pages/Help'))
+const Help = lazy(PAGES['/help'])
 const SharedDashboard = lazy(() => import('@/pages/SharedDashboard'))
 
 function RouteLoading() {

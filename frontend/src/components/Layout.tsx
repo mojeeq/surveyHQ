@@ -2,6 +2,7 @@ import { NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { api } from '@/lib/api'
+import { warm } from '@/lib/pages'
 import { useAuth } from '@/hooks/useAuth'
 import { useTheme } from '@/hooks/useTheme'
 import type { Notification } from '@/lib/types'
@@ -157,6 +158,13 @@ function SidebarNav({ admin = false, onNavigate }: { admin?: boolean; onNavigate
                   to={item.to}
                   end={item.end}
                   onClick={onNavigate}
+                  // Start fetching the page while the pointer is still on its
+                  // way to the click. Dashboards and Analyse pull the charting
+                  // library with them, a megabyte that is very visible to wait
+                  // for once the click has landed.
+                  onMouseEnter={() => warm(item.to)}
+                  onFocus={() => warm(item.to)}
+                  onTouchStart={() => warm(item.to)}
                   className={({ isActive }) => navRow(isActive)}
                 >
                   <AppIcon name={item.icon} size={19} glow={glow} className="shrink-0" />
@@ -171,12 +179,26 @@ function SidebarNav({ admin = false, onNavigate }: { admin?: boolean; onNavigate
           <div className="space-y-1">
             {/* Help is here for everybody, above Administration, because it is
                 the one entry a reader who is lost will look for by name. */}
-            <NavLink to="/help" onClick={onNavigate} className={({ isActive }) => navRow(isActive)}>
+            <NavLink
+              to="/help"
+              onClick={onNavigate}
+              onMouseEnter={() => warm('/help')}
+              onFocus={() => warm('/help')}
+              onTouchStart={() => warm('/help')}
+              className={({ isActive }) => navRow(isActive)}
+            >
               <AppIcon name="help" size={19} glow={glow} className="shrink-0" />
               <span className="truncate">Help</span>
             </NavLink>
             {admin && (
-              <NavLink to="/admin" onClick={onNavigate} className={({ isActive }) => navRow(isActive)}>
+              <NavLink
+                to="/admin"
+                onClick={onNavigate}
+                onMouseEnter={() => warm('/admin')}
+                onFocus={() => warm('/admin')}
+                onTouchStart={() => warm('/admin')}
+                className={({ isActive }) => navRow(isActive)}
+              >
                 <AppIcon name="admin" size={19} glow={glow} className="shrink-0" />
                 <span className="truncate">Administration</span>
               </NavLink>
