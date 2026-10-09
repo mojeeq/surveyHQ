@@ -449,7 +449,7 @@ def run_report_burst(self: Any, job_id: str) -> dict[str, Any]:
                 db,
                 dashboard,
                 variable,
-                render=lambda widget: _render_widget(db, widget, None),
+                render=lambda widget, filters: _render_widget(db, widget, filters),
                 destination=reports.directory() / f"{job_id}.zip",
                 on_progress=progress,
             )
@@ -804,7 +804,7 @@ def take_due_snapshots() -> dict[str, Any]:
                 snapshot = snapshots.take(
                     db,
                     dashboard,
-                    render=lambda widget: _render_widget(db, widget, None),
+                    render=lambda widget, filters: _render_widget(db, widget, filters),
                     automatic=True,
                     now=now,
                 )

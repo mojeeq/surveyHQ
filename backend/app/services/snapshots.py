@@ -73,7 +73,9 @@ def due(dashboard: Dashboard, now: dt.datetime | None = None) -> bool:
 def take(
     db: Session,
     dashboard: Dashboard,
-    render: Callable[[Any], Any],
+    # Takes the filter as well as the widget: build_payload hands one through
+    # for a pinned export, and None for an ordinary one like this.
+    render: Callable[[Any, Any], Any],
     *,
     automatic: bool = False,
     user_id: str | None = None,

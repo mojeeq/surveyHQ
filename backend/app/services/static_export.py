@@ -148,7 +148,13 @@ def _narrowed(
     ordinary control leaves such a widget alone instead of emptying it.
     """
     extra = [
-        Condition(variable=name, operator="eq", value=value)
+        # use_label, because the values come from _values_for, which asks for
+        # them labelled - the dropdown offers "Aimeliik", not the code stored
+        # under it. Without this the comparison reaches DuckDB as
+        # CAST('Aimeliik' AS DOUBLE) against a coded column and the widget
+        # fails with a conversion error. A plain text column has no value
+        # labels, so the flag changes nothing there.
+        Condition(variable=name, operator="eq", value=value, use_label=True)
         for name, value in pinned.items()
         if name in ctx.variables
     ]
@@ -561,6 +567,25 @@ AS_THEY_STAND = {
 }
 
 
+def pinned_filters(pinned: dict[str, str] | None) -> FilterGroup | None:
+    """A pinned selection as a filter the live renderer understands.
+
+    Used for the widgets that cannot be recomputed offline and so are drawn
+    as they stand. Drawn with no filter, those showed the whole country inside
+    a province's report: labelled honestly, but the wrong numbers under the
+    wrong title, which is worse than leaving them out.
+    """
+    if not pinned:
+        return None
+    return FilterGroup(
+        op="and",
+        conditions=[
+            Condition(variable=name, operator="eq", value=value, use_label=True)
+            for name, value in pinned.items()
+        ],
+    )
+
+
 def build_payload(
     db: Session,
     dashboard: Dashboard,
@@ -589,12 +614,20 @@ def build_payload(
     controls = [control for control in controls if control["values"]]
     # A pinned variable is answered, so it is not a question any more. Dropped
     # before the widgets are built, which is what keeps it out of every cube.
-    chosen = [
-        {"variable": control["variable"], "label": control.get("label") or control["variable"],
-         "value": pinned[control["variable"]]}
-        for control in controls
-        if control["variable"] in pinned
-    ]
+    # One entry per variable, not per control. The same filter is usually
+    # declared on every page that uses it, so a board with five pages read
+    # "State: Aimeliik" five times under its title.
+    chosen: list[dict[str, str]] = []
+    for control in controls:
+        name = control["variable"]
+        if name in pinned and not any(one["variable"] == name for one in chosen):
+            chosen.append(
+                {
+                    "variable": name,
+                    "label": control.get("label") or name,
+                    "value": pinned[name],
+                }
+            )
     controls = [control for control in controls if control["variable"] not in pinned]
 
     widgets: list[dict[str, Any]] = []
@@ -635,7 +668,7 @@ def build_payload(
                 reason = str(exc)
         if reason is not None or builder is None:
             entry["kind"] = "snapshot"
-            entry["snapshot"] = render(widget)
+            entry["snapshot"] = render(widget, pinned_filters(pinned))
             # Only worth saying where a filter exists that the reader will
             # expect to move it. A text box is not "not filtered"; it simply
             # has nothing to filter.
