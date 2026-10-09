@@ -6,7 +6,7 @@ import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
 import { formatNumber, relativeTime } from '@/lib/format'
 import { Badge, Field, Modal, Spinner } from '@/components/ui'
-import type { Dashboard } from '@/lib/types'
+import type { Dashboard, DashboardSavedView } from '@/lib/types'
 
 export interface ShareLink {
   id: string
@@ -269,6 +269,16 @@ export default function ShareLinks({
  * thing that makes it a dashboard, which is that the reader can narrow it.
  */
 function DownloadCopy({ dashboard }: { dashboard: Dashboard }) {
+  // Saved views are the selections somebody already wrote down, so they are
+  // what a report is of: "Malampa this week" is a report of Malampa this week.
+  // Nobody has to describe the same thing twice, and the file and the view
+  // cannot drift apart.
+  const views = useQuery({
+    queryKey: ['dashboard-views', dashboard.id, `/dashboards/${dashboard.id}`],
+    queryFn: () => api.get<DashboardSavedView[]>(`/dashboards/${dashboard.id}/views`),
+  })
+  const [view, setView] = useState('')
+  const chosen = views.data?.find((one) => one.id === view)
   const toast = useToast()
   const [busy, setBusy] = useState(false)
   return (
@@ -278,11 +288,36 @@ function DownloadCopy({ dashboard }: { dashboard: Dashboard }) {
           <p className="text-sm font-medium text-ink-800">Download as a web page</p>
           <p className="text-xs text-ink-500">
             One HTML file you can put on any web host or send to somebody. Its filter
-            dropdowns still work: the numbers behind every widget travel with it. Charts
-            and maps are drawn by libraries fetched from the internet, and a widget that
-            cannot be worked out again offline - a data quality panel, a median - says on
-            its face that it is showing the day it was exported.
+            dropdowns still work: the numbers behind every widget travel with it, as do
+            the libraries that draw the charts, so it opens with no internet. A widget
+            that cannot be worked out again offline - a data quality panel, a median -
+            says on its face that it is showing the day it was exported. A map still
+            needs the internet for its background tiles.
           </p>
+          {Boolean(views.data?.length) && (
+            <label className="mt-2 flex flex-wrap items-center gap-2 text-xs text-ink-600">
+              Of
+              <select
+                className="input w-auto py-1 text-xs"
+                value={view}
+                onChange={(event) => setView(event.target.value)}
+              >
+                <option value="">everything, with the filters left open</option>
+                {views.data?.map((one) => (
+                  <option key={one.id} value={one.id}>
+                    just {one.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          )}
+          {chosen && (
+            <p className="mt-1.5 text-xs text-ink-500">
+              The file is narrowed to {chosen.name} and carries nothing else: the rows
+              outside it are never computed, so it is safe to send to whoever that
+              selection belongs to. Its controls are gone rather than preset.
+            </p>
+          )}
         </div>
         <button
           className="btn-secondary btn-sm shrink-0"
@@ -291,9 +326,14 @@ function DownloadCopy({ dashboard }: { dashboard: Dashboard }) {
             setBusy(true)
             try {
               await downloadFile(
-                `/dashboards/${dashboard.id}/export.html`,
+                `/dashboards/${dashboard.id}/export.html${view ? `?view=${view}` : ''}`,
                 undefined,
-                `${dashboard.slug || 'dashboard'}.html`,
+                // Only a fallback: the server names the file, and names it
+                // after the view, so a folder of provincial reports is not
+                // fourteen copies of one name.
+                `${dashboard.slug || 'dashboard'}${
+                  chosen ? `-${chosen.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}` : ''
+                }.html`,
                 'GET',
               )
             } catch (error) {

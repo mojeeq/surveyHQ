@@ -137,6 +137,15 @@
      part of the figure, so the controls are printed as the values they are
      set to rather than dropped. The charts are canvases and print as they are
      drawn, which is why the background colours have to be told to print. */
+  /* The pinned selection under the title. Reads as a subtitle on screen and
+     has to survive onto paper, where it is the only thing distinguishing one
+     province's printout from another's. */
+  .pinned {
+    margin: 6px 0 0;
+    font-weight: 600;
+    letter-spacing: .01em;
+  }
+
   @media print {
     @page { margin: 14mm; }
     body { background: #fff; }
@@ -993,6 +1002,16 @@
     }
     if (DATA.description && !look.hide_subtitle) {
       header.appendChild(el('p', '', DATA.description))
+    }
+    /* What this file is of. A pinned export has no control for these, so
+       without a line saying so the reader cannot tell Shefa's copy from the
+       whole country's, and the two look identical side by side on a desk. */
+    if (DATA.pinned && DATA.pinned.length) {
+      var pin = el('p', 'pinned')
+      pin.textContent = DATA.pinned.map(function (one) {
+        return one.label + ': ' + one.value
+      }).join(' · ')
+      header.appendChild(pin)
     }
     app.appendChild(header)
 

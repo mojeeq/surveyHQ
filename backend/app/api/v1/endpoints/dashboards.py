@@ -1107,8 +1107,35 @@ class ShareLinkPatch(BaseModel):
     password: str | None = None
 
 
+def _pinned_from_view(
+    view_id: str, dashboard_id: str, db: DbSession
+) -> tuple[dict[str, str], str]:
+    """The filter selection a saved view stands for, and what to call it.
+
+    A view already is the thing somebody wants a report of: its state holds
+    {"filters": {"province": "Malampa"}}, which is exactly one province's
+    report. Reusing it means the report and the on-screen view cannot drift,
+    and nobody has to describe the same selection twice.
+    """
+    view = db.get(DashboardView, view_id)
+    # Checked against this dashboard, not just fetched: a view id from another
+    # board would otherwise narrow this one by a variable nobody chose here.
+    if view is None or view.dashboard_id != dashboard_id:
+        raise HTTPException(status_code=404, detail="View not found")
+    state = view.state or {}
+    raw = state.get("filters") if isinstance(state, dict) else {}
+    pinned = {
+        str(k): str(v)
+        for k, v in (raw or {}).items()
+        if isinstance(k, str) and v not in (None, "")
+    }
+    return pinned, view.name
+
+
 @router.get("/{dashboard_id}/export.html")
-def export_dashboard_html(dashboard_id: str, db: DbSession, user: CurrentUser) -> Response:
+def export_dashboard_html(
+    dashboard_id: str, db: DbSession, user: CurrentUser, view: str | None = None
+) -> Response:
     """The dashboard as one HTML file, filters and all.
 
     A board is often wanted somewhere this platform is not: on a ministry's own
@@ -1116,10 +1143,15 @@ def export_dashboard_html(dashboard_id: str, db: DbSession, user: CurrentUser) -
     loses the one thing that makes it a dashboard, which is that the reader can
     narrow it and watch the numbers move, so the file carries the data behind
     every widget at the grain its filters need rather than a rendering of it.
+
+    With `view`, it is that view's file instead: narrowed to the selection the
+    view holds, with those controls gone rather than preselected. One
+    province's report, carrying one province's numbers and no others.
     """
     dashboard = _get_dashboard(dashboard_id, db, user)
+    pinned, view_name = _pinned_from_view(view, dashboard_id, db) if view else ({}, "")
     payload = static_export.build_payload(
-        db, dashboard, render=lambda widget: _render_widget(db, widget, None)
+        db, dashboard, render=lambda widget: _render_widget(db, widget, None), pinned=pinned
     )
     record(
         db,
@@ -1127,10 +1159,14 @@ def export_dashboard_html(dashboard_id: str, db: DbSession, user: CurrentUser) -
         action="dashboard.export_html",
         entity_type="dashboard",
         entity_id=dashboard_id,
-        detail={"widgets": len(payload["widgets"])},
+        detail={"widgets": len(payload["widgets"]), "view": view_name, "pinned": pinned},
     )
     db.commit()
     name = slugify(dashboard.name) or "dashboard"
+    # The province in the file name, because a folder of fourteen files all
+    # called fiji-census-2017.html is not a set of provincial reports.
+    if view_name:
+        name = f"{name}-{slugify(view_name) or 'view'}"
     return Response(
         content=static_export.render_html(
             payload, static_export.appearance_css(dashboard)

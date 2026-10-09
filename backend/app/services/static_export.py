@@ -40,8 +40,10 @@ from app.models import (
 )
 from app.schemas.query import (
     Aggregation,
+    Condition,
     CrosstabRequest,
     Dimension,
+    FilterGroup,
     Measure,
     QuerySpec,
 )
@@ -129,10 +131,39 @@ def _recipe(measures: list[Measure]) -> tuple[list[Measure], list[dict[str, Any]
     return asked, recipes
 
 
+def _narrowed(
+    ctx: DatasetContext, filters: FilterGroup, pinned: dict[str, str]
+) -> FilterGroup:
+    """`filters`, and every pinned choice this dataset can answer.
+
+    A pinned export is one province's file, so the narrowing happens here
+    rather than being left to the reader: the rows of the other provinces are
+    never computed and never travel. That is the difference between a file
+    that opens on Shefa and a file that is Shefa, and it is the whole reason
+    not to simply preselect the dropdown - a standalone file is the copy
+    nobody can withdraw, and one quietly carrying every other province's
+    numbers is the wrong thing to email to a provincial office.
+
+    A pinned variable the dataset does not carry is skipped, the same way an
+    ordinary control leaves such a widget alone instead of emptying it.
+    """
+    extra = [
+        Condition(variable=name, operator="eq", value=value)
+        for name, value in pinned.items()
+        if name in ctx.variables
+    ]
+    if not extra:
+        return filters
+    # Nested rather than appended: the saved filter may be an "any of these",
+    # and adding a condition beside those would widen it instead of narrowing.
+    return FilterGroup(op="and", conditions=extra, groups=[filters])
+
+
 def _cube(
     ctx: DatasetContext,
     spec: QuerySpec,
     filter_variables: list[str],
+    pinned: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """One widget's numbers, at the grain its filters need.
 
@@ -158,6 +189,8 @@ def _cube(
         {"variable": name, "column": grouped.get(name, name)} for name in filter_variables
     ]
     asked, recipes = _recipe(list(spec.measures))
+    if pinned:
+        spec = spec.model_copy(update={"filters": _narrowed(ctx, spec.filters, pinned)})
     grained = spec.model_copy(
         update={
             "dimensions": [
@@ -297,7 +330,7 @@ def _crosstab_spec(request: CrosstabRequest) -> QuerySpec:
 
 
 def _chart_widget(
-    db: Session, widget: Widget, controls: list[dict[str, Any]]
+    db: Session, widget: Widget, controls: list[dict[str, Any]], pinned: dict[str, str]
 ) -> dict[str, Any]:
     chart = db.get(Chart, widget.chart_id or "")
     if chart is None:
@@ -326,7 +359,12 @@ def _chart_widget(
             # finished. The reader loses the ability to narrow this one widget
             # inside the file; the alternative is publishing what the rule
             # exists to protect.
-            table = execute_crosstab(ctx, request)
+            # The only query that does not go through _cube, so the pinned
+            # narrowing has to be applied by hand here or this one widget
+            # would report the whole country inside a provincial file.
+            table = execute_crosstab(
+                ctx, request.model_copy(update={"filters": _narrowed(ctx, request.filters, pinned)})
+            )
             return {
                 "kind": "crosstab",
                 "chart_type": "crosstab",
@@ -354,7 +392,7 @@ def _chart_widget(
                 },
                 "cube": {"dimensions": [], "measures": [], "filters": [], "rows": []},
             }
-        cube = _cube(ctx, _crosstab_spec(request), names)
+        cube = _cube(ctx, _crosstab_spec(request), names, pinned)
         return {
             "kind": "crosstab",
             "chart_type": "crosstab",
@@ -380,12 +418,12 @@ def _chart_widget(
         "kind": "chart",
         "chart_type": chart.chart_type.value,
         "display": spec_raw.get("options") or {},
-        "cube": _cube(ctx, spec, names),
+        "cube": _cube(ctx, spec, names, pinned),
     }
 
 
 def _inline_widget(
-    db: Session, widget: Widget, controls: list[dict[str, Any]]
+    db: Session, widget: Widget, controls: list[dict[str, Any]], pinned: dict[str, str]
 ) -> dict[str, Any]:
     config = widget.config or {}
     ctx = _ctx_for(db, widget.dataset_id or config.get("dataset_id"))
@@ -398,12 +436,12 @@ def _inline_widget(
         if widget.widget_type.value == "chart"
         else widget.widget_type.value,
         "display": config.get("options") or {},
-        "cube": _cube(ctx, spec, _applicable_names(ctx, controls)),
+        "cube": _cube(ctx, spec, _applicable_names(ctx, controls), pinned),
     }
 
 
 def _indicator_widget(
-    db: Session, widget: Widget, controls: list[dict[str, Any]]
+    db: Session, widget: Widget, controls: list[dict[str, Any]], pinned: dict[str, str]
 ) -> dict[str, Any]:
     indicator = db.get(Indicator, widget.indicator_id or "")
     if indicator is None:
@@ -435,7 +473,7 @@ def _indicator_widget(
             "breakdown_targets": indicator.breakdown_targets or {},
             "percent_of": indicator.percent_of or "",
         },
-        "cube": _cube(ctx, headline, names),
+        "cube": _cube(ctx, headline, names, pinned),
     }
     if indicator.percent_of:
         # The rows the indicator's own count is a share of. Its filters are
@@ -448,7 +486,7 @@ def _indicator_widget(
             filters=_denominator_filters(indicator, spec),
             limit=MAX_CUBE_ROWS + 1,
         )
-        payload["denominator"] = _cube(ctx, keep, names)
+        payload["denominator"] = _cube(ctx, keep, names, pinned)
     return payload
 
 
@@ -464,7 +502,9 @@ def _denominator_filters(indicator: Indicator, spec: QuerySpec):
     return FilterGroup()
 
 
-def _map_widget(db: Session, widget: Widget, controls: list[dict[str, Any]]) -> dict[str, Any]:
+def _map_widget(
+    db: Session, widget: Widget, controls: list[dict[str, Any]], pinned: dict[str, str]
+) -> dict[str, Any]:
     config = widget.config or {}
     ctx = _ctx_for(db, widget.dataset_id or config.get("dataset_id"))
     if ctx is None:
@@ -500,7 +540,7 @@ def _map_widget(db: Session, widget: Widget, controls: list[dict[str, Any]]) -> 
             "point_opacity": config.get("point_opacity"),
             "size_by_value": config.get("size_by_value", True),
         },
-        "cube": _cube(ctx, spec, _applicable_names(ctx, controls)),
+        "cube": _cube(ctx, spec, _applicable_names(ctx, controls), pinned),
     }
 
 
@@ -525,6 +565,7 @@ def build_payload(
     db: Session,
     dashboard: Dashboard,
     render: Any,
+    pinned: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """Everything the exported page needs, as plain JSON.
 
@@ -532,7 +573,13 @@ def build_payload(
     lives with the API and importing it here would tie a service to an
     endpoint. It draws the widgets that cannot be recomputed offline, exactly
     as they stand right now.
+
+    `pinned` fixes some of the filters, which makes this one province's file
+    rather than the whole country's with a dropdown. Those variables lose
+    their control, lose their cube column, and never have their other values
+    computed. Left empty, nothing changes and the export is what it was.
     """
+    pinned = {str(k): str(v) for k, v in (pinned or {}).items() if v not in (None, "")}
     controls = _filters_for(dashboard)
     for control in controls:
         ctx = _ctx_for(db, control["dataset_id"])
@@ -540,6 +587,15 @@ def build_payload(
     # A control nothing can answer is worse than no control: it would sit on
     # the page offering choices that move nothing.
     controls = [control for control in controls if control["values"]]
+    # A pinned variable is answered, so it is not a question any more. Dropped
+    # before the widgets are built, which is what keeps it out of every cube.
+    chosen = [
+        {"variable": control["variable"], "label": control.get("label") or control["variable"],
+         "value": pinned[control["variable"]]}
+        for control in controls
+        if control["variable"] in pinned
+    ]
+    controls = [control for control in controls if control["variable"] not in pinned]
 
     widgets: list[dict[str, Any]] = []
     for widget in sorted(dashboard.widgets, key=lambda w: (w.page or 0, w.position or 0)):
@@ -572,7 +628,7 @@ def build_payload(
         reason = AS_THEY_STAND.get(widget.widget_type.value)
         if builder is not None and reason is None:
             try:
-                entry.update(builder(db, widget, mine))
+                entry.update(builder(db, widget, mine, pinned))
             except NotExportable as exc:
                 reason = str(exc)
             except QueryError as exc:
@@ -620,6 +676,9 @@ def build_payload(
             if isinstance(group, dict) and group.get("id")
         ],
         "filters": controls,
+        # What this file is of, for the page to say so under the title. Empty
+        # on an ordinary export, which then reads exactly as it always has.
+        "pinned": chosen,
         "widgets": widgets,
         # The logo and the one structural choice the page's own script acts on.
         # Everything else about how this board is dressed is in the stylesheet.

@@ -1164,11 +1164,10 @@ as well, so it reads in that face on a laptop that has never met the platform.
 What the copy does not do:
 
 - **Clicking a mark does not filter it.** The dropdowns are the filters.
-- **The charts and the map are drawn by libraries fetched from the internet**
-  (ECharts and Leaflet, from public addresses, pinned to a version). A machine
-  with no connection still opens the file and reads every number - each chart
-  falls back to its table - but it will not draw the pictures, and the map will
-  have no ground under its pins.
+- **A map has no ground under its pins without the internet.** The charts are
+  drawn by libraries carried inside the file, so they draw on a machine with no
+  connection; a basemap cannot be, because it is millions of tiles on somebody
+  else's server.
 - **Some widgets are frozen** and say so on their face, with the reason. A data
   quality panel and a freshness panel report what their last run found rather
   than answering a query, so there is nothing for a filter to narrow. A chart
@@ -1187,6 +1186,30 @@ What the copy does not do:
 The file says at its foot when it was made. Nothing in it goes back to the
 platform, so the numbers are the numbers of that moment: export it again when
 they should be newer.
+
+#### A report for one province
+
+**Of** on the download panel turns the file into one saved view's report.
+Leave it on "everything" and you get the board with its filters open, as
+above. Choose a view and you get that view's file: Shefa's report, titled
+Shefa, with the province named under the heading.
+
+It is **narrowed, not preselected**, and the difference matters. The rows
+outside the view are never computed and never travel, so Shefa's file holds
+Shefa's numbers and nothing else, and the control is gone rather than sitting
+there set to Shefa with the rest of the country one click away. A file is the
+copy nobody can withdraw, so it should hold only what the person you send it
+to is meant to have.
+
+To produce one per province, save a view per province and download each. The
+file is named after the view, so they do not all arrive called the same thing.
+
+**For PDF or Word**, open the file and print it. The page has a print
+stylesheet: margins, no tab strip, each card kept whole rather than split
+across a page break, folded groups opened for the printing and closed again
+after, and the filters printed as the values they were set to so the figures
+say what they are of. Print to PDF gives a document you can attach or file.
+For Word, print to PDF and place it, or copy a table straight off the page.
 
 ### Giving a dashboard its own address
 
