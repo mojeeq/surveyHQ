@@ -224,8 +224,9 @@ def _cube(
                 "name": column.name,
                 "label": column.label,
                 "type": column.type,
-                # A date axis is read in order, not biggest first, and the
-                # browser has no other way to tell a date from a category.
+                # A date or a number is read along its own order rather
+                # than biggest first, and the browser has no other way to
+                # tell either from a category.
                 "data_type": column.data_type,
             }
             for column in result.columns
