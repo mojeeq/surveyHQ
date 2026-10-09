@@ -1004,8 +1004,10 @@
       header.appendChild(el('p', '', DATA.description))
     }
     /* What this file is of. A pinned export has no control for these, so
-       without a line saying so the reader cannot tell Shefa's copy from the
-       whole country's, and the two look identical side by side on a desk. */
+       without a line saying so one area's copy and the whole country's look
+       identical side by side on a desk. (No example name here: this comment
+       travels inside every exported file, and a province named in it reads
+       as data to anyone searching the file for one.) */
     if (DATA.pinned && DATA.pinned.length) {
       var pin = el('p', 'pinned')
       pin.textContent = DATA.pinned.map(function (one) {

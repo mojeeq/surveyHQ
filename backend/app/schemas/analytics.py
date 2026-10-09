@@ -326,6 +326,12 @@ class HtmlSnippetOut(BaseModel):
     updated_at: dt.datetime
 
 
+class ReportBurstIn(BaseModel):
+    """Which filter to write one report for each value of."""
+
+    variable: str = Field(min_length=1, max_length=200)
+
+
 class SnapshotSchedule(BaseModel):
     """When to keep a copy of the board, and how many to keep."""
 

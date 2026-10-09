@@ -471,3 +471,263 @@ def test_the_file_is_named_after_the_view(client, auth_headers, board):
     # A folder of fourteen files all called exportable.html is not a set of
     # provincial reports.
     assert "exportable-shefa.html" in response.headers["content-disposition"]
+
+
+# --- A report for every province, in one run --------------------------------
+
+
+def test_the_burst_writes_one_report_per_value_and_each_holds_only_its_own(
+    client, auth_headers, board, tmp_path, monkeypatch
+):
+    """The whole feature, end to end, without the worker.
+
+    The job runs on Celery in a deployment; here the service is called
+    directly, which is the part worth testing - the task around it only moves
+    a status along.
+    """
+    import zipfile
+
+    from app.api.v1.endpoints.dashboards import _render_widget
+    from app.models import Dashboard
+    from app.services import reports
+
+    with_session = client.app.dependency_overrides
+    assert with_session is not None  # the app is wired; the session comes below
+
+    from app.db.session import SessionLocal
+
+    db = SessionLocal()
+    try:
+        dashboard = db.get(Dashboard, board["id"])
+        out = tmp_path / "reports.zip"
+        summary = reports.burst(
+            db,
+            dashboard,
+            "province",
+            render=lambda widget: _render_widget(db, widget, None),
+            destination=out,
+        )
+    finally:
+        db.close()
+
+    assert sorted(summary["written"]) == ["Sanma", "Shefa"]
+    assert summary["skipped"] == []
+    assert out.exists()
+
+    with zipfile.ZipFile(out) as bundle:
+        names = sorted(bundle.namelist())
+        assert names == ["exportable-sanma.html", "exportable-shefa.html"]
+        for name, mine, theirs in (
+            ("exportable-shefa.html", "Shefa", "Sanma"),
+            ("exportable-sanma.html", "Sanma", "Shefa"),
+        ):
+            html = bundle.read(name).decode()
+            # Against the data rather than the file text: the template's own
+            # source travels in every export, so a province named in a comment
+            # there would read as a leak when it is nothing of the kind. Asked
+            # the first time this test was written, by a comment that did.
+            carried = json.dumps(payload_of(html))
+            assert mine in carried
+            assert payload_of(html)["pinned"][0]["value"] == mine
+            # Each file is forwardable on its own, which it would not be if it
+            # carried the province next door.
+            assert theirs not in carried, f"{name} carries {theirs}"
+
+
+def test_the_burst_reports_progress_as_it_goes(client, auth_headers, board, tmp_path):
+    """A bar that only moves at the end is not a bar."""
+    from app.api.v1.endpoints.dashboards import _render_widget
+    from app.db.session import SessionLocal
+    from app.models import Dashboard
+    from app.services import reports
+
+    seen: list[tuple[int, int]] = []
+    db = SessionLocal()
+    try:
+        reports.burst(
+            db,
+            db.get(Dashboard, board["id"]),
+            "province",
+            render=lambda widget: _render_widget(db, widget, None),
+            destination=tmp_path / "r.zip",
+            on_progress=lambda done, total: seen.append((done, total)),
+        )
+    finally:
+        db.close()
+    assert seen == [(1, 2), (2, 2)]
+
+
+def test_one_failing_value_is_skipped_and_the_rest_still_arrive(
+    client, auth_headers, board, tmp_path, monkeypatch
+):
+    """Thirteen provinces and a note about the fourteenth beats nothing at all.
+
+    And the note has to say which one, or the only way to find out is to open
+    all of them.
+    """
+    from app.api.v1.endpoints.dashboards import _render_widget
+    from app.db.session import SessionLocal
+    from app.models import Dashboard
+    from app.services import reports, static_export
+
+    real = static_export.build_payload
+
+    def sometimes(db, dashboard, render, pinned=None):
+        if (pinned or {}).get("province") == "Sanma":
+            raise RuntimeError("its dataset went away")
+        return real(db, dashboard, render, pinned=pinned)
+
+    monkeypatch.setattr(reports.static_export, "build_payload", sometimes)
+
+    db = SessionLocal()
+    try:
+        summary = reports.burst(
+            db,
+            db.get(Dashboard, board["id"]),
+            "province",
+            render=lambda widget: _render_widget(db, widget, None),
+            destination=tmp_path / "partial.zip",
+        )
+    finally:
+        db.close()
+
+    assert summary["written"] == ["Shefa"]
+    assert summary["skipped"] == [
+        {"value": "Sanma", "error": "its dataset went away"}
+    ]
+    # And the zip is a real one holding the report that did build.
+    import zipfile
+
+    with zipfile.ZipFile(tmp_path / "partial.zip") as bundle:
+        assert bundle.namelist() == ["exportable-shefa.html"]
+
+
+def test_the_service_refuses_too_many_values_even_if_the_route_did_not(
+    client, auth_headers, board, tmp_path, monkeypatch
+):
+    """The endpoint checks first, but it is not the only way in.
+
+    The worker reads a variable out of job params written earlier, and a board
+    whose filter has grown since should not start hours of work on the
+    strength of a check made before it did.
+    """
+    from app.api.v1.endpoints.dashboards import _render_widget
+    from app.db.session import SessionLocal
+    from app.models import Dashboard
+    from app.services import reports
+
+    monkeypatch.setattr(reports, "MAX_REPORTS", 1)
+    db = SessionLocal()
+    try:
+        with pytest.raises(reports.TooMany, match="limit is 1"):
+            reports.burst(
+                db,
+                db.get(Dashboard, board["id"]),
+                "province",
+                render=lambda widget: _render_widget(db, widget, None),
+                destination=tmp_path / "never.zip",
+            )
+    finally:
+        db.close()
+    # Refused before anything was written, not halfway through.
+    assert not (tmp_path / "never.zip").exists()
+
+
+def test_a_burst_over_a_variable_with_no_filter_is_refused(client, auth_headers, board):
+    response = client.post(
+        f"/api/v1/dashboards/{board['id']}/reports",
+        headers=auth_headers,
+        json={"variable": "wage"},
+    )
+    # The board has no wage control, so there is nothing to enumerate and
+    # nothing sensible to produce.
+    assert response.status_code == 404, response.text
+
+
+def test_the_values_a_burst_would_cover_can_be_asked_for_first(
+    client, auth_headers, board
+):
+    response = client.get(
+        f"/api/v1/dashboards/{board['id']}/report-values?variable=province",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert sorted(body["values"]) == ["Sanma", "Shefa"]
+    # So the dialog can say "2 reports" and refuse before anybody waits.
+    assert body["limit"] >= 2
+
+
+def test_too_many_values_is_refused_before_the_work_starts(
+    client, auth_headers, board, monkeypatch
+):
+    """A burst over an interviewer id is hours of work and hundreds of files."""
+    from app.services import reports
+
+    monkeypatch.setattr(reports, "MAX_REPORTS", 1)
+    response = client.post(
+        f"/api/v1/dashboards/{board['id']}/reports",
+        headers=auth_headers,
+        json={"variable": "province"},
+    )
+    assert response.status_code == 400, response.text
+    assert "limit is 1" in response.json()["detail"]
+
+
+def test_a_finished_run_is_downloaded_and_an_unfinished_one_is_not(
+    client, auth_headers, board, db_session
+):
+    from app.models import Job, JobStatus, JobType
+
+    job = Job(
+        job_type=JobType.export,
+        status=JobStatus.running,
+        params={"dashboard_id": board["id"], "variable": "province"},
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    waiting = client.get(
+        f"/api/v1/dashboards/{board['id']}/reports/{job.id}.zip", headers=auth_headers
+    )
+    assert waiting.status_code == 409, waiting.text
+
+    job.status = JobStatus.success
+    job.result = {"path": "/nowhere/gone.zip"}
+    db_session.commit()
+    missing = client.get(
+        f"/api/v1/dashboards/{board['id']}/reports/{job.id}.zip", headers=auth_headers
+    )
+    # The row outliving its file says so, rather than serving an empty zip.
+    assert missing.status_code == 410, missing.text
+
+    db_session.delete(job)
+    db_session.commit()
+
+
+def test_one_board_s_run_cannot_be_downloaded_through_another(
+    client, auth_headers, board, db_session, tmp_path
+):
+    from app.models import Job, JobStatus, JobType
+
+    other = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Somebody else's"}
+    ).json()
+    zipped = tmp_path / "theirs.zip"
+    zipped.write_bytes(b"PK\x05\x06" + b"\x00" * 18)
+    job = Job(
+        job_type=JobType.export,
+        status=JobStatus.success,
+        params={"dashboard_id": board["id"], "variable": "province"},
+        result={"path": str(zipped)},
+    )
+    db_session.add(job)
+    db_session.commit()
+
+    response = client.get(
+        f"/api/v1/dashboards/{other['id']}/reports/{job.id}.zip", headers=auth_headers
+    )
+    assert response.status_code == 404, response.text
+
+    db_session.delete(job)
+    db_session.commit()
