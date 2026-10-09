@@ -307,3 +307,167 @@ def test_a_counted_table_still_says_so(client, auth_headers, board):
     widget = widget_named(payload_of(export(client, auth_headers, board)), "Counted")
     assert widget["crosstab"]["show_values"] is True
     assert widget["crosstab"]["measure_label"] == "Count"
+
+
+# --- One province's file ----------------------------------------------------
+#
+# A view already names a selection somebody wants a report of, so the export
+# takes one. The point of these is that the file is narrowed rather than
+# preselected: a standalone file is the copy nobody can withdraw, and one that
+# quietly carried every other province's numbers would be the wrong thing to
+# send to a provincial office.
+
+
+def _view(client, auth_headers, board, name: str, filters: dict) -> str:
+    created = client.post(
+        f"/api/v1/dashboards/{board['id']}/views",
+        headers=auth_headers,
+        json={"name": name, "state": {"filters": filters}},
+    )
+    assert created.status_code in (200, 201), created.text
+    return created.json()["id"]
+
+
+def _pinned_payload(client, auth_headers, board, view_id: str) -> dict:
+    response = client.get(
+        f"/api/v1/dashboards/{board['id']}/export.html?view={view_id}", headers=auth_headers
+    )
+    assert response.status_code == 200, response.text
+    return payload_of(response.text)
+
+
+def test_a_pinned_export_carries_only_that_province(client, auth_headers, board):
+    view = _view(client, auth_headers, board, "Shefa", {"province": "Shefa"})
+    payload = _pinned_payload(client, auth_headers, board, view)
+
+    everything = json.dumps(payload)
+    assert "Shefa" in everything
+    # The whole point. Not "Sanma is not selected" but "Sanma is not in here".
+    assert "Sanma" not in everything
+
+
+def test_a_pinned_export_drops_the_control_rather_than_presetting_it(
+    client, auth_headers, board
+):
+    view = _view(client, auth_headers, board, "Shefa", {"province": "Shefa"})
+    payload = _pinned_payload(client, auth_headers, board, view)
+
+    # No picker: there is nothing left to choose, and a dropdown offering one
+    # option is furniture.
+    assert [control["variable"] for control in payload["filters"]] == []
+    # And the file says what it is of, or Shefa's printout and Sanma's are
+    # indistinguishable on a desk.
+    assert payload["pinned"] == [
+        {"variable": "province", "label": "Province", "value": "Shefa"}
+    ]
+
+
+def test_a_pinned_export_reports_that_province_s_own_numbers(client, auth_headers, board):
+    """Shefa's wages are 100, 200, 300, 400; the country's mean is not Shefa's."""
+    view = _view(client, auth_headers, board, "Shefa", {"province": "Shefa"})
+    payload = _pinned_payload(client, auth_headers, board, view)
+
+    counts = widget_named(payload, "Interviews by province")
+    assert [row[-1] for row in counts["cube"]["rows"]] == [4]
+
+    means = widget_named(payload, "Mean wage by province")
+    # Carried as a total and a count so the browser can re-average; 1000/4.
+    row = means["cube"]["rows"][0]
+    assert row[1:] == [1000.0, 4]
+
+
+def test_an_unpinned_export_is_unchanged(client, auth_headers, board):
+    """The ordinary export still carries both provinces and its picker."""
+    payload = payload_of(export(client, auth_headers, board))
+    assert payload["pinned"] == []
+    assert [control["variable"] for control in payload["filters"]] == ["province"]
+    counts = widget_named(payload, "Interviews by province")
+    assert sorted(row[-1] for row in counts["cube"]["rows"]) == [4, 4]
+
+
+def test_a_view_from_another_dashboard_cannot_narrow_this_one(
+    client, auth_headers, board
+):
+    other = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Somebody else's"}
+    ).json()
+    stray = client.post(
+        f"/api/v1/dashboards/{other['id']}/views",
+        headers=auth_headers,
+        json={"name": "Theirs", "state": {"filters": {"province": "Sanma"}}},
+    ).json()["id"]
+    response = client.get(
+        f"/api/v1/dashboards/{board['id']}/export.html?view={stray}", headers=auth_headers
+    )
+    assert response.status_code == 404, response.text
+
+
+def test_an_unknown_view_is_refused_rather_than_ignored(client, auth_headers, board):
+    # Silently exporting the whole country when the view id is wrong is how a
+    # national file ends up filed as a provincial one.
+    response = client.get(
+        f"/api/v1/dashboards/{board['id']}/export.html?view=nope", headers=auth_headers
+    )
+    assert response.status_code == 404, response.text
+
+
+def test_pinning_narrows_a_widget_whose_own_filter_is_an_any_of(
+    client, auth_headers, board
+):
+    """The case where appending the pinned condition would widen, not narrow.
+
+    A chart saved with "any of these" holds an OR. Adding `province = Shefa`
+    beside those conditions makes it a third alternative, so the widget would
+    report every row matching the original OR plus every row in Shefa, which
+    is more than it started with and includes the provinces the file is
+    supposed to exclude. Nesting the saved group under an AND is the only
+    arrangement that narrows whatever shape it happens to be.
+
+    Shefa holds one wage of 100; Sanma holds three of 1000. Pinned to Shefa,
+    "wage is 100 or 1000" is one row. Appended, it is seven.
+    """
+    either = client.post(
+        "/api/v1/dashboards/charts",
+        headers=auth_headers,
+        json={
+            "name": "Either wage",
+            "dataset_id": board["dataset_id"],
+            "chart_type": "bar",
+            "spec": {
+                "query": {
+                    "dimensions": [{"variable": "province"}],
+                    "measures": [{"agg": "count", "alias": "n"}],
+                    "filters": {
+                        "op": "or",
+                        "conditions": [
+                            {"variable": "wage", "operator": "eq", "value": 100},
+                            {"variable": "wage", "operator": "eq", "value": 1000},
+                        ],
+                        "groups": [],
+                    },
+                }
+            },
+        },
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{board['id']}/widgets",
+        headers=auth_headers,
+        json={"title": "Either wage", "widget_type": "chart", "chart_id": either["id"]},
+    )
+
+    view = _view(client, auth_headers, board, "Shefa", {"province": "Shefa"})
+    payload = _pinned_payload(client, auth_headers, board, view)
+
+    widget = widget_named(payload, "Either wage")
+    assert [row[-1] for row in widget["cube"]["rows"]] == [1]
+    assert "Sanma" not in json.dumps(payload)
+
+
+def test_the_file_is_named_after_the_view(client, auth_headers, board):
+    view = _view(client, auth_headers, board, "Shefa", {"province": "Shefa"})
+    response = client.get(
+        f"/api/v1/dashboards/{board['id']}/export.html?view={view}", headers=auth_headers
+    )
+    # A folder of fourteen files all called exportable.html is not a set of
+    # provincial reports.
+    assert "exportable-shefa.html" in response.headers["content-disposition"]
