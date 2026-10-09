@@ -218,7 +218,7 @@ def test_keep_is_never_zero(client, auth_headers):
         dashboard.snapshot_keep = 0
         db.commit()
         snapshot = service.take(
-            db, dashboard, render=lambda widget: None, automatic=True
+            db, dashboard, render=lambda widget, filters: None, automatic=True
         )
         db.commit()
         service.prune(db, dashboard)

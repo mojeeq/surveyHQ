@@ -75,7 +75,7 @@ def burst(
     db: Session,
     dashboard: Dashboard,
     variable: str,
-    render: Callable[[Any], Any],
+    render: Callable[[Any, Any], Any],
     destination: Path,
     on_progress: Callable[[int, int], None] | None = None,
 ) -> dict[str, Any]:

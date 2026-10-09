@@ -504,7 +504,7 @@ def test_the_burst_writes_one_report_per_value_and_each_holds_only_its_own(
             db,
             dashboard,
             "province",
-            render=lambda widget: _render_widget(db, widget, None),
+            render=lambda widget, filters: _render_widget(db, widget, filters),
             destination=out,
         )
     finally:
@@ -548,7 +548,7 @@ def test_the_burst_reports_progress_as_it_goes(client, auth_headers, board, tmp_
             db,
             db.get(Dashboard, board["id"]),
             "province",
-            render=lambda widget: _render_widget(db, widget, None),
+            render=lambda widget, filters: _render_widget(db, widget, filters),
             destination=tmp_path / "r.zip",
             on_progress=lambda done, total: seen.append((done, total)),
         )
@@ -585,7 +585,7 @@ def test_one_failing_value_is_skipped_and_the_rest_still_arrive(
             db,
             db.get(Dashboard, board["id"]),
             "province",
-            render=lambda widget: _render_widget(db, widget, None),
+            render=lambda widget, filters: _render_widget(db, widget, filters),
             destination=tmp_path / "partial.zip",
         )
     finally:
@@ -624,7 +624,7 @@ def test_the_service_refuses_too_many_values_even_if_the_route_did_not(
                 db,
                 db.get(Dashboard, board["id"]),
                 "province",
-                render=lambda widget: _render_widget(db, widget, None),
+                render=lambda widget, filters: _render_widget(db, widget, filters),
                 destination=tmp_path / "never.zip",
             )
     finally:
@@ -731,3 +731,188 @@ def test_one_board_s_run_cannot_be_downloaded_through_another(
 
     db_session.delete(job)
     db_session.commit()
+
+
+# --- A coded column, which is what a real export carries --------------------
+#
+# The board fixture above stores its province as text, so a pinned condition
+# comparing to the label happened to work. A Survey Solutions export does not:
+# a single-select question arrives as an integer code with a value label, and
+# the filter dropdown offers the label. These cover the gap that let a report
+# ship with every widget reading "Could not convert string to DOUBLE".
+
+
+@pytest.fixture
+def coded_board(client, auth_headers, request) -> dict:
+    """State as 1 and 2 with labels, the shape a real questionnaire exports."""
+    import io
+
+    frame = pd.DataFrame(
+        {
+            "interview__key": [f"k{i}" for i in range(8)],
+            "state": [1] * 5 + [2] * 3,
+            "age": [20.0, 30.0, 40.0, 50.0, 60.0, 25.0, 35.0, 45.0],
+        }
+    )
+    buffer = io.BytesIO()
+    frame.to_stata(
+        buffer,
+        write_index=False,
+        version=118,
+        value_labels={"state": {1: "Aimeliik", 2: "Koror"}},
+    )
+    name = request.node.name[:40]
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                f"{name}.zip",
+                _zip_bytes({f"{name}.dta": buffer.getvalue()}),
+                "application/zip",
+            )
+        },
+    ).json()
+    dataset_id = uploaded["datasets"][0]["id"]
+    chart = client.post(
+        "/api/v1/dashboards/charts",
+        headers=auth_headers,
+        json={
+            "name": "Mean age",
+            "dataset_id": dataset_id,
+            "chart_type": "bar",
+            "spec": {
+                "query": {
+                    "dimensions": [],
+                    "measures": [{"agg": "mean", "variable": "age", "alias": "Mean age"}],
+                }
+            },
+        },
+    ).json()
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Coded"}
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={"title": "Mean age", "widget_type": "chart", "chart_id": chart["id"]},
+    )
+    # The same filter on several pages, which is how a real board declares one
+    # it wants on each tab.
+    client.patch(
+        f"/api/v1/dashboards/{dashboard['id']}",
+        headers=auth_headers,
+        json={
+            "filters": [
+                {"variable": "state", "dataset_id": dataset_id, "label": "State", "page": page}
+                for page in range(4)
+            ]
+        },
+    )
+    return {"id": dashboard["id"], "dataset_id": dataset_id}
+
+
+def test_pinning_a_labelled_code_does_not_ask_duckdb_to_cast_the_label(
+    client, auth_headers, coded_board
+):
+    """The dropdown offers "Aimeliik"; the column holds 1.
+
+    Without use_label the comparison reaches DuckDB as CAST('Aimeliik' AS
+    DOUBLE) and every widget on the board comes back as a conversion error,
+    which is exactly how the first provincial reports shipped.
+    """
+    view = client.post(
+        f"/api/v1/dashboards/{coded_board['id']}/views",
+        headers=auth_headers,
+        json={"name": "Aimeliik", "state": {"filters": {"state": "Aimeliik"}}},
+    ).json()["id"]
+    response = client.get(
+        f"/api/v1/dashboards/{coded_board['id']}/export.html?view={view}",
+        headers=auth_headers,
+    )
+    assert response.status_code == 200, response.text
+    payload = payload_of(response.text)
+
+    widget = widget_named(payload, "Mean age")
+    assert widget["kind"] == "chart", widget.get("frozen_because")
+    assert "convert" not in json.dumps(widget).lower()
+    # Aimeliik is the five rows coded 1: ages 20 to 60, mean 40, carried as
+    # its total and its count.
+    assert widget["cube"]["rows"] == [[200.0, 5]]
+
+
+def test_the_pinned_line_names_each_variable_once(client, auth_headers, coded_board):
+    """The same filter is declared on four pages, as a real board declares it.
+
+    One entry per control read "State: Aimeliik" four times under the title.
+    """
+    view = client.post(
+        f"/api/v1/dashboards/{coded_board['id']}/views",
+        headers=auth_headers,
+        json={"name": "Aimeliik", "state": {"filters": {"state": "Aimeliik"}}},
+    ).json()["id"]
+    payload = payload_of(
+        client.get(
+            f"/api/v1/dashboards/{coded_board['id']}/export.html?view={view}",
+            headers=auth_headers,
+        ).text
+    )
+    assert payload["pinned"] == [
+        {"variable": "state", "label": "State", "value": "Aimeliik"}
+    ]
+
+
+def test_a_widget_drawn_as_it_stands_is_drawn_narrowed(client, auth_headers, coded_board):
+    """A frozen widget in a province's report must not show the country.
+
+    Quality panels and medians cannot be recomputed offline, so they travel as
+    they were drawn. Drawn with no filter they reported the national figure
+    under a provincial title, which is worse than omitting them: the note says
+    the numbers are from the day the file was made, not that they are
+    somebody else's.
+    """
+    from app.schemas.query import FilterGroup
+    from app.services import static_export
+
+    # A data quality panel is in AS_THEY_STAND: it reports what its last run
+    # found rather than answering a query, so it is always drawn rather than
+    # recomputed. That makes it the widget this is about.
+    client.post(
+        f"/api/v1/dashboards/{coded_board['id']}/widgets",
+        headers=auth_headers,
+        json={
+            "title": "Checks",
+            "widget_type": "quality",
+            "dataset_id": coded_board["dataset_id"],
+        },
+    )
+
+    seen: list[FilterGroup | None] = []
+
+    def spy(widget, filters):
+        seen.append(filters)
+        return {"type": "text", "content": ""}
+
+    from app.db.session import SessionLocal
+    from app.models import Dashboard
+
+    db = SessionLocal()
+    try:
+        static_export.build_payload(
+            db,
+            db.get(Dashboard, coded_board["id"]),
+            render=spy,
+            pinned={"state": "Aimeliik"},
+        )
+    finally:
+        db.close()
+
+    assert seen, "nothing was drawn as it stands, so this proves nothing"
+    group = seen[0]
+    assert group is not None, "the frozen widget was drawn without the pin"
+    assert [(c.variable, c.value, c.use_label) for c in group.conditions] == [
+        ("state", "Aimeliik", True)
+    ]
+    # And an ordinary export still draws them unfiltered, as it always did.
+    assert static_export.pinned_filters({}) is None
+    assert static_export.pinned_filters(None) is None

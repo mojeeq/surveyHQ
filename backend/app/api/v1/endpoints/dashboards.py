@@ -1166,7 +1166,10 @@ def export_dashboard_html(
     dashboard = _get_dashboard(dashboard_id, db, user)
     pinned, view_name = _pinned_from_view(view, dashboard_id, db) if view else ({}, "")
     payload = static_export.build_payload(
-        db, dashboard, render=lambda widget: _render_widget(db, widget, None), pinned=pinned
+        db,
+        dashboard,
+        render=lambda widget, filters: _render_widget(db, widget, filters),
+        pinned=pinned,
     )
     record(
         db,
@@ -1369,7 +1372,7 @@ def create_snapshot(
     snapshot = snapshots.take(
         db,
         dashboard,
-        render=lambda widget: _render_widget(db, widget, None),
+        render=lambda widget, filters: _render_widget(db, widget, filters),
         user_id=user.id,
     )
     record(
