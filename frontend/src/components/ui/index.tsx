@@ -662,9 +662,16 @@ export function Toggle({
           checked ? 'bg-brand-600' : 'bg-ink-300 dark:bg-dark-300'
         }`}
       >
+        {/* `left-0.5` is not decoration. Without a left of its own the knob
+            falls back to its static position, and a button centres its
+            content, so that position is the middle of the track rather than
+            its start: the travel was measured from 18px instead of 0. Checked,
+            the knob ended 14px past the right edge and sat on top of the
+            label; unchecked, it was pinned to the right edge and read as on.
+            Track 36, knob 16, 2 either side, so the travel is exactly 16. */}
         <span
-          className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${
-            checked ? 'translate-x-4' : 'translate-x-0.5'
+          className={`absolute left-0.5 top-0.5 h-4 w-4 rounded-full bg-white shadow-sm transition-transform ${
+            checked ? 'translate-x-4' : 'translate-x-0'
           }`}
         />
       </button>
