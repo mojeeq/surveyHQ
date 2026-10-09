@@ -348,10 +348,15 @@
     var down = sort ? sort.direction !== 'asc' : true
     if (index < 0) {
       if (cube.dimensions.length !== 1 || !cube.measures.length) return rows
-      // A date axis is read left to right in time. Everything else with one
-      // grouping is read biggest first, which is how the platform draws a
-      // grouping nothing sorted.
-      if (/date|time/.test(typeOf(cube, cube.dimensions[0]))) { index = 0; down = false }
+      // An axis with an order of its own is read along that order: a date
+      // left to right in time, a number low to high. Age in ten year bands
+      // is the case that made this plain - sorted biggest first, a
+      // histogram came out 10, 80, 30, 60, 40, the shape of the
+      // distribution thrown away and nothing on the chart admitting it.
+      // Everything else with one grouping is read biggest first, which is
+      // how the platform draws a grouping nothing sorted.
+      var axis = typeOf(cube, cube.dimensions[0])
+      if (axis === 'datetime' || axis === 'numeric') { index = 0; down = false }
       else index = cube.dimensions.length
     }
     return rows.slice().sort(function (a, b) {
