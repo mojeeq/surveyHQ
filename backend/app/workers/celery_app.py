@@ -37,6 +37,10 @@ celery_app.conf.update(
         # minutes. They must not make alerts and monitoring wait in the same queue.
         "app.workers.tasks.run_upload_import": {"queue": "imports"},
         "app.workers.tasks.run_connection_sync": {"queue": "imports"},
+        # With the imports, because it is the same kind of work: a full pass
+        # over a dataset per value, on the worker whose concurrency is the one
+        # tuned for how much memory that takes.
+        "app.workers.tasks.run_report_burst": {"queue": "imports"},
         "app.workers.tasks.schedule_due_syncs": {"queue": "monitoring"},
         "app.workers.tasks.refresh_all_indicators": {"queue": "monitoring"},
         "app.workers.tasks.run_all_quality_checks": {"queue": "quality"},

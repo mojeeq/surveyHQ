@@ -6,7 +6,7 @@ import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
 import { formatNumber, relativeTime } from '@/lib/format'
 import { Badge, Field, Modal, Spinner } from '@/components/ui'
-import type { Dashboard, DashboardSavedView } from '@/lib/types'
+import type { Dashboard, DashboardSavedView, Job } from '@/lib/types'
 
 export interface ShareLink {
   id: string
@@ -279,6 +279,72 @@ function DownloadCopy({ dashboard }: { dashboard: Dashboard }) {
   })
   const [view, setView] = useState('')
   const chosen = views.data?.find((one) => one.id === view)
+
+  // A report per value of a filter, in one run. The controls the board
+  // already has are the ones worth bursting over: they are the questions
+  // somebody decided this board gets asked.
+  // `filters` on the dashboard is an untyped bag shared by several readers,
+  // so the two fields wanted here are read out rather than the whole type
+  // being narrowed underneath everyone else.
+  const controls = (dashboard.filters ?? [])
+    .map((raw) => ({
+      variable: String(raw.variable ?? ''),
+      label: String(raw.label ?? raw.variable ?? ''),
+    }))
+    .filter((control) => control.variable)
+  const [burstBy, setBurstBy] = useState('')
+  const [burstDone, setBurstDone] = useState(0)
+  const counts = useQuery({
+    queryKey: ['report-values', dashboard.id, burstBy],
+    queryFn: () =>
+      api.get<{ values: string[]; limit: number }>(
+        `/dashboards/${dashboard.id}/report-values?variable=${encodeURIComponent(burstBy)}`,
+      ),
+    enabled: Boolean(burstBy),
+  })
+  const howMany = counts.data?.values.length ?? 0
+  const tooMany = Boolean(counts.data) && howMany > (counts.data?.limit ?? 0)
+
+  const burst = useMutation({
+    mutationFn: async () => {
+      setBurstDone(0)
+      let job = await api.post<Job>(`/dashboards/${dashboard.id}/reports`, {
+        variable: burstBy,
+      })
+      // Every value is a full pass over the dataset, so this is minutes. The
+      // job carries its own progress and the bar follows it rather than
+      // guessing from elapsed time.
+      const deadline = Date.now() + 30 * 60 * 1000
+      while (job.status === 'queued' || job.status === 'running') {
+        if (Date.now() > deadline) {
+          throw new Error(
+            'The reports are still being written. Watch it under Administration \u2192 Background jobs.',
+          )
+        }
+        await new Promise((resolve) => setTimeout(resolve, 2000))
+        job = await api.get<Job>(`/system/jobs/${job.id}`)
+        setBurstDone(Math.round((job.progress || 0) * 100))
+      }
+      if (job.status !== 'success') throw new Error(job.error || 'The run did not finish.')
+      await downloadFile(
+        `/dashboards/${dashboard.id}/reports/${job.id}.zip`,
+        undefined,
+        `${dashboard.slug || 'dashboard'}-reports.zip`,
+        'GET',
+      )
+      return job
+    },
+    onSuccess: (job) => {
+      const skipped = (job.result?.skipped as unknown[] | undefined)?.length ?? 0
+      toast.push(
+        skipped
+          ? `Reports downloaded. ${skipped} could not be built - see the job for which.`
+          : 'Reports downloaded.',
+        skipped ? 'info' : 'success',
+      )
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
   const toast = useToast()
   const [busy, setBusy] = useState(false)
   return (
@@ -347,6 +413,50 @@ function DownloadCopy({ dashboard }: { dashboard: Dashboard }) {
           {busy ? 'Building the file' : 'Download'}
         </button>
       </div>
+
+      {controls.length > 0 && (
+        <div className="mt-3 border-t border-ink-200 pt-3">
+          <p className="text-sm font-medium text-ink-800">One report for each</p>
+          <p className="text-xs text-ink-500">
+            Writes a separate file for every value of a filter and hands them back as a
+            zip, each one narrowed to its own value the way a single report is. Every
+            value is a full pass over the data, so a dozen of them takes minutes.
+          </p>
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <select
+              className="input w-auto py-1 text-xs"
+              value={burstBy}
+              onChange={(event) => setBurstBy(event.target.value)}
+              disabled={burst.isPending}
+            >
+              <option value="">Choose a filter…</option>
+              {controls.map((control) => (
+                <option key={control.variable} value={control.variable}>
+                  {control.label || control.variable}
+                </option>
+              ))}
+            </select>
+            <button
+              className="btn-secondary btn-sm"
+              disabled={!burstBy || burst.isPending || tooMany || howMany === 0}
+              onClick={() => burst.mutate()}
+            >
+              {burst.isPending && <Spinner className="h-4 w-4" />}
+              {burst.isPending
+                ? `Writing… ${burstDone}%`
+                : howMany
+                  ? `Write ${howMany} reports`
+                  : 'Write the reports'}
+            </button>
+          </div>
+          {tooMany && (
+            <p className="mt-1.5 text-xs text-red-600">
+              That filter has {howMany} values, past the limit of {counts.data?.limit}. A
+              report for each would be hours of work and more files than anybody reads.
+            </p>
+          )}
+        </div>
+      )}
     </div>
   )
 }

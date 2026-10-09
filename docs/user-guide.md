@@ -1201,8 +1201,25 @@ there set to Shefa with the rest of the country one click away. A file is the
 copy nobody can withdraw, so it should hold only what the person you send it
 to is meant to have.
 
-To produce one per province, save a view per province and download each. The
-file is named after the view, so they do not all arrive called the same thing.
+**One report for each** does the whole set in one go. Choose a filter and it
+writes a separate file for every value it offers - fourteen provinces, one
+zip - each narrowed to its own value exactly as a single report is, so any one
+of them can be forwarded on its own.
+
+It runs on the worker and takes minutes, because every value is a full pass
+over the data for every widget on the board: a dozen reports is a dozen times
+the work of one export. The button shows how far along it is, and hands you
+the zip when it finishes. A value whose report cannot be built is skipped and
+named rather than stopping the rest, so thirteen provinces and a note about
+the fourteenth is what arrives.
+
+There is a limit of sixty. A filter with more values than that is refused
+before anything starts: bursting over an interviewer id would be hours of work
+and more files than anybody opens.
+
+The single download is still there for one province at a time: save a view
+and choose it under **Of**. The file is named after the view either way, so a
+folder of them does not arrive all called the same thing.
 
 **For PDF or Word**, open the file and print it. The page has a print
 stylesheet: margins, no tab strip, each card kept whole rather than split

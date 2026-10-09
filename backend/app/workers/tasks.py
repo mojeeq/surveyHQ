@@ -402,6 +402,77 @@ def _import_export_archive(
         }
 
 
+@celery_app.task(name="app.workers.tasks.run_report_burst", bind=True)
+def run_report_burst(self: Any, job_id: str) -> dict[str, Any]:
+    """One pinned export per value of a filter, zipped.
+
+    On the worker because it is the same work as an export repeated once per
+    value: fourteen provinces is fourteen passes over the dataset for every
+    widget on the board, which is minutes rather than the seconds a request
+    should take.
+    """
+    # Imported here, as the snapshot task does: the renderer lives with the
+    # API, and importing it at module scope would have the worker pull in the
+    # whole endpoint layer at start-up.
+    from app.api.v1.endpoints.dashboards import _render_widget
+    from app.services import reports
+
+    with session_scope() as db:
+        job = db.get(Job, job_id)
+        if job is None:
+            return {"error": "job not found"}
+        job.status = JobStatus.running
+        job.started_at = utcnow()
+        job.celery_task_id = getattr(self.request, "id", "") or ""
+        params = dict(job.params or {})
+        db.flush()
+
+    dashboard_id = str(params.get("dashboard_id") or "")
+    variable = str(params.get("variable") or "")
+
+    try:
+        with session_scope() as db:
+            dashboard = db.get(Dashboard, dashboard_id)
+            if dashboard is None:
+                raise LookupError("The dashboard no longer exists.")
+
+            def progress(done: int, total: int) -> None:
+                # Its own session: the burst holds the one above open for
+                # minutes, and a progress bar nobody can read until the end
+                # is not a progress bar.
+                with session_scope() as tick:
+                    watching = tick.get(Job, job_id)
+                    if watching is not None:
+                        watching.progress = done / total if total else 1.0
+
+            summary = reports.burst(
+                db,
+                dashboard,
+                variable,
+                render=lambda widget: _render_widget(db, widget, None),
+                destination=reports.directory() / f"{job_id}.zip",
+                on_progress=progress,
+            )
+    except Exception as error:  # noqa: BLE001 - recorded on the job and reported
+        logger.exception("Report burst failed for dashboard %s", dashboard_id)
+        with session_scope() as db:
+            job = db.get(Job, job_id)
+            if job is not None:
+                job.status = JobStatus.failed
+                job.error = str(error)
+                job.finished_at = utcnow()
+        return {"error": str(error)}
+
+    with session_scope() as db:
+        job = db.get(Job, job_id)
+        if job is not None:
+            job.status = JobStatus.success
+            job.progress = 1.0
+            job.result = summary
+            job.finished_at = utcnow()
+    return {"written": len(summary["written"]), "skipped": len(summary["skipped"])}
+
+
 @celery_app.task(name="app.workers.tasks.schedule_due_syncs")
 def schedule_due_syncs() -> dict[str, Any]:
     """Queue the automatic imports that are due.

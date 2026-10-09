@@ -20,6 +20,7 @@ from app.api.deps import (
     RequireAnalyst,
     get_ready_dataset,
 )
+from app.core.logging import get_logger
 from app.core.security import hash_password, new_public_token
 from app.db.base import utcnow
 from app.models import (
@@ -32,6 +33,9 @@ from app.models import (
     HtmlSnippet,
     Indicator,
     IndicatorSnapshot,
+    Job,
+    JobStatus,
+    JobType,
     QualityResult,
     QualityRule,
     Role,
@@ -58,6 +62,7 @@ from app.schemas.analytics import (
     HtmlSnippetOut,
     HtmlSnippetUpdate,
     PageMove,
+    ReportBurstIn,
     SketchBlock,
     SnapshotSchedule,
     WidgetCommentIn,
@@ -67,6 +72,7 @@ from app.schemas.analytics import (
     WidgetPatch,
 )
 from app.schemas.common import Message
+from app.schemas.monitoring import JobOut
 from app.schemas.query import (
     CrosstabRequest,
     CrosstabResult,
@@ -74,7 +80,14 @@ from app.schemas.query import (
     QueryResult,
     QuerySpec,
 )
-from app.services import boundary_store, multiselect, quality, snapshots, static_export
+from app.services import (
+    boundary_store,
+    multiselect,
+    quality,
+    reports,
+    snapshots,
+    static_export,
+)
 from app.services.audit import record
 from app.services.boundaries import Areas
 from app.services.dashboard_assets import (
@@ -116,6 +129,8 @@ from app.services.query_engine import (
     execute_query,
 )
 from app.services.sharing import as_utc, link_expired
+
+logger = get_logger(__name__)
 
 router = APIRouter()
 
@@ -1173,6 +1188,113 @@ def export_dashboard_html(
         ),
         media_type="text/html; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="{name}.html"'},
+    )
+
+
+@router.get("/{dashboard_id}/report-values")
+def list_report_values(
+    dashboard_id: str, variable: str, db: DbSession, user: CurrentUser
+) -> dict[str, Any]:
+    """What a burst over this filter would produce, before anybody waits.
+
+    A board filtered by interviewer would be hundreds of reports and an hour
+    of work. Showing the count and the limit first means the refusal arrives
+    in the dialog rather than in a failed job ten minutes later.
+    """
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    try:
+        values = reports.values_for(db, dashboard, variable)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"variable": variable, "values": values, "limit": reports.MAX_REPORTS}
+
+
+@router.post("/{dashboard_id}/reports", response_model=JobOut, status_code=202)
+def start_report_burst(
+    dashboard_id: str, payload: ReportBurstIn, db: DbSession, user: RequireAnalyst
+) -> Job:
+    """One report per value of a filter, as a job.
+
+    Answers with the job rather than the zip: every value is a full pass over
+    the dataset for every widget, so this is minutes of work and a request
+    that waited for it would time out long before it finished.
+    """
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    try:
+        values = reports.values_for(db, dashboard, payload.variable)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    if not values:
+        raise HTTPException(status_code=400, detail="That filter has no values to report on.")
+    if len(values) > reports.MAX_REPORTS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"{payload.variable} has {len(values)} values and this would write that "
+                f"many reports. The limit is {reports.MAX_REPORTS}."
+            ),
+        )
+    job = Job(
+        job_type=JobType.export,
+        status=JobStatus.queued,
+        title=f"{len(values)} reports by {payload.variable}",
+        params={"dashboard_id": dashboard.id, "variable": payload.variable},
+        created_by=user.id,
+    )
+    db.add(job)
+    record(
+        db,
+        user=user,
+        action="dashboard.report_burst",
+        entity_type="dashboard",
+        entity_id=dashboard.id,
+        detail={"variable": payload.variable, "reports": len(values)},
+    )
+    db.commit()
+    db.refresh(job)
+
+    from app.workers.tasks import run_report_burst
+
+    try:
+        async_result = run_report_burst.delay(job.id)
+        job.celery_task_id = async_result.id
+        db.commit()
+        db.refresh(job)
+    except Exception as exc:  # noqa: BLE001 - broker unreachable
+        logger.error("Could not queue report burst %s: %s", job.id, exc)
+        job.status = JobStatus.failed
+        job.error = (
+            "The background worker could not be reached. Check that the worker "
+            "and Redis containers are running."
+        )
+        db.commit()
+        db.refresh(job)
+    return job
+
+
+@router.get("/{dashboard_id}/reports/{job_id}.zip")
+def download_report_burst(
+    dashboard_id: str, job_id: str, db: DbSession, user: CurrentUser
+) -> Response:
+    """The zip a finished burst wrote."""
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    job = db.get(Job, job_id)
+    # Checked against this dashboard, so a job id cannot fetch the reports of
+    # a board the caller has no business reading.
+    if job is None or job.job_type != JobType.export:
+        raise HTTPException(status_code=404, detail="No such report run")
+    if str((job.params or {}).get("dashboard_id") or "") != dashboard.id:
+        raise HTTPException(status_code=404, detail="No such report run")
+    if job.status != JobStatus.success:
+        raise HTTPException(status_code=409, detail="That run has not finished.")
+    path = Path(str((job.result or {}).get("path") or ""))
+    if not path.exists():
+        raise HTTPException(status_code=410, detail="That run's file is no longer on disk")
+    name = slugify(dashboard.name) or "dashboard"
+    return Response(
+        content=path.read_bytes(),
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{name}-reports.zip"'},
     )
 
 
