@@ -72,7 +72,12 @@ from app.services.datasets import (
 from app.services.derived import propagate_labels, rebuild_dependents
 from app.services.download import FORMATS as DOWNLOAD_FORMATS
 from app.services.download import download_file, temp_directory
-from app.services.ingest import SUPPORTED_EXTENSIONS, IngestError
+from app.services.ingest import (
+    SUPPORTED_EXTENSIONS,
+    IngestError,
+    is_numeric_storage,
+    numeric_code_text,
+)
 from app.services.projects import can_edit, can_view, restrict, scope_for
 from app.services.query_engine import (
     DatasetContext,
@@ -871,8 +876,16 @@ def update_variable(
     if "value_labels" in data:
         # Replaces rather than merges: removing a label has to be possible, and
         # the editor sends the whole set it is showing.
+        # Keyed the way the column is read, so "1.0" typed against a numeric
+        # column the editor was printing as 1.0 still reaches the value 1. A
+        # text column is left alone: there "1.0" is the value.
+        as_key = (
+            numeric_code_text
+            if is_numeric_storage(row.storage_type)
+            else (lambda code: str(code))
+        )
         cleaned = {
-            str(code): str(text)
+            as_key(code): str(text)
             for code, text in (data["value_labels"] or {}).items()
             if str(text).strip()
         }

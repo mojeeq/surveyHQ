@@ -299,6 +299,34 @@ def code_text(value: Any) -> str:
     return str(value)
 
 
+def numeric_code_text(value: Any) -> str:
+    """A code written by hand against a numeric column, as that column reads.
+
+    The editor prints an unlabelled numeric column as 1.0, so 1.0 is what
+    somebody types into the label box beside it. The data is read by "1", and
+    a label keyed "1.0" is never found - which looks exactly like the label
+    not having saved. Only for columns that hold numbers: a text column whose
+    values really are "1.0" is read by "1.0".
+    """
+    try:
+        return code_text(float(value))
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def code_labels(labels: dict[Any, Any]) -> dict[str, str]:
+    """One file's value labels, keyed the way a code is written.
+
+    Readers do not agree on the type of a code. Stata's labels come back with
+    integer keys and SPSS's with floats, because SPSS stores every number as a
+    double - so str() alone wrote "1" for one format and "1.0" for the other,
+    and a lookup for "1" missed every label an SPSS file had. The data showed
+    the codes, a crosstab of a labelled question printed 1.0 and 2.0, and
+    nothing said the labels were there and unreachable.
+    """
+    return {code_text(code): str(text) for code, text in labels.items()}
+
+
 def merge_value_labels(
     kept: dict[str, dict[str, str]], incoming: dict[str, dict[str, str]]
 ) -> dict[str, dict[str, str]]:
@@ -597,15 +625,14 @@ def _read_stata(path: Path) -> tuple[pd.DataFrame, dict[str, str], dict[str, dic
             name: label for name, label in (meta.column_names_to_labels or {}).items() if label
         }
         value_labels = {
-            variable: {str(k): str(v) for k, v in labels.items()}
+            variable: code_labels(labels)
             for variable, labels in (meta.variable_value_labels or {}).items()
         }
         # Every label set in the file, named as the file names them, including
         # the ones no column uses - which is where a multiple-select question
         # keeps the text of its options.
         sets = {
-            name: {str(k): str(v) for k, v in labels.items()}
-            for name, labels in (meta.value_labels or {}).items()
+            name: code_labels(labels) for name, labels in (meta.value_labels or {}).items()
         }
         variable_labels.update(
             name_multiselect_options(list(frame.columns), variable_labels, sets)
@@ -626,10 +653,7 @@ def _read_stata(path: Path) -> tuple[pd.DataFrame, dict[str, str], dict[str, dic
         # so that is the alignment made here - and where it is wrong, it is
         # wrong about a variable no set was named after, which is to say it
         # names nothing.
-        sets = {
-            name: {str(k): str(v) for k, v in labels.items()}
-            for name, labels in raw_value_labels.items()
-        }
+        sets = {name: code_labels(labels) for name, labels in raw_value_labels.items()}
         value_labels = {
             name: labels for name, labels in sets.items() if name in frame.columns
         }
@@ -650,8 +674,7 @@ def _read_spss(path: Path) -> tuple[pd.DataFrame, dict[str, str], dict[str, dict
             name: label for name, label in (meta.column_names_to_labels or {}).items() if label
         }
         sets = {
-            name: {str(k): str(v) for k, v in labels.items()}
-            for name, labels in (meta.value_labels or {}).items()
+            name: code_labels(labels) for name, labels in (meta.value_labels or {}).items()
         }
         variable_labels.update(
             name_multiselect_options(list(frame.columns), variable_labels, sets)
@@ -660,7 +683,7 @@ def _read_spss(path: Path) -> tuple[pd.DataFrame, dict[str, str], dict[str, dict
             frame,
             variable_labels,
             {
-                variable: {str(k): str(v) for k, v in labels.items()}
+                variable: code_labels(labels)
                 for variable, labels in (meta.variable_value_labels or {}).items()
             },
         )
@@ -1071,7 +1094,7 @@ def _stream_stata(path: Path, destination_dir: Path, warnings: list[str]) -> Ing
     variable_labels = dict(meta.column_names_to_labels or {})
     raw_value_labels = meta.variable_value_labels or {}
     value_labels = {
-        column: {str(k): str(v) for k, v in raw_value_labels[column].items()}
+        column: code_labels(raw_value_labels[column])
         for column in meta.column_names
         if column in raw_value_labels
     }

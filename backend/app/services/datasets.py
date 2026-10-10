@@ -34,6 +34,7 @@ from app.services.ingest import (
     IngestResult,
     add_geopoint_columns,
     clean_columns,
+    code_labels,
     detect_monitoring_fields,
     ingest_file,
     ingest_frame,
@@ -173,7 +174,12 @@ def _apply_ingest(db: Session, dataset: Dataset, result: IngestResult) -> Datase
                 min_value=meta.min_value,
                 max_value=meta.max_value,
                 mean_value=meta.mean_value,
-                value_labels={**meta.value_labels, **(override.get("value_labels") or {})},
+                # Through code_labels, because a dataset carried from before
+                # these were normalised can hold "1.0" where the lookup asks
+                # for "1" - a labelled question whose labels never matched.
+                value_labels=code_labels(
+                    {**meta.value_labels, **(override.get("value_labels") or {})}
+                ),
                 missing_tags=meta.missing_tags,
                 is_hidden=meta.is_hidden,
             )
