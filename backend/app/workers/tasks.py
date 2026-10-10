@@ -92,7 +92,8 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
                 "workspace": connection.workspace,
                 "verify_ssl": connection.verify_ssl,
             }
-            export_format = connection.export_format.value
+            # The import's own choice, or the connection's where it made none.
+            export_format = params.get("export_format") or connection.export_format.value
             connection.last_sync_status = SyncStatus.running
             connection_name = connection.name
             project_id = params.get("project_id") or connection.project_id
@@ -126,6 +127,7 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
                         questionnaire=title,
                         status=SyncStatus.running,
                         started_at=utcnow(),
+                        export_format=export_format,
                     )
                     db.add(run)
                     db.flush()

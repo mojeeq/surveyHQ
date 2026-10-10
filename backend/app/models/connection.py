@@ -29,6 +29,13 @@ class SyncStatus(str, enum.Enum):
 
 
 class ExportFormat(str, enum.Enum):
+    """The formats a Survey Solutions server will produce an export in.
+
+    Its API takes these names and no others, so this is the whole list: the
+    tabular export is tab separated text (.tab), Stata is .dta and SPSS is
+    .sav. There is no CSV and no .dat among them.
+    """
+
     stata = "STATA"
     tabular = "Tabular"
     spss = "SPSS"
@@ -117,5 +124,12 @@ class SyncRun(UUIDMixin, Base):
     # The export zip as it arrived, kept so it can be downloaded and re-used
     # like any other export archive. Empty once it has been pruned.
     archive_path: Mapped[str] = mapped_column(String(500), default="", server_default=text("''"))
+    # The format this run asked the server for. On the run rather than only on
+    # the connection, because the format can be chosen per import - a round
+    # whose .dta reads badly is re-pulled as tabular - and afterwards the
+    # question "which of these came in as what" has to have an answer.
+    export_format: Mapped[str] = mapped_column(
+        String(20), default="", server_default=text("''")
+    )
 
     connection: Mapped[Connection] = relationship(back_populates="runs")

@@ -339,6 +339,10 @@ def trigger_sync(
             "interview_status": payload.interview_status or connection.interview_status,
             "project_id": target_project,
             "mode": payload.mode,
+            # Resolved here rather than in the worker, so the job records what
+            # was actually asked for even if the connection's default is
+            # changed while the import is still queued.
+            "export_format": (payload.export_format or connection.export_format).value,
         },
         created_by=user.id,
     )
@@ -349,7 +353,10 @@ def trigger_sync(
         action="trigger_sync",
         entity_type="connection",
         entity_id=connection_id,
-        detail={"questionnaires": questionnaires},
+        detail={
+            "questionnaires": questionnaires,
+            "export_format": (payload.export_format or connection.export_format).value,
+        },
     )
     db.commit()
     db.refresh(job)
