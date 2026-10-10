@@ -433,6 +433,8 @@ export interface SyncRun {
   log: string[]
   /** Whether the export zip is still on disk to be downloaded. */
   has_archive: boolean
+  /** The format asked of the server. Empty for runs from before it was recorded. */
+  export_format: string
 }
 
 export type ChartType =

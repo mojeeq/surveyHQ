@@ -223,6 +223,21 @@ export default function Connections() {
   )
 }
 
+/**
+ * The formats a Survey Solutions server will export in.
+ *
+ * Its API takes these three names and no others, which is why there is no
+ * CSV and no .dat here: the tabular export is tab separated text, and a .tab
+ * opens in Excel and reads into Stata and R like any other delimited file.
+ * The extensions are on the labels because the file is what people recognise
+ * - "Tabular" on its own says nothing about what lands on disk.
+ */
+const EXPORT_FORMATS: { value: Connection['export_format']; label: string }[] = [
+  { value: 'STATA', label: 'Stata (.dta) - keeps value labels' },
+  { value: 'Tabular', label: 'Tab-delimited text (.tab)' },
+  { value: 'SPSS', label: 'SPSS (.sav)' },
+]
+
 function SyncBadge({ connection }: { connection: Connection }) {
   const map: Record<string, { tone: BadgeTone; icon?: string; label: string }> = {
     success: { tone: 'success', label: 'Synced' },
@@ -236,6 +251,12 @@ function SyncBadge({ connection }: { connection: Connection }) {
       {state.label}
     </Badge>
   )
+}
+
+/** The extension a format arrives as, which is what a run is recognised by. */
+function formatName(value: string): string {
+  const suffix: Record<string, string> = { STATA: '.dta', Tabular: '.tab', SPSS: '.sav' }
+  return suffix[value] ?? value
 }
 
 function SyncHistory({ connectionId }: { connectionId: string }) {
@@ -260,6 +281,9 @@ function SyncHistory({ connectionId }: { connectionId: string }) {
                 {run.status}
               </Badge>
               <span className="text-ink-700">{run.questionnaire}</span>
+              {run.export_format && (
+                <span className="text-ink-400">{formatName(run.export_format)}</span>
+              )}
             </span>
             <span className="truncate text-ink-500">{run.message}</span>
             <span className="flex shrink-0 items-center gap-2">
@@ -433,9 +457,11 @@ function ConnectionModal({
               update({ export_format: event.target.value as typeof form.export_format })
             }
           >
-            <option value="STATA">Stata (.dta) - keeps value labels</option>
-            <option value="Tabular">Tab-delimited</option>
-            <option value="SPSS">SPSS (.sav)</option>
+            {EXPORT_FORMATS.map((format) => (
+              <option key={format.value} value={format.value}>
+                {format.label}
+              </option>
+            ))}
           </select>
         </Field>
         <ProjectPicker
@@ -609,6 +635,10 @@ function ImportModal({ connection, onClose }: { connection: Connection; onClose:
   const [selected, setSelected] = useState<string[]>(connection.questionnaires)
   const [projectId, setProjectId] = useState(connection.project_id ?? '')
   const [mode, setMode] = useState<'replace' | 'append'>('replace')
+  // Starts at the connection's format and applies to this import alone, which
+  // is what makes it useful: a questionnaire whose Stata file reads badly can
+  // be pulled again as tabular without changing what the nightly import does.
+  const [format, setFormat] = useState(connection.export_format)
 
   const start = useMutation({
     mutationFn: () =>
@@ -616,6 +646,7 @@ function ImportModal({ connection, onClose }: { connection: Connection; onClose:
         questionnaires: selected,
         project_id: projectId || null,
         mode,
+        export_format: format,
       }),
     onSuccess: () => {
       toast.push(
@@ -668,6 +699,24 @@ function ImportModal({ connection, onClose }: { connection: Connection; onClose:
           >
             <option value="replace">Replace their data</option>
             <option value="append">Add these rows to them</option>
+          </select>
+        </Field>
+        <Field
+          label="Ask the server for"
+          hint="This import only. The connection keeps its own default for scheduled imports."
+        >
+          <select
+            className="input"
+            value={format}
+            onChange={(event) =>
+              setFormat(event.target.value as Connection['export_format'])
+            }
+          >
+            {EXPORT_FORMATS.map((entry) => (
+              <option key={entry.value} value={entry.value}>
+                {entry.label}
+              </option>
+            ))}
           </select>
         </Field>
       </div>

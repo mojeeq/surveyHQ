@@ -138,11 +138,18 @@ class SyncRunOut(BaseModel):
     log: list[Any] = Field(default_factory=list)
     # Whether the export zip is still on disk to be downloaded.
     has_archive: bool = False
+    # The format asked of the server. Empty for runs from before it was
+    # recorded, which is not the same as "unknown format" but is all that can
+    # honestly be said about them.
+    export_format: str = ""
 
 
 class SyncRequest(BaseModel):
     questionnaires: list[str] = Field(default_factory=list)
     interview_status: str | None = None
+    # The format to ask the server for, for this import only. Absent uses the
+    # connection's own, which is what a scheduled import runs on.
+    export_format: ExportFormat | None = None
     # Where the imported datasets land. Absent falls back to the connection's
     # own project, which is how a scheduled sync knows where to put things.
     project_id: str | None = None

@@ -47,6 +47,21 @@ credentials and the permissions in one step.
 Press **Import data** on a connection. It lists every questionnaire the account
 can see; tick the ones you want and start the import.
 
+**Ask the server for** sets the format for that import alone, starting from the
+connection's own. Survey Solutions produces three:
+
+| Format | File | When |
+|---|---|---|
+| Stata | `.dta` | The default. It carries variable and value labels, so a coded answer arrives as "Rented" rather than 3. |
+| Tab-delimited text | `.tab` | Plain text, no binary encoding to go wrong. Reach for it when a `.dta` imports with values nothing explains. Labels are not in the file, so coded answers stay as codes. |
+| SPSS | `.sav` | For a workflow that is already SPSS. Labels are carried, as in Stata. |
+
+There is no CSV and no `.dat`: those are not formats the server will produce. A
+`.tab` is a text file with tab separators, which Excel, Stata and R all read.
+
+Which format a run used is shown beside it under **Recent imports**, so a
+dataset pulled as `.tab` to work around a bad `.dta` is recognisable afterwards.
+
 What happens next:
 
 1. SurveyHQ asks the server to prepare an export job.
