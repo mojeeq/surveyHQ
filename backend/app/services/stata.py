@@ -38,7 +38,7 @@ from app.services.datasets import (
     dataset_directory,
     dataset_is_queryable,
 )
-from app.services.ingest import IngestResult
+from app.services.ingest import IngestResult, numeric_code_text
 from app.services.query_engine import (
     DatasetContext,
     _quote_path,
@@ -1497,7 +1497,9 @@ def _label_definition(body: str) -> tuple[str, dict[str, str]]:
     book, rest = parts[0], parts[1:]
     if len(rest) % 2:
         raise CommandError("Every code needs a label after it")
-    pairs = {rest[i]: rest[i + 1] for i in range(0, len(rest), 2)}
+    # Codes written as the data is read: `label define yn 1.0 "Yes"` is a
+    # label for the value 1, and keyed "1.0" it would never be found.
+    pairs = {numeric_code_text(rest[i]): rest[i + 1] for i in range(0, len(rest), 2)}
     return book, pairs
 
 
