@@ -35,7 +35,13 @@ def build_metadata_from_parquet_fast(
     therefore read the same Parquet more than a thousand times. profile_parquet
     combines many independent aggregates into each pass.
     """
-    from app.services.ingest import MISSING_TAG_SUFFIX, VariableMeta, _safe_float, classify
+    from app.services.ingest import (
+        MISSING_TAG_SUFFIX,
+        VariableMeta,
+        _safe_float,
+        classify,
+        is_numeric_storage,
+    )
 
     total, profiles, tags = columnar.profile_parquet(
         parquet_path, hidden_suffix=MISSING_TAG_SUFFIX
@@ -44,9 +50,7 @@ def build_metadata_from_parquet_fast(
     for position, profile in enumerate(profiles):
         storage = profile.storage_type
         upper = storage.upper()
-        numeric = any(
-            token in upper for token in ("INT", "DOUBLE", "FLOAT", "DECIMAL", "HUGEINT")
-        )
+        numeric = is_numeric_storage(storage)
         is_datetime = "TIMESTAMP" in upper or upper == "DATE"
         labels = value_labels.get(profile.name, {})
         var_type = classify(
@@ -155,7 +159,11 @@ def append_frame_fast(
         add_geopoint_columns,
         clean_columns,
         geopoint_columns,
+        is_numeric_storage,
+        merge_value_labels,
+        retyped_warnings,
         stored_geopoint_columns,
+        unlabelled_code_warnings,
     )
 
     if not dataset_service.dataset_is_queryable(dataset):
@@ -166,7 +174,8 @@ def append_frame_fast(
     existing_path = Path(dataset.storage_path)
     frame = clean_columns(frame)
     before = int(dataset.row_count or 0)
-    existing_columns = {name for name, _ in columnar.parquet_columns(existing_path)}
+    stored_types = dict(columnar.parquet_columns(existing_path))
+    existing_columns = set(stored_types)
 
     # This path writes the incoming rows straight to Parquet and unions them
     # onto the stored file by name, so a combined GPS column has to be split
@@ -194,13 +203,23 @@ def append_frame_fast(
             "blank for the new rows: " + ", ".join(sorted(dropped)[:5])
         )
 
+    # Code by code, so an answer option this round added is labelled rather
+    # than drawn as a bare number beside the options the first round had.
     kept_labels = {v.name: v.label for v in dataset.variables if v.label}
-    kept_value_labels = {v.name: v.value_labels for v in dataset.variables if v.value_labels}
     for key, value in variable_labels.items():
         kept_labels.setdefault(key, value)
-    for key, value in value_labels.items():
-        kept_value_labels.setdefault(key, value)
+    kept_value_labels = merge_value_labels(
+        {v.name: v.value_labels for v in dataset.variables if v.value_labels},
+        value_labels,
+    )
     warnings.extend(dataset_service._recoded_warnings(kept_value_labels, value_labels))
+    warnings.extend(unlabelled_code_warnings(frame, kept_value_labels))
+    warnings.extend(
+        retyped_warnings(
+            {name for name, kind in stored_types.items() if is_numeric_storage(kind)},
+            frame,
+        )
+    )
 
     destination = existing_path.with_name(f"data-{uuid4().hex}.parquet")
     columnar.append_frame_to_parquet(

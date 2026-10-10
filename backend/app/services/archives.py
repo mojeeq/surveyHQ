@@ -25,7 +25,12 @@ import pandas as pd
 
 from app.core.config import settings
 from app.core.logging import get_logger
-from app.services.ingest import SUPPORTED_EXTENSIONS, IngestError, read_source
+from app.services.ingest import (
+    SUPPORTED_EXTENSIONS,
+    IngestError,
+    merge_value_labels,
+    read_source,
+)
 
 logger = get_logger(__name__)
 
@@ -322,14 +327,14 @@ def combine(members: list[ExtractedMember], strict: bool = False) -> CombineResu
     combined = pd.concat(frames, ignore_index=True, sort=False)
 
     # Later files win only where earlier ones said nothing, so the first file's
-    # labels are the ones that stand.
+    # labels are the ones that stand - code by code for the value labels, or an
+    # answer option added in a later file would have no label at all.
     variable_labels: dict[str, str] = {}
     value_labels: dict[str, dict[str, str]] = {}
     for member in members:
         for key, value in member.variable_labels.items():
             variable_labels.setdefault(key, value)
-        for key, value in member.value_labels.items():
-            value_labels.setdefault(key, value)
+        value_labels = merge_value_labels(value_labels, member.value_labels)
     variable_labels.setdefault(SOURCE_COLUMN, "File this row was imported from")
 
     return CombineResult(

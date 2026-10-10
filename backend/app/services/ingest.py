@@ -287,6 +287,143 @@ def split_geopoints(frame: pd.DataFrame, variable_labels: dict[str, str]) -> lis
     return columns
 
 
+def code_text(value: Any) -> str:
+    """A value as a value-label key is written.
+
+    Codes are stored as text because that is what both Stata readers hand back
+    and what the query engine looks a label up by, and a whole number has to
+    read "3" rather than "3.0" or every label it has is missed.
+    """
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def merge_value_labels(
+    kept: dict[str, dict[str, str]], incoming: dict[str, dict[str, str]]
+) -> dict[str, dict[str, str]]:
+    """Fold another file's value labels into the ones a dataset already has.
+
+    Code by code, not variable by variable. A questionnaire revised in the
+    middle of fieldwork adds answer options, and keeping the first round's
+    whole mapping meant every code introduced after it had no label at all:
+    the chart drew "Rented" and "Mortgage or loan" beside a bare 6, with
+    nothing on it saying that 6 was "Other tenure" in the rounds that asked it
+    that way.
+
+    A code the dataset already knows keeps its meaning. One that now means
+    something else is reported rather than rewritten, because the rows
+    collected under the old meaning are still in the data.
+    """
+    merged = {name: dict(codes) for name, codes in kept.items()}
+    for name, codes in incoming.items():
+        if name not in merged:
+            merged[name] = dict(codes)
+            continue
+        for code, label in codes.items():
+            merged[name].setdefault(code, label)
+    return merged
+
+
+# What a stored column's type says when it holds numbers. DuckDB and pandas
+# both name their types in here, which is why the test is on the tokens rather
+# than on a list of type names.
+NUMERIC_STORAGE_TOKENS = ("INT", "DOUBLE", "FLOAT", "DECIMAL", "HUGEINT")
+
+
+def is_numeric_storage(storage_type: str) -> bool:
+    """Whether a stored column holds numbers, from the type it is stored as."""
+    upper = str(storage_type).upper()
+    return any(token in upper for token in NUMERIC_STORAGE_TOKENS)
+
+
+def _reads_as_text(series: pd.Series) -> bool:
+    """Whether a column of values would be stored as text rather than numbers."""
+    return any(isinstance(value, str) for value in series.dropna().head(100))
+
+
+def retyped_warnings(numeric_before: set[str], frame: pd.DataFrame) -> list[str]:
+    """Variables the dataset holds as numbers that arrive as text.
+
+    The two are stacked as text, which is the only answer that loses no
+    values, and it is also the end of every mean, total and range the variable
+    had - on all of it, not only the rows that arrived. Nothing else in an
+    import says so: the column still looks full, the numbers are all still
+    there, and the statistics have quietly become unavailable.
+    """
+    messages: list[str] = []
+    for name in sorted(numeric_before):
+        if name not in frame.columns:
+            continue
+        series = frame[name]
+        if not series.notna().any() or not _reads_as_text(series):
+            continue
+        messages.append(
+            f"'{name}' is held as numbers but arrives as text in this file, so "
+            "the whole variable becomes text. Every value is kept; totals, "
+            "averages and ranges on it stop working."
+        )
+    return messages
+
+
+# Below this share of labelled rows a variable is read as a measurement that
+# happens to tag a few codes - age with 999 for "refused" - rather than a coded
+# question, and its unlabelled values are its data rather than a gap.
+LABELLED_SHARE = 0.5
+
+# Enough to recognise what is arriving without printing a column into a warning.
+UNLABELLED_EXAMPLES = 5
+
+
+def _code_order(code: str) -> tuple[int, float, str]:
+    """Numbers in numeric order, so a list of codes reads as one."""
+    try:
+        return (0, float(code), "")
+    except ValueError:
+        return (1, 0.0, code)
+
+
+def unlabelled_code_warnings(
+    frame: pd.DataFrame, value_labels: dict[str, dict[str, str]]
+) -> list[str]:
+    """Coded variables arriving with codes that nothing in the file explains.
+
+    This is what a chart of a revised question looks like from the outside:
+    labels for the codes the first round had, bare numbers for everything
+    added later, and no way to tell whether the numbers are a labelling gap or
+    the wrong variable's values. Said at import, it is one sentence naming the
+    variable and the codes; found afterwards, it is a day.
+    """
+    messages: list[str] = []
+    for name, labels in sorted(value_labels.items()):
+        if not labels or name not in frame.columns:
+            continue
+        # Counted first, so the code text is worked out once per distinct
+        # answer rather than once per interview. A coded question has a
+        # handful of answers and a survey has millions of rows.
+        counts = frame[name].value_counts(dropna=True)
+        if counts.empty:
+            continue
+        seen: dict[str, int] = {}
+        for value, count in counts.items():
+            seen[code_text(value)] = seen.get(code_text(value), 0) + int(count)
+        labelled = sum(count for code, count in seen.items() if code in labels)
+        if labelled / sum(seen.values()) < LABELLED_SHARE:
+            continue
+        unknown = sorted((code for code in seen if code not in labels), key=_code_order)
+        if not unknown:
+            continue
+        shown = ", ".join(unknown[:UNLABELLED_EXAMPLES])
+        more = f" and {len(unknown) - UNLABELLED_EXAMPLES} more" if (
+            len(unknown) > UNLABELLED_EXAMPLES
+        ) else ""
+        messages.append(
+            f"'{name}' holds {len(unknown)} value(s) no file labels: {shown}{more}. "
+            "They are kept as they are and will appear on a chart as numbers."
+        )
+    return messages
+
+
 def _clean_column_name(name: Any, index: int) -> str:
     text = str(name).strip()
     if not text or text.lower() == "nan":
@@ -747,10 +884,16 @@ def ingest_frame(
         if numeric.notna().sum() == series.notna().sum() and series.notna().any():
             frame[column] = numeric
             continue
-        # Object columns holding genuinely mixed types break Parquet
+        # Object columns holding genuinely mixed types break Parquet. Written
+        # out the way a code is written, not with str(): a round that exported
+        # a coded question as text, stacked on rounds that exported it as a
+        # number, would otherwise give one answer two spellings - "4" and
+        # "4.0" - which draws as two bars, one of them with no value label.
         types = {type(v) for v in series.dropna().head(1000)}
         if len(types) > 1:
-            frame[column] = series.astype(str).replace({"nan": None, "None": None})
+            frame[column] = series.map(
+                lambda value: None if pd.isna(value) else code_text(value)
+            )
 
     # After the loop above, because a combined GPS column is exactly the kind
     # of text column it leaves alone.

@@ -37,8 +37,11 @@ from app.services.ingest import (
     detect_monitoring_fields,
     ingest_file,
     ingest_frame,
+    merge_value_labels,
     read_source,
+    retyped_warnings,
     stored_geopoint_columns,
+    unlabelled_code_warnings,
 )
 
 logger = get_logger(__name__)
@@ -340,17 +343,31 @@ def append_frame_into_dataset(
         )
 
     # Existing labels win: they describe the dataset as it has been analysed.
+    # Value labels merge code by code, so an answer option the appended round
+    # added arrives labelled instead of as a bare number.
     kept_labels = {v.name: v.label for v in dataset.variables if v.label}
-    kept_value_labels = {v.name: v.value_labels for v in dataset.variables if v.value_labels}
     for key, value in variable_labels.items():
         kept_labels.setdefault(key, value)
-    for key, value in value_labels.items():
-        kept_value_labels.setdefault(key, value)
+    kept_value_labels = merge_value_labels(
+        {v.name: v.value_labels for v in dataset.variables if v.value_labels},
+        value_labels,
+    )
     # A questionnaire revised between rounds can reuse a code for a different
     # answer. The appended rows are then shown under the labels the dataset
     # already had, which reads as one variable's values appearing under
     # another's meaning - so it is reported rather than left to be noticed.
     warnings.extend(_recoded_warnings(kept_value_labels, value_labels))
+    warnings.extend(unlabelled_code_warnings(frame, kept_value_labels))
+    warnings.extend(
+        retyped_warnings(
+            {
+                str(name)
+                for name in existing.columns
+                if pd.api.types.is_numeric_dtype(existing[name])
+            },
+            frame,
+        )
+    )
 
     _apply_ingest(
         db,
@@ -449,6 +466,20 @@ def find_archive_sibling(
             shared * 100,
         )
     return None
+
+
+def _ingest_warnings(dataset: Dataset, archive: str, member: str) -> list[str]:
+    """What the ingest said about one file, named by the file it was said about.
+
+    Ingest writes its warnings onto the dataset, where the next round
+    overwrites them - so uploading five questionnaire versions at once left
+    only what was said about the fifth, and nothing about the four before it
+    reached the person who pressed import. The import report is where somebody
+    is actually looking, and which round a warning belongs to is most of its
+    meaning when five are going in at once.
+    """
+    said = (dataset.meta or {}).get("warnings") or []
+    return [f"{archive} ({member}): {text}" for text in said]
 
 
 def load_archive_as_datasets(
@@ -564,6 +595,9 @@ def load_archive_as_datasets(
                             f"({before} + {len(frame)} = {existing.row_count} rows)"
                         )
                         outcome.rows += len(frame)
+                        outcome.warnings.extend(
+                            _ingest_warnings(existing, archive_name, member.name)
+                        )
                     else:
                         # Everything built on this dataset points at its id, so the
                         # row is kept and only its data swapped. Losing a variable is
@@ -600,6 +634,9 @@ def load_archive_as_datasets(
                         outcome.rows += existing.row_count
                         outcome.warnings.extend(
                             _lost_variable_warnings(db, existing, had, now)
+                        )
+                        outcome.warnings.extend(
+                            _ingest_warnings(existing, archive_name, member.name)
                         )
                     outcome.datasets.append(existing)
                     continue
@@ -642,6 +679,9 @@ def load_archive_as_datasets(
                     f"{member.name} -> {dataset.name} ({dataset.row_count} rows)"
                 )
                 outcome.rows += dataset.row_count
+                outcome.warnings.extend(
+                    _ingest_warnings(dataset, archive_name, member.name)
+                )
             finally:
                 # Dropped before the next file is read, so the peak is one
                 # member rather than the whole archive. The member released its

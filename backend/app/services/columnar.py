@@ -102,6 +102,64 @@ def frame_to_parquet(frame: pd.DataFrame, destination: Path) -> Path:
     return destination
 
 
+NUMERIC_TYPE_TOKENS = ("INT", "DOUBLE", "FLOAT", "DECIMAL", "HUGEINT")
+
+
+def _holds_numbers(column_type: str) -> bool:
+    return any(token in column_type.upper() for token in NUMERIC_TYPE_TOKENS)
+
+
+def code_text_sql(name: str) -> str:
+    """A numeric column as text, written the way a code is written.
+
+    DuckDB renders a double as "4.0", and a value label is keyed "4". So a
+    round that exports a coded question as text, stacked onto rounds that
+    exported it as a number, would give the same answer two spellings: half
+    the interviews under "Rented" and half under a bare "4.0", on one axis,
+    with nothing saying they are the same answer. Whole numbers are written
+    without the decimal point for that reason, and the same expression is in
+    the query engine, where a column with tagged missings is read as text.
+
+    TRY_CAST because a value too large for a BIGINT is still a value; it keeps
+    whatever spelling the double has rather than failing the whole import.
+    """
+    col = quote_ident(name)
+    return (
+        f"CASE WHEN {col} = floor({col}) AND TRY_CAST({col} AS BIGINT) IS NOT NULL "
+        f"THEN CAST(CAST({col} AS BIGINT) AS VARCHAR) "
+        f"ELSE CAST({col} AS VARCHAR) END"
+    )
+
+
+def _text_clash(
+    existing: list[tuple[str, str]], incoming: list[tuple[str, str]]
+) -> tuple[list[str], list[str]]:
+    """Columns one side holds as numbers and the other as text.
+
+    Returned per side, because it is the numeric side that has to be written
+    out as text; the other side already is.
+    """
+    other = dict(incoming)
+    left: list[str] = []
+    right: list[str] = []
+    for name, kind in existing:
+        if name not in other:
+            continue
+        theirs = other[name]
+        if _holds_numbers(kind) and not _holds_numbers(theirs):
+            left.append(name)
+        elif _holds_numbers(theirs) and not _holds_numbers(kind):
+            right.append(name)
+    return left, right
+
+
+def _select_with_text(path: Path, columns: list[str], extra: str = "") -> str:
+    """SELECT * from a Parquet file with some columns rewritten as code text."""
+    replace = ", ".join(f"{code_text_sql(name)} AS {quote_ident(name)}" for name in columns)
+    star = f"* REPLACE ({replace})" if columns else "*"
+    return f"SELECT {star}{extra} FROM read_parquet({quote_path(path)})"
+
+
 def append_frame_to_parquet(
     existing_path: str | Path,
     incoming: pd.DataFrame,
@@ -123,19 +181,27 @@ def append_frame_to_parquet(
     incoming_path = destination.with_name(f".incoming.{uuid.uuid4().hex}.parquet")
     try:
         frame_to_parquet(incoming, incoming_path)
-        existing_columns = [name for name, _ in parquet_columns(existing_path)]
-        incoming_columns = [name for name, _ in parquet_columns(incoming_path)]
+        stored = parquet_columns(existing_path)
+        arriving = parquet_columns(incoming_path)
+        existing_columns = [name for name, _ in stored]
+        incoming_columns = [name for name, _ in arriving]
 
-        existing_select = f"SELECT * FROM read_parquet({quote_path(existing_path)})"
+        # A variable the two files disagree about the type of is stacked as
+        # text, which is the only answer that loses no values. The numeric
+        # side is written out the way a code is written first, or the same
+        # answer arrives under two spellings - "4" and "4.0" - and splits into
+        # two bars, one of them with no value label.
+        here, there = _text_clash(stored, arriving)
+        extra = ""
         if source_column and source_column not in existing_columns:
-            existing_select = (
-                "SELECT *, "
+            extra = (
+                ", "
                 + quote_literal(existing_source_value)
                 + " AS "
                 + quote_ident(source_column)
-                + f" FROM read_parquet({quote_path(existing_path)})"
             )
-        incoming_select = f"SELECT * FROM read_parquet({quote_path(incoming_path)})"
+        existing_select = _select_with_text(existing_path, here, extra)
+        incoming_select = _select_with_text(incoming_path, there)
 
         con = connect()
         try:
