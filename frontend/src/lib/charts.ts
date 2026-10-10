@@ -492,6 +492,18 @@ function byLabel(left: string, right: string): number {
 }
 
 /**
+ * Whether the axis has an order of its own rather than being a set of names.
+ *
+ * A date runs in time and a number runs low to high. Everything else - a
+ * province, a status, a question's answers - has no order but the one a
+ * reader is given, which is what the sort option is for.
+ */
+export function readsAsAScale(result: QueryResult): boolean {
+  const first = result.columns.find((column) => column.type === 'dimension')
+  return first?.data_type === 'datetime' || first?.data_type === 'numeric'
+}
+
+/**
  * Order the categories, and fold the tail into one "Other".
  *
  * Both are reading aids rather than data changes: a bar chart of forty
@@ -503,11 +515,30 @@ function shape(
   categories: string[],
   series: { name: string; data: (number | null)[] }[],
   options: BuildOptions,
+  scale = false,
 ) {
   const totals = categories.map((_, index) =>
     series.reduce((sum, entry) => sum + Number(entry.data[index] ?? 0), 0),
   )
   let order = categories.map((_, index) => index)
+
+  // An axis with an order of its own is read along it, whatever the sort
+  // option says. That option is a reading aid for a set of categories, where
+  // nothing but size or name can put them in a line; a date or a number is
+  // already in a line, and drawing July after August is not a different view
+  // of the same chart, it is one that cannot be read.
+  if (scale) {
+    // byLabel reads a pair of numbers as numbers and everything else as
+    // text: bands arrive as 0, 10, 20, and a moment arrives as an ISO date,
+    // where the text order is the time order.
+    return laidOut(
+      order.sort((a, b) => byLabel(categories[a], categories[b])),
+      categories,
+      series,
+      totals,
+      options,
+    )
+  }
 
   switch (options.sort) {
     case 'value_desc':
@@ -526,6 +557,17 @@ function shape(
       break
   }
 
+  return laidOut(order, categories, series, totals, options)
+}
+
+/** The categories in the order decided, with the tail folded and stacked. */
+function laidOut(
+  order: number[],
+  categories: string[],
+  series: { name: string; data: (number | null)[] }[],
+  totals: number[],
+  options: BuildOptions,
+) {
   const top = options.topN && options.topN > 0 ? options.topN : 0
   let names = order.map((index) => categories[index])
   let rows = series.map((entry) => ({
@@ -685,7 +727,12 @@ function buildOption(
     : ordered
   const pivoted = pivot(result)
   const valueLabelText = pivoted.valueLabel
-  const { categories, series } = shape(pivoted.categories, pivoted.series, options)
+  const { categories, series } = shape(
+    pivoted.categories,
+    pivoted.series,
+    options,
+    readsAsAScale(result),
+  )
   const multiSeries = series.length > 1
   // A single series is named by the chart title, so it needs no legend box -
   // and can be given one on request. Two or more always keep theirs, whatever

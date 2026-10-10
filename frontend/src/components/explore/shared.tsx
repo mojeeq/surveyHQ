@@ -5,6 +5,7 @@ import type {
   Chart,
   ChartType,
   Dataset,
+  Dimension,
   Variable,
 } from "@/lib/types";
 
@@ -76,3 +77,27 @@ export function openedIn(mode: Mode, chart?: Chart): Chart | undefined {
 }
 
 export type VariableList = Dataset["variables"];
+
+/**
+ * Whether a grouping runs along a scale rather than across categories.
+ *
+ * A date runs in time and a number runs low to high. Asking for one of those
+ * biggest first draws the busiest days in whatever order they happen to rank,
+ * which is not a time series at all - and under a row limit it is a scattered
+ * sample of days rather than a stretch of fieldwork. The query is left
+ * unsorted for these, which is what makes the server order them along their
+ * own axis.
+ *
+ * "Keep the N largest" is the exception: that asks for the ranking, and the
+ * fold into "Other" reads the rows in that order. The same exception is in
+ * the server's own rule, which this mirrors.
+ */
+export function scaleOf(
+  dimension: Dimension | undefined,
+  variable: Variable | undefined,
+): "time" | "number" | null {
+  if (!dimension || dimension.limit) return null;
+  if (dimension.grain || variable?.var_type === "datetime") return "time";
+  if (dimension.bin_width || variable?.var_type === "numeric") return "number";
+  return null;
+}
