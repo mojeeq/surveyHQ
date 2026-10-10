@@ -34,6 +34,7 @@ import {
   AGGREGATIONS,
   CHART_TYPES,
   VariableList,
+  scaleOf,
 } from "@/components/explore/shared";
 import {
   Card,
@@ -231,6 +232,12 @@ export function AggregateBuilder({
         ]
       : measures;
 
+  const axis = queryDimensions[0];
+  const scale = scaleOf(
+    axis,
+    allVariables.find((one) => one.name === axis?.variable),
+  );
+
   const spec: QuerySpec = {
     dimensions: queryDimensions,
     measures: queryMeasures,
@@ -241,7 +248,7 @@ export function AggregateBuilder({
     // denominator used in official-statistics tables.
     sort: isBox
       ? [{ field: "box_median", direction: "desc" }]
-      : isKpi
+      : isKpi || scale
         ? []
         : measures.length
           ? [{ field: measures[0].alias || measures[0].agg, direction: "desc" }]
@@ -658,10 +665,22 @@ export function AggregateBuilder({
               ))}
             </select>
           </Field>
-          <Field label="Order">
+          <Field
+            label="Order"
+            hint={
+              scale === "time"
+                ? "A date axis is drawn in time order."
+                : scale === "number"
+                  ? "A number axis is drawn low to high."
+                  : undefined
+            }
+          >
             <select
               className="input py-1.5 text-xs"
-              value={display.sort ?? "none"}
+              // Nothing to choose along a scale: July drawn after August is
+              // not another view of the same chart, it is an unreadable one.
+              disabled={Boolean(scale)}
+              value={scale ? "scale" : (display.sort ?? "none")}
               onChange={(event) =>
                 setDisplay({
                   ...display,
@@ -669,6 +688,11 @@ export function AggregateBuilder({
                 })
               }
             >
+              {scale && (
+                <option value="scale">
+                  {scale === "time" ? "In time order" : "Low to high"}
+                </option>
+              )}
               <option value="value_desc">Largest first</option>
               <option value="value_asc">Smallest first</option>
               <option value="label_asc">By name (A-Z)</option>

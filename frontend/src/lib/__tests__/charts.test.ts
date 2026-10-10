@@ -457,3 +457,175 @@ describe('a tooltip that is wider than the widget it belongs to', () => {
     expect(option.tooltip?.appendToBody).toBe(true)
   })
 })
+
+// --- an axis with an order of its own ----------------------------------------
+
+/** One date grouping and a measure, as a chart of fieldwork over time is. */
+function overTime(pairs: [string, number][]): QueryResult {
+  return result(
+    [
+      { name: 'day', label: 'Day', type: 'dimension', data_type: 'datetime' },
+      column('interviews', 'measure'),
+    ],
+    pairs.map(([day, value]) => [day, value]),
+  )
+}
+
+/** A date grouping and a second dimension: a line per status over time. */
+function overTimeBy(rows: [string, string, number][]): QueryResult {
+  return result(
+    [
+      { name: 'day', label: 'Day', type: 'dimension', data_type: 'datetime' },
+      column('status', 'dimension'),
+      column('interviews', 'measure'),
+    ],
+    rows.map(([day, status, value]) => [day, status, value]),
+  )
+}
+
+describe('a chart over time', () => {
+  // The rows as a query sorted by size hands them over: biggest day first.
+  const scattered = overTime([
+    ['2026-08-03', 440],
+    ['2026-07-15', 360],
+    ['2026-07-08', 290],
+    ['2026-07-23', 320],
+    ['2026-07-09', 230],
+  ])
+
+  it('is drawn in time order whatever the sort asks for', () => {
+    for (const sort of ['value_desc', 'value_asc', 'label_desc', 'none'] as const) {
+      expect(categoriesOf(buildChartOption(scattered, 'line', { sort }))).toEqual([
+        '2026-07-08',
+        '2026-07-09',
+        '2026-07-15',
+        '2026-07-23',
+        '2026-08-03',
+      ])
+    }
+  })
+
+  it('carries each day its own value, not the one next to it', () => {
+    const option = buildChartOption(scattered, 'line', { sort: 'value_desc' })
+    const names = categoriesOf(option)
+    const values = seriesOf(option)[0].data as number[]
+    expect(Object.fromEntries(names.map((name, i) => [name, values[i]]))).toEqual({
+      '2026-07-08': 290,
+      '2026-07-09': 230,
+      '2026-07-15': 360,
+      '2026-07-23': 320,
+      '2026-08-03': 440,
+    })
+  })
+
+  it('reads months and years in time order, not as text', () => {
+    const months = overTime([
+      ['2026-10', 5],
+      ['2026-09', 9],
+      ['2027-01', 1],
+    ])
+    expect(categoriesOf(buildChartOption(months, 'line', { sort: 'value_desc' }))).toEqual([
+      '2026-09',
+      '2026-10',
+      '2027-01',
+    ])
+  })
+
+  it('puts one line per series over the same ordered axis', () => {
+    const option = buildChartOption(
+      overTimeBy([
+        ['2026-08-03', 'Completed', 440],
+        ['2026-07-08', 'Completed', 290],
+        ['2026-07-08', 'Approved', 12],
+        ['2026-08-03', 'Approved', 30],
+      ]),
+      'line',
+      { sort: 'value_desc' },
+    )
+    expect(categoriesOf(option)).toEqual(['2026-07-08', '2026-08-03'])
+    const byName = Object.fromEntries(seriesOf(option).map((s) => [s.name, s.data]))
+    expect(byName.Completed).toEqual([290, 440])
+    expect(byName.Approved).toEqual([12, 30])
+  })
+
+  it('still folds the smallest days into Other, at the end', () => {
+    const option = buildChartOption(scattered, 'line', { sort: 'value_desc', topN: 3 })
+    const names = categoriesOf(option)
+    // The three busiest days are kept, in date order, and the rest add up.
+    expect(names).toEqual(['2026-07-15', '2026-07-23', '2026-08-03', 'Other (2)'])
+    expect((seriesOf(option)[0].data as number[])[3]).toBe(290 + 230)
+  })
+})
+
+describe('a chart of a number', () => {
+  const bands = result(
+    [
+      { name: 'age', label: 'Age', type: 'dimension', data_type: 'numeric' },
+      column('people', 'measure'),
+    ],
+    [
+      ['30', 60],
+      ['0', 116],
+      ['80', 12],
+      ['10', 141],
+      ['20', 95],
+    ],
+  )
+
+  it('reads low to high however the rows arrive', () => {
+    expect(categoriesOf(buildChartOption(bands, 'bar', { sort: 'value_desc' }))).toEqual([
+      '0',
+      '10',
+      '20',
+      '30',
+      '80',
+    ])
+  })
+
+  it('does not read a band as a year', () => {
+    const years = result(
+      [
+        { name: 'built', label: 'Year built', type: 'dimension', data_type: 'numeric' },
+        column('houses', 'measure'),
+      ],
+      [
+        ['2026', 3],
+        ['198', 9],
+        ['45', 1],
+      ],
+    )
+    expect(categoriesOf(buildChartOption(years, 'bar', { sort: 'value_desc' }))).toEqual([
+      '45',
+      '198',
+      '2026',
+    ])
+  })
+})
+
+describe('a chart of categories', () => {
+  it('still reads biggest first', () => {
+    const option = buildChartOption(
+      simple([
+        ['Shefa', 120],
+        ['Tafea', 200],
+        ['Sanma', 80],
+      ]),
+      'bar',
+      { sort: 'value_desc' },
+    )
+    expect(categoriesOf(option)).toEqual(['Tafea', 'Shefa', 'Sanma'])
+  })
+
+  it('still reads by name when asked', () => {
+    const option = buildChartOption(
+      simple([
+        ['Shefa', 120],
+        ['Tafea', 200],
+        ['Sanma', 80],
+      ]),
+      'bar',
+      { sort: 'label_asc' },
+    )
+    expect(categoriesOf(option)).toEqual(['Sanma', 'Shefa', 'Tafea'])
+  })
+})
