@@ -429,49 +429,121 @@ pointed at it.
 ```
 backend/app/
   core/         config, logging, password hashing, JWTs, secret encryption
-  db/           SQLAlchemy engine, session, bootstrap
+  db/           SQLAlchemy engine, session, bootstrap, Alembic migrations
   models/       tables: user, project, dataset, connection, analytics,
                 monitoring, system
   schemas/      pydantic request/response models, including the query spec
   api/v1/       endpoints, grouped by area
   services/     the substance:
+
+                getting data in
                   ingest.py           files -> Parquet + metadata
-                  query_engine.py     spec -> DuckDB SQL -> result
-                  projects.py         who may see and change what
+                  datasets.py         creating and refreshing them, and the
+                                      metadata bookkeeping around it
                   archives.py         a zip -> one dataset per file in it
+                  import_review.py    prepare candidates, publish the reviewed
+                  dataset_versions.py retained versions of a dataset's data
+                  survey_solutions.py the CAPI server client
+                  scheduling.py       when the next import is due
+
+                querying it
+                  query_engine.py     spec -> DuckDB SQL -> result
+                  columnar.py         the DuckDB and Parquet helpers under it
+                  multiselect.py      0/1 columns -> one "tick all" question
+                  relationships.py    detecting and storing the links
                   derived.py          merges, and rebuilding what depends
-                  rproject.py         a project's R workspace and its scripts
                   freshness.py        how recent a dataset's data is
+
+                preparing it
+                  stata.py            the command engine for a project script
+                  stata_expr.py       its expression language
+                  stata_frame.py      the frame a script works on
+                  project_script.py   where a project's script lives, and
+                                      when it runs again
+
+                monitoring it
+                  monitoring.py       indicators, thresholds, alerts
+                  field_progress.py   the automatic monitoring views
+                  monitoring_precompute.py  those views, computed on import
+                  quality.py          the eight checks
+                  quality_failures.py the rows behind a failing one
+
+                publishing it
+                  static_export.py    a dashboard as one HTML file
+                  export_lib.py       the drawing libraries it carries
+                  export_fonts.py     the fonts it carries
+                  export_appearance.py how it is dressed
+                  reports.py          one export per value of a filter
+                  snapshots.py        a dashboard as it stood
+                  sharing.py          share links, passwords, expiry
+                  hostnames.py        a dashboard's own subdomain
+                  dashboard_assets.py background and logo images
+                  exporters.py        a result as CSV, Excel or Stata
+                  download.py         a whole dataset as a file
+
+                the map
                   geo.py              GPS points, grouped, for the map
                   geometry.py         GeoJSON/GeoPackage/shapefile -> features
                   boundaries.py       which area a point falls in
                   boundary_store.py   boundary layers on disk, with a cache
-                  scheduling.py       when the next import is due
-                  multiselect.py      0/1 columns -> one "tick all" question
-                  relationships.py    detecting and storing the links
-                  sharing.py          share links, passwords, expiry
-                  hostnames.py        a dashboard's own subdomain
-                  static_export.py    a dashboard as one HTML file
-                  dashboard_assets.py background and logo images
-                  exporters.py        a result as CSV, Excel or Stata
+
+                the rest
+                  projects.py         who may see and change what
+                  accounts.py         usernames and account identity
+                  archive.py          archiving a project: data goes, the
+                                      rest stays
+                  operation_lock.py   locks held until the transaction ends
                   net_guard.py        what an outbound request may reach
                   mailer.py           alert email
                   audit.py            who did what
-                  survey_solutions.py the CAPI server client
-                  quality.py          the eight checks
-                  monitoring.py       indicators, thresholds, alerts
-                  field_progress.py   the automatic monitoring views
+
+                the performance runtime (see below)
+                  query_runtime.py    installs the fast paths at start-up
+                  fast_ingest.py      the implementations it installs
   workers/      Celery app and tasks
 
 frontend/src/
-  lib/          API client, types, formatting, ECharts option builder,
-                the R tokeniser behind the coloured script boxes
-  hooks/        auth and toast context
+  lib/          API client, types, formatting, the ECharts option builder,
+                the chart palettes, the sidebar ink, and the small pure
+                pieces the pages are tested through
+  hooks/        auth, theme, toasts, the platform's own dialogs, project
+                scope, remembered preferences
   components/   layout, chart card, data table, filter builder, the map,
-                dashboard appearance, widget comments, the code editor,
+                dashboard appearance, widget comments, the script editor,
                 UI primitives
   pages/        one per route
+  help/         the documentation, rendered into the bundle at build time
 ```
+
+
+## The performance runtime
+
+A deployment does not run every function in `services/`. At start-up, before
+the endpoint and task modules are imported, `install_query_runtime()` swaps
+faster implementations into place: the columnar append, batched metadata
+scans, DuckDB's own CSV reader for large delimited files, a Redis cache keyed
+by dataset version, a direct Parquet-to-Parquet join for merges, and the
+precomputed field-monitoring views.
+
+It is done by replacement rather than by a second set of endpoints so that
+there is one contract per operation rather than two, and one set of schemas.
+The cost is that the code which runs is not always the code that reads
+first - so each replaced function keeps its original under its own name:
+`append_frame_pandas`, `build_metadata_per_column`. Those are not leftovers.
+They are what lets a test hold both implementations to the same contract,
+which is the rule here: **both have to behave the same way**.
+
+That rule is enforced rather than hoped for. The `append_implementation`
+fixture runs the append tests under each in turn, and it earns its keep: it
+found a questionnaire version stored as `"1"` by one path and `1` by the
+other, and a round that exported a number as text taking the whole variable
+to text on one path and not the other. Before it existed, the same labelling
+fault was fixed twice, a day apart, in two files.
+
+A deployment can turn the cache off (`ANALYTICS_CACHE_ENABLED`) and the
+precomputation off (`MONITORING_PRECOMPUTE_ENABLED`); the rest is always
+installed. The test suite imports the app, so it runs with the runtime
+installed too.
 
 ## A dashboard with its own address
 
@@ -590,6 +662,33 @@ ratio.
 
 None of this reaches the charts. A gloss over a bar changes the colour the eye
 reads off it, and those colours are the data.
+
+### Dark mode, and the safety net under it
+
+There are two palettes: `ink`, which is the light one, and `dark`, which is
+the surfaces a dark page is built from. Components pair them by hand -
+`bg-white dark:bg-dark-50`, `text-ink-700 dark:text-dark-700` - and most do.
+
+The ones that do not are the problem, and there are hundreds of them: an
+element that says `text-ink-900` and nothing else keeps near-black when the
+page goes dark. Rather than a `dark:` twin on every class attribute, which
+is an edit nobody finishes and anybody can forget, `index.css` carries one
+rule per shade under `.dark` in the components layer: ink resolves to the
+same number in the dark palette. Because it is in that layer, an explicit
+`dark:` on an element still wins - this is the default for what was not
+thought about, not an override of what was.
+
+The net covers text, borders, dividers and the light surfaces. It cannot
+cover `bg-white`, because a swatch previewing a light dashboard wants white
+in dark mode, so those pair themselves and `scripts/dark-mode-net.mjs`
+fails the build if one does not. `.on-light` is the opt-out in the other
+direction: a white tile on a dark board re-asserts the light palette inside
+itself, which is what keeps a table drawn for white paper readable on it.
+
+The net was written twice from measurement rather than from reading the
+classes: a sweep of the running app that walks every element, computes the
+luminance of its background and border, and reports anything light on a dark
+page. The second sweep found every panel on Explore outlined in #e8e8e8.
 
 ## Chart colour
 

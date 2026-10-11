@@ -650,8 +650,8 @@ from the dataset's own variables - one click to run.
 | Control | What it does |
 |---|---|
 | Chart type | Bar, horizontal bar, stacked bar, horizontal stacked bar, population pyramid, line, area, donut, pie, scatter, box plot, heatmap, table |
-| Order | Leave the query's order, or sort by value or by label, ascending or descending |
-| Show only the top | Keep the largest N categories and fold the rest into one "Other" |
+| Order | Leave the query's order, or sort by value or by label, ascending or descending. A date or a number is drawn along its own scale instead - a timeline sorted by size is not a timeline - so the control says so and is not offered |
+| Show only the top | Keep the largest N categories and fold the rest into one "Other". On a date or a number axis this is how to ask for a ranking - the ten busiest days - and the axis gives way to it |
 | Value axis title | Name the value axis |
 | Axis from … to | Fix its minimum and maximum, so two charts can be compared |
 | Target line | A line across the plot with a label, e.g. the target this is read against |
