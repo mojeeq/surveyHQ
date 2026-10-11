@@ -929,7 +929,7 @@ out of its group for the same reason.
 | **Data quality panel** | The last result of every check on a dataset, and how old the oldest one is |
 | **Text note** | A heading, an explanation, a caveat |
 | **Countdown to a date** | Time remaining to a deadline, ticking, with your own label and a message for when it passes |
-| **Map of interview locations** | GPS points from a dataset, grouped by coordinate - up to 50,000 places. Click a point for its count or any aggregate, plus the detail columns you chose |
+| **Map of interview locations** | GPS points from a dataset, grouped by coordinate, and grouped into cells of ground when there are more places than a map can be read at. Click a pin for its count or any aggregate, plus the detail columns you chose |
 | **Embedded HTML** | Whatever HTML you paste, rendered in a sandboxed frame - a logo, an embedded video, a link bar |
 | **How recent the data is** | When each dataset was last imported, and how old its newest record is |
 
@@ -977,6 +977,32 @@ statistics office behind a ministry firewall, and a feature that quietly needs
 a download the first time it is used is a feature that fails there.
 
 What a layer is good for is the two things below.
+
+### A map of a census
+
+A pin is a place, not an interview: several interviews at one household have
+always been one pin carrying a number, which is what the count in its popup
+is.
+
+A census makes that do very little, because every household has its own GPS
+reading - a hundred thousand interviews are a hundred thousand places. Drawing
+them one by one sent four megabytes to the browser every time the page loaded,
+a filter changed or a view was chosen, and asked it to draw fifty thousand
+pins; the line under the map now says "100,000 located interviews, drawn as
+1,509 pins about 1.1 km across" instead, and the map arrives in a tenth of a
+second.
+
+The rounding only happens when it is needed. A village survey, a sample, an
+enumeration area - anything up to a few thousand places - is drawn exactly
+where each reading was taken, and the line under the map just counts the
+locations. The number on a pin is always worked out from the interviews behind
+it, however they were grouped: a mean at a pin is the mean of those
+interviews, not an average of averages.
+
+A map **checking recorded areas** against the ground (below) is never rounded
+past about 110 m, because the verdict is read off the pin: a wider cell could
+put a household on the wrong side of a boundary and turn the finding into an
+artefact of the drawing.
 
 ### Drawing boundaries under a map
 

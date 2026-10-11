@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import { escapeHtml, formatNumber } from '@/lib/format'
+import { escapeHtml, formatNumber, mapSummary } from '@/lib/format'
 
 /**
  * The grounds the pins can be drawn on, in the order they are offered.
@@ -208,6 +208,7 @@ export default function MapWidget({
   basemap,
   tiles,
   truncated = false,
+  grouped,
   boundary,
   areas,
   areaVariable,
@@ -224,6 +225,8 @@ export default function MapWidget({
   basemap?: string
   tiles?: string
   truncated?: boolean
+  /** Set when the coordinates were rounded to fit the map, and by how much. */
+  grouped?: { records: number; decimals?: number; metres?: number | null } | null
   /** The outlines to draw under the pins, when the widget names a layer. */
   boundary?: BoundaryOverlay
   /** That layer's areas, fetched separately: a national frame is large. */
@@ -618,7 +621,7 @@ export default function MapWidget({
         </div>
       )}
       <p className="mt-1 shrink-0 text-[11px] text-ink-400">
-        {points.length ? `${formatNumber(points.length)} location(s)` : 'No located interviews'}
+        {mapSummary(points.length, grouped)}
         {truncated && ' - showing the busiest only'}
         {tilesFailed && ' - no map tiles: this server cannot reach the tile host'}
       </p>

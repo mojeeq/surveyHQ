@@ -128,3 +128,26 @@ export function titleCase(value: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase())
     .trim()
 }
+
+/** What a map's pins stand for, in one line under the map.
+ *
+ * A pin has always been a place rather than an interview, and on a census map
+ * it is a cell of ground holding several: "1,509 pins" alone would read as
+ * 1,509 interviews to anybody who did not know that, and the number they came
+ * for - how many located interviews there are - has to be the one on the page.
+ */
+export function mapSummary(
+  pins: number,
+  grouped?: { records: number; metres?: number | null } | null,
+): string {
+  if (!pins) return 'No located interviews'
+  if (!grouped) return `${formatNumber(pins)} location(s)`
+  const across =
+    grouped.metres && grouped.metres >= 1000
+      ? `${formatNumber(grouped.metres / 1000, 1)} km`
+      : `${formatNumber(grouped.metres ?? 0)} m`
+  return (
+    `${formatNumber(grouped.records)} located interviews, drawn as ` +
+    `${formatNumber(pins)} pins about ${across} across`
+  )
+}
