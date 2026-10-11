@@ -587,6 +587,98 @@ def pinned_filters(pinned: dict[str, str] | None) -> FilterGroup | None:
     )
 
 
+#: What a widget is, where it says nothing. The same defaults the board uses.
+DEFAULT_WIDE = 4
+DEFAULT_HIGH = 6
+MIN_HIGH = 2
+
+
+def _box(layout: dict[str, Any], columns: int) -> dict[str, int]:
+    """One widget's rectangle, trimmed to a board of this many columns.
+
+    A board narrowed after its widgets were placed still holds some at the old
+    width. Left alone, a widget running off the end adds an implicit column,
+    which narrows every other widget on the page to make room for one that is
+    half off the paper.
+    """
+    wide = min(columns, max(1, int(layout.get("w") or DEFAULT_WIDE)))
+    return {
+        "w": wide,
+        "h": max(MIN_HIGH, int(layout.get("h") or DEFAULT_HIGH)),
+        "x": min(columns - wide, max(0, int(layout.get("x") or 0))),
+        "y": max(0, int(layout.get("y") or 0)),
+    }
+
+
+def _clear(box: dict[str, int], row: int, placed: list[dict[str, int]]) -> bool:
+    """Whether this widget would sit at that row without landing on another."""
+    return not any(
+        box["x"] < other["x"] + other["w"]
+        and other["x"] < box["x"] + box["w"]
+        and row < other["row"] + other["h"]
+        and other["row"] < row + box["h"]
+        for other in placed
+    )
+
+
+def pack(boxes: list[dict[str, int]]) -> list[int]:
+    """The row each widget comes to rest on, in the order they were given.
+
+    The board packs upwards: a widget dragged halfway down the page settles
+    against whatever is above it, and what gets stored is where it was
+    dropped rather than where it landed. Exported at the stored y, a board
+    grows bands of empty paper. Exported with no y at all - which is what
+    this page used to do, flowing the widgets in the order they were made -
+    a widget can only ever follow the one before it, so a chart beside the
+    first tile comes out beside the second, and the first tile sits alone
+    with a hole to its right. That was the fault; this is the fix.
+
+    So the page does what the board does: taken row by row and then column by
+    column, each widget rises until it meets one already placed.
+    """
+    rows = [0] * len(boxes)
+    placed: list[dict[str, int]] = []
+    order = sorted(range(len(boxes)), key=lambda index: (boxes[index]["y"], boxes[index]["x"]))
+    for index in order:
+        box = boxes[index]
+        row = box["y"]
+        while row > 0 and _clear(box, row - 1, placed):
+            row -= 1
+        rows[index] = row
+        placed.append({**box, "row": row})
+    return rows
+
+
+def place_widgets(widgets: list[dict[str, Any]], columns: int) -> list[dict[str, Any]]:
+    """Give every widget the rectangle it will be drawn in, and sort them.
+
+    Packed one container at a time, because that is how the page draws them:
+    a page's loose widgets share a grid, and each group is a band with a grid
+    of its own.
+
+    Sorted into reading order afterwards - down the page, then across - so
+    that the file prints, and is read aloud, in the order it looks like.
+    """
+    containers: dict[tuple[int, str], list[dict[str, Any]]] = {}
+    for widget in widgets:
+        key = (int(widget.get("page") or 0), str(widget.get("group_id") or ""))
+        containers.setdefault(key, []).append(widget)
+
+    for members in containers.values():
+        boxes = [_box(member.get("layout") or {}, columns) for member in members]
+        for member, box, row in zip(members, boxes, pack(boxes), strict=True):
+            member["place"] = {**box, "row": row}
+
+    return sorted(
+        widgets,
+        key=lambda widget: (
+            int(widget.get("page") or 0),
+            widget["place"]["row"],
+            widget["place"]["x"],
+        ),
+    )
+
+
 def build_payload(
     db: Session,
     dashboard: Dashboard,
@@ -676,6 +768,9 @@ def build_payload(
             entry["frozen_because"] = reason if (reason and mine) else ""
         widgets.append(entry)
 
+    appearance = dashboard.appearance or {}
+    widgets = place_widgets(widgets, max(1, int(appearance.get("columns") or 12)))
+
     pages = [
         {"name": str((page or {}).get("name") or f"Page {index + 1}")}
         for index, page in enumerate(dashboard.pages or [{"name": "Page 1"}])
@@ -690,7 +785,7 @@ def build_payload(
         # that matched no theme the platform has, so a board came back in hues
         # it had never been shown in.
         "colors": export_lib.colors_for(dashboard.theme),
-        "appearance": dashboard.appearance or {},
+        "appearance": appearance,
         "pages": pages,
         # The frames and their names. A group says what a handful of widgets
         # are for, so a file that dropped them would read as a looser board
