@@ -17,6 +17,7 @@ import {
   Loading,
   Modal,
   PageHeader,
+  Segmented,
   Tabs,
 } from '@/components/ui'
 
@@ -115,24 +116,17 @@ export default function Alerts() {
         {tab === 'alerts' && (
           <>
             <div className="mb-4 flex gap-1">
-              {[
-                { value: 'open', label: 'Open' },
-                { value: 'acknowledged', label: 'Acknowledged' },
-                { value: 'resolved', label: 'Resolved' },
-                { value: '', label: 'All' },
-              ].map((option) => (
-                <button
-                  key={option.value}
-                  onClick={() => setStatusFilter(option.value)}
-                  className={`rounded-card px-3 py-1.5 text-xs font-medium ${
-                    statusFilter === option.value
-                      ? 'bg-ink-800 text-white'
-                      : 'bg-white text-ink-600 hover:bg-ink-100'
-                  }`}
-                >
-                  {option.label}
-                </button>
-              ))}
+              <Segmented
+                label="Alert status"
+                value={statusFilter}
+                onChange={setStatusFilter}
+                options={[
+                  { value: 'open', label: 'Open' },
+                  { value: 'acknowledged', label: 'Acknowledged' },
+                  { value: 'resolved', label: 'Resolved' },
+                  { value: '', label: 'All' },
+                ]}
+              />
             </div>
 
             {alerts.isLoading ? (

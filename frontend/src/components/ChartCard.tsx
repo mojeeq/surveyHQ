@@ -3,7 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import { buildChartOption, type BuildOptions } from '@/lib/charts'
 import { formatCell, formatNumber } from '@/lib/format'
 import type { ChartType, QueryResult } from '@/lib/types'
-import { EmptyState } from './ui'
+import { EmptyState, Segmented } from './ui'
 
 /**
  * Renders a query result as a chart with a table fallback.
@@ -399,21 +399,16 @@ function ViewToggle({
   onChange: (view: 'chart' | 'table') => void
 }) {
   return (
-    <div className="mb-2 flex justify-end gap-1">
-      {(['chart', 'table'] as const).map((option) => (
-        <button
-          key={option}
-          onClick={() => onChange(option)}
-          className={`rounded px-2 py-1 text-xs font-medium capitalize transition-colors ${
-            view === option
-              ? 'bg-ink-800 text-white dark:bg-dark-300 dark:text-dark-900'
-              : 'text-ink-500 hover:bg-ink-100 dark:text-dark-500 dark:hover:bg-dark-200'
-          }`}
-        >
-          {option}
-        </button>
-      ))}
-    </div>
+    <Segmented
+      label="Show as"
+      className="mb-2 justify-end"
+      value={view}
+      onChange={onChange}
+      options={[
+        { value: 'chart', label: 'Chart' },
+        { value: 'table', label: 'Table' },
+      ]}
+    />
   )
 }
 

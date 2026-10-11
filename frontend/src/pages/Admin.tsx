@@ -388,7 +388,7 @@ function ApiKeys() {
           <p className="text-sm font-medium text-ink-900">
             Copy this key now. It is not shown again.
           </p>
-          <code className="mt-2 block break-all rounded bg-white px-2 py-1.5 text-xs">
+          <code className="mt-2 block break-all rounded bg-white px-2 py-1.5 text-xs dark:bg-dark-50">
             {created}
           </code>
           <button className="btn-ghost btn-sm mt-1" onClick={() => setCreated(null)}>
