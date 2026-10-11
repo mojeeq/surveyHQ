@@ -1072,15 +1072,19 @@ def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabR
             return MISSING_LABEL
         return str(_label_value(info, value) if request.use_labels else value)
 
-    row_keys: list[Any] = []
-    col_keys: list[Any] = []
-    table: dict[tuple[Any, Any], float] = {}
-    for row_value, col_value, value in triples:
-        if row_value not in row_keys:
-            row_keys.append(row_value)
-        if col_value not in col_keys:
-            col_keys.append(col_value)
-        table[(row_value, col_value)] = float(value or 0)
+    # dict.fromkeys rather than a list with a membership test in it. The test
+    # was a linear scan of everything seen so far, which is fine for twelve
+    # education levels and quadratic in the number of categories: tabulating
+    # 200,000 interview keys - which the platform offers, and which is how
+    # somebody reads a whole table - spent fifty seconds here and under a
+    # tenth of a second in DuckDB. Both of these keep first-seen order, which
+    # is what the sort below expects.
+    row_keys: list[Any] = list(dict.fromkeys(triple[0] for triple in triples))
+    col_keys: list[Any] = list(dict.fromkeys(triple[1] for triple in triples))
+    table: dict[tuple[Any, Any], float] = {
+        (row_value, col_value): float(value or 0)
+        for row_value, col_value, value in triples
+    }
 
     all_rows = _sorted_keys(row_keys, row_info)
     all_cols = _sorted_keys(col_keys, col_info)
