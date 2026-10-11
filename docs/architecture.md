@@ -327,7 +327,7 @@ Celery handles anything that outlives a request:
 | `run_all_quality_checks` | Every six hours |
 | `take_due_snapshots` | Every ten minutes - keeps a copy of each dashboard whose time has come, and prunes past what it keeps |
 | `reap_stale_jobs` | Every ten minutes - fails jobs still claiming to be running past any limit a task could have run to |
-| `prune_history` | Nightly - trims snapshots, resolved alerts, old results and jobs |
+| `prune_history` | Nightly - trims snapshots, resolved alerts, old results and jobs, and sweeps the report zips those jobs were the only way to reach |
 
 Indicator snapshots are what make trends possible: each refresh writes a
 timestamped value, so every indicator carries its own history without anyone
@@ -358,6 +358,16 @@ afternoon in UTC. Getting it wrong is not an hour's error, it is a day's.
 Each run's export zip is kept under `sync-archives/`, the last five per
 connection, so a run's history is a list of real files that can be downloaded
 and re-uploaded like any other archive.
+
+Report bursts under `reports/` are bounded the same way, and have to be: a
+burst is one HTML report per province for every widget on a board, so a board
+bursting weekly writes a zip a week for ever. Each finished burst prunes its
+own board back to the last five (`services/reports.py`), and because a zip is
+named for the job that wrote it and recorded nowhere else, `prune_history`
+sweeps any file whose job row has since been deleted by age - the download
+route reads the path off that row, so a file outliving it is unreachable disk.
+The row stays when the file goes: the run keeps its list of what it wrote, and
+the download answers that the zip is no longer there.
 
 ## Monitoring model
 

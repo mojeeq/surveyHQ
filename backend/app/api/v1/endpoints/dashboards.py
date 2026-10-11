@@ -1290,9 +1290,20 @@ def download_report_burst(
         raise HTTPException(status_code=404, detail="No such report run")
     if job.status != JobStatus.success:
         raise HTTPException(status_code=409, detail="That run has not finished.")
-    path = Path(str((job.result or {}).get("path") or ""))
-    if not path.exists():
-        raise HTTPException(status_code=410, detail="That run's file is no longer on disk")
+    recorded = str((job.result or {}).get("path") or "")
+    path = Path(recorded)
+    # The string is checked before the file: a run whose zip has been pruned
+    # records no path at all, and `Path("")` is the working directory, which
+    # exists and is not a zip.
+    if not recorded or not path.is_file():
+        raise HTTPException(
+            status_code=410,
+            detail=(
+                "That run's reports are no longer on disk. The last "
+                f"{reports.BURSTS_KEPT} runs of a board are kept; run it again to "
+                "rebuild this one."
+            ),
+        )
     name = slugify(dashboard.name) or "dashboard"
     return Response(
         content=path.read_bytes(),

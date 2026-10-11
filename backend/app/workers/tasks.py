@@ -472,6 +472,11 @@ def run_report_burst(self: Any, job_id: str) -> dict[str, Any]:
             job.progress = 1.0
             job.result = summary
             job.finished_at = utcnow()
+        # Flushed first because these sessions do not autoflush: the prune
+        # counts the runs whose zips are still on disk, and the run that just
+        # finished is the newest of them.
+        db.flush()
+        reports.prune_bursts(db, dashboard_id)
     return {"written": len(summary["written"]), "skipped": len(summary["skipped"])}
 
 
@@ -736,9 +741,15 @@ def ingest_dataset_file(dataset_id: str, file_path: str) -> dict[str, Any]:
 
 @celery_app.task(name="app.workers.tasks.prune_history")
 def prune_history() -> dict[str, int]:
-    """Keep the operational tables from growing without bound."""
+    """Keep the operational tables, and the files they point at, bounded."""
     now = utcnow()
-    removed = {"snapshots": 0, "alerts": 0, "quality_results": 0, "jobs": 0}
+    removed = {
+        "snapshots": 0,
+        "alerts": 0,
+        "quality_results": 0,
+        "jobs": 0,
+        "report_bursts": 0,
+    }
     with session_scope() as db:
         snapshot_cutoff = now - dt.timedelta(days=SNAPSHOT_RETENTION_DAYS)
         for snapshot in db.scalars(
@@ -767,6 +778,14 @@ def prune_history() -> dict[str, int]:
         for job in db.scalars(select(Job).where(Job.created_at < job_cutoff)).all():
             db.delete(job)
             removed["jobs"] += 1
+
+    # After the rows have gone, and in its own transaction so it reads them as
+    # gone: a report burst's zip is named for its job and reachable only
+    # through that row, so pruning the row is what leaves the file stranded.
+    from app.services import reports
+
+    with session_scope() as db:
+        removed["report_bursts"] = reports.sweep_bursts(db)
 
     logger.info("Pruned old records: %s", removed)
     return removed
