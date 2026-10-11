@@ -585,7 +585,16 @@ def load_archive_as_datasets(
                             "it was left alone rather than stamped"
                         )
                     else:
-                        frame[column] = value
+                        # Text, and declared as text: a questionnaire version
+                        # is a name, not a quantity. Left as a plain object
+                        # column it is all digits, so the numeric coercion in
+                        # ingest_frame reads it as a number - and then one
+                        # import path stores "1" and the other 1, a filter
+                        # written against one of them matches nothing on the
+                        # other, and nobody can see why.
+                        frame[column] = pd.Series(
+                            [value] * len(frame), index=frame.index, dtype="string"
+                        )
 
                 existing = find_archive_sibling(
                     db, key, project_id, {str(c) for c in frame.columns}

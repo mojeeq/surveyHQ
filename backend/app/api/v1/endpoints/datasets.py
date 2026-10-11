@@ -59,6 +59,7 @@ from app.schemas.query import FilterGroup
 from app.services import archive as archiving
 from app.services import project_script, stata
 from app.services.audit import record
+from app.services.columnar import holds_numbers
 from app.services.datasets import (
     ArchiveImport,
     append_file_into_dataset,
@@ -72,12 +73,7 @@ from app.services.datasets import (
 from app.services.derived import propagate_labels, rebuild_dependents
 from app.services.download import FORMATS as DOWNLOAD_FORMATS
 from app.services.download import download_file, temp_directory
-from app.services.ingest import (
-    SUPPORTED_EXTENSIONS,
-    IngestError,
-    is_numeric_storage,
-    numeric_code_text,
-)
+from app.services.ingest import SUPPORTED_EXTENSIONS, IngestError, numeric_code_text
 from app.services.projects import can_edit, can_view, restrict, scope_for
 from app.services.query_engine import (
     DatasetContext,
@@ -881,7 +877,7 @@ def update_variable(
         # text column is left alone: there "1.0" is the value.
         as_key = (
             numeric_code_text
-            if is_numeric_storage(row.storage_type)
+            if holds_numbers(row.storage_type)
             else (lambda code: str(code))
         )
         cleaned = {

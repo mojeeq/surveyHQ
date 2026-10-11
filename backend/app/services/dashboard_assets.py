@@ -40,10 +40,6 @@ def assets_path(kind: str = "background") -> Path:
     return get_settings().storage_path / KINDS[kind]
 
 
-def backgrounds_path() -> Path:
-    return assets_path("background")
-
-
 def sniff(data: bytes) -> tuple[str, str]:
     """Return (suffix, content type), or raise if this is not a usable image."""
     for magic, suffix, content_type in SIGNATURES:

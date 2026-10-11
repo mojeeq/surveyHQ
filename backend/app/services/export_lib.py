@@ -78,12 +78,6 @@ def scripts_for(needs_map: bool) -> str:
     return "\n".join(f"<script>\n{_source(name)}\n</script>" for name in names)
 
 
-def bytes_for(needs_map: bool) -> int:
-    """How much of an export is library, for anything that wants to say so."""
-    wanted = {"always"} | ({"map"} if needs_map else set())
-    return sum(int(entry["bytes"]) for entry in manifest() if entry["when"] in wanted)
-
-
 @lru_cache(maxsize=1)
 def themes() -> dict[str, list[str]]:
     """The chart palettes, as the frontend's own theme table defines them."""

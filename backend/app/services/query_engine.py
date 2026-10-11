@@ -37,6 +37,7 @@ from app.schemas.query import (
     QuerySpec,
     SummaryStats,
 )
+from app.services import columnar
 
 logger = get_logger(__name__)
 
@@ -153,12 +154,11 @@ class DatasetContext:
         return info
 
 
-def quote_ident(name: str) -> str:
-    return '"' + name.replace('"', '""') + '"'
-
-
-def _quote_path(path: str) -> str:
-    return "'" + path.replace("'", "''") + "'"
+# Re-exported from the module that talks to DuckDB, which is where the one
+# definition lives. Every service that builds SQL over a dataset imports it
+# from here, so the name stays where its callers look for it.
+quote_ident = columnar.quote_ident
+_quote_path = columnar.quote_path
 
 
 class SQLBuilder:
@@ -187,15 +187,14 @@ class SQLBuilder:
             # companion column keeps ".a" apart from a plain blank, which is the
             # difference between "asked and refused" and "never asked".
             tag_col = quote_ident(f"{info.name}{MISSING_TAG_SUFFIX}")
-            # Stata only tags missings on numeric variables, so the stored column
-            # is numeric here whatever its semantic type. A whole number must
-            # render as "1", not "1.0": value label keys are written that way,
-            # and a coded variable would otherwise lose every label it had.
-            as_text = (
-                f"CASE WHEN {col} = floor({col}) "
-                f"THEN CAST(CAST({col} AS BIGINT) AS VARCHAR) "
-                f"ELSE CAST({col} AS VARCHAR) END"
-            )
+            # Stata only tags missings on numeric variables, so the stored
+            # column is numeric here whatever its semantic type. A whole
+            # number must render as "1", not "1.0": value label keys are
+            # written that way, and a coded variable would otherwise lose
+            # every label it had. The same expression writes a code out when
+            # two rounds disagree about a column's type, so it is one
+            # function rather than two copies to keep in step.
+            as_text = columnar.code_text_sql(col)
             return (
                 f"CASE WHEN {col} IS NOT NULL THEN {as_text} "
                 f"ELSE COALESCE({tag_col}, '{MISSING_LABEL}') END"

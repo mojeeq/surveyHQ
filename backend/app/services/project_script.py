@@ -26,7 +26,7 @@ from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
 from app.db.base import utcnow
-from app.models import Dataset, ProjectScript
+from app.models import ProjectScript
 from app.services import stata
 from app.services.stata import CommandError, ScriptError
 
@@ -188,13 +188,3 @@ def _project_name(db: Session, project_id: str) -> str:
     project = db.get(Project, project_id)
     return f"'{project.name}'" if project is not None else "this project"
 
-
-def outputs_of(db: Session, project_id: str) -> list[Dataset]:
-    """The datasets the script last wrote, for the page that shows them."""
-    script = db.scalars(
-        select(ProjectScript).where(ProjectScript.project_id == project_id)
-    ).first()
-    if script is None:
-        return []
-    found = [db.get(Dataset, dataset_id) for dataset_id in script.writes or []]
-    return [dataset for dataset in found if dataset is not None]
