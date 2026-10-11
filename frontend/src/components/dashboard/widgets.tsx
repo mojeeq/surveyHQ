@@ -104,6 +104,7 @@ export function BoundedMap({
       sizeByValue={widget.config?.size_by_value !== false}
       tiles={widget.config?.tiles as string | undefined}
       truncated={payload.truncated}
+      grouped={payload.grouped}
       boundary={boundary}
       areas={areas.data}
       areaVariable={payload.area_check?.variable}
