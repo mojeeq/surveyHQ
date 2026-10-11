@@ -199,6 +199,18 @@ def _apply_ingest(db: Session, dataset: Dataset, result: IngestResult) -> Datase
     dataset.refreshed_at = utcnow()
     dataset.version = (dataset.version or 0) + 1
     db.flush()
+
+    # Every figure read off this dataset rather than queried from it is now
+    # describing data that is no longer there, and the indicators are the ones
+    # a dashboard reads: a tile shows the value the last scheduled run
+    # computed. Recomputed here, where the data changed, rather than left to
+    # the quarter-hour tick - a morning's import should move the numbers it
+    # was imported to move. Imported here because monitoring reads this
+    # module, and at module scope the two would not import at all.
+    from app.services.monitoring import refresh_for_dataset
+
+    refresh_for_dataset(db, dataset.id)
+
     logger.info(
         "Dataset %s ready: %s rows x %s columns",
         dataset.name,
