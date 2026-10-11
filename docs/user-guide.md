@@ -1217,6 +1217,12 @@ There is a limit of sixty. A filter with more values than that is refused
 before anything starts: bursting over an interviewer id would be hours of work
 and more files than anybody opens.
 
+The server keeps the zips of the last five runs per board. An older run is
+still in the job history with what it wrote and what it skipped, but its file
+has gone and asking for it says so rather than pretending the run never
+happened. So download a set that matters when it finishes and keep it with the
+rest of your files; running the burst again writes it afresh.
+
 The single download is still there for one province at a time: save a view
 and choose it under **Of**. The file is named after the view either way, so a
 folder of them does not arrive all called the same thing.
