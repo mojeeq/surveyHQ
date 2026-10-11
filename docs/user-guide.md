@@ -999,10 +999,14 @@ locations. The number on a pin is always worked out from the interviews behind
 it, however they were grouped: a mean at a pin is the mean of those
 interviews, not an average of averages.
 
-A map **checking recorded areas** against the ground (below) is never rounded
-past about 110 m, because the verdict is read off the pin: a wider cell could
-put a household on the wrong side of a boundary and turn the finding into an
-artefact of the drawing.
+A map **checking recorded areas** against the ground (below) is grouped the
+same way, and the order is what keeps it honest: every location is checked
+where it was recorded, and only then are the pins grouped. So the legend
+counts locations rather than pins, and no cell can put a household on the
+wrong side of a boundary. A pin standing for several locations takes the worst
+verdict among them, because a cell holding one disagreement is somewhere to go
+and look, and its popup says how many of the locations under it actually
+disagree.
 
 ### Drawing boundaries under a map
 

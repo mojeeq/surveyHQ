@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import { escapeHtml, formatNumber, mapSummary } from '@/lib/format'
+import { escapeHtml, formatNumber, mapSummary, verdictMix } from '@/lib/format'
 
 /**
  * The grounds the pins can be drawn on, in the order they are offered.
@@ -76,6 +76,10 @@ export interface MapPoint {
   area_status?: AreaStatus
   area_expected?: string | null
   recorded_area_label?: unknown
+  /** How many locations a grouped pin stands for, and how they each came out.
+      Absent on a map drawn one pin per location. */
+  places?: number
+  area_verdicts?: Record<string, number>
   [detail: string]: unknown
 }
 
@@ -99,6 +103,14 @@ export const VERDICTS: Record<AreaStatus, { label: string; color: string; radius
 }
 
 export const VERDICT_ORDER: AreaStatus[] = ['mismatch', 'outside', 'unrecorded', 'match']
+
+/** The same four, said in the words a count reads with: "3 disagree". */
+export const VERDICT_LABELS: Record<AreaStatus, string> = {
+  mismatch: 'disagree with the GPS',
+  outside: 'outside every area',
+  unrecorded: 'with no area recorded',
+  match: 'agree',
+}
 
 /**
  * The shapes a point can be drawn as.
@@ -209,6 +221,7 @@ export default function MapWidget({
   tiles,
   truncated = false,
   grouped,
+  areaCounts,
   boundary,
   areas,
   areaVariable,
@@ -227,6 +240,9 @@ export default function MapWidget({
   truncated?: boolean
   /** Set when the coordinates were rounded to fit the map, and by how much. */
   grouped?: { records: number; decimals?: number; metres?: number | null } | null
+  /** The verdicts over every location checked, counted before the pins were
+      grouped. The legend is the finding, so it is not a count of pins. */
+  areaCounts?: Partial<Record<AreaStatus, number>>
   /** The outlines to draw under the pins, when the widget names a layer. */
   boundary?: BoundaryOverlay
   /** That layer's areas, fetched separately: a national frame is large. */
@@ -515,6 +531,11 @@ export default function MapWidget({
           fillOpacity: verdict ? 0.85 : (pointOpacity ?? DEFAULT_POINT_OPACITY),
         },
       )
+      const mix = verdictMix(
+        Number(point.places) || 0,
+        point.area_verdicts,
+        VERDICT_LABELS,
+      )
       // Built when the popup opens, not when the marker is made: the string is
       // the expensive part, and at fifty thousand points all but one of them
       // is work for a popup nobody opens.
@@ -538,6 +559,9 @@ export default function MapWidget({
           (verdict
             ? `<div style="margin:4px 0;padding-top:4px;border-top:1px solid #e5e7eb">` +
               `<div style="color:${verdict.color};font-weight:600">${escape(verdict.label)}</div>` +
+              (mix
+                ? `<div style="color:#64748b">${escape(mix)}</div>`
+                : '') +
               `<div><span style="color:#64748b">${escape(areaVariable || 'Recorded')}:</span> ` +
               `${escape(point.recorded_area_label ?? point.recorded_area ?? '-')}</div>` +
               `<div><span style="color:#64748b">Falls in:</span> ${escape(
@@ -597,9 +621,14 @@ export default function MapWidget({
   // Only the verdicts actually present, in severity order. A legend listing
   // four outcomes when three of them have no pins is four things to read and
   // one fact.
-  const present = VERDICT_ORDER.filter((status) =>
-    points.some((point) => point.area_status === status),
-  )
+  //
+  // Counted from the check rather than from the pins wherever the server sent
+  // the counts: a grouped pin stands for several locations, so counting pins
+  // would under-report the very thing this map is read for.
+  const checked = (status: AreaStatus): number =>
+    areaCounts?.[status] ??
+    points.filter((point) => point.area_status === status).length
+  const present = VERDICT_ORDER.filter((status) => checked(status) > 0)
 
   return (
     <div className="flex h-full min-h-[200px] flex-col">
@@ -613,9 +642,7 @@ export default function MapWidget({
                 style={{ backgroundColor: VERDICTS[status].color }}
               />
               {VERDICTS[status].label}
-              <span className="text-ink-400">
-                ({formatNumber(points.filter((point) => point.area_status === status).length)})
-              </span>
+              <span className="text-ink-400">({formatNumber(checked(status))})</span>
             </span>
           ))}
         </div>

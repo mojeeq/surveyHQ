@@ -61,11 +61,10 @@ PLACE_DECIMALS = (4, 3, 2, 1)
 #: What a rounding step comes to on the ground, for the widget to say.
 PLACE_METRES = {4: 11, 3: 110, 2: 1_100, 1: 11_000}
 
-#: The finest rounding allowed while the map is checking recorded areas
-#: against the ground. The verdict is read off the pin, so a cell wider than a
-#: household's garden could put a point on the wrong side of a boundary and
-#: turn the finding this mode exists for into an artefact of the grouping.
-AREA_CHECK_DECIMALS = (4, 3)
+#: Worst first. A pin standing for several places takes the worst verdict
+#: among them, because a map of this kind is read for its findings: a cell
+#: holding one disagreement and nine agreements is somewhere to go and look.
+VERDICT_ORDER = ("mismatch", "outside", "unrecorded", "match")
 
 AGGREGATIONS = {
     "count": None,
@@ -131,8 +130,16 @@ def points(
     filters: FilterGroup | None = None,
     limit: int = MAX_POINTS,
     area_variable: str = "",
+    areas: Areas | None = None,
+    boundary_key: str = "",
 ) -> dict[str, Any]:
-    """Grouped coordinates, each with a value and the details to show on click."""
+    """Grouped coordinates, each with a value and the details to show on click.
+
+    Pass `areas` and `boundary_key` to check what each record says about where
+    it was against where its coordinates put it. The checking happens here,
+    between reading the points and grouping them, because the order is the
+    whole correctness of it - see the comment on the rounding below.
+    """
     for name in (latitude, longitude):
         if name not in ctx.variables:
             raise QueryError(f"'{name}' is not a variable in this dataset")
@@ -188,19 +195,19 @@ def points(
     if where:
         conditions.append(f"({where})")
 
-    decimals = _rounding(
-        ctx,
-        lat,
-        lon,
-        conditions,
-        params,
-        AREA_CHECK_DECIMALS if area_variable else PLACE_DECIMALS,
-    )
+    decimals = _rounding(ctx, lat, lon, conditions, params, PLACE_DECIMALS)
     # Rounded in the grouping key, so every value is still aggregated over the
     # records themselves: the mean at a pin is the mean of the interviews
     # behind it, not an average of averages.
-    at_lat = f"ROUND({lat}, {decimals})" if decimals is not None else lat
-    at_lon = f"ROUND({lon}, {decimals})" if decimals is not None else lon
+    #
+    # Except while checking recorded areas, where the coordinates are read as
+    # recorded and the pins are grouped afterwards, by into_cells below. The
+    # verdict is a comparison between a point and a boundary, so rounding it
+    # first could put a household on the wrong side of a line and invent or
+    # hide the finding this mode exists for.
+    checking = areas is not None and bool(area_variable)
+    at_lat = f"ROUND({lat}, {decimals})" if decimals is not None and not checking else lat
+    at_lon = f"ROUND({lon}, {decimals})" if decimals is not None and not checking else lon
 
     sql = (
         f"SELECT {at_lat} AS lat, {at_lon} AS lon{area_select}, {value} AS value, "
@@ -227,11 +234,24 @@ def points(
         for point in found:
             point[name] = _label_value(info, point[name])
     truncated = len(found) > limit
+    found = found[:limit]
+
+    area_counts: dict[str, int] | None = None
+    if checking:
+        # Every point as recorded, against the boundaries.
+        area_counts = check_areas(found, areas, boundary_key)
+        if decimals is not None:
+            found = into_cells(found, decimals, measure_agg, details)
+
     return {
-        "points": found[:limit],
+        "points": found,
         "detail": details,
         "measure": {"agg": measure_agg, "variable": measure_variable},
         "truncated": truncated,
+        # The verdicts over every point the map read, counted before the pins
+        # were grouped, so the legend is the finding rather than a count of
+        # pins that happen to carry one.
+        "area_counts": area_counts,
         # Set only when the coordinates were rounded, so a map drawn exactly
         # where things were recorded says nothing and a grouped one can say
         # what a pin stands for. The records are counted from the pins rather
@@ -241,12 +261,103 @@ def points(
             {
                 "decimals": decimals,
                 "metres": PLACE_METRES.get(decimals),
-                "records": sum(int(point["rows"] or 0) for point in found[:limit]),
+                "records": sum(int(point["rows"] or 0) for point in found),
             }
             if decimals is not None
             else None
         ),
     }
+
+
+def _worst(verdicts: dict[str, int]) -> str:
+    """The verdict a pin takes from the places it stands for."""
+    for verdict in VERDICT_ORDER:
+        if verdicts.get(verdict):
+            return verdict
+    return "match"
+
+
+def into_cells(
+    found: list[dict[str, Any]],
+    decimals: int,
+    measure_agg: str,
+    details: list[str],
+) -> list[dict[str, Any]]:
+    """Group checked points into cells of ground, for drawing.
+
+    Only ever after the areas have been checked. The verdict is a comparison
+    between one coordinate and a boundary, and a cell a kilometre across could
+    put a household on the wrong side of a ward line: grouped first, the
+    finding this mode exists for becomes an artefact of the drawing. Grouped
+    afterwards, every verdict is the one its own coordinates earned and what a
+    cell loses is only where inside it the household stood.
+
+    The arithmetic is exact rather than an average of averages. A count or a
+    sum adds up; a mean is weighted by the records behind each point, which is
+    the same number the mean was taken over; a minimum and a maximum are the
+    extremes of the extremes.
+    """
+    cells: dict[tuple[float, float], dict[str, Any]] = {}
+    for point in found:
+        key = (round(float(point["lat"]), decimals), round(float(point["lon"]), decimals))
+        rows = int(point.get("rows") or 0)
+        value = float(point.get("value") or 0)
+        cell = cells.get(key)
+        if cell is None:
+            cell = {
+                "lat": key[0],
+                "lon": key[1],
+                "rows": 0,
+                "value": 0.0,
+                # Carried from the first point in the cell, as ANY_VALUE
+                # carries them in the query: a popup shows an example of what
+                # is here, not a summary of it.
+                **{name: point.get(name) for name in details},
+                "_verdicts": {},
+                "_areas": set(),
+                "_weighted": 0.0,
+                "_values": [],
+            }
+            cells[key] = cell
+        cell["rows"] += rows
+        cell["_weighted"] += value * rows
+        cell["_values"].append(value)
+        cell["_verdicts"][point["area_status"]] = (
+            cell["_verdicts"].get(point["area_status"], 0) + 1
+        )
+        cell["_areas"].add(
+            (point.get("recorded_area"), point.get("recorded_area_label"))
+        )
+
+    grouped: list[dict[str, Any]] = []
+    for cell in cells.values():
+        verdicts = cell.pop("_verdicts")
+        recorded = cell.pop("_areas")
+        weighted = cell.pop("_weighted")
+        values = cell.pop("_values")
+        if measure_agg == "mean":
+            cell["value"] = weighted / cell["rows"] if cell["rows"] else 0.0
+        elif measure_agg == "min":
+            cell["value"] = min(values)
+        elif measure_agg == "max":
+            cell["value"] = max(values)
+        else:
+            cell["value"] = sum(values)
+        cell["area_status"] = _worst(verdicts)
+        # What the popup needs to say why the pin is the colour it is: one
+        # place's verdict, or a cell where several places disagree with each
+        # other as well as with the frame.
+        cell["places"] = sum(verdicts.values())
+        cell["area_verdicts"] = verdicts
+        if len(recorded) == 1:
+            code, label = next(iter(recorded))
+            cell["recorded_area"], cell["recorded_area_label"] = code, label
+        else:
+            cell["recorded_area"] = None
+            cell["recorded_area_label"] = f"{len(recorded)} different areas"
+        grouped.append(cell)
+    grouped.sort(key=lambda cell: cell["value"], reverse=True)
+    return grouped
 
 
 def check_areas(
