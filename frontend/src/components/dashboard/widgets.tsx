@@ -108,6 +108,7 @@ export function BoundedMap({
       boundary={boundary}
       areas={areas.data}
       areaVariable={payload.area_check?.variable}
+      areaCounts={payload.area_check?.counts}
     />
   );
 }

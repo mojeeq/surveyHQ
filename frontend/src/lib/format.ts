@@ -151,3 +151,25 @@ export function mapSummary(
     `${formatNumber(pins)} pins about ${across} across`
   )
 }
+
+
+/** What a pin standing for several places says about them, for its popup.
+ *
+ * A grouped pin takes the worst verdict among the places under it, because a
+ * cell holding one disagreement is somewhere to go and look. That would read
+ * as "every household here disagrees" with nothing to correct it, so the
+ * popup says how many of them actually do.
+ */
+export function verdictMix(
+  places: number,
+  verdicts: Record<string, number> | undefined,
+  labels: Record<string, string>,
+): string {
+  if (!verdicts || places <= 1) return ''
+  const parts = Object.entries(verdicts)
+    .filter(([, count]) => count > 0)
+    .sort((left, right) => right[1] - left[1])
+    .map(([status, count]) => `${formatNumber(count)} ${labels[status] ?? status}`)
+  if (!parts.length) return ''
+  return `${formatNumber(places)} locations here - ${parts.join(', ')}`
+}

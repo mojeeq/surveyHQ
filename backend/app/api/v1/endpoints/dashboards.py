@@ -103,7 +103,6 @@ from app.services.freshness import (
     DEFAULT_WARN_HOURS,
 )
 from app.services.freshness import report as freshness_report
-from app.services.geo import check_areas
 from app.services.geo import points as geo_points
 from app.services.hostnames import HostnameError
 from app.services.hostnames import normalise as normalise_hostname
@@ -2559,19 +2558,23 @@ def _render_widget(
                 measure_variable=config.get("measure_variable", ""),
                 filters=_applicable(filters, ctx),
                 area_variable=area_variable,
+                # Handed the layer rather than checking the points here: the
+                # check has to happen between reading them and grouping them
+                # into pins, and that order is the correctness of it.
+                areas=boundary[1] if boundary and area_variable else None,
+                boundary_key=str(config.get("boundary_key") or ""),
             )
         except QueryError as exc:
             return {"error": str(exc)}
+        counts = found.pop("area_counts", None)
         payload: dict[str, Any] = {"type": "map", "filters_ignored": ignored, **found}
-        if boundary and area_variable:
-            layer, areas = boundary
+        if boundary and area_variable and counts is not None:
+            layer, _ = boundary
             payload["area_check"] = {
                 "boundary_id": layer.id,
                 "boundary_name": layer.name,
                 "variable": area_variable,
-                "counts": check_areas(
-                    payload["points"], areas, str(config.get("boundary_key") or "")
-                ),
+                "counts": counts,
             }
         if boundary:
             payload["boundary"] = {
