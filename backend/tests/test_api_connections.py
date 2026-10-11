@@ -9,6 +9,9 @@ zip is kept where it can be fetched back.
 from __future__ import annotations
 
 import zipfile
+from types import SimpleNamespace
+
+import pytest
 
 
 def _connection(client, auth_headers, **overrides) -> dict:
@@ -232,8 +235,23 @@ def test_a_connection_remembers_the_questionnaires_it_imports(client, auth_heade
     assert again.json()["questionnaires"] == [questionnaire]
 
 
+@pytest.fixture
+def no_broker(monkeypatch):
+    """Queue nothing.
+
+    Redis is not running in the test environment, and Celery spends twenty
+    seconds finding that out one retry at a time - which was an eighth of the
+    whole suite in this one test. The endpoint catches the failure and records
+    it on the job; what is under test here is what the job was given.
+    """
+    monkeypatch.setattr(
+        "app.workers.tasks.run_connection_sync.delay",
+        lambda job_id: SimpleNamespace(id=f"task-{job_id}"),
+    )
+
+
 def test_an_import_with_nothing_chosen_falls_back_to_the_connections_list(
-    client, auth_headers, db_session
+    client, auth_headers, db_session, no_broker
 ):
     """What the "Import data" button sends when the reader changes nothing."""
     from app.models import Job

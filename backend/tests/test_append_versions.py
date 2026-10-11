@@ -135,8 +135,14 @@ def project(client, auth_headers) -> str:
 
 
 @pytest.fixture
-def imported(client, auth_headers, project):
-    """All five versions uploaded in one go, as the import screen sends them."""
+def imported(client, auth_headers, project, append_implementation):
+    """All five versions uploaded in one go, as the import screen sends them.
+
+    Under each append implementation in turn: the columnar one, which is what
+    a deployment runs, and the pandas one it replaced. Both have to behave
+    the same way, and the way to be sure of that is to ask the same questions
+    of each.
+    """
     response = client.post(
         "/api/v1/datasets/upload",
         headers=auth_headers,
@@ -261,7 +267,7 @@ def test_merging_does_not_write_through_to_what_it_was_given():
     assert kept == {"tenure": {"1": "Owned"}}
 
 
-def test_a_code_that_changed_meaning_is_still_reported(client, auth_headers, project):
+def test_a_code_that_changed_meaning_is_still_reported(client, auth_headers, project, append_implementation):
     """Merging must not quietly swallow a questionnaire that recoded an answer."""
     first = client.post(
         "/api/v1/datasets/upload",
@@ -329,7 +335,7 @@ def test_a_variable_the_file_does_not_have_says_nothing():
 
 
 def test_the_import_report_names_the_round_whose_codes_have_no_label(
-    client, auth_headers, project
+    client, auth_headers, project, append_implementation
 ):
     """The chart in the bug report, caught at import instead of in a meeting."""
     client.post(
@@ -387,10 +393,15 @@ def test_the_import_report_names_the_round_whose_codes_have_no_label(
 # --- a round that exports a number as text ----------------------------------
 
 
-def test_a_numeric_variable_arriving_as_text_is_reported():
-    before = {"hh_size", "tenure"}
+def test_numbers_written_down_are_still_numbers_and_say_nothing():
+    """How one round spelled a household size is not news."""
     frame = pd.DataFrame({"hh_size": ["5", "2"], "tenure": [1, 2]})
-    [message] = retyped_warnings(before, frame)
+    assert retyped_warnings({"hh_size", "tenure"}, frame) == []
+
+
+def test_text_with_text_in_it_is_reported():
+    frame = pd.DataFrame({"hh_size": ["5", "about 6"]})
+    [message] = retyped_warnings({"hh_size"}, frame)
     assert "'hh_size'" in message
     assert "totals, averages and ranges on it stop working" in message
 
@@ -406,9 +417,10 @@ def test_an_empty_column_says_nothing():
     assert retyped_warnings({"hh_size"}, frame) == []
 
 
-def test_the_import_report_says_a_question_arrived_as_text(
-    client, auth_headers, project
+def test_a_round_that_exports_numbers_as_text_keeps_them_as_numbers(
+    client, auth_headers, project, append_implementation
 ):
+    """A round that wrote "5" instead of 5 has not stopped collecting a number."""
     client.post(
         "/api/v1/datasets/upload",
         headers=auth_headers,
@@ -450,18 +462,87 @@ def test_the_import_report_says_a_question_arrived_as_text(
         data={"project_id": project, "mode": "append"},
     )
     assert later.status_code == 201, later.text
+    # Nothing to report: no value was lost and nothing stopped working.
+    assert not [text for text in later.json()["warnings"] if "'hh_size'" in text]
+
+    dataset_id = later.json()["datasets"][0]["id"]
+    detail = client.get(f"/api/v1/datasets/{dataset_id}", headers=auth_headers).json()
+    kinds = {v["name"]: v["var_type"] for v in detail["variables"]}
+    assert kinds["hh_size"] in ("numeric", "categorical"), kinds
+    answer = client.post(
+        "/api/v1/analytics/query",
+        headers=auth_headers,
+        json={
+            "dataset_id": dataset_id,
+            "spec": {"measures": [{"agg": "mean", "variable": "hh_size", "alias": "m"}]},
+        },
+    )
+    assert answer.status_code == 200, answer.text
+    # The mean of 4, 2, 5 and 3, which a column turned to text could not give.
+    assert answer.json()["rows"][0][0] == pytest.approx(3.5)
+
+
+def test_a_round_with_real_text_in_a_number_turns_the_column_to_text(
+    client, auth_headers, project, append_implementation
+):
+    """And says so, because every total on that variable has just stopped."""
+    client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files=[
+            (
+                "file",
+                (
+                    "numbers.zip",
+                    _archive(
+                        pd.DataFrame(
+                            {"interview__key": _keys("a", 2), "hh_size": [4.0, 2.0]}
+                        ),
+                        {},
+                    ),
+                    "application/zip",
+                ),
+            )
+        ],
+        data={"project_id": project},
+    )
+    later = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files=[
+            (
+                "file",
+                (
+                    "mixed.zip",
+                    _archive(
+                        pd.DataFrame(
+                            {
+                                "interview__key": _keys("b", 2),
+                                "hh_size": ["5", "about 6"],
+                            }
+                        ),
+                        {},
+                    ),
+                    "application/zip",
+                ),
+            )
+        ],
+        data={"project_id": project, "mode": "append"},
+    )
+    assert later.status_code == 201, later.text
     said = later.json()["warnings"]
-    assert any("'hh_size'" in text and "text.zip" in text for text in said), said
-    # And nothing was dropped to say it.
+    assert any("'hh_size'" in text and "mixed.zip" in text for text in said), said
+
     dataset_id = later.json()["datasets"][0]["id"]
     preview = client.get(
         f"/api/v1/datasets/{dataset_id}/preview", headers=auth_headers
     ).json()
-    assert sorted(str(row[1]) for row in preview["rows"]) == ["2", "3", "4", "5"]
+    # Every value kept, and the numbers written as a code is written.
+    assert sorted(str(row[1]) for row in preview["rows"]) == ["2", "4", "5", "about 6"]
 
 
 def test_a_coded_question_exported_as_text_keeps_its_labels(
-    client, auth_headers, project
+    client, auth_headers, project, append_implementation
 ):
     """One answer must not end up with two spellings on one axis.
 

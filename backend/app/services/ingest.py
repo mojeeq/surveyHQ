@@ -22,6 +22,7 @@ import numpy as np
 import pandas as pd
 
 from app.core.logging import get_logger
+from app.services.columnar import holds_numbers, quote_ident
 
 logger = get_logger(__name__)
 
@@ -353,31 +354,36 @@ def merge_value_labels(
     return merged
 
 
-# What a stored column's type says when it holds numbers. DuckDB and pandas
-# both name their types in here, which is why the test is on the tokens rather
-# than on a list of type names.
-NUMERIC_STORAGE_TOKENS = ("INT", "DOUBLE", "FLOAT", "DECIMAL", "HUGEINT")
-
-
-def is_numeric_storage(storage_type: str) -> bool:
-    """Whether a stored column holds numbers, from the type it is stored as."""
-    upper = str(storage_type).upper()
-    return any(token in upper for token in NUMERIC_STORAGE_TOKENS)
-
-
 def _reads_as_text(series: pd.Series) -> bool:
     """Whether a column of values would be stored as text rather than numbers."""
     return any(isinstance(value, str) for value in series.dropna().head(100))
 
 
-def retyped_warnings(numeric_before: set[str], frame: pd.DataFrame) -> list[str]:
-    """Variables the dataset holds as numbers that arrive as text.
+def counts_as_numbers(series: pd.Series) -> bool:
+    """Whether every value in a text column is a number written down.
 
-    The two are stacked as text, which is the only answer that loses no
-    values, and it is also the end of every mean, total and range the variable
-    had - on all of it, not only the rows that arrived. Nothing else in an
-    import says so: the column still looks full, the numbers are all still
-    there, and the statistics have quietly become unavailable.
+    A round that exported household size as "5" rather than 5 has not
+    stopped collecting a number, and the whole column should not stop being
+    one because of how one file spelled it. Checked over every value, not a
+    sample: one "about 6" in a million rows is the difference between a
+    column that still has a mean and a column that lies about having one.
+    """
+    answered = series.dropna()
+    if answered.empty:
+        return False
+    return int(pd.to_numeric(answered, errors="coerce").notna().sum()) == len(answered)
+
+
+def retyped_warnings(numeric_before: set[str], frame: pd.DataFrame) -> list[str]:
+    """Variables the dataset holds as numbers that arrive as something else.
+
+    Text that is numbers written down is read back as numbers and says
+    nothing: how one round spelled a household size is not news. Text with
+    real text in it cannot be, and the two are then stacked as text - which
+    loses no values and is the end of every mean, total and range the
+    variable had, on all of it rather than only the rows that arrived.
+    Nothing else in an import says so: the column still looks full, the
+    numbers are all still there, and the statistics have quietly gone.
     """
     messages: list[str] = []
     for name in sorted(numeric_before):
@@ -386,10 +392,13 @@ def retyped_warnings(numeric_before: set[str], frame: pd.DataFrame) -> list[str]
         series = frame[name]
         if not series.notna().any() or not _reads_as_text(series):
             continue
+        if counts_as_numbers(series):
+            continue
         messages.append(
-            f"'{name}' is held as numbers but arrives as text in this file, so "
-            "the whole variable becomes text. Every value is kept; totals, "
-            "averages and ranges on it stop working."
+            f"'{name}' is held as numbers and arrives as text in this file, "
+            "with values that are not numbers in it, so the whole variable "
+            "becomes text. Every value is kept; totals, averages and ranges "
+            "on it stop working."
         )
     return messages
 
@@ -1198,11 +1207,8 @@ def build_metadata_from_parquet(
     for position, (name, storage, *_rest) in enumerate(described):
         if name.endswith(MISSING_TAG_SUFFIX):
             continue
-        quoted = '"' + name.replace('"', '""') + '"'
-        numeric = any(
-            token in storage.upper()
-            for token in ("INT", "DOUBLE", "FLOAT", "DECIMAL", "HUGEINT")
-        )
+        quoted = quote_ident(name)
+        numeric = holds_numbers(storage)
         is_datetime = "TIMESTAMP" in storage.upper() or storage.upper() == "DATE"
 
         aggregates = [f"COUNT({quoted})", f"COUNT(DISTINCT {quoted})"]

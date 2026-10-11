@@ -264,21 +264,6 @@ def read_geopackage(path: Path, layer: str = "") -> list[dict[str, Any]]:
     return features
 
 
-def geopackage_layers(path: Path) -> list[str]:
-    """The spatial layers a GeoPackage offers, so one can be chosen."""
-    try:
-        connection = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
-    except sqlite3.Error:
-        return []
-    try:
-        rows = connection.execute("SELECT table_name FROM gpkg_geometry_columns").fetchall()
-        return [row[0] for row in rows]
-    except sqlite3.Error:
-        return []
-    finally:
-        connection.close()
-
-
 # --- Shapefile -------------------------------------------------------------
 
 

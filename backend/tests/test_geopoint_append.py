@@ -16,8 +16,6 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from app.services import datasets as dataset_service
-
 
 def _csv(keys: list[str]) -> bytes:
     frame = pd.DataFrame(
@@ -41,19 +39,6 @@ def project(client, auth_headers) -> str:
         headers=auth_headers,
         params={"contents": "delete"},
     )
-
-
-@pytest.fixture(params=["columnar", "pandas"])
-def append_implementation(request, monkeypatch):
-    """Run the test against each append implementation in turn."""
-    if request.param == "pandas":
-        pandas_append = getattr(dataset_service, "append_frame_pandas", None)
-        if pandas_append is None:  # the runtime was never installed
-            pytest.skip("the columnar append is not installed")
-        monkeypatch.setattr(
-            dataset_service, "append_frame_into_dataset", pandas_append
-        )
-    return request.param
 
 
 def test_appended_rows_get_the_coordinates_too(

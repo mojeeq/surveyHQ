@@ -69,6 +69,3 @@ def load(path: str | Path) -> tuple[list[dict[str, Any]], Areas]:
     _CACHE[key] = prepared
     return prepared
 
-
-def clear_cache() -> None:
-    _CACHE.clear()

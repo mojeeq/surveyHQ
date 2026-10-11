@@ -104,32 +104,6 @@ def _write_cell(worksheet: Any, row: int, column: int, value: Any, number_format
         worksheet.write_string(row, column, str(value))
 
 
-def tables_to_xlsx(tables: dict[str, QueryResult]) -> bytes:
-    """Write several result sets into one workbook, one sheet per entry."""
-    import xlsxwriter
-
-    buffer = io.BytesIO()
-    workbook = xlsxwriter.Workbook(buffer, {"in_memory": True})
-    header_format = workbook.add_format(
-        {"bold": True, "bg_color": "#1e293b", "font_color": "#ffffff", "border": 1}
-    )
-    number_format = workbook.add_format({"num_format": "#,##0.####"})
-    used_names: set[str] = set()
-
-    for raw_name, result in tables.items():
-        name = _safe_sheet_name(raw_name, used_names)
-        worksheet = workbook.add_worksheet(name)
-        for column_index, column in enumerate(result.columns):
-            worksheet.write(0, column_index, column.label or column.name, header_format)
-            worksheet.set_column(column_index, column_index, 18)
-        for row_index, row in enumerate(result.rows, start=1):
-            for column_index, value in enumerate(row):
-                _write_cell(worksheet, row_index, column_index, value, number_format)
-        worksheet.freeze_panes(1, 0)
-    workbook.close()
-    return buffer.getvalue()
-
-
 def _safe_sheet_name(name: str, used: set[str]) -> str:
     cleaned = "".join(c for c in name if c not in "[]:*?/\\")[:31] or "Sheet"
     candidate = cleaned

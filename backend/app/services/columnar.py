@@ -10,7 +10,7 @@ from __future__ import annotations
 import os
 import uuid
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +21,12 @@ from app.core.config import settings
 
 
 def quote_ident(name: str) -> str:
+    """A column name as SQL, whatever is in it.
+
+    The one definition: the query engine re-exports this rather than keeping
+    a second copy, because a quoting rule that exists twice is a quoting rule
+    that gets hardened once.
+    """
     return '"' + name.replace('"', '""') + '"'
 
 
@@ -105,12 +111,18 @@ def frame_to_parquet(frame: pd.DataFrame, destination: Path) -> Path:
 NUMERIC_TYPE_TOKENS = ("INT", "DOUBLE", "FLOAT", "DECIMAL", "HUGEINT")
 
 
-def _holds_numbers(column_type: str) -> bool:
-    return any(token in column_type.upper() for token in NUMERIC_TYPE_TOKENS)
+def holds_numbers(column_type: str) -> bool:
+    """Whether a stored column holds numbers, from the type it is stored as.
+
+    Both vocabularies land in this argument - DuckDB writes DOUBLE and pandas
+    writes float64 - which is why the test is on the tokens rather than on a
+    list of type names.
+    """
+    return any(token in str(column_type).upper() for token in NUMERIC_TYPE_TOKENS)
 
 
-def code_text_sql(name: str) -> str:
-    """A numeric column as text, written the way a code is written.
+def code_text_sql(expression: str) -> str:
+    """A numeric expression as text, written the way a code is written.
 
     DuckDB renders a double as "4.0", and a value label is keyed "4". So a
     round that exports a coded question as text, stacked onto rounds that
@@ -122,8 +134,12 @@ def code_text_sql(name: str) -> str:
 
     TRY_CAST because a value too large for a BIGINT is still a value; it keeps
     whatever spelling the double has rather than failing the whole import.
+
+    Takes an expression rather than a name because its two callers have
+    different things to hand: a column being unioned, and a column the query
+    engine has already quoted.
     """
-    col = quote_ident(name)
+    col = expression
     return (
         f"CASE WHEN {col} = floor({col}) AND TRY_CAST({col} AS BIGINT) IS NOT NULL "
         f"THEN CAST(CAST({col} AS BIGINT) AS VARCHAR) "
@@ -131,32 +147,61 @@ def code_text_sql(name: str) -> str:
     )
 
 
-def _text_clash(
-    existing: list[tuple[str, str]], incoming: list[tuple[str, str]]
-) -> tuple[list[str], list[str]]:
-    """Columns one side holds as numbers and the other as text.
+@dataclass
+class TypeClash:
+    """Columns the two files disagree about the type of, and what to do.
 
-    Returned per side, because it is the numeric side that has to be written
-    out as text; the other side already is.
+    `countable` is the good case: one side is text and every value in it is
+    a number written down, so that side is read as numbers and the column
+    goes on being one. The rest cannot be, and there the numeric side is
+    written out as code text instead, because text is the only stack that
+    loses no values.
     """
+
+    countable: list[str] = field(default_factory=list)
+    existing_as_text: list[str] = field(default_factory=list)
+    incoming_as_text: list[str] = field(default_factory=list)
+
+
+def _text_clash(
+    existing: list[tuple[str, str]],
+    incoming: list[tuple[str, str]],
+    numbers_in_text: set[str] | None = None,
+) -> TypeClash:
+    """Which columns clash, and which way round."""
     other = dict(incoming)
-    left: list[str] = []
-    right: list[str] = []
+    countable = numbers_in_text or set()
+    clash = TypeClash()
     for name, kind in existing:
         if name not in other:
             continue
         theirs = other[name]
-        if _holds_numbers(kind) and not _holds_numbers(theirs):
-            left.append(name)
-        elif _holds_numbers(theirs) and not _holds_numbers(kind):
-            right.append(name)
-    return left, right
+        if holds_numbers(kind) == holds_numbers(theirs):
+            continue
+        if name in countable:
+            clash.countable.append(name)
+        elif holds_numbers(kind):
+            clash.existing_as_text.append(name)
+        else:
+            clash.incoming_as_text.append(name)
+    return clash
 
 
-def _select_with_text(path: Path, columns: list[str], extra: str = "") -> str:
-    """SELECT * from a Parquet file with some columns rewritten as code text."""
-    replace = ", ".join(f"{code_text_sql(name)} AS {quote_ident(name)}" for name in columns)
-    star = f"* REPLACE ({replace})" if columns else "*"
+def _select_aligned(
+    path: Path, as_text: list[str], as_numbers: list[str], extra: str = ""
+) -> str:
+    """SELECT * from a Parquet file with the clashing columns brought into line."""
+    rewrites = [
+        f"{code_text_sql(quote_ident(name))} AS {quote_ident(name)}" for name in as_text
+    ]
+    # TRY_CAST, not CAST: the caller has already checked that every value
+    # parses, and a column that turns out to hold one stray word becomes a
+    # null rather than failing an import that is otherwise fine.
+    rewrites += [
+        f"TRY_CAST({quote_ident(name)} AS DOUBLE) AS {quote_ident(name)}"
+        for name in as_numbers
+    ]
+    star = f"* REPLACE ({', '.join(rewrites)})" if rewrites else "*"
     return f"SELECT {star}{extra} FROM read_parquet({quote_path(path)})"
 
 
@@ -167,12 +212,17 @@ def append_frame_to_parquet(
     *,
     source_column: str | None = None,
     existing_source_value: str = "original upload",
+    numbers_in_text: set[str] | None = None,
 ) -> tuple[list[str], list[str]]:
     """Append a pandas *incoming* frame to an existing Parquet file in DuckDB.
 
     Only the newly-arrived rows are materialised in pandas. The existing survey
     remains in Parquet and DuckDB performs UNION ALL BY NAME directly into the
     replacement file. The destination is swapped atomically after COPY finishes.
+
+    `numbers_in_text` names the arriving columns that are text holding
+    nothing but numbers, which the caller can see in pandas and DuckDB
+    cannot see without a second pass over the file.
 
     Returns (existing_columns, incoming_columns) for schema-change warnings.
     """
@@ -186,12 +236,15 @@ def append_frame_to_parquet(
         existing_columns = [name for name, _ in stored]
         incoming_columns = [name for name, _ in arriving]
 
-        # A variable the two files disagree about the type of is stacked as
-        # text, which is the only answer that loses no values. The numeric
-        # side is written out the way a code is written first, or the same
-        # answer arrives under two spellings - "4" and "4.0" - and splits into
-        # two bars, one of them with no value label.
-        here, there = _text_clash(stored, arriving)
+        # A variable the two files disagree about the type of. Where the text
+        # side is numbers written down, it is read as numbers and the column
+        # goes on being one - a round that exported household size as "5" has
+        # not stopped collecting a number. Where it is not, the stack is text,
+        # which loses no values, and the numeric side is written out the way a
+        # code is written: otherwise the same answer arrives under two
+        # spellings, "4" and "4.0", and splits into two bars, one of them with
+        # no value label.
+        clash = _text_clash(stored, arriving, numbers_in_text)
         extra = ""
         if source_column and source_column not in existing_columns:
             extra = (
@@ -200,8 +253,17 @@ def append_frame_to_parquet(
                 + " AS "
                 + quote_ident(source_column)
             )
-        existing_select = _select_with_text(existing_path, here, extra)
-        incoming_select = _select_with_text(incoming_path, there)
+        existing_select = _select_aligned(
+            existing_path,
+            as_text=clash.existing_as_text,
+            as_numbers=[],
+            extra=extra,
+        )
+        incoming_select = _select_aligned(
+            incoming_path,
+            as_text=clash.incoming_as_text,
+            as_numbers=clash.countable,
+        )
 
         con = connect()
         try:
@@ -236,30 +298,6 @@ def overlapping_frame_values(
             f"FROM read_parquet({quote_path(existing_path)}) e "
             f"INNER JOIN incoming_rows i ON e.{col} = i.{col} "
             f"WHERE e.{col} IS NOT NULL"
-        )
-        count = int(con.execute(f"SELECT COUNT(*) FROM ({base}) x").fetchone()[0])
-        sample = [row[0] for row in con.execute(f"{base} LIMIT {int(examples)}").fetchall()]
-        return count, sample
-    finally:
-        con.close()
-
-
-def overlapping_values(
-    left_path: str | Path,
-    right_path: str | Path,
-    column: str,
-    *,
-    examples: int = 3,
-) -> tuple[int, list[Any]]:
-    """Count shared non-null identifiers without building Python sets of rows."""
-    col = quote_ident(column)
-    con = connect()
-    try:
-        base = (
-            f"SELECT DISTINCT l.{col} AS value "
-            f"FROM read_parquet({quote_path(left_path)}) l "
-            f"INNER JOIN read_parquet({quote_path(right_path)}) r "
-            f"ON l.{col} = r.{col} WHERE l.{col} IS NOT NULL"
         )
         count = int(con.execute(f"SELECT COUNT(*) FROM ({base}) x").fetchone()[0])
         sample = [row[0] for row in con.execute(f"{base} LIMIT {int(examples)}").fetchall()]
@@ -402,10 +440,7 @@ def profile_parquet(
             shape: list[tuple[str, str, bool]] = []
             for index, (name, storage) in enumerate(batch):
                 q = quote_ident(name)
-                numeric = any(
-                    token in storage.upper()
-                    for token in ("INT", "DOUBLE", "FLOAT", "DECIMAL", "HUGEINT")
-                )
+                numeric = holds_numbers(storage)
                 expressions.extend(
                     [
                         f"COUNT({q}) AS c_{index}",

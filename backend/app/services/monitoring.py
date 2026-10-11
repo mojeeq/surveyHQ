@@ -20,7 +20,6 @@ from app.models import (
     IndicatorSnapshot,
     Notification,
     Role,
-    Severity,
     User,
 )
 from app.schemas.query import Aggregation, Condition, Dimension, FilterGroup, Measure, QuerySpec
@@ -437,6 +436,3 @@ def _resolve_emails(db: Session, rule: AlertRule) -> list[str]:
         return list(rule.recipients)
     return [u.email for u in _default_recipients(db)]
 
-
-def severity_rank(severity: Severity) -> int:
-    return {Severity.info: 0, Severity.warning: 1, Severity.critical: 2}[severity]

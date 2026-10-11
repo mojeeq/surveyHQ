@@ -138,3 +138,24 @@ def db_session():
     finally:
         session.rollback()
         session.close()
+
+
+@pytest.fixture(params=["columnar", "pandas"])
+def append_implementation(request, monkeypatch):
+    """Run a test against each append implementation in turn.
+
+    There are two, and only one of them is deployed: the performance runtime
+    swaps the columnar append in at start-up and keeps the pandas one under
+    `append_frame_pandas`. A test that exercises only what is installed holds
+    half the code to the contract, which is how the same fault - an answer
+    option added in a later round losing its label - came to be fixed twice,
+    a day apart, in two files.
+    """
+    from app.services import datasets as dataset_service
+
+    if request.param == "pandas":
+        pandas_append = getattr(dataset_service, "append_frame_pandas", None)
+        if pandas_append is None:  # the runtime was never installed
+            pytest.skip("the columnar append is not installed")
+        monkeypatch.setattr(dataset_service, "append_frame_into_dataset", pandas_append)
+    return request.param

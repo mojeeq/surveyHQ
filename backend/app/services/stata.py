@@ -1558,21 +1558,3 @@ def _remember(dataset: Dataset, command: str) -> None:
     meta["commands"] = commands
     dataset.meta = meta
 
-
-def _remember_label(
-    dataset: Dataset,
-    variable: str,
-    label: str | None = None,
-    value_labels: dict[str, str] | None = None,
-) -> None:
-    """Keep it where the label editor keeps its own, so a replace preserves it."""
-    meta = dict(dataset.meta or {})
-    overrides = dict(meta.get("variable_labels") or {})
-    stored = dict(overrides.get(variable) or {})
-    if label is not None:
-        stored["label"] = label
-    if value_labels is not None:
-        stored["value_labels"] = value_labels
-    overrides[variable] = stored
-    meta["variable_labels"] = overrides
-    dataset.meta = meta

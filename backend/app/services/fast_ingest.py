@@ -40,7 +40,6 @@ def build_metadata_from_parquet_fast(
         VariableMeta,
         _safe_float,
         classify,
-        is_numeric_storage,
     )
 
     total, profiles, tags = columnar.profile_parquet(
@@ -50,7 +49,7 @@ def build_metadata_from_parquet_fast(
     for position, profile in enumerate(profiles):
         storage = profile.storage_type
         upper = storage.upper()
-        numeric = is_numeric_storage(storage)
+        numeric = columnar.holds_numbers(storage)
         is_datetime = "TIMESTAMP" in upper or upper == "DATE"
         labels = value_labels.get(profile.name, {})
         var_type = classify(
@@ -158,8 +157,8 @@ def append_frame_fast(
         IngestResult,
         add_geopoint_columns,
         clean_columns,
+        counts_as_numbers,
         geopoint_columns,
-        is_numeric_storage,
         merge_value_labels,
         retyped_warnings,
         stored_geopoint_columns,
@@ -216,10 +215,22 @@ def append_frame_fast(
     warnings.extend(unlabelled_code_warnings(frame, kept_value_labels))
     warnings.extend(
         retyped_warnings(
-            {name for name, kind in stored_types.items() if is_numeric_storage(kind)},
+            {name for name, kind in stored_types.items() if columnar.holds_numbers(kind)},
             frame,
         )
     )
+
+    # Which arriving text columns are numbers written down. Seen here, in
+    # pandas, where the rows already are; DuckDB would need another pass over
+    # the file to find out.
+    numeric_before = {
+        name for name, kind in stored_types.items() if columnar.holds_numbers(kind)
+    }
+    numbers_in_text = {
+        name
+        for name in numeric_before
+        if name in frame.columns and counts_as_numbers(frame[name])
+    }
 
     destination = existing_path.with_name(f"data-{uuid4().hex}.parquet")
     columnar.append_frame_to_parquet(
@@ -228,6 +239,7 @@ def append_frame_fast(
         destination,
         source_column=dataset_service.SOURCE_COLUMN,
         existing_source_value=dataset.source_ref or "original upload",
+        numbers_in_text=numbers_in_text,
     )
     metas = build_metadata_from_parquet_fast(destination, kept_labels, kept_value_labels)
     result = IngestResult(
