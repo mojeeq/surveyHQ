@@ -64,8 +64,9 @@
     grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
     grid-auto-rows: var(--row); gap: var(--gap);
   }
-  /* A group is a band here: this page flows its widgets rather than pinning
-     them to coordinates, so there is no rectangle to draw a frame around. */
+  /* A group is a band here: its widgets are packed within it, as the board
+     packs them, but the band itself is a strip down the page rather than the
+     rectangle it is on the platform. */
   .group {
     border: 1px dashed var(--ink-200); border-radius: 3px;
     padding: 10px 12px 14px; margin: 16px 0;
@@ -100,6 +101,11 @@
   table.data td.n, table.data th.n { text-align: right; font-variant-numeric: tabular-nums; }
   table.data tr.total td, table.data td.total { font-weight: 600; background: var(--ink-50); }
   .kpi { font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  /* A tile holding one number is centred in its card, as it is on the
+     platform. Left at the top, a tile four rows tall is a number and then a
+     third of a page of nothing, which is what an exported board full of
+     counters looked like. */
+  .card > .body.middle { display: flex; flex-direction: column; justify-content: center; }
   .track { height: 8px; border-radius: 999px; background: var(--ink-100); overflow: hidden; margin-top: 10px; }
   .track > div { height: 100%; border-radius: 999px; }
   /* A widget somebody painted a dark colour. Everything inside reads its ink
@@ -575,6 +581,7 @@
     if (kind === 'table' || !window.echarts) { drawTable(body, result); return }
     if (kind === 'kpi' || kind === 'gauge') {
       var dims = result.columns.filter(function (c) { return c.type === 'dimension' }).length
+      body.className += ' middle'
       body.appendChild(el('p', 'kpi', num(result.rows[0][dims])))
       body.appendChild(el('p', 'muted', result.columns[dims] ? result.columns[dims].label : ''))
       return
@@ -829,6 +836,7 @@
       }
     }
     var status = indicatorStatus(spec, value)
+    if (!breakdown.length) body.className += ' middle'
     body.appendChild(el('p', 'kpi', formatValue(value, spec.value_format, spec.unit)))
     if (spec.target_value) {
       var track = el('div', 'track')
@@ -967,6 +975,7 @@
       return
     }
     if (payload.type === 'indicator') {
+      body.className += ' middle'
       body.appendChild(el('p', 'kpi', formatValue(payload.value, payload.value_format, payload.unit)))
       return
     }
@@ -1070,11 +1079,11 @@
       app.appendChild(bar)
     }
 
-    // Groups are bands here rather than the boxes they are on the platform.
-    // This page flows its widgets rather than pinning them to coordinates, so
-    // there is no rectangle to draw a frame around - but the name still has to
-    // survive, because it is what says why these widgets are together. A
-    // folded group exports folded, and opens on a click like any summary.
+    // Groups are bands here rather than the boxes they are on the platform:
+    // a band is a strip down the page, with its own widgets packed inside it.
+    // The name still has to survive, because it is what says why these
+    // widgets are together. A folded group exports folded, and opens on a
+    // click like any summary.
     var mine = DATA.widgets.filter(function (widget) { return widget.page === page })
     var groups = (DATA.groups || []).filter(function (group) { return group.page === page })
     var ungrouped = mine.filter(function (widget) {
@@ -1133,21 +1142,13 @@
 
   function card(widget) {
     var node = el('article', 'card')
-    var layout = widget.layout || {}
-    if (window.matchMedia('(min-width: 781px)').matches) {
-      var columns = Math.max(1, Number((DATA.appearance || {}).columns) || 12)
-      // A widget cannot start past the last column or run off the end of the
-      // board: a board narrowed after its widgets were placed still holds some
-      // at the old width, and `span` past the edge adds an implicit column,
-      // which narrows every other widget on the page to make room for it.
-      var wide = Math.min(columns, Math.max(1, Number(layout.w) || 4))
-      var from = Math.min(columns - wide, Math.max(0, Number(layout.x) || 0))
-      node.style.gridColumn = (from + 1) + ' / span ' + wide
-      // Rows flow rather than being pinned to the stored y. The dashboard packs
-      // its widgets upwards as they are dragged, so the y a widget was saved
-      // with can sit well below the one above it - which here would be a band
-      // of empty page rather than the tidy grid it is on the platform.
-      node.style.gridRow = 'span ' + Math.max(2, Number(layout.h) || 6)
+    var place = widget.place
+    if (place && window.matchMedia('(min-width: 781px)').matches) {
+      // Both coordinates, worked out when the file was written: the board
+      // packs its widgets upwards, so neither the stored row nor the order
+      // they were made in is where they actually sit. See place_widgets.
+      node.style.gridColumn = (place.x + 1) + ' / span ' + place.w
+      node.style.gridRow = (place.row + 1) + ' / span ' + place.h
     }
     var style = widget.style || {}
     if (style.background) node.style.background = style.background
