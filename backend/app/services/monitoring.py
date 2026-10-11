@@ -320,6 +320,43 @@ def refresh_indicator(db: Session, indicator: Indicator, store_snapshot: bool = 
     return outcome
 
 
+def refresh_for_dataset(db: Session, dataset_id: str, store_snapshot: bool = False) -> int:
+    """Recompute the indicators that read one dataset, its data having changed.
+
+    An indicator tile shows the value the last scheduled run computed, because
+    opening a board must not set a query going for every tile on it. That is
+    the right trade while the data sits still and the wrong one the moment it
+    moves: an import landed this morning's interviews and every tile went on
+    showing yesterday's number until the quarter-hour tick came round, which
+    reads as an import that did nothing.
+
+    No snapshot by default. The snapshots are the indicator's trend, and that
+    series is what the number was at each scheduled moment - five
+    questionnaire versions importing one after another would otherwise punch
+    five points into it inside a minute, four of them describing a dataset
+    half way through being written.
+
+    One indicator failing stops neither the others nor the import. An
+    expression somebody mistyped belongs on the page where expressions are
+    edited, and is no reason to refuse data that has already landed.
+    """
+    indicators = db.scalars(
+        select(Indicator).where(
+            Indicator.dataset_id == dataset_id, Indicator.is_active.is_(True)
+        )
+    ).all()
+    refreshed = 0
+    for indicator in indicators:
+        try:
+            refresh_indicator(db, indicator, store_snapshot=store_snapshot)
+            refreshed += 1
+        except Exception as exc:  # noqa: BLE001 - one bad spec must not stop the rest
+            logger.warning(
+                "Indicator '%s' did not refresh after the import: %s", indicator.name, exc
+            )
+    return refreshed
+
+
 def evaluate_alert_rule(db: Session, rule: AlertRule) -> Alert | None:
     """Fire an alert when the rule's condition holds and the cooldown has passed."""
     if not rule.is_active or not rule.indicator_id:

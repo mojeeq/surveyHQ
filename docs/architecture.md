@@ -329,6 +329,14 @@ Celery handles anything that outlives a request:
 | `reap_stale_jobs` | Every ten minutes - fails jobs still claiming to be running past any limit a task could have run to |
 | `prune_history` | Nightly - trims snapshots, resolved alerts, old results and jobs, and sweeps the report zips those jobs were the only way to reach |
 
+An indicator's value is read off the indicator rather than queried when a
+dashboard draws it, because opening a board must not set a query going for
+every tile on it. That makes the stored value part of the data: whenever a
+dataset's data changes - an import, a replacement, a replayed command, a merge
+rebuilt - `_apply_ingest` recomputes the indicators that read it, so the
+numbers move when the data does rather than at the next tick. No snapshot is
+written there; the trend stays a record of the scheduled moments.
+
 Indicator snapshots are what make trends possible: each refresh writes a
 timestamped value, so every indicator carries its own history without anyone
 configuring a time series. A dashboard copy is a different thing that shares the
