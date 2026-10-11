@@ -403,15 +403,28 @@ function pivot(result: QueryResult) {
     const colIndex = names.indexOf(dimensions[1].name)
     const valIndex = names.indexOf(measures[0].name)
 
+    // Sets alongside the lists, not includes(). The membership test was a
+    // scan of everything seen so far, which is nothing for twelve education
+    // levels and quadratic in the number of categories - and a table of
+    // interview keys is tens of thousands of them. The lists are kept because
+    // first-seen order is the order the axis is built in.
     const categories: string[] = []
     const seriesNames: string[] = []
+    const seenCategory = new Set<string>()
+    const seenSeries = new Set<string>()
     const lookup = new Map<string, number>()
 
     for (const row of result.rows) {
       const category = formatCell(row[rowIndex])
       const seriesName = formatCell(row[colIndex])
-      if (!categories.includes(category)) categories.push(category)
-      if (!seriesNames.includes(seriesName)) seriesNames.push(seriesName)
+      if (!seenCategory.has(category)) {
+        seenCategory.add(category)
+        categories.push(category)
+      }
+      if (!seenSeries.has(seriesName)) {
+        seenSeries.add(seriesName)
+        seriesNames.push(seriesName)
+      }
       lookup.set(`${category}||${seriesName}`, Number(row[valIndex] ?? 0))
     }
     // Folded, not sliced. The tail used to be cut off here, so a cross-tab of
