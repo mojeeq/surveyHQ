@@ -62,6 +62,45 @@
     @apply text-dark-900;
   }
 
+  /* The same safety net for what is drawn rather than written.
+   *
+   * The text rules above were added for the headline numbers; the rules a
+   * card is ruled with were left behind, and they are the light palette too.
+   * Measured on a dark page: a hairline between two rows came out #edecec
+   * and the box around a grouping #e8e8e8, so every panel on Explore wore a
+   * near-white outline and the Overview's dataset list a bright rule under
+   * each row. A border exists to be barely visible, which is exactly what it
+   * stops being when the page goes dark around it.
+   *
+   * One rule per shade rather than a `dark:` twin on each of the forty class
+   * attributes that name one, for the reason given above, and in the same
+   * layer - so an explicit `dark:border-...` still wins, and the `.on-light`
+   * opt-out below still holds a white tile to the light palette.
+   */
+  .dark .border-ink-100,
+  .dark .border-ink-200 {
+    @apply border-dark-200;
+  }
+  .dark .border-ink-300 {
+    @apply border-dark-300;
+  }
+  /* Written out the way Tailwind emits a divide utility, because that is the
+   * selector being overridden. */
+  .dark .divide-ink-100 > :not([hidden]) ~ :not([hidden]),
+  .dark .divide-ink-200 > :not([hidden]) ~ :not([hidden]) {
+    border-color: theme('colors.dark.200');
+  }
+  /* And the surfaces: a stripe behind a table heading, a progress track, the
+   * panel a share link sits in. Paired as the components that did think of it
+   * pair them by hand - ink-50 to the page shade, ink-100 to the one above it.
+   */
+  .dark .bg-ink-50 {
+    @apply bg-dark-100;
+  }
+  .dark .bg-ink-100 {
+    @apply bg-dark-200;
+  }
+
   /* A widget whose own background disagrees with the page it sits on.
    *
    * Choosing a dark colour for one tile should not oblige anybody to go and
@@ -211,6 +250,13 @@
   }
   .dark .on-light .bg-ink-100 {
     background-color: theme('colors.ink.100');
+  }
+  .dark .on-light .border-ink-100,
+  .dark .on-light .border-ink-200 {
+    border-color: theme('colors.ink.200');
+  }
+  .dark .on-light .border-ink-300 {
+    border-color: theme('colors.ink.300');
   }
 
   /* The card gloss has to be a tint, not a coat of paint.

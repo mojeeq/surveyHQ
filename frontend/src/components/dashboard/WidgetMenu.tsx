@@ -175,7 +175,7 @@ export function WidgetMenu({
             ref={panel}
             // Hidden across and scrolling down: across is what keeps the
             // corners rounded, down is what makes a capped menu reachable.
-            className="fixed z-50 min-w-[11rem] overflow-hidden overflow-y-auto rounded-card border border-ink-200 bg-white py-1 shadow-lg"
+            className="fixed z-50 min-w-[11rem] overflow-hidden overflow-y-auto rounded-card border border-ink-200 bg-white py-1 shadow-lg dark:bg-dark-50"
             style={{
               top: at.top,
               bottom: at.bottom,

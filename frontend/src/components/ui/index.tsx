@@ -680,6 +680,54 @@ export function Toggle({
   )
 }
 
+/**
+ * A row of mutually exclusive choices, where tabs would be too much.
+ *
+ * Chart or table, open or resolved: a handful of options that switch what is
+ * already on screen rather than navigating to it. There were two of these
+ * written by hand, and the pair had already drifted - one carried its dark
+ * palette and the other did not, so the alert filter was three white blocks
+ * on a dark page. One component, so the next one cannot drift either.
+ *
+ * `radiogroup` rather than a row of buttons, because that is what it is: the
+ * options are read as a set and the chosen one is announced as chosen.
+ */
+export function Segmented<T extends string>({
+  options,
+  value,
+  onChange,
+  label,
+  className = '',
+}: {
+  options: { value: T; label: string }[]
+  value: T
+  onChange: (value: T) => void
+  /** Named for a screen reader, which otherwise meets a row of loose buttons. */
+  label: string
+  className?: string
+}) {
+  return (
+    <div role="radiogroup" aria-label={label} className={`flex gap-1 ${className}`}>
+      {options.map((option) => (
+        <button
+          key={option.value}
+          type="button"
+          role="radio"
+          aria-checked={value === option.value}
+          onClick={() => onChange(option.value)}
+          className={`rounded-control px-3 py-1.5 text-xs font-medium transition-colors ${
+            value === option.value
+              ? 'bg-ink-800 text-white dark:bg-dark-300 dark:text-dark-900'
+              : 'text-ink-600 hover:bg-ink-100 dark:text-dark-600 dark:hover:bg-dark-200'
+          }`}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  )
+}
+
 export function Tabs<T extends string>({
   tabs,
   active,
