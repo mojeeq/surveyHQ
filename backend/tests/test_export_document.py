@@ -1,9 +1,9 @@
 """A board as a Word report.
 
-The web page is the board and the workbook is its figures. This is the one
-that goes inside a written report, so what matters is that it reads as a
-document: the board's name and what it was narrowed to, then each page, then
-each widget as a heading and a table somebody can quote from.
+The web page is the board itself. This is the one that goes inside a written
+report, so what matters is that it reads as a document: the board's name and
+what it was narrowed to, then each page, then each widget as a heading and a
+table somebody can quote from.
 """
 
 from __future__ import annotations
