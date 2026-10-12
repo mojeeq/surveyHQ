@@ -1211,16 +1211,10 @@ picture of it - a picture nobody can check is worth less than numbers somebody
 can quote - and a text box is carried as what it says, because that is already
 prose.
 
-**PDF** is that web page printed, by the server rather than by you: A4
-landscape, margins, no tab strip, each card kept whole rather than split
-across a page break, folded groups opened for the printing, the filters
-printed as the values they were set to, and every page of the board one after
-another rather than only the tab you were looking at. It takes a few seconds,
-because a browser on the server really does open the file and print it.
-
-You can still print it yourself - open the web page and print - and you get
-the same layout, for the tab in front of you. Where the server has no browser
-installed the PDF choice is not offered at all, and the panel says why.
+For **PDF**, open the web page and print it: it has a print layout, with
+margins, no tab strip, each card kept whole rather than split across a page
+break, folded groups opened for the printing, and the filters printed as the
+values they were set to.
 
 What the web page does not do:
 

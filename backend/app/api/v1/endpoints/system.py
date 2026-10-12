@@ -185,7 +185,6 @@ def reset_platform_setting(
 @router.get("/info", response_model=dict)
 def platform_info(_: CurrentUser) -> dict[str, Any]:
     from app import __version__
-    from app.services.export_pdf import why_not as pdf_refusal
 
     return {
         "name": settings.project_name,
@@ -198,9 +197,4 @@ def platform_info(_: CurrentUser) -> dict[str, Any]:
         # resolve to nothing.
         "dashboard_domain": dashboard_domain(),
         "supported_formats": [".dta", ".sav", ".csv", ".tab", ".tsv", ".xlsx", ".xls"],
-        # Whether this server can print a dashboard itself. Empty reason means
-        # it can; the interface offers the format or says why it cannot,
-        # rather than handing somebody a button that answers 503.
-        "pdf_export": not pdf_refusal(),
-        "pdf_export_reason": pdf_refusal(),
     }

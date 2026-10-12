@@ -119,10 +119,6 @@ jobs:
           sed -i "s|^FIRST_ADMIN_PASSWORD=.*|FIRST_ADMIN_PASSWORD=ci-password-12345|" .env
           sed -i "s|^PUBLIC_URL=.*|PUBLIC_URL=http://localhost:8080|" .env
           sed -i "s|^CORS_ORIGINS=.*|CORS_ORIGINS=http://localhost:8080|" .env
-          # Built without the PDF browser: this job proves the stack starts,
-          # and several hundred megabytes of chromium downloaded on every run
-          # proves nothing it does not already.
-          sed -i "s|^PDF_BROWSER=.*|PDF_BROWSER=0|" .env
           docker compose config --quiet
 
       - name: Build and start the whole stack
