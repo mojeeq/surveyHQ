@@ -182,7 +182,7 @@ def _said_plainly(stamp: str) -> str:
     return moment.strftime("%d %B %Y, %H:%M UTC")
 
 
-def _widget_table(widget: dict[str, Any]) -> tuple[list[str], list[list[Any]]] | None:
+def widget_table(widget: dict[str, Any]) -> tuple[list[str], list[list[Any]]] | None:
     """One widget as a heading row and its rows, or None if it has no numbers."""
     kind = str(widget.get("kind") or "")
     if kind == "chart":
@@ -283,7 +283,7 @@ def workbook(payload: dict[str, Any]) -> bytes:
         index = int(widget.get("page") or 0)
         where = pages[index] if index < len(pages) else f"Page {index + 1}"
         title = str(widget.get("title") or "").strip() or "Untitled widget"
-        table = _widget_table(widget)
+        table = widget_table(widget)
         if table is None:
             listed.append({
                 "sheet": "-",

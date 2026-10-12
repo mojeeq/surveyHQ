@@ -1204,6 +1204,13 @@ usually why somebody wanted the workbook. A map, a text box and the panels
 that carry no numbers are named on the cover rather than dropped quietly, so
 you can see that nothing went missing.
 
+**Word** gives you the board as a report, for the document it ends up inside:
+the title and what it was narrowed to, then each page, then each widget as a
+heading and a table of its numbers. A chart is its figures here rather than a
+picture of it - a picture nobody can check is worth less than numbers somebody
+can quote - and a text box is carried as what it says, because that is already
+prose.
+
 For **PDF**, open the web page and print it: it has a print layout, with
 margins, no tab strip, each card kept whole rather than split across a page
 break, folded groups opened for the printing, and the filters printed as the

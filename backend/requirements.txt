@@ -25,6 +25,13 @@ openpyxl==3.1.5
 pyreadstat==1.2.8
 XlsxWriter==3.2.0
 
+# --- Documents ---------------------------------------------------------------
+# A dashboard exported as a Word report. Pure Python over lxml, which is
+# already here through the rest of the stack: no office suite on the server
+# and nothing fetched at run time, which is what lets it work on a machine
+# with no internet.
+python-docx==1.1.2
+
 # --- Boundary files ----------------------------------------------------------
 # Shapefiles only. Pure Python with no compiled part and no system GIS library,
 # which is what lets a boundary layer be read on a server with no internet and

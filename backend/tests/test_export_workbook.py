@@ -105,7 +105,7 @@ def test_a_sheet_is_in_the_order_the_widget_is():
         [{"name": "value", "label": "Interviews", "how": "sum", "parts": ["value"]}],
         sort=[{"field": "value", "direction": "desc"}],
     )
-    table = export_workbook._widget_table({"kind": "chart", "cube": cube})
+    table = export_workbook.widget_table({"kind": "chart", "cube": cube})
 
     assert table is not None
     assert [row[0] for row in table[1]] == ["Shefa", "Tafea", "Sanma"]
