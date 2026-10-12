@@ -89,6 +89,10 @@ class IndicatorValue(BaseModel):
     status: str = "unknown"
     direction: Direction = Direction.higher_is_better
     breakdown: dict[str, float] = Field(default_factory=dict)
+    # Per group: its value, its own quota, how far through it is and what that
+    # makes it. Beside the raw breakdown rather than instead of it, so a reader
+    # that only wants the numbers is unaffected.
+    breakdown_progress: dict[str, dict[str, Any]] = Field(default_factory=dict)
     breakdown_variable: str = ""
     computed_at: dt.datetime | None = None
     error: str | None = None
