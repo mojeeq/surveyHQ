@@ -83,7 +83,6 @@ from app.schemas.query import (
 from app.services import (
     boundary_store,
     export_document,
-    export_workbook,
     multiselect,
     quality,
     reports,
@@ -1195,51 +1194,13 @@ def export_dashboard_html(
     )
 
 
-@router.get("/{dashboard_id}/export.xlsx")
-def export_dashboard_workbook(
-    dashboard_id: str, db: DbSession, user: CurrentUser, view: str | None = None
-) -> Response:
-    """The board's numbers as a workbook, one sheet per widget.
-
-    The HTML export is the board; this is the figures behind it, for the
-    reader who wants to reconcile them against another system or put their own
-    arithmetic beside them. Built from the same payload as the HTML and added
-    back up the same way, so the two cannot disagree with each other.
-    """
-    dashboard = _get_dashboard(dashboard_id, db, user)
-    pinned, view_name = _pinned_from_view(view, dashboard_id, db) if view else ({}, "")
-    payload = static_export.build_payload(
-        db,
-        dashboard,
-        render=lambda widget, filters: _render_widget(db, widget, filters),
-        pinned=pinned,
-    )
-    record(
-        db,
-        user=user,
-        action="dashboard.export_xlsx",
-        entity_type="dashboard",
-        entity_id=dashboard_id,
-        detail={"widgets": len(payload["widgets"]), "view": view_name, "pinned": pinned},
-    )
-    db.commit()
-    name = slugify(dashboard.name) or "dashboard"
-    if view_name:
-        name = f"{name}-{slugify(view_name) or 'view'}"
-    return Response(
-        content=export_workbook.workbook(payload),
-        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{name}.xlsx"'},
-    )
-
-
 @router.get("/{dashboard_id}/export.docx")
 def export_dashboard_document(
     dashboard_id: str, db: DbSession, user: CurrentUser, view: str | None = None
 ) -> Response:
     """The board as a Word report, for the document it ends up inside.
 
-    The same numbers as the workbook and the same page as the HTML file, read
+    The same page as the HTML file and the same numbers behind it, read
     out in order: the board's title and what it was narrowed to, then each
     page, then each widget as a heading and a table.
     """

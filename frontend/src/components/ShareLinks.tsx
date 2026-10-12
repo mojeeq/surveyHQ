@@ -8,7 +8,7 @@ import { formatNumber, relativeTime } from '@/lib/format'
 import { Badge, Field, Modal, Segmented, Spinner } from '@/components/ui'
 import type { Dashboard, DashboardSavedView, Job } from '@/lib/types'
 
-type ExportFormat = 'html' | 'xlsx' | 'docx'
+type ExportFormat = 'html' | 'docx'
 
 /** What each shape of this board is for, said where it is chosen. */
 const FORMATS: Record<ExportFormat, { about: string }> = {
@@ -21,14 +21,6 @@ const FORMATS: Record<ExportFormat, { about: string }> = {
       'says on its face that it is showing the day it was exported. A map still ' +
       'needs the internet for its background tiles. Print it for a PDF: it has a ' +
       'print layout, with each card kept whole across the page breaks.',
-  },
-  xlsx: {
-    about:
-      'The figures rather than the board: one sheet per widget, behind a cover ' +
-      'saying which board this was and what it was narrowed to. Each sheet holds ' +
-      'every row, so a widget showing only its top few shows all of them here. A ' +
-      'map, a text box and the panels that have no numbers in them are named on ' +
-      'the cover rather than dropped quietly.',
   },
   docx: {
     about:
@@ -391,7 +383,6 @@ function DownloadCopy({ dashboard }: { dashboard: Dashboard }) {
             onChange={setFormat}
             options={[
               { value: 'html', label: 'Web page' },
-              { value: 'xlsx', label: 'Excel' },
               { value: 'docx', label: 'Word' },
             ]}
           />

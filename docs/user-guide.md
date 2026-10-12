@@ -1194,16 +1194,6 @@ typeface, the tab band, the filter bar and the widget transparency all travel
 with it. Any bundled typeface the board is set in is carried inside the file
 as well, so it reads in that face on a laptop that has never met the platform.
 
-**Excel** gives you the figures instead of the board: one sheet per widget,
-behind a cover saying which board it was, what it was narrowed to and when.
-The numbers are worked out the same way the web page works them out - an
-average from its total and its count, a share of the sheet it is on - so the
-two files cannot disagree. Each sheet holds every row in the widget's own
-order, so a chart showing only its top ten shows all sixty here, which is
-usually why somebody wanted the workbook. A map, a text box and the panels
-that carry no numbers are named on the cover rather than dropped quietly, so
-you can see that nothing went missing.
-
 **Word** gives you the board as a report, for the document it ends up inside:
 the title and what it was narrowed to, then each page, then each widget as a
 heading and a table of its numbers. A chart is its figures here rather than a
