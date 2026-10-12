@@ -1927,3 +1927,39 @@ and it goes back to reporting the stored run, which costs nothing.
 
 **Administration → API keys** creates a key for scripts and integrations. The key
 is shown once - copy it then. See [api.md](api.md).
+
+## Settings
+
+**Administration → Settings** is what can be changed while the platform is
+running, by an administrator, without anybody touching the server. Five
+groups:
+
+- **Files and uploads** - the largest upload, and how far a zip may expand
+  once it is opened.
+- **How often things run** - how often due imports are looked for, and how
+  often indicators are recomputed and alert rules evaluated.
+- **Analytics and caching** - whether answers are kept in Redis and for how
+  long, the size above which a delimited file is read by DuckDB, and whether
+  fieldwork is summarised after each import.
+- **Email** - the mail server alerts and invitations go through. The password
+  is stored encrypted and is never sent back to the page; leaving the box
+  empty keeps the one that is there.
+- **Access and disclosure** - self-service accounts, the sign-in rate limit,
+  and the floor below which a table cell is withheld.
+
+Each setting says what it does, what it is now, and where that came from. One
+that nobody has changed reads "From .env"; one that has been changed reads
+"Set here", with what it would go back to and a **put it back** link.
+
+**It takes about half a minute.** Each part of the platform - the API, the
+workers, the scheduler - keeps what it read for a few seconds before asking
+again, which is what stops the upload limit being a database query on every
+request. A change you make is in force everywhere within half a minute, and
+in the audit log immediately, with your name on it.
+
+**What is not here.** The secret key, the encryption key, the database, Redis,
+the addresses the platform answers on: a web page is not where those belong,
+and a mistake in one of them locks everybody out or loses data. They stay in
+`.env`, which also goes on holding the defaults for everything above - what
+you see under "From .env" is that file, and removing a setting here goes back
+to it.

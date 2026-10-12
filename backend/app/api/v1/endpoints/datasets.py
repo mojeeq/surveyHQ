@@ -57,7 +57,7 @@ from app.schemas.dataset import (
 from app.schemas.monitoring import JobOut
 from app.schemas.query import FilterGroup
 from app.services import archive as archiving
-from app.services import project_script, stata
+from app.services import preferences, project_script, stata
 from app.services.audit import record
 from app.services.columnar import holds_numbers
 from app.services.datasets import (
@@ -317,7 +317,7 @@ async def upload_dataset(
     if mode not in ("replace", "append"):
         raise HTTPException(status_code=422, detail="mode must be 'replace' or 'append'")
 
-    max_bytes = settings.max_upload_mb * 1024 * 1024
+    max_bytes = preferences.value("max_upload_mb") * 1024 * 1024
     # Refused from the declared length, before a byte of it is stored. The old
     # order - store, count, refuse - meant the whole file was uploaded and
     # written to disk first, and a proxy that had already forwarded a body no
@@ -329,8 +329,9 @@ async def upload_dataset(
             status_code=413,
             detail=(
                 f"This upload is {int(declared) / (1024 * 1024):,.0f} MB and the "
-                f"limit is {settings.max_upload_label}. Raise MAX_UPLOAD_MB in "
-                ".env and restart, or upload the archive's files separately."
+                f"limit is {preferences.upload_label()}. An administrator can "
+                "raise it under Administration -> Settings, or upload the "
+                "archive's files separately."
             ),
         )
 
@@ -408,7 +409,8 @@ async def upload_dataset(
                         raise HTTPException(
                             status_code=413,
                             detail=(
-                                f"This upload exceeds the {settings.max_upload_label} limit"
+                                f"This upload exceeds the "
+                                f"{preferences.upload_label()} limit"
                             ),
                         )
                     handle.write(chunk)

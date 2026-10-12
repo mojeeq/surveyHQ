@@ -23,8 +23,8 @@ from pathlib import Path
 
 import pandas as pd
 
-from app.core.config import settings
 from app.core.logging import get_logger
+from app.services import preferences
 from app.services.ingest import (
     SUPPORTED_EXTENSIONS,
     IngestError,
@@ -81,8 +81,8 @@ def max_extracted_bytes() -> int:
     400 GB - more than any disk an archive would be unpacked onto, so nothing
     was being bounded in practice.
     """
-    proportional = settings.max_upload_mb * 1024 * 1024 * MAX_EXPANSION_FACTOR
-    ceiling = settings.max_extracted_gb * 1024 * 1024 * 1024
+    proportional = preferences.value("max_upload_mb") * 1024 * 1024 * MAX_EXPANSION_FACTOR
+    ceiling = preferences.value("max_extracted_gb") * 1024 * 1024 * 1024
     return min(proportional, ceiling)
 
 
@@ -95,7 +95,7 @@ def _too_big(budget: int) -> IngestError:
     # decide this budget, and telling somebody to raise MAX_UPLOAD_MB while the
     # ceiling is what binds sends them to a setting they can raise all day
     # without the refusal changing.
-    ceiling = settings.max_extracted_gb * 1024 * 1024 * 1024
+    ceiling = preferences.value("max_extracted_gb") * 1024 * 1024 * 1024
     knob = "MAX_EXTRACTED_GB" if budget >= ceiling else "MAX_UPLOAD_MB"
     return IngestError(
         f"The files inside this archive expand to more than {size}. Raise "

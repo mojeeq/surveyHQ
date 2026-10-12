@@ -20,7 +20,7 @@ import redis
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.schemas.query import QueryResult
-from app.services import columnar
+from app.services import columnar, preferences
 
 logger = get_logger(__name__)
 _lock = threading.Lock()
@@ -33,7 +33,8 @@ def _redis() -> redis.Redis | None:
     # Unit/integration test legs deliberately run without a Redis service. The
     # cache is an accelerator, never a correctness dependency, so avoid a failed
     # TCP connect on every test query.
-    if not settings.analytics_cache_enabled or settings.environment.lower() in {"test", "testing"}:
+    testing = settings.environment.lower() in {"test", "testing"}
+    if testing or not preferences.value("analytics_cache_enabled"):
         return None
     if _client is None:
         _client = redis.Redis.from_url(
@@ -84,7 +85,7 @@ def _put(key: str, result: QueryResult) -> None:
     try:
         client.setex(
             key,
-            max(1, settings.analytics_cache_ttl_seconds),
+            max(1, preferences.value("analytics_cache_ttl_seconds")),
             result.model_dump_json().encode("utf-8"),
         )
     except Exception as exc:  # noqa: BLE001 - Redis is an accelerator, not a dependency
@@ -164,7 +165,7 @@ def install_query_runtime() -> None:
 
         def apply_ingest_with_summary(db: Any, dataset: Any, result: Any) -> Any:
             ready = original_apply_ingest(db, dataset, result)
-            if settings.monitoring_precompute_enabled:
+            if preferences.value("monitoring_precompute_enabled"):
                 monitoring_precompute.precompute(ready, original_build_overview)
             return ready
 

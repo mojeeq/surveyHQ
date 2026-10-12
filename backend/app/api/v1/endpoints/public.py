@@ -18,7 +18,6 @@ from app.api.v1.endpoints.dashboards import (
     restrict_to_visible,
     visible_variables,
 )
-from app.core.config import settings
 from app.core.rate_limit import enforce
 from app.core.security import (
     create_access_token,
@@ -29,6 +28,7 @@ from app.db.base import utcnow
 from app.models import Dashboard, DashboardView, ShareLink
 from app.schemas.analytics import DashboardDetail, DashboardViewOut
 from app.schemas.query import FilterGroup
+from app.services import preferences
 from app.services.sharing import link_is_open
 
 # The only unauthenticated routes in the platform, and the expensive one among
@@ -67,7 +67,7 @@ def resolve_host(request: Request, db: DbSession) -> dict[str, Any]:
     Only a hostname explicitly assigned to a shared dashboard matches. The Host
     header is a request header like any other - it is looked up, never trusted.
     """
-    site = {"signup_enabled": settings.signup_enabled}
+    site = {"signup_enabled": preferences.value("signup_enabled")}
     host = (request.headers.get("host") or "").split(":")[0].strip().lower()
     if not host:
         return {"dashboard": None, **site}

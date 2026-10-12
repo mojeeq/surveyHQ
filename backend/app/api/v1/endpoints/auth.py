@@ -29,6 +29,7 @@ from app.schemas.auth import (
     UserOut,
 )
 from app.schemas.common import Message
+from app.services import preferences
 from app.services.accounts import normalize_username
 from app.services.audit import record
 
@@ -76,7 +77,7 @@ def signup(payload: SignupRequest, db: DbSession, request: Request) -> Token:
     deployment that wants self-service accounts says so; one that has not
     thought about it is not opted in by upgrading.
     """
-    if not settings.signup_enabled:
+    if not preferences.value("signup_enabled"):
         # 404 rather than 403: a deployment with sign-up off should be
         # indistinguishable from one built without the feature. FastAPI's own
         # wording, so the reply matches every other unrouted path exactly.

@@ -22,6 +22,7 @@ from fastapi import HTTPException, status
 
 from app.core.config import settings
 from app.core.logging import get_logger
+from app.services import preferences
 
 logger = get_logger(__name__)
 
@@ -102,7 +103,7 @@ def hits(key: str, window_seconds: int) -> int:
 
 def enforce(key: str, limit: int, window_seconds: int, message: str) -> None:
     """Raise 429 once key has been used more than limit times this window."""
-    if not settings.rate_limit_enabled:
+    if not preferences.value("rate_limit_enabled"):
         return
     if hits(key, window_seconds) > limit:
         raise HTTPException(

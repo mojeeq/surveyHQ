@@ -15,9 +15,8 @@ from uuid import uuid4
 
 import pandas as pd
 
-from app.core.config import settings
 from app.core.logging import get_logger
-from app.services import columnar
+from app.services import columnar, preferences
 
 logger = get_logger(__name__)
 DELIMITED = {".csv", ".tab", ".tsv", ".txt"}
@@ -89,7 +88,7 @@ def ingest_file_fast(
     """Use DuckDB's parallel CSV reader for large delimited survey exports."""
     from app.services.ingest import IngestResult
 
-    threshold = max(1, settings.duckdb_csv_above_mb) * 1024 * 1024
+    threshold = max(1, preferences.value("duckdb_csv_above_mb")) * 1024 * 1024
     if source.suffix.lower() not in DELIMITED or source.stat().st_size < threshold:
         return original(source, destination_dir)
 

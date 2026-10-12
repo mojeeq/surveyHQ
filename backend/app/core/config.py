@@ -207,26 +207,6 @@ class Settings(BaseSettings):
         ):
             path.mkdir(parents=True, exist_ok=True)
 
-    @property
-    def max_upload_label(self) -> str:
-        """The upload ceiling as a person would say it.
-
-        Every message that names the limit reads it from here. Spelled in
-        megabytes it was fine at 512 and absurd at 20480, and an error that
-        quotes an absurd number reads as a bug in the platform rather than as
-        a file that is too big.
-        """
-        megabytes = self.max_upload_mb
-        if megabytes >= 1024 and megabytes % 1024 == 0:
-            return f"{megabytes // 1024} GB"
-        if megabytes >= 1024:
-            return f"{megabytes / 1024:.1f} GB"
-        return f"{megabytes} MB"
-
-    @property
-    def mail_enabled(self) -> bool:
-        return bool(self.smtp_host)
-
     def validate_security_settings(self) -> None:
         if self.environment.lower() in NON_PRODUCTION_ENVIRONMENTS:
             return

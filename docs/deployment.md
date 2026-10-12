@@ -61,6 +61,14 @@ Everything lives in `.env`. Values worth attention:
 | `MONITOR_TICK_MINUTES` | How often indicators, alerts and checks are evaluated. |
 | `PDF_CHROMIUM_PATH` | A chromium to print dashboards with, if not the one in the image. |
 
+Several of these can also be changed from inside the platform, by an
+administrator, under **Administration -> Settings**: the upload limit, the
+archive expansion ceiling, the two tick intervals, the analytics cache, the
+DuckDB CSV threshold, the monitoring precompute, every SMTP setting, sign-ups,
+the rate limit and the disclosure floor. What is set there wins over this
+file, which goes on holding the defaults; the page says which is which and can
+put any of them back. Nothing else is reachable from a web page.
+
 After editing `.env`:
 
 ```bash
