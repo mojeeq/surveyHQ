@@ -76,6 +76,12 @@ class Settings(BaseSettings):
     duckdb_threads: int = 0
     duckdb_memory_limit: str = "2GB"
     duckdb_temp_dir: str = ""
+    # Where to find a browser for printing a dashboard to PDF. Empty means
+    # the one Playwright installed for itself. Set it to use the distribution's
+    # chromium instead, which is a tenth of the size and already patched by
+    # whoever patches the rest of the server.
+    pdf_chromium_path: str = ""
+
     analytics_cache_enabled: bool = True
     analytics_cache_ttl_seconds: int = 300
     # Large delimited Survey Solutions members bypass pandas and are parsed by

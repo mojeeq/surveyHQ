@@ -249,6 +249,8 @@
   var STATUS = { ok: '#2aa876', warning: '#c2872f', critical: '#d94f4f', unknown: '#8d8a83' }
   var app = document.getElementById('app')
   var page = 0
+  //: How many times a page of this board has finished drawing.
+  var laid = 0
   var chosen = {}
   var drawn = []
 
@@ -1132,6 +1134,13 @@
     // in place puts every one of them right.
     requestAnimationFrame(function () {
       drawn.forEach(function (entry) { entry.chart.resize(); entry.refit() })
+      // Said out loud, for anything printing this file with nobody watching:
+      // the charts have now been measured against the page they are actually
+      // on, so what is here is what should go on paper. It counts up rather
+      // than being set once, so a printer changing tab can tell this page's
+      // drawing from the last one's.
+      laid += 1
+      document.documentElement.setAttribute('data-drawn', String(laid))
     })
 
     var footer = el('footer', 'board')

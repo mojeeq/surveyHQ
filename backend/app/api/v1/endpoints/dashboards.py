@@ -83,6 +83,7 @@ from app.schemas.query import (
 from app.services import (
     boundary_store,
     export_document,
+    export_pdf,
     export_workbook,
     multiselect,
     quality,
@@ -1269,6 +1270,62 @@ def export_dashboard_document(
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         ),
         headers={"Content-Disposition": f'attachment; filename="{name}.docx"'},
+    )
+
+
+@router.get("/{dashboard_id}/export.pdf")
+def export_dashboard_pdf(
+    dashboard_id: str,
+    db: DbSession,
+    user: CurrentUser,
+    view: str | None = None,
+    landscape: bool = True,
+) -> Response:
+    """The board printed, by the same page a person would print by hand.
+
+    Held open while it renders rather than queued behind a job: a board is
+    seconds of work, and a button that hands back a file is worth more than
+    one that hands back a job to go and look for. A server with no browser
+    says so rather than failing obscurely.
+    """
+    dashboard = _get_dashboard(dashboard_id, db, user)
+    refusal = export_pdf.why_not()
+    if refusal:
+        raise HTTPException(status_code=503, detail=refusal)
+
+    pinned, view_name = _pinned_from_view(view, dashboard_id, db) if view else ({}, "")
+    payload = static_export.build_payload(
+        db,
+        dashboard,
+        render=lambda widget, filters: _render_widget(db, widget, filters),
+        pinned=pinned,
+    )
+    html = static_export.render_html(payload, static_export.appearance_css(dashboard))
+    try:
+        printed = export_pdf.render(html, landscape=landscape)
+    except Exception as exc:  # noqa: BLE001 - a browser that would not print
+        logger.exception("Printing dashboard %s failed", dashboard_id)
+        raise HTTPException(
+            status_code=500,
+            detail=f"The board could not be printed: {exc}",
+        ) from exc
+
+    record(
+        db,
+        user=user,
+        action="dashboard.export_pdf",
+        entity_type="dashboard",
+        entity_id=dashboard_id,
+        detail={"widgets": len(payload["widgets"]), "view": view_name, "pinned": pinned},
+    )
+    db.commit()
+    name = slugify(dashboard.name) or "dashboard"
+    if view_name:
+        name = f"{name}-{slugify(view_name) or 'view'}"
+    return Response(
+        content=printed,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{name}.pdf"'},
     )
 
 
