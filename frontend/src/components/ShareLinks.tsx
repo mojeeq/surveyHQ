@@ -5,8 +5,32 @@ import { copyText } from '@/lib/clipboard'
 import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
 import { formatNumber, relativeTime } from '@/lib/format'
-import { Badge, Field, Modal, Spinner } from '@/components/ui'
+import { Badge, Field, Modal, Segmented, Spinner } from '@/components/ui'
 import type { Dashboard, DashboardSavedView, Job } from '@/lib/types'
+
+type ExportFormat = 'html' | 'xlsx'
+
+/** What each shape of this board is for, said where it is chosen. */
+const FORMATS: Record<ExportFormat, { about: string }> = {
+  html: {
+    about:
+      'One HTML file you can put on any web host or send to somebody. Its filter ' +
+      'dropdowns still work: the numbers behind every widget travel with it, as do ' +
+      'the libraries that draw the charts, so it opens with no internet. A widget ' +
+      'that cannot be worked out again offline - a data quality panel, a median - ' +
+      'says on its face that it is showing the day it was exported. A map still ' +
+      'needs the internet for its background tiles. Print it for a PDF: it has a ' +
+      'print layout, with each card kept whole across the page breaks.',
+  },
+  xlsx: {
+    about:
+      'The figures rather than the board: one sheet per widget, behind a cover ' +
+      'saying which board this was and what it was narrowed to. Each sheet holds ' +
+      'every row, so a widget showing only its top few shows all of them here. A ' +
+      'map, a text box and the panels that have no numbers in them are named on ' +
+      'the cover rather than dropped quietly.',
+  },
+}
 
 export interface ShareLink {
   id: string
@@ -347,19 +371,23 @@ function DownloadCopy({ dashboard }: { dashboard: Dashboard }) {
   })
   const toast = useToast()
   const [busy, setBusy] = useState(false)
+  const [format, setFormat] = useState<ExportFormat>('html')
   return (
     <div className="mb-4 rounded-card border border-ink-200 bg-ink-50 px-3 py-2.5">
       <div className="flex flex-wrap items-center gap-3">
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium text-ink-800">Download as a web page</p>
-          <p className="text-xs text-ink-500">
-            One HTML file you can put on any web host or send to somebody. Its filter
-            dropdowns still work: the numbers behind every widget travel with it, as do
-            the libraries that draw the charts, so it opens with no internet. A widget
-            that cannot be worked out again offline - a data quality panel, a median -
-            says on its face that it is showing the day it was exported. A map still
-            needs the internet for its background tiles.
-          </p>
+          <p className="text-sm font-medium text-ink-800">Download this board</p>
+          <Segmented
+            className="mt-1.5"
+            label="What to download it as"
+            value={format}
+            onChange={setFormat}
+            options={[
+              { value: 'html', label: 'Web page' },
+              { value: 'xlsx', label: 'Excel' },
+            ]}
+          />
+          <p className="mt-1.5 text-xs text-ink-500">{FORMATS[format].about}</p>
           {Boolean(views.data?.length) && (
             <label className="mt-2 flex flex-wrap items-center gap-2 text-xs text-ink-600">
               Of
@@ -392,14 +420,14 @@ function DownloadCopy({ dashboard }: { dashboard: Dashboard }) {
             setBusy(true)
             try {
               await downloadFile(
-                `/dashboards/${dashboard.id}/export.html${view ? `?view=${view}` : ''}`,
+                `/dashboards/${dashboard.id}/export.${format}${view ? `?view=${view}` : ''}`,
                 undefined,
                 // Only a fallback: the server names the file, and names it
                 // after the view, so a folder of provincial reports is not
                 // fourteen copies of one name.
                 `${dashboard.slug || 'dashboard'}${
                   chosen ? `-${chosen.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}` : ''
-                }.html`,
+                }.${format}`,
                 'GET',
               )
             } catch (error) {

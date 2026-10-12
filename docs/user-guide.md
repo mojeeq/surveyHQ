@@ -1170,9 +1170,12 @@ and it exists so that a forwarded link is not a public one.
 
 ### Taking the dashboard away as a file
 
-A link needs SurveyHQ running and reachable. **Share -> Download as a web page**
-gives you the board itself: one HTML file, which you can put on any web host,
-attach to a report, or send to somebody who will open it from their own disk.
+A link needs SurveyHQ running and reachable. **Share -> Download this board**
+takes it away as a file instead, in one of two shapes.
+
+**Web page** gives you the board itself: one HTML file, which you can put on
+any web host, attach to a report, or send to somebody who will open it from
+their own disk.
 
 **Its filters still work.** That is the point of it. The file carries the
 numbers behind each widget rather than a picture of it, grouped by what the
@@ -1191,7 +1194,22 @@ typeface, the tab band, the filter bar and the widget transparency all travel
 with it. Any bundled typeface the board is set in is carried inside the file
 as well, so it reads in that face on a laptop that has never met the platform.
 
-What the copy does not do:
+**Excel** gives you the figures instead of the board: one sheet per widget,
+behind a cover saying which board it was, what it was narrowed to and when.
+The numbers are worked out the same way the web page works them out - an
+average from its total and its count, a share of the sheet it is on - so the
+two files cannot disagree. Each sheet holds every row in the widget's own
+order, so a chart showing only its top ten shows all sixty here, which is
+usually why somebody wanted the workbook. A map, a text box and the panels
+that carry no numbers are named on the cover rather than dropped quietly, so
+you can see that nothing went missing.
+
+For **PDF**, open the web page and print it: it has a print layout, with
+margins, no tab strip, each card kept whole rather than split across a page
+break, folded groups opened for the printing, and the filters printed as the
+values they were set to.
+
+What the web page does not do:
 
 - **Clicking a mark does not filter it.** The dropdowns are the filters.
 - **A map has no ground under its pins without the internet.** The charts are
