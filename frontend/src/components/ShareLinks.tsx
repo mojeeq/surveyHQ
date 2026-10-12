@@ -8,7 +8,7 @@ import { formatNumber, relativeTime } from '@/lib/format'
 import { Badge, Field, Modal, Segmented, Spinner } from '@/components/ui'
 import type { Dashboard, DashboardSavedView, Job } from '@/lib/types'
 
-type ExportFormat = 'html' | 'xlsx' | 'docx' | 'pdf'
+type ExportFormat = 'html' | 'docx'
 
 /** What each shape of this board is for, said where it is chosen. */
 const FORMATS: Record<ExportFormat, { about: string }> = {
@@ -22,27 +22,12 @@ const FORMATS: Record<ExportFormat, { about: string }> = {
       'needs the internet for its background tiles. Print it for a PDF: it has a ' +
       'print layout, with each card kept whole across the page breaks.',
   },
-  xlsx: {
-    about:
-      'The figures rather than the board: one sheet per widget, behind a cover ' +
-      'saying which board this was and what it was narrowed to. Each sheet holds ' +
-      'every row, so a widget showing only its top few shows all of them here. A ' +
-      'map, a text box and the panels that have no numbers in them are named on ' +
-      'the cover rather than dropped quietly.',
-  },
   docx: {
     about:
       'A Word report, for the document this ends up inside: the board read out ' +
       'in order, each widget a heading and a table of its numbers. A chart is ' +
       'its figures here rather than a picture of it, and a text box is carried ' +
       'as what it says, because that is already prose.',
-  },
-  pdf: {
-    about:
-      'The web page, printed: the board as it looks, on A4 landscape with each ' +
-      'card kept whole across the page breaks and every page of a board one ' +
-      'after another. The server prints it, which takes a few seconds, so this ' +
-      'is the one to send to somebody who only has to read it.',
   },
 }
 
@@ -386,16 +371,6 @@ function DownloadCopy({ dashboard }: { dashboard: Dashboard }) {
   const toast = useToast()
   const [busy, setBusy] = useState(false)
   const [format, setFormat] = useState<ExportFormat>('html')
-  // Whether this server can print one itself, which depends on it having a
-  // browser installed. Asked once and kept, like the other platform facts.
-  const platform = useQuery({
-    queryKey: ['platform-info'],
-    queryFn: () =>
-      api.get<{ pdf_export: boolean; pdf_export_reason: string }>('/system/info'),
-    staleTime: 5 * 60 * 1000,
-  })
-  const printable = platform.data?.pdf_export ?? false
-  const whyNotPdf = platform.data?.pdf_export_reason ?? ''
   return (
     <div className="mb-4 rounded-card border border-ink-200 bg-ink-50 px-3 py-2.5">
       <div className="flex flex-wrap items-center gap-3">
@@ -408,17 +383,10 @@ function DownloadCopy({ dashboard }: { dashboard: Dashboard }) {
             onChange={setFormat}
             options={[
               { value: 'html', label: 'Web page' },
-              { value: 'xlsx', label: 'Excel' },
               { value: 'docx', label: 'Word' },
-              // Offered only where the server can do it: a button that always
-              // answers "this server has no browser" is worse than no button.
-              ...(printable ? [{ value: 'pdf' as ExportFormat, label: 'PDF' }] : []),
             ]}
           />
           <p className="mt-1.5 text-xs text-ink-500">{FORMATS[format].about}</p>
-          {!printable && whyNotPdf && (
-            <p className="mt-1 text-xs text-ink-400">PDF: {whyNotPdf}</p>
-          )}
           {Boolean(views.data?.length) && (
             <label className="mt-2 flex flex-wrap items-center gap-2 text-xs text-ink-600">
               Of
@@ -469,7 +437,7 @@ function DownloadCopy({ dashboard }: { dashboard: Dashboard }) {
           }}
         >
           {busy && <Spinner className="h-4 w-4" />}
-          {busy ? (format === 'pdf' ? 'Printing the board' : 'Building the file') : 'Download'}
+          {busy ? 'Building the file' : 'Download'}
         </button>
       </div>
 

@@ -1,9 +1,9 @@
 """A board as a document, for the report it ends up in.
 
-The web page is the board and the workbook is its figures. This is the third
-thing people ask an export for: something to put in a report, or to send to
-somebody who will read it rather than work with it. A Word file, because that
-is what a ministry's report is written in and a PDF cannot be edited into one.
+The web page is the board. This is the other thing people ask an export
+for: something to put in a report, or to send to somebody who will read it
+rather than work with it. A Word file, because that is what a ministry's
+report is written in and a PDF cannot be edited into one.
 
 What it carries is the board read out in order: the title and what it was
 narrowed to, then each page, then each widget as a heading and a table of its
@@ -18,7 +18,7 @@ from __future__ import annotations
 import io
 from typing import Any
 
-from app.services.export_workbook import NO_NUMBERS, _said_plainly, widget_table
+from app.services.export_tables import NO_NUMBERS, _said_plainly, widget_table
 
 
 def _written(value: Any) -> str:

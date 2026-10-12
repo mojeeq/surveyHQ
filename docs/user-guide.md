@@ -1194,16 +1194,6 @@ typeface, the tab band, the filter bar and the widget transparency all travel
 with it. Any bundled typeface the board is set in is carried inside the file
 as well, so it reads in that face on a laptop that has never met the platform.
 
-**Excel** gives you the figures instead of the board: one sheet per widget,
-behind a cover saying which board it was, what it was narrowed to and when.
-The numbers are worked out the same way the web page works them out - an
-average from its total and its count, a share of the sheet it is on - so the
-two files cannot disagree. Each sheet holds every row in the widget's own
-order, so a chart showing only its top ten shows all sixty here, which is
-usually why somebody wanted the workbook. A map, a text box and the panels
-that carry no numbers are named on the cover rather than dropped quietly, so
-you can see that nothing went missing.
-
 **Word** gives you the board as a report, for the document it ends up inside:
 the title and what it was narrowed to, then each page, then each widget as a
 heading and a table of its numbers. A chart is its figures here rather than a
@@ -1211,16 +1201,10 @@ picture of it - a picture nobody can check is worth less than numbers somebody
 can quote - and a text box is carried as what it says, because that is already
 prose.
 
-**PDF** is that web page printed, by the server rather than by you: A4
-landscape, margins, no tab strip, each card kept whole rather than split
-across a page break, folded groups opened for the printing, the filters
-printed as the values they were set to, and every page of the board one after
-another rather than only the tab you were looking at. It takes a few seconds,
-because a browser on the server really does open the file and print it.
-
-You can still print it yourself - open the web page and print - and you get
-the same layout, for the tab in front of you. Where the server has no browser
-installed the PDF choice is not offered at all, and the panel says why.
+For **PDF**, open the web page and print it: it has a print layout, with
+margins, no tab strip, each card kept whole rather than split across a page
+break, folded groups opened for the printing, and the filters printed as the
+values they were set to.
 
 What the web page does not do:
 

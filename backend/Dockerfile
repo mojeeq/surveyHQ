@@ -20,18 +20,6 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# The browser that prints a dashboard to PDF. Several hundred megabytes, which
-# is most of this image, so a deployment that does not want the feature can
-# build with --build-arg PDF_BROWSER=0 and the button says it is not available
-# rather than failing. Installed into /opt where the unprivileged user below
-# can read it, and with its own apt dependencies, since this is a slim base.
-ARG PDF_BROWSER=1
-ENV PLAYWRIGHT_BROWSERS_PATH=/opt/pw-browsers
-RUN if [ "$PDF_BROWSER" = "1" ]; then \
-        playwright install --with-deps chromium \
-        && chmod -R a+rX /opt/pw-browsers; \
-    fi
-
 COPY app ./app
 COPY pyproject.toml alembic.ini ./
 COPY migrations ./migrations
