@@ -88,7 +88,6 @@ import { PublicLinkBar,SharePasswordPrompt } from '@/components/dashboard/sharin
 import { AddWidgetModal,EditWidgetModal } from '@/components/dashboard/WidgetEditor'
 import { WidgetFrame } from '@/components/dashboard/WidgetFrame'
 import {
-Badge,
 Card,
 EmptyState,
 ErrorNote,
@@ -880,19 +879,62 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         />
       )}
 
+      {/*
+        A click on a mark narrows the rest of the page, which is a state the
+        reader did not ask for in words and has to be able to see at a glance
+        and leave in one. So it is a band rather than a line of badges: a mark
+        on the left saying what kind of thing this is, the selection itself in
+        the reading size, what it reaches in the small grey of an aside, and
+        the way out held at the far end where it is always in the same place.
+      */}
       {picked && (
-        <div className="mb-3 flex flex-wrap items-center gap-2 rounded-card border border-brand-300 bg-brand-50 px-3 py-2 text-sm text-brand-900">
-          <Badge tone="info" icon="⊙">
-            Filtered by a click
-          </Badge>
-          <span>
-            <span className="font-mono text-xs">{picked.variable}</span> is{' '}
-            <strong>{picked.value}</strong>
+        <div className="mb-3 flex items-center gap-3 rounded-card border border-brand-100 bg-white px-4 py-3 shadow-sm dark:border-brand-500/25 dark:bg-dark-50">
+          <span
+            aria-hidden
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-brand-50 text-brand-600 dark:bg-brand-500/15 dark:text-brand-300"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              className="h-4 w-4"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              <path d="M4 5h16l-6.2 7.3V19l-3.6-2v-4.7z" />
+            </svg>
           </span>
-          <span className="text-xs text-brand-800/70">
-            - every widget on this page except &ldquo;{picked.label}&rdquo;
-          </span>
-          <button className="btn-ghost btn-sm ml-auto" onClick={() => setPicked(null)}>
+
+          <div className="min-w-0">
+            <p className="text-[11px] font-semibold uppercase tracking-wider text-brand-600 dark:text-brand-300">
+              Filtered by a click
+            </p>
+            <p className="mt-0.5 truncate text-sm text-ink-800 dark:text-dark-700">
+              {picked.variable} is{' '}
+              <strong className="font-semibold text-brand-700 dark:text-brand-300">
+                {picked.value}
+              </strong>
+              <span className="ml-2 text-xs text-ink-500 dark:text-dark-500">
+                - every widget on this page except &ldquo;{picked.label}&rdquo;
+              </span>
+            </p>
+          </div>
+
+          <button
+            className="btn-ghost btn-sm ml-auto shrink-0 gap-1.5"
+            onClick={() => setPicked(null)}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              className="h-3.5 w-3.5"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+            >
+              <path d="M6 6l12 12M18 6L6 18" />
+            </svg>
             Clear
           </button>
         </div>
