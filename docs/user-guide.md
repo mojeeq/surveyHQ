@@ -1769,11 +1769,12 @@ two additions:
   mean something between two columns are offered there: a column cannot be
   "one of" or "contain" another one.
 
-**Which rows are the problem** chooses how you would rather phrase it:
+**Which rows are the problem** chooses how you would rather phrase it, and the
+condition itself is built directly underneath it:
 
-- *Flag rows that match* - you describe what is wrong. This is how the other
-  eight checks read.
-- *Flag rows that do NOT match* - you state what must be true and the check
+- *The rows that match the condition* - you describe what is wrong. This is how
+  the other checks read.
+- *The rows that do NOT match it* - you state what must be true and the check
   finds the rows that break it, the way Stata's `assert` is written.
 
 A row is **left unjudged, not flagged**, when a value the condition needs is
@@ -1806,10 +1807,11 @@ interview keys. A few percent is more sensible for short interviews.
 definition that no longer exists. The check type is fixed - changing that would
 make it a different check.
 
-A check can also be restricted to part of the dataset. The filter narrows the
-total as well as the flagged rows, so the failure rate stays a rate of what was
-actually checked: "3% of interviews in Shefa", not "3% of everything, some of
-which was in Shefa".
+A check can also be restricted to part of the dataset: **Only check part of the
+dataset** adds the filter, and is already open where the check you are editing
+has one. The filter narrows the total as well as the flagged rows, so the
+failure rate stays a rate of what was actually checked: "3% of interviews in
+Shefa", not "3% of everything, some of which was in Shefa".
 
 Checks run every six hours, and on demand with **Run** or **Run all**. Add a
 **data quality panel** to a dashboard to keep the results where people look;

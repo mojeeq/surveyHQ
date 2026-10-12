@@ -538,6 +538,10 @@ function CheckModal({
   const [threshold, setThreshold] = useState(String((rule?.threshold ?? 0) * 100))
   const [config, setConfig] = useState<Record<string, unknown>>(rule?.config ?? {})
   const [filters, setFilters] = useState<FilterGroup>(rule?.filters ?? emptyFilter())
+  // Open where this check is already restricted, asked for by name otherwise.
+  const [scoped, setScoped] = useState(
+    Boolean(rule?.filters?.conditions?.length || rule?.filters?.groups?.length),
+  )
   // A logic rule's condition rides in `config`, which is an untyped bag shared
   // by every check type. Held as its own state so the builder has a FilterGroup
   // to work on, and folded back in on save.
@@ -750,63 +754,66 @@ function CheckModal({
         </>
       )}
 
+      {/*
+        One question, asked once: which rows are wrong, and what makes them
+        wrong. It read as three - a direction, a preset and a condition, each
+        with its own label and its own paragraph - which is three headings
+        over one thought and twice as much prose as the thought needs. The
+        guide carries the long version.
+      */}
       {checkType === 'logic' && (
-        <>
-          <Field
-            label="Which rows are the problem"
-            hint="Describe what is wrong, or state what must hold and let the check find the rows that break it."
+        <Field
+          label="Which rows are the problem"
+          hint="A row is left unjudged, not flagged, when a value the condition needs is missing - use a Missing values check for those."
+        >
+          <select
+            className="input"
+            value={String(config.flag ?? 'match')}
+            onChange={(event) => set({ flag: event.target.value })}
           >
-            <select
-              className="input"
-              value={String(config.flag ?? 'match')}
-              onChange={(event) => set({ flag: event.target.value })}
-            >
-              <option value="match">Flag rows that match this condition</option>
-              <option value="no_match">Flag rows that do NOT match this condition</option>
-            </select>
-          </Field>
-          <Field
-            label="Start from"
-            hint="Fills the condition in below. Everything stays editable afterwards, including adding rows the preset does not know about."
-          >
-            <div className="flex flex-wrap gap-2">
-              {LOGIC_PRESETS.map((preset) => (
-                <button
-                  key={preset.id}
-                  className="btn-secondary btn-sm"
-                  title={preset.hint}
-                  onClick={async () => {
-                    const clear =
-                      !condition.conditions.length
-                      || (await ask.confirm({
-                        title: 'Replace the condition you have built?',
-                        message: 'The preset starts again from its own rows.',
-                        confirmLabel: 'Replace',
-                        tone: 'danger',
-                      }))
-                    if (clear) {
-                      setCondition(preset.build(variables))
-                      set({ flag: preset.flag })
-                    }
-                  }}
-                >
-                  {preset.label}
-                </button>
-              ))}
-            </div>
-          </Field>
-          <Field
-            label="Condition"
-            hint="Group conditions to mix and with or. A row is left unjudged, not flagged, when a value the condition needs is missing - use a Missing values check for those."
-          >
+            <option value="match">The rows that match the condition below</option>
+            <option value="no_match">The rows that do NOT match it</option>
+          </select>
+
+          {/* A starting point is an aside, not a step of its own: one line
+              above the builder it fills, rather than a labelled field with a
+              paragraph under it. */}
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <span className="text-xs text-ink-500 dark:text-dark-500">Start from</span>
+            {LOGIC_PRESETS.map((preset) => (
+              <button
+                key={preset.id}
+                className="btn-ghost btn-sm"
+                title={preset.hint}
+                onClick={async () => {
+                  const clear =
+                    !condition.conditions.length
+                    || (await ask.confirm({
+                      title: 'Replace the condition you have built?',
+                      message: 'The preset starts again from its own rows.',
+                      confirmLabel: 'Replace',
+                      tone: 'danger',
+                    }))
+                  if (clear) {
+                    setCondition(preset.build(variables))
+                    set({ flag: preset.flag })
+                  }
+                }}
+              >
+                {preset.label}
+              </button>
+            ))}
+          </div>
+
+          <div className="mt-2.5">
             <FilterBuilder
               variables={variables}
               value={condition}
               onChange={setCondition}
               allowVariableComparison
             />
-          </Field>
-        </>
+          </div>
+        </Field>
       )}
 
       <div className="grid grid-cols-2 gap-4">
@@ -840,12 +847,25 @@ function CheckModal({
         <input className="input" value={name} onChange={(event) => setName(event.target.value)} />
       </Field>
 
-      <Field
-        label="Only check part of the dataset"
-        hint="Both the flagged rows and the total are counted inside the filter, so the failure rate stays a rate of what was checked."
-      >
-        <FilterBuilder variables={variables} value={filters} onChange={setFilters} />
-      </Field>
+      {/*
+        Most checks run over the whole dataset, and an empty builder here is a
+        second "+ Add filter / + Add group" directly under the condition's
+        own - the same control twice, for something the check usually does
+        not do. Asked for by name instead, and open from the start where the
+        check already has one.
+      */}
+      {scoped ? (
+        <Field
+          label="Only check part of the dataset"
+          hint="Both the flagged rows and the total are counted inside the filter, so the failure rate stays a rate of what was checked."
+        >
+          <FilterBuilder variables={variables} value={filters} onChange={setFilters} />
+        </Field>
+      ) : (
+        <button className="btn-secondary btn-sm" onClick={() => setScoped(true)}>
+          + Only check part of the dataset
+        </button>
+      )}
     </Modal>
   )
 }
