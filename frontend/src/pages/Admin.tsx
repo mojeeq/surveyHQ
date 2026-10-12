@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
+import Settings from '@/components/admin/Settings'
 import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { useDialog } from '@/hooks/useDialog'
@@ -25,15 +26,19 @@ const ROLES: { value: Role; label: string; description: string }[] = [
 ]
 
 export default function Admin() {
-  const [tab, setTab] = useState<'users' | 'jobs' | 'keys' | 'audit'>('users')
+  const [tab, setTab] = useState<'users' | 'jobs' | 'keys' | 'settings' | 'audit'>('users')
   return (
     <>
-      <PageHeader title="Administration" description="Users, background jobs and access." />
+      <PageHeader
+        title="Administration"
+        description="Users, background jobs, access and how this platform is set up."
+      />
       <Tabs
         tabs={[
           { id: 'users', label: 'Users' },
           { id: 'jobs', label: 'Background jobs' },
           { id: 'keys', label: 'API keys' },
+          { id: 'settings', label: 'Settings' },
           { id: 'audit', label: 'Audit log' },
         ]}
         active={tab}
@@ -43,6 +48,7 @@ export default function Admin() {
         {tab === 'users' && <Users />}
         {tab === 'jobs' && <Jobs />}
         {tab === 'keys' && <ApiKeys />}
+        {tab === 'settings' && <Settings />}
         {tab === 'audit' && <AuditLog />}
       </div>
     </>

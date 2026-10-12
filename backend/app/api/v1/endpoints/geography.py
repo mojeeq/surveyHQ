@@ -10,10 +10,9 @@ from pydantic import BaseModel, ConfigDict
 from sqlalchemy import or_, select
 
 from app.api.deps import CurrentUser, DbSession, RequireManager
-from app.core.config import settings
 from app.models import BoundaryFormat, BoundaryLayer, Role, User
 from app.schemas.common import Message
-from app.services import boundary_store, geometry
+from app.services import boundary_store, geometry, preferences
 from app.services.audit import record
 from app.services.projects import can_edit, restrict, scope_for
 
@@ -126,11 +125,14 @@ async def upload_layer(
         )
 
     raw = await file.read()
-    limit = settings.max_upload_mb * 1024 * 1024
+    limit = preferences.value("max_upload_mb") * 1024 * 1024
     if len(raw) > limit:
         raise HTTPException(
             status_code=413,
-            detail=f"This file is larger than the {settings.max_upload_label} upload limit",
+            detail=(
+                f"This file is larger than the {preferences.upload_label()} "
+                "upload limit"
+            ),
         )
 
     try:

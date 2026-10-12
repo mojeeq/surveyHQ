@@ -8,6 +8,7 @@ from email.message import EmailMessage
 from app.core.config import settings
 from app.core.logging import get_logger
 from app.models import Severity
+from app.services import preferences
 
 logger = get_logger(__name__)
 
@@ -19,7 +20,7 @@ SEVERITY_PREFIX = {
 
 
 def send_email(recipients: list[str], subject: str, body: str, html: str | None = None) -> bool:
-    if not settings.mail_enabled:
+    if not preferences.mail_enabled():
         logger.debug("SMTP not configured; skipping email '%s'", subject)
         return False
     if not recipients:
@@ -27,18 +28,20 @@ def send_email(recipients: list[str], subject: str, body: str, html: str | None 
 
     message = EmailMessage()
     message["Subject"] = subject
-    message["From"] = settings.smtp_from
+    message["From"] = preferences.value("smtp_from")
     message["To"] = ", ".join(recipients)
     message.set_content(body)
     if html:
         message.add_alternative(html, subtype="html")
 
     try:
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as server:
-            if settings.smtp_tls:
+        host = preferences.value("smtp_host")
+        user = preferences.value("smtp_user")
+        with smtplib.SMTP(host, preferences.value("smtp_port"), timeout=30) as server:
+            if preferences.value("smtp_tls"):
                 server.starttls()
-            if settings.smtp_user:
-                server.login(settings.smtp_user, settings.smtp_password)
+            if user:
+                server.login(user, preferences.value("smtp_password"))
             server.send_message(message)
         logger.info("Sent '%s' to %s recipient(s)", subject, len(recipients))
         return True

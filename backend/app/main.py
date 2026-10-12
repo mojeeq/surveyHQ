@@ -18,6 +18,7 @@ from sqlalchemy.orm.exc import StaleDataError
 from app import __version__
 from app.core.config import settings
 from app.core.logging import configure_logging, get_logger
+from app.services import preferences
 from app.services.query_runtime import install_query_runtime
 
 # Install this before router imports. Endpoint modules import execute_query by
@@ -79,7 +80,7 @@ async def refuse_oversized_upload(request: Request, call_next):  # type: ignore[
     """
     if request.method == "POST" and request.url.path.endswith("/datasets/upload"):
         declared = request.headers.get("content-length", "")
-        limit = settings.max_upload_mb * 1024 * 1024
+        limit = preferences.value("max_upload_mb") * 1024 * 1024
         # A megabyte of slack for the form fields travelling with the file.
         if declared.isdigit() and int(declared) > limit + 1024 * 1024:
             return JSONResponse(
@@ -87,9 +88,9 @@ async def refuse_oversized_upload(request: Request, call_next):  # type: ignore[
                 content={
                     "detail": (
                         f"This upload is {int(declared) / (1024 * 1024):,.0f} MB and "
-                        f"the limit is {settings.max_upload_label}. Raise "
-                        "MAX_UPLOAD_MB in .env and restart, or upload the "
-                        "archive's files one at a time."
+                        f"the limit is {preferences.upload_label()}. An "
+                        "administrator can raise it under Administration -> "
+                        "Settings, or upload the archive's files one at a time."
                     )
                 },
             )

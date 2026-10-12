@@ -17,8 +17,8 @@ from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
-from app.core.config import settings
 from app.core.logging import get_logger
+from app.services import preferences
 
 logger = get_logger(__name__)
 SUMMARY_NAME = "monitoring-summary.json"
@@ -60,7 +60,7 @@ def precompute(
     builder: Callable[..., dict[str, Any]],
 ) -> dict[str, Any] | None:
     """Run the canonical unfiltered day overview once and persist it."""
-    if not settings.monitoring_precompute_enabled or not dataset.storage_path:
+    if not preferences.value("monitoring_precompute_enabled") or not dataset.storage_path:
         return None
     if not (dataset.meta or {}).get("monitoring_fields"):
         return None

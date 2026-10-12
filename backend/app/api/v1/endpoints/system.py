@@ -13,6 +13,8 @@ from app.db.base import utcnow
 from app.models import AuditLog, Job, Notification, Role
 from app.schemas.common import Message, Page
 from app.schemas.monitoring import JobOut, NotificationOut
+from app.services import preferences
+from app.services.audit import record
 from app.services.hostnames import base_domain as dashboard_domain
 
 router = APIRouter()
@@ -110,6 +112,76 @@ def list_audit(
     return Page(items=items, total=total, limit=limit, offset=offset)
 
 
+@router.get("/settings", response_model=list[dict])
+def read_platform_settings(_: RequireAdmin) -> list[dict[str, Any]]:
+    """Every setting an administrator may change here, and what it is now.
+
+    Each one carries what `.env` says as well, so the page can show what it
+    would go back to and whether anybody has moved it.
+    """
+    return preferences.catalogue()
+
+
+@router.put("/settings", response_model=list[dict])
+def write_platform_settings(
+    changes: dict[str, Any], db: DbSession, user: RequireAdmin
+) -> list[dict[str, Any]]:
+    """Change some of them, as one transaction.
+
+    All or nothing: a page that saved four of six settings and reported an
+    error would leave somebody guessing which four. A secret arriving empty is
+    left as it was, because the page never had it to send back.
+    """
+    recorded: dict[str, Any] = {}
+    try:
+        for name, given in changes.items():
+            if name in preferences.ENCRYPTED and given in (None, ""):
+                continue
+            recorded[name] = preferences.put(db, name, given)
+    except preferences.NotAllowed as exc:
+        # Said rather than left to the session's teardown, which would also
+        # discard these writes: what this method promises is all or nothing,
+        # and a promise kept by something three layers away is a promise
+        # waiting to be broken by a change over there.
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if recorded:
+        record(
+            db,
+            user=user,
+            action="system.settings",
+            entity_type="system",
+            entity_id="settings",
+            detail=recorded,
+        )
+    db.commit()
+    preferences.forget()
+    return preferences.catalogue()
+
+
+@router.delete("/settings/{name}", response_model=list[dict])
+def reset_platform_setting(
+    name: str, db: DbSession, user: RequireAdmin
+) -> list[dict[str, Any]]:
+    """Put one setting back to what `.env` says."""
+    try:
+        preferences.clear(db, name)
+    except preferences.NotAllowed as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    record(
+        db,
+        user=user,
+        action="system.settings.reset",
+        entity_type="system",
+        entity_id=name,
+        detail={"setting": name},
+    )
+    db.commit()
+    preferences.forget()
+    return preferences.catalogue()
+
+
 @router.get("/info", response_model=dict)
 def platform_info(_: CurrentUser) -> dict[str, Any]:
     from app import __version__
@@ -119,8 +191,8 @@ def platform_info(_: CurrentUser) -> dict[str, Any]:
         "name": settings.project_name,
         "version": __version__,
         "environment": settings.environment,
-        "mail_enabled": settings.mail_enabled,
-        "max_upload_mb": settings.max_upload_mb,
+        "mail_enabled": preferences.mail_enabled(),
+        "max_upload_mb": preferences.value("max_upload_mb"),
         # Empty means no wildcard DNS record and certificate are configured, so
         # the interface does not offer to name a dashboard something that would
         # resolve to nothing.

@@ -29,7 +29,6 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
-from app.core.config import settings
 from app.db.base import utcnow
 from app.models import (
     Chart,
@@ -47,7 +46,7 @@ from app.schemas.query import (
     Measure,
     QuerySpec,
 )
-from app.services import export_appearance, export_fonts, export_lib
+from app.services import export_appearance, export_fonts, export_lib, preferences
 from app.services.datasets import dataset_is_queryable
 from app.services.query_engine import (
     DatasetContext,
@@ -355,7 +354,7 @@ def _chart_widget(
 
     if spec_raw.get("crosstab"):
         request = CrosstabRequest.model_validate(spec_raw["crosstab"])
-        if settings.disclosure_threshold > 0:
+        if preferences.value("disclosure_threshold") > 0:
             # The cube is the cell values at their finest grain, which is the
             # whole point of it - the browser re-adds them as the reader
             # filters. Under disclosure control that is a file carrying the

@@ -6,7 +6,6 @@ from fastapi import APIRouter, HTTPException
 from sqlalchemy import func, select
 
 from app.api.deps import CurrentUser, DbSession, RequireAdmin
-from app.core.config import settings
 from app.core.security import hash_password
 from app.models import Role, User
 from app.schemas.auth import (
@@ -17,6 +16,7 @@ from app.schemas.auth import (
     UserUpdate,
 )
 from app.schemas.common import Message, Page
+from app.services import preferences
 from app.services.accounts import (
     next_available_username,
     normalize_username,
@@ -91,7 +91,7 @@ def directory(
     So this answers only while sign-up is off. Turn sign-up on and it closes,
     because then the accounts are no longer all somebody's colleagues.
     """
-    if settings.signup_enabled:
+    if preferences.value("signup_enabled"):
         raise HTTPException(
             status_code=403,
             detail=(

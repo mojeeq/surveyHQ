@@ -19,7 +19,6 @@ from uuid import uuid4
 import duckdb
 import pandas as pd
 
-from app.core.config import settings
 from app.core.logging import get_logger
 from app.schemas.query import (
     Aggregation,
@@ -37,7 +36,7 @@ from app.schemas.query import (
     QuerySpec,
     SummaryStats,
 )
-from app.services import columnar
+from app.services import columnar, preferences
 
 logger = get_logger(__name__)
 
@@ -1020,7 +1019,7 @@ def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabR
     # three households - so disclosure is judged on the unweighted frequency
     # and a second query is what it takes to know it. Skipped entirely when no
     # floor is set, which is every deployment that has not asked for one.
-    threshold = max(0, settings.disclosure_threshold)
+    threshold = max(0, preferences.value("disclosure_threshold"))
     frequency: dict[tuple[Any, Any], float] = {}
     if threshold:
         # Only the records that reach the statistic. Every aggregate ignores

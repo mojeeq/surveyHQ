@@ -329,6 +329,18 @@ Celery handles anything that outlives a request:
 | `reap_stale_jobs` | Every ten minutes - fails jobs still claiming to be running past any limit a task could have run to |
 | `prune_history` | Nightly - trims snapshots, resolved alerts, old results and jobs, and sweeps the report zips those jobs were the only way to reach |
 
+The first two intervals are settings rather than numbers: beat is handed a
+schedule object that reads the interval when it is asked rather than one
+captured at start-up, and `beat_max_loop_interval` is a minute, so a change
+made under Administration -> Settings takes hold within a minute without a
+restart. Everything else an administrator can change is read at the moment it
+is used, through `services/preferences.py`, which holds what it read for
+twenty seconds - so a change reaches the API, the workers and the scheduler
+within half a minute. What is stored wins; `.env` holds the defaults. Two
+tests keep the arrangement honest: one refuses a changeable setting read
+straight off the configuration anywhere in the app, and one refuses a
+property on `Settings` that derives anything from one.
+
 An indicator's value is read off the indicator rather than queried when a
 dashboard draws it, because opening a board must not set a query going for
 every tile on it. That makes the stored value part of the data: whenever a
@@ -509,6 +521,8 @@ backend/app/
                   boundary_store.py   boundary layers on disk, with a cache
 
                 the rest
+                  preferences.py      the settings an administrator may
+                                      change without a restart
                   projects.py         who may see and change what
                   accounts.py         usernames and account identity
                   archive.py          archiving a project: data goes, the

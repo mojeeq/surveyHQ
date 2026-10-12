@@ -8,6 +8,7 @@ from celery.schedules import crontab
 from app.core.config import settings
 from app.core.logging import configure_logging
 from app.services.query_runtime import install_query_runtime
+from app.workers.schedules import Tunable
 
 configure_logging()
 install_query_runtime()
@@ -31,6 +32,12 @@ celery_app.conf.update(
     worker_max_tasks_per_child=50,
     result_expires=60 * 60 * 24 * 3,
     broker_connection_retry_on_startup=True,
+    # How long beat may sleep between looking at its schedule. It decides how
+    # soon a changed interval takes hold, because beat otherwise sleeps until
+    # the next run is due - an hourly task shortened to five minutes would not
+    # be noticed for an hour. A minute of sleep costs nothing and is the whole
+    # price of settings that need no restart.
+    beat_max_loop_interval=60,
     task_default_queue="default",
     task_routes={
         # File parsing and Survey Solutions downloads can saturate CPU / disk for
@@ -50,13 +57,16 @@ celery_app.conf.update(
 )
 
 celery_app.conf.beat_schedule = {
+    # Both intervals are settings an administrator can change from the
+    # platform itself, so they are read when beat asks rather than captured
+    # here at import.
     "check-due-connection-syncs": {
         "task": "app.workers.tasks.schedule_due_syncs",
-        "schedule": settings.sync_tick_minutes * 60.0,
+        "schedule": Tunable("sync_tick_minutes"),
     },
     "refresh-indicators-and-alerts": {
         "task": "app.workers.tasks.refresh_all_indicators",
-        "schedule": settings.monitor_tick_minutes * 60.0,
+        "schedule": Tunable("monitor_tick_minutes"),
     },
     "run-quality-checks": {
         "task": "app.workers.tasks.run_all_quality_checks",
