@@ -1604,12 +1604,18 @@ picture rather than as something on top of it.
 
 The rest of **Appearance** controls how the dashboard is dressed:
 
-- **Ready-made looks** - Plain, Paper, Harbour, Forest, Ochre and Midnight, at
-  the top of the dialog. Each sets the page ground, the title band, the board,
-  the tab band and the filter bar together, because dressing a board well means
-  picking colours that agree and getting one of them wrong is what makes a
-  dashboard look worse than the grey it started as. Everything below stays
-  editable afterwards, so a look is a starting point rather than a lock.
+- **Ready-made looks** - twenty-six of them at the top of the dialog, in three
+  bands. *Light* (Plain, Paper, Bureau, Linen, Arctic, Sandstone, Mint, Rose,
+  Slate, Citrus) is for reading indoors and for print. *Dark* (Harbour, Forest,
+  Ochre, Midnight, Blueprint, Lagoon, Moss, Carbon, Plum, Volcano) is for a
+  wall screen, and for a room with the lights down. *Colour* (Cobalt, Coral,
+  Savannah, Monsoon, Copper, Orchid) is for a board that belongs to a
+  programme rather than to an office. Each sets the page ground, the title
+  band, the board, the tab band and the filter bar together, because dressing a
+  board well means picking colours that agree and getting one of them wrong is
+  what makes a dashboard look worse than the grey it started as. Everything
+  below stays editable afterwards, so a look is a starting point rather than a
+  lock. Hovering one says what it is for.
 - **Title band** - a colour, or two for a gradient, behind the dashboard's
   name. With one set the header becomes a masthead: the name larger on the
   band, the description under it, and the buttons moved to a row of their own
@@ -1619,9 +1625,19 @@ The rest of **Appearance** controls how the dashboard is dressed:
   It belongs to this dashboard: every other page in the platform keeps the
   usual grey, leaving the dashboard puts it back, and the setting carries onto
   the shared link, so what an office sees on the wall is the dressed version.
-- **Background** - the board itself: a colour, or an uploaded image (PNG, JPEG,
-  GIF or WebP, up to 8 MB), set to fill the page, fit whole, or repeat, with a
-  fade slider so text stays readable over it.
+- **Background** - the board itself: a colour, a **ready-made ground**, or an
+  uploaded image (PNG, JPEG, GIF or WebP, up to 8 MB), set to fill the page,
+  fit whole, or repeat, with a fade slider so text stays readable over it.
+
+  The twelve grounds - Mist, Paper, Graph paper, Dots, Sand, Dawn, Arctic,
+  Blueprint, Sea, Moss, Carbon and Plum - are drawn rather than uploaded. That
+  is not only about the file size: a ground drawn this way travels inside an
+  exported dashboard, prints without fetching anything, and stays sharp at any
+  zoom, none of which a photograph does. Five of them are textures in
+  translucent ink - Mist, Paper, Graph paper, Dots and Carbon - so they take
+  the colour of whatever the board is already set to; the other seven carry
+  their own colour and bring it with them. An uploaded image covers any of
+  them.
 - **Canvas width** - fit the window, or a fixed width that scrolls, for a
   dashboard meant to go on a wall. **Columns** and **row height** set how fine
   the grid underneath the widgets is.

@@ -546,6 +546,12 @@ export interface Appearance {
   /** Changes whenever the image does, so a cached one is not shown instead. */
   background_version?: string
   background_fit?: 'cover' | 'contain' | 'tile'
+  /**
+   * A ready-made ground from lib/backgrounds, drawn in CSS rather than
+   * uploaded. An uploaded image wins over it: both at once is a pattern
+   * nobody can see under a photograph.
+   */
+  background_pattern?: string
   /** 0-1: how much white is laid over the image to keep widgets readable. */
   fade?: number
   /** Grid columns: more is finer placement, not more room. Defaults to 12. */

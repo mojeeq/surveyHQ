@@ -14,6 +14,14 @@ import type { Appearance, Widget } from '@/lib/types'
 import { Field, Modal, Section, useOpenSections } from '@/components/ui'
 import ColorPicker from '@/components/ColorPicker'
 import { FONTS, fontStack } from '@/lib/fonts'
+import { BACKGROUNDS, ground } from '@/lib/backgrounds'
+import { FAMILIES, LOOKS } from '@/lib/looks'
+
+// The looks were defined here until the list grew past two dozen, which is
+// more table than component. They are re-exported because this module is
+// where everything else already imports its appearance pieces from.
+export { LOOKS } from '@/lib/looks'
+export { BACKGROUNDS } from '@/lib/backgrounds'
 
 /** Ready-made grounds, so a usable background does not need a colour picker. */
 export function titleFontStack(value?: string): string | undefined {
@@ -94,128 +102,6 @@ export function bandStyle(
 }
 
 /**
- * Ready-made looks.
- *
- * Six choices rather than eight colour pickers. Dressing a board well from
- * scratch means picking a page ground, a masthead, a canvas, a tab band and a
- * filter bar that all agree, and getting one of the five wrong is what makes a
- * dashboard look worse than the plain grey it started as. These were picked
- * together, and every one of them is still only a starting point: each field
- * stays editable underneath.
- *
- * Each look is a patch, not a whole appearance - the grid, the logo, the title
- * size and the widget opacity are the board's own and are not touched.
- */
-export const LOOKS: { key: string; label: string; note: string; patch: Appearance }[] = [
-  {
-    key: 'plain',
-    label: 'Plain',
-    note: 'The default grey, with no band and no ground.',
-    patch: {
-      page_background: '',
-      page_background_2: '',
-      header_background: '',
-      header_background_2: '',
-      background_color: '',
-      tab_background: '',
-      tab_color: '',
-      filter_background: '',
-      filter_color: '',
-    },
-  },
-  {
-    key: 'paper',
-    label: 'Paper',
-    note: 'A dark masthead over a pale page. The report look.',
-    patch: {
-      page_background: '#edf0f4',
-      page_background_2: '#dfe5ec',
-      page_angle: 160,
-      header_background: '#1f2a37',
-      header_background_2: '#38495e',
-      header_angle: 135,
-      background_color: '#f7f8fa',
-      tab_background: '#e6ebf1',
-      tab_color: '#1f2a37',
-      filter_background: '#ffffff',
-      filter_color: '#4a5565',
-    },
-  },
-  {
-    key: 'harbour',
-    label: 'Harbour',
-    note: 'Deep sea blue, for a board that hangs in an office.',
-    patch: {
-      page_background: '#0a2135',
-      page_background_2: '#0f3a5c',
-      page_angle: 160,
-      header_background: '#0d4b74',
-      header_background_2: '#1c84bd',
-      header_angle: 120,
-      background_color: '#0e2d47',
-      tab_background: '#12395a',
-      tab_color: '#d7e8f5',
-      filter_background: '#12395a',
-      filter_color: '#c2dcee',
-    },
-  },
-  {
-    key: 'forest',
-    label: 'Forest',
-    note: 'Green, and dark enough to read a chart against.',
-    patch: {
-      page_background: '#0d1e17',
-      page_background_2: '#14291f',
-      page_angle: 160,
-      header_background: '#14503a',
-      header_background_2: '#248059',
-      header_angle: 120,
-      background_color: '#11251c',
-      tab_background: '#183326',
-      tab_color: '#d3e8dd',
-      filter_background: '#183326',
-      filter_color: '#bcd8c9',
-    },
-  },
-  {
-    key: 'ochre',
-    label: 'Ochre',
-    note: 'Warm earth, which suits a printed cover page.',
-    patch: {
-      page_background: '#241a12',
-      page_background_2: '#33261a',
-      page_angle: 160,
-      header_background: '#7b4818',
-      header_background_2: '#bf7d2c',
-      header_angle: 120,
-      background_color: '#2b1f15',
-      tab_background: '#3a2b1d',
-      tab_color: '#f0dfc6',
-      filter_background: '#3a2b1d',
-      filter_color: '#e0cbab',
-    },
-  },
-  {
-    key: 'midnight',
-    label: 'Midnight',
-    note: 'Near black, for a screen left on overnight.',
-    patch: {
-      page_background: '#0b0f14',
-      page_background_2: '#12181f',
-      page_angle: 160,
-      header_background: '#161f2b',
-      header_background_2: '#293b52',
-      header_angle: 120,
-      background_color: '#101720',
-      tab_background: '#1a242f',
-      tab_color: '#cbd5e1',
-      filter_background: '#1a242f',
-      filter_color: '#b6c2d0',
-    },
-  },
-]
-
-/**
  * Paint the ground the whole page sits on, for as long as this board is open.
  *
  * Written as a custom property on the document rather than as a style on an
@@ -241,11 +127,18 @@ export function canvasStyle(
   imageUrl: string | null,
 ): React.CSSProperties | undefined {
   const color = appearance?.background_color
-  if (!color && !imageUrl) return undefined
+  const chosen = ground(appearance?.background_pattern)
+  if (!color && !imageUrl && !chosen) return undefined
 
   const fit = appearance?.background_fit ?? 'cover'
   const fade = Number(appearance?.fade ?? 0)
-  const style: React.CSSProperties = { backgroundColor: color || undefined }
+  const style: React.CSSProperties = { backgroundColor: color || chosen?.tint || undefined }
+  // A ready-made ground is CSS under the widgets, and an uploaded image stands
+  // in front of it: a pattern nobody can see is not worth the rule.
+  if (!imageUrl && chosen) {
+    style.backgroundImage = chosen.layers
+    if (chosen.size) style.backgroundSize = chosen.size
+  }
   if (imageUrl) {
     // The veil is a gradient of one colour laid over the image in the same
     // property, which is how an image is dimmed without a second element
@@ -578,35 +471,63 @@ export default function AppearanceModal({
         label="Start from one of these"
         hint="Each one sets the page, the title band, the board and the filter bar together. Everything below stays editable afterwards."
       >
-        <div className="flex flex-wrap gap-2">
-          {LOOKS.map((look) => (
-            <button
-              key={look.key}
-              className="w-[104px] overflow-hidden rounded-control border border-ink-200 p-0 text-left hover:border-brand-500"
-              title={look.note}
-              onClick={() => setDraft({ ...draft, ...look.patch })}
-            >
-              <span
-                className="block h-7"
-                style={bandStyle(
-                  look.patch.header_background || '#e6e8ec',
-                  look.patch.header_background_2 || undefined,
-                  look.patch.header_angle,
-                )}
-              />
-              <span
-                className="block h-5"
-                style={bandStyle(
-                  look.patch.page_background || '#eceef1',
-                  look.patch.page_background_2 || undefined,
-                  look.patch.page_angle,
-                  false,
-                )}
-              />
-              <span className="block bg-white px-2 py-1 text-[11px] text-ink-700">
-                {look.label}
-              </span>
-            </button>
+        {/*
+          Two dozen of them, so they are banded by what a reader is actually
+          choosing between: a board for reading indoors, one for a wall screen
+          in a dim room, or one that belongs to a programme rather than to an
+          office. An unbanded run of twenty-six swatches is a wall of colour
+          nobody finishes scanning.
+        */}
+        <div className="space-y-3">
+          {FAMILIES.map((family) => (
+            <div key={family.id}>
+              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-ink-500 dark:text-dark-500">
+                {family.label}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {LOOKS.filter((look) => look.family === family.id).map((look) => (
+                  <button
+                    key={look.key}
+                    className="w-[104px] overflow-hidden rounded-control border border-ink-200 p-0 text-left hover:border-brand-500 dark:border-dark-200"
+                    title={look.note}
+                    onClick={() => setDraft({ ...draft, ...look.patch })}
+                  >
+                    <span
+                      className="block h-7"
+                      style={bandStyle(
+                        look.patch.header_background || '#e6e8ec',
+                        look.patch.header_background_2 || undefined,
+                        look.patch.header_angle,
+                      )}
+                    />
+                    {/* The board's own ground, pattern included, between the
+                        masthead and the page: a swatch that showed only the
+                        two bands said nothing about the surface the widgets
+                        actually sit on. */}
+                    <span
+                      className="block h-5"
+                      style={
+                        canvasStyle(look.patch, null) ?? {
+                          backgroundColor: '#f7f8fa',
+                        }
+                      }
+                    />
+                    <span
+                      className="block h-4"
+                      style={bandStyle(
+                        look.patch.page_background || '#eceef1',
+                        look.patch.page_background_2 || undefined,
+                        look.patch.page_angle,
+                        false,
+                      )}
+                    />
+                    <span className="block bg-white px-2 py-1 text-[11px] text-ink-700 dark:bg-dark-50 dark:text-dark-700">
+                      {look.label}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
           ))}
         </div>
       </Field>
@@ -939,8 +860,67 @@ export default function AppearanceModal({
       </Field>
 
       <Field
+        label="Ready-made ground"
+        hint="Drawn rather than uploaded, so it travels in an exported file and prints without fetching anything. An uploaded image covers it."
+      >
+        <div className="flex flex-wrap gap-2">
+          <button
+            className={`w-[72px] overflow-hidden rounded-control border p-0 text-left ${
+              draft.background_pattern
+                ? 'border-ink-200 hover:border-brand-500 dark:border-dark-200'
+                : 'border-brand-500 ring-1 ring-brand-500'
+            }`}
+            title="No ground: the board is the colour above, or white."
+            onClick={() => setDraft({ ...draft, background_pattern: '' })}
+          >
+            <span className="block h-8 bg-white dark:bg-dark-100" />
+            <span className="block bg-white px-1.5 py-1 text-[11px] text-ink-700 dark:bg-dark-50 dark:text-dark-700">
+              None
+            </span>
+          </button>
+          {BACKGROUNDS.map((one) => (
+            <button
+              key={one.id}
+              className={`w-[72px] overflow-hidden rounded-control border p-0 text-left ${
+                draft.background_pattern === one.id
+                  ? 'border-brand-500 ring-1 ring-brand-500'
+                  : 'border-ink-200 hover:border-brand-500 dark:border-dark-200'
+              }`}
+              title={one.note}
+              onClick={() =>
+                setDraft({
+                  ...draft,
+                  background_pattern: one.id,
+                  // A texture is translucent, so a board that already has a
+                  // colour keeps it and gets the texture over it. A ground
+                  // that is its own colour brings that colour with it, or it
+                  // would be drawn over whatever the board happened to carry.
+                  background_color:
+                    one.tintable && draft.background_color
+                      ? draft.background_color
+                      : one.tint,
+                })
+              }
+            >
+              <span
+                className="block h-8"
+                style={{
+                  backgroundColor: one.tint,
+                  backgroundImage: one.layers,
+                  ...(one.size ? { backgroundSize: one.size } : {}),
+                }}
+              />
+              <span className="block bg-white px-1.5 py-1 text-[11px] text-ink-700 dark:bg-dark-50 dark:text-dark-700">
+                {one.label}
+              </span>
+            </button>
+          ))}
+        </div>
+      </Field>
+
+      <Field
         label="Background image"
-        hint="PNG, JPEG, GIF or WebP, up to 8 MB. It sits behind the widgets."
+        hint="PNG, JPEG, GIF or WebP, up to 8 MB. It sits behind the widgets, over any ground chosen above."
       >
         <div className="flex flex-wrap items-center gap-2">
           <input

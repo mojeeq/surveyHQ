@@ -21,7 +21,7 @@ from __future__ import annotations
 import base64
 from typing import Any
 
-from app.services import export_fonts
+from app.services import export_backgrounds, export_fonts
 from app.services.dashboard_assets import background_file
 
 # How large an uploaded image may be before the export keeps the colour and
@@ -127,13 +127,23 @@ def image_data_url(dashboard: Any, kind: str) -> str:
 
 
 def canvas(appearance: dict[str, Any], image: str) -> str:
-    """The board's own ground: a colour, an image, and the veil over it."""
+    """The board's own ground: a colour, a ready-made pattern or an image.
+
+    A ready-made ground is CSS, so it travels whole. An uploaded image stands
+    in front of it, exactly as it does in the application: a pattern under a
+    photograph is a rule nobody can see the result of.
+    """
     colour = _clean(appearance.get("background_color"))
-    if not colour and not image:
+    chosen = export_backgrounds.ground(appearance.get("background_pattern", ""))
+    if not colour and not image and not chosen:
         return ""
     rules = []
-    if colour:
-        rules.append(f"background-color:{colour};")
+    if colour or chosen:
+        rules.append(f"background-color:{colour or chosen['tint']};")
+    if chosen and not image:
+        rules.append(f"background-image:{chosen['layers']};")
+        if chosen.get("size"):
+            rules.append(f"background-size:{chosen['size']};")
     if image:
         fit = str(appearance.get("background_fit") or "cover")
         if fit not in ("cover", "contain", "tile"):
@@ -184,7 +194,14 @@ def stylesheet(dashboard: Any, background: str) -> str:
     # the board's own canvas when one is set, and only the page ground when
     # there is no board colour at all. Getting this backwards is how the footer
     # ended up pale grey on pale paper.
-    behind = appearance.get("background_color") if board else appearance.get("page_background")
+    # A board given only a ready-made ground has no colour of its own, and the
+    # thing behind the title is then that ground's tint rather than nothing.
+    tint = (export_backgrounds.ground(appearance.get("background_pattern", "")) or {}).get("tint")
+    behind = (
+        appearance.get("background_color") or tint
+        if board
+        else appearance.get("page_background")
+    )
     if is_dark(behind):
         out.append("footer.board{color:rgba(255,255,255,.65);}")
         if not appearance.get("header_background"):

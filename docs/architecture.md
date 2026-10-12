@@ -502,6 +502,7 @@ backend/app/
                   static_export.py    a dashboard as one HTML file
                   export_document.py  the same board as a Word report
                   export_tables.py    a widget's numbers for that report
+                  export_backgrounds.py the ready-made grounds, in CSS
                   export_lib.py       the drawing libraries it carries
                   export_fonts.py     the fonts it carries
                   export_appearance.py how it is dressed
