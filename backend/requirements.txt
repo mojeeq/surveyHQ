@@ -32,6 +32,14 @@ XlsxWriter==3.2.0
 # with no internet.
 python-docx==1.1.2
 
+# A dashboard printed to PDF: a headless browser prints the page the HTML
+# export already produces, and pypdf puts a multi-page board's sheets
+# together. Playwright is a few megabytes; the browser it drives is several
+# hundred and is installed separately in the Dockerfile, so a deployment that
+# does not want it can leave it out and the button says so.
+playwright==1.49.0
+pypdf==5.1.0
+
 # --- Boundary files ----------------------------------------------------------
 # Shapefiles only. Pure Python with no compiled part and no system GIS library,
 # which is what lets a boundary layer be read on a server with no internet and

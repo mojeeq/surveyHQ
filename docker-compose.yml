@@ -56,6 +56,18 @@ x-backend-env: &backend-env
   ANALYTICS_CACHE_ENABLED: ${ANALYTICS_CACHE_ENABLED:-true}
   ANALYTICS_CACHE_TTL_SECONDS: ${ANALYTICS_CACHE_TTL_SECONDS:-300}
   MONITORING_PRECOMPUTE_ENABLED: ${MONITORING_PRECOMPUTE_ENABLED:-true}
+  PDF_CHROMIUM_PATH: ${PDF_CHROMIUM_PATH:-}
+
+# One image behind the API, the workers and the scheduler, so they are built
+# the same way and only once.
+x-backend-build: &backend-build
+  context: ./backend
+  dockerfile: Dockerfile
+  args:
+    # The browser that prints a dashboard to PDF, and most of this image's
+    # size. PDF_BROWSER=0 in .env builds without it; the share panel then does
+    # not offer PDF, and says why not.
+    PDF_BROWSER: ${PDF_BROWSER:-1}
 
 services:
   postgres:
@@ -90,9 +102,7 @@ services:
     networks: [surveyhq]
 
   migrate:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    build: *backend-build
     command: ["python", "-m", "app.cli", "init-db"]
     environment: *backend-env
     volumes:
@@ -102,9 +112,7 @@ services:
     networks: [surveyhq]
 
   api:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    build: *backend-build
     restart: unless-stopped
     environment: *backend-env
     volumes:
@@ -127,9 +135,7 @@ services:
   # Keeping this queue separate means a census import cannot occupy the worker
   # slots responsible for alerts and field monitoring.
   worker:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    build: *backend-build
     restart: unless-stopped
     command:
       ["celery", "-A", "app.workers.celery_app.celery_app", "worker",
@@ -152,9 +158,7 @@ services:
 
   # Latency-sensitive scheduled work has its own worker pool.
   worker-monitoring:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    build: *backend-build
     restart: unless-stopped
     command:
       ["celery", "-A", "app.workers.celery_app.celery_app", "worker",
@@ -176,9 +180,7 @@ services:
     networks: [surveyhq]
 
   beat:
-    build:
-      context: ./backend
-      dockerfile: Dockerfile
+    build: *backend-build
     restart: unless-stopped
     # The schedule file lives in /tmp because the container runs as non-root.
     command:

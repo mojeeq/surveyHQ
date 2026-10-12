@@ -19,7 +19,16 @@ Four other things share that volume: the uploads as received, the last five
 export archives per connection (tens of megabytes each), dashboard background
 and logo images (8 MB each at most), and boundary layers, which are stored as
 GeoJSON and are usually a few megabytes for a national enumeration-area frame.
-The archives prune themselves as new runs land; nothing else does.
+The archives prune themselves as new runs land, and so do the report bursts;
+nothing else does.
+
+**The backend image carries a browser**, which is most of its size: a few
+hundred megabytes of chromium, there so the server can print a dashboard to
+PDF. A deployment that does not want it builds with
+`--build-arg PDF_BROWSER=0`, and the PDF choice then does not appear in the
+share panel - the panel says why, and the web page can still be printed by
+hand. A server that already has a chromium can use that one instead by
+setting `PDF_CHROMIUM_PATH` to it and building without the browser.
 
 ## Install
 
@@ -50,6 +59,7 @@ Everything lives in `.env`. Values worth attention:
 | `RATE_LIMIT_ENABLED` | Caps sign-in attempts and requests to shared dashboards. Leave it on. Turn it off only if every visitor reaches you from one address, as behind some corporate proxies, where they would share one budget. |
 | `SYNC_TICK_MINUTES` | How often the scheduler checks for due imports. A connection set to import at a time of day cannot be honoured more precisely than this. |
 | `MONITOR_TICK_MINUTES` | How often indicators, alerts and checks are evaluated. |
+| `PDF_CHROMIUM_PATH` | A chromium to print dashboards with, if not the one in the image. |
 
 After editing `.env`:
 
