@@ -734,6 +734,16 @@ export interface IndicatorValue {
   status: IndicatorState
   direction: Direction
   breakdown: Record<string, number>
+  /**
+   * Each group against its own quota: the value, that group's target where it
+   * has one, how far through it is and what that makes it. A group with no
+   * quota of its own has a null target and is reported rather than judged -
+   * the overall target belongs to all the groups together.
+   */
+  breakdown_progress: Record<
+    string,
+    { value: number; target: number | null; percent: number | null; status: IndicatorState }
+  >
   breakdown_variable: string
   computed_at: string | null
   error: string | null

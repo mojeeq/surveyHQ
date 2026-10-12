@@ -356,11 +356,29 @@ def widget_table(widget: dict[str, Any]) -> tuple[list[str], list[list[Any]]] | 
         value, breakdown = indicator_value(widget)
         unit = "%" if spec.get("percent_of") else (spec.get("unit") or "")
         heading = [str(spec.get("breakdown_variable") or "Indicator"), spec.get("name") or "Value"]
+        # Each group's own quota, where the indicator has them, in a column of
+        # its own. The headline is what those quotas add up to, so putting it
+        # beside a single group would invite exactly the comparison it must
+        # not be read as.
+        quotas = {
+            str(name): number
+            for name, number in (spec.get("breakdown_targets") or {}).items()
+            if _number(number) is not None
+        }
+        quoted = bool(breakdown) and any(str(name) in quotas for name, _ in breakdown)
+        if quoted:
+            heading.append("Its own target")
         rows: list[list[Any]] = []
         if breakdown:
-            rows.extend([name, number] for name, number in breakdown)
-        rows.append(["Total" if breakdown else (spec.get("name") or "Value"), value])
-        if spec.get("target_value") is not None:
+            rows.extend(
+                [name, number, quotas.get(str(name))] if quoted else [name, number]
+                for name, number in breakdown
+            )
+        total: list[Any] = ["Total" if breakdown else (spec.get("name") or "Value"), value]
+        if quoted:
+            total.append(spec.get("target_value"))
+        rows.append(total)
+        if spec.get("target_value") is not None and not quoted:
             rows.append(["Target", spec.get("target_value")])
         if unit:
             heading[1] = f"{heading[1]} ({unit})"

@@ -6,6 +6,8 @@ import { useAuth } from '@/hooks/useAuth'
 import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
 import { buildSparkline, STATUS_COLORS } from '@/lib/charts'
+import { by } from '@/lib/collections'
+import { quotaSummary } from '@/lib/quotas'
 import { formatNumber, formatValue, relativeTime } from '@/lib/format'
 import type {
   Aggregation,
@@ -266,27 +268,53 @@ function IndicatorCard({
 
       {expanded && breakdown.data && Object.keys(breakdown.data.breakdown).length > 0 && (
         <div className="mt-3">
-          <ChartCard
-            showToggle={false}
-            chartType="horizontal_bar"
-            height={200}
-            result={{
-              columns: [
-                {
-                  name: 'group',
-                  label: definition?.breakdown_variable ?? 'Group',
-                  type: 'dimension',
-                  data_type: 'text',
-                },
-                { name: 'value', label: value.name, type: 'measure', data_type: 'number' },
-              ],
-              rows: Object.entries(breakdown.data.breakdown).map(([key, val]) => [key, val]),
-              row_count: Object.keys(breakdown.data.breakdown).length,
-              truncated: false,
-              sql: '',
-              duration_ms: 0,
-            }}
-          />
+          {(() => {
+            const progress = breakdown.data.breakdown_progress ?? {}
+            // Each group beside its own quota, not beside the headline: the
+            // headline is what the quotas add up to, so a group measured
+            // against it reads as far behind whatever it has actually done.
+            const quoted = Object.keys(breakdown.data!.breakdown).some(
+              (key) => (progress[key]?.target ?? null) !== null,
+            )
+            const rows = Object.entries(breakdown.data!.breakdown)
+              .sort(by(([key]) => key))
+              .map(([key, val]) =>
+                quoted ? [key, val, progress[key]?.target ?? null] : [key, val],
+              )
+            return (
+              <ChartCard
+                showToggle={false}
+                chartType="horizontal_bar"
+                height={Math.min(420, Math.max(200, rows.length * 26))}
+                result={{
+                  columns: [
+                    {
+                      name: 'group',
+                      label: definition?.breakdown_variable ?? 'Group',
+                      type: 'dimension',
+                      data_type: 'text',
+                    },
+                    { name: 'value', label: value.name, type: 'measure', data_type: 'number' },
+                    ...(quoted
+                      ? [
+                          {
+                            name: 'target',
+                            label: 'Its own quota',
+                            type: 'measure' as const,
+                            data_type: 'number' as const,
+                          },
+                        ]
+                      : []),
+                  ],
+                  rows,
+                  row_count: rows.length,
+                  truncated: false,
+                  sql: '',
+                  duration_ms: 0,
+                }}
+              />
+            )
+          })()}
         </div>
       )}
     </Card>
@@ -344,6 +372,41 @@ function measureKindOf(indicator: Indicator): MeasureKind {
   const match = MEASURES.find((m) => m.agg === measure.agg && m.needsVariable === named)
   return match?.value ?? 'records'
 }
+
+/**
+ * What the per-group quotas add up to, said under the list of them.
+ *
+ * Silent until at least one is set, because a form that says "0 of 15,040" to
+ * somebody who has not started is nagging rather than helping.
+ */
+function QuotaTotal({
+  targets,
+  headline,
+}: {
+  targets: Record<string, string>
+  headline: string
+}) {
+  const summary = quotaSummary(targets, headline)
+  if (!summary.set) return null
+
+  const groups = `${summary.set} group${summary.set === 1 ? '' : 's'}`
+  const adding = `${groups} with a quota, adding up to ${formatNumber(summary.total)}`
+  if (summary.headline === null) {
+    return <p className="mt-2 text-xs text-ink-500 dark:text-dark-500">{adding}.</p>
+  }
+
+  const off = summary.difference ?? 0
+  const matches = off === 0
+  return (
+    <p className={`mt-2 text-xs ${matches ? 'text-ink-500 dark:text-dark-500' : 'text-amber-700 dark:text-amber-400'}`}>
+      {adding}
+      {matches
+        ? `, which is the overall target.`
+        : `, ${formatNumber(Math.abs(off))} ${off > 0 ? 'more than' : 'short of'} the overall ${formatNumber(summary.headline)}. That is allowed - the quotas you set are the ones that are judged - but it is usually a typo.`}
+    </p>
+  )
+}
+
 
 function IndicatorModal({
   indicator,
@@ -651,31 +714,45 @@ function IndicatorModal({
         {breakdown && (categories.data?.length ?? 0) > 0 && (
         <Field
           label="Target for each group"
-          hint="Optional. A group with no target of its own is judged against the overall target, and its warning and critical thresholds scale with whatever target applies to it."
+          hint="Optional, and each one is that group's own quota rather than a share of the overall target. A group left empty is reported but not judged: the overall target belongs to all of them together, so measuring one group against it says nothing."
         >
           <div className="grid gap-x-4 gap-y-1.5 sm:grid-cols-2">
-            {(categories.data ?? []).map((option) => {
-              const key = String(option.value)
-              return (
-                <label key={key} className="flex items-center gap-2 text-sm text-ink-700">
-                  <span className="min-w-0 flex-1 truncate" title={option.label || key}>
-                    {option.label || key}
-                  </span>
-                  <input
-                    className="input input-sm w-28"
-                    type="number"
-                    placeholder={target || 'overall'}
-                    aria-label={`Target for ${option.label || key}`}
-                    value={categoryTargets[key] ?? ''}
-                    onChange={(event) =>
-                      setCategoryTargets({ ...categoryTargets, [key]: event.target.value })
-                    }
-                  />
-                </label>
-              )
-            })}
+            {/* In the order a reader looks them up in - a list of enumeration
+                areas arrives in whatever order the query answered in, which
+                is no order at all once there are sixty of them. */}
+            {[...(categories.data ?? [])]
+              .sort(by((option) => String(option.label || option.value)))
+              .map((option) => {
+                const key = String(option.value)
+                return (
+                  <label key={key} className="flex items-center gap-2 text-sm text-ink-700 dark:text-dark-700">
+                    <span className="min-w-0 flex-1 truncate" title={option.label || key}>
+                      {option.label || key}
+                    </span>
+                    <input
+                      className="input input-sm w-28"
+                      type="number"
+                      placeholder="none"
+                      aria-label={`Target for ${option.label || key}`}
+                      value={categoryTargets[key] ?? ''}
+                      onChange={(event) =>
+                        setCategoryTargets({ ...categoryTargets, [key]: event.target.value })
+                      }
+                    />
+                  </label>
+                )
+              })}
           </div>
         </Field>
+      )}
+      {/* The quotas are the overall target, divided up. Said under the list
+          because sixty boxes is exactly where one gets mistyped, and nothing
+          else would ever mention it. Outside the field so it reads after the
+          explanation rather than between the boxes and it. */}
+      {breakdown && (categories.data?.length ?? 0) > 0 && (
+        <div className="-mt-2 mb-4">
+          <QuotaTotal targets={categoryTargets} headline={target} />
+        </div>
       )}
 
       <Field label="Direction">

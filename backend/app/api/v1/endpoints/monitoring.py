@@ -49,6 +49,7 @@ from app.schemas.query import FilterGroup
 from app.services.audit import record
 from app.services.field_progress import build_overview
 from app.services.monitoring import (
+    breakdown_progress,
     evaluate_alert_rule,
     indicator_status,
     progress_percent,
@@ -204,6 +205,7 @@ def indicator_values(
                 status=indicator_status(indicator, indicator.last_value),
                 direction=indicator.direction,
                 breakdown=breakdown,
+                breakdown_progress=breakdown_progress(indicator, breakdown),
                 breakdown_variable=indicator.breakdown_variable,
                 computed_at=indicator.last_computed_at,
                 error=error,
@@ -234,6 +236,7 @@ def refresh_single_indicator(
         status=indicator_status(indicator, indicator.last_value),
         direction=indicator.direction,
         breakdown=outcome.get("breakdown") or {},
+        breakdown_progress=breakdown_progress(indicator, outcome.get("breakdown") or {}),
         breakdown_variable=indicator.breakdown_variable,
         computed_at=indicator.last_computed_at,
         error=outcome.get("error"),

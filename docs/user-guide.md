@@ -1689,10 +1689,24 @@ indicator and losing its history.
 **A target per group.** A survey's quota is rarely one number: "6,000
 interviews" is really 3,500 in one province and 2,500 in another, or a set
 number of men and of women. Once a breakdown variable is chosen, each of its
-groups gets a target box, filled from the values actually in the data. A group
-left blank is judged against the overall target.
+groups gets a target box, filled from the values actually in the data and
+listed in order, which matters once there are sixty enumeration areas in it.
 
-The warning and critical thresholds scale with whichever target applies, so a
+**Each box is that group's own quota, not a share of the overall target**, and
+the overall target is what the quotas add up to. Under the list the form says
+what they currently add up to and how that compares with the overall figure -
+"38 groups with a quota, adding up to 14,820, 220 short of the overall 15,040"
+- because a column of sixty numbers is exactly where a digit goes missing. A
+sum that does not match is allowed, since a survey may watch quotas in four
+districts out of forty, but it is usually a typo.
+
+**A group left blank is reported, not judged.** It has no target of its own,
+and the overall target belongs to all the groups together: an enumeration area
+of two hundred households measured against a national fifteen thousand reads
+as one per cent of something that was never its own, which on a board of sixty
+areas is sixty red tiles about nothing.
+
+The warning and critical thresholds scale with the group's own target, so a
 province carrying a tenth of the quota trips its warning at a tenth of the
 count. Without that, every small province sat permanently in the red - and,
 worse, a group well behind its own quota could read as on track simply because
@@ -1706,7 +1720,15 @@ Once groups have targets, that chart becomes a quota chart: **the bar is the
 target**, split into what has been achieved and what is still to go, with
 anything past the target as its own segment. Read across, the coloured part is
 the actual and the whole bar is the quota. A province at 109 of a quota of 400
-is then obviously behind one at 89 of 100, which the raw counts alone hide.
+is then obviously behind one at 89 of 100, which the raw counts alone hide. A
+group with no quota is drawn as its value and nothing else, rather than against
+a target that is not its own.
+
+The same is true everywhere the breakdown is drawn: on the **Indicators** page,
+opening *Show by …* puts each group beside its own quota; a board **exported as
+a web page** carries the quota chart with it; and the **Word report** gives the
+breakdown a column headed "Its own target", with the overall figure left on the
+Total line where it is the right number to compare with.
 
 Stacking the actual *on top of* the target would not mean anything - 86
 interviews plus a quota of 100 is not 186 of something - which is why it is

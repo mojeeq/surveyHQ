@@ -1,19 +1,33 @@
 """Judging each group of a broken-down indicator against its own target.
 
 A survey's quota is rarely one number. "6,000 interviews" is really 3,500 in
-one province and 2,500 in another, or a set number of men and of women. Read
-against the single headline target, a group that is well behind its own quota
-reported as on track simply because the headline is the sum of several unequal
-quotas - which is the opposite of what a monitoring platform is for.
+one province and 2,500 in another, or a set number of men and of women, and
+the headline is what those add up to. Read against the single headline target,
+a group well behind its own quota reported as on track simply because the
+headline is the sum of several unequal quotas - which is the opposite of what
+a monitoring platform is for.
+
+The headline is nobody's own target, so a group that has not been given one is
+not judged at all. An enumeration area of two hundred households shown at one
+per cent of a national fifteen thousand is a red tile about nothing.
 """
 
 from __future__ import annotations
+
+from pathlib import Path
+from typing import Any
 
 import pytest
 
 from app.models import Indicator
 from app.models.monitoring import Direction
-from app.services.monitoring import IndicatorStatus, breakdown_progress, target_for
+from app.services import export_tables
+from app.services.monitoring import (
+    IndicatorStatus,
+    breakdown_progress,
+    target_for,
+    targets_total,
+)
 
 
 def make(**kwargs) -> Indicator:
@@ -35,10 +49,29 @@ def test_a_category_uses_its_own_target():
     assert target_for(indicator, "South") == 600
 
 
-def test_a_category_without_one_falls_back_to_the_headline():
-    """An indicator broken down for interest, not against a quota."""
+def test_a_category_without_one_has_no_target_rather_than_the_headline():
+    """The headline belongs to every group together, so it is nobody's own."""
     indicator = make(breakdown_targets={"North": 400})
-    assert target_for(indicator, "South") == 1000.0
+    assert target_for(indicator, "South") is None
+
+
+def test_a_group_with_no_quota_is_not_judged():
+    """Unknown, rather than critical against a number that was never its own."""
+    indicator = make(breakdown_targets={"North": 400})
+    report = breakdown_progress(indicator, {"South": 180.0})
+
+    assert report["South"]["target"] is None
+    assert report["South"]["percent"] is None
+    assert report["South"]["status"] == IndicatorStatus.unknown
+
+
+def test_the_quotas_add_up_to_what_the_headline_should_be():
+    """What the form shows under the list, so a typo is visible."""
+    indicator = make(breakdown_targets={"North": 400, "South": 600})
+    assert targets_total(indicator) == 1000.0
+
+    assert targets_total(make(breakdown_targets={"North": 400, "South": "junk"})) == 400.0
+    assert targets_total(make()) == 0.0
 
 
 def test_progress_is_measured_against_the_category_target():
@@ -73,13 +106,17 @@ def test_a_category_genuinely_behind_is_still_flagged():
     assert report["North"]["status"] == IndicatorStatus.critical
 
 
-def test_without_per_category_targets_nothing_changes():
-    """The existing behaviour, for every indicator that has no quotas set."""
+def test_an_indicator_with_no_quotas_judges_none_of_its_groups():
+    """Broken down for interest: the groups are reported, not marked."""
     indicator = make()
     report = breakdown_progress(indicator, {"North": 900.0, "South": 400.0})
-    assert report["North"]["status"] == IndicatorStatus.ok
-    assert report["South"]["status"] == IndicatorStatus.critical
-    assert report["North"]["target"] == 1000.0
+
+    assert report["North"]["target"] is None
+    assert report["South"]["target"] is None
+    assert report["North"]["status"] == IndicatorStatus.unknown
+    assert report["South"]["status"] == IndicatorStatus.unknown
+    # The values themselves are still reported; it is the judgement that goes.
+    assert report["North"]["value"] == 900.0
 
 
 def test_lower_is_better_scales_the_same_way():
@@ -98,10 +135,10 @@ def test_lower_is_better_scales_the_same_way():
 
 
 @pytest.mark.parametrize("junk", ["", "not a number", None, {}])
-def test_a_junk_target_falls_back_rather_than_failing(junk):
+def test_a_junk_target_is_no_target_rather_than_a_failure(junk):
     """breakdown_targets is JSON, so it can hold anything that got past a form."""
     indicator = make(breakdown_targets={"North": junk})
-    assert target_for(indicator, "North") == 1000.0
+    assert target_for(indicator, "North") is None
 
 
 def test_no_headline_target_leaves_percent_unset():
@@ -109,3 +146,83 @@ def test_no_headline_target_leaves_percent_unset():
     report = breakdown_progress(indicator, {"North": 120.0})
     assert report["North"]["percent"] is None
     assert report["North"]["value"] == 120.0
+
+
+# --- Where the quotas are read ----------------------------------------------
+#
+# A quota that is only right inside the platform is half a feature: the board
+# goes out as a Word report and as a standalone page, and a group drawn there
+# against the headline is the same wrong comparison in a file nobody can
+# correct afterwards.
+
+
+def _indicator_widget(targets: dict[str, Any]) -> dict[str, Any]:
+    """An indicator tile as the export payload carries one."""
+    return {
+        "kind": "indicator",
+        "type": "indicator",
+        "title": "Interviews",
+        "indicator": {
+            "name": "Interviews",
+            "unit": "",
+            "value_format": "number",
+            "target_value": 1000,
+            "breakdown_variable": "region",
+            "breakdown_targets": targets,
+            "percent_of": "",
+        },
+        "cube": {
+            "columns": [
+                {"name": "region", "label": "Region"},
+                {"name": "value", "label": "Interviews"},
+            ],
+            "dimensions": ["region"],
+            "measures": [
+                {"name": "value", "label": "Interviews", "how": "sum", "parts": ["value"]}
+            ],
+            "rows": [["North", 200], ["South", 300]],
+            "sort": [],
+        },
+    }
+
+
+def test_the_word_report_gives_each_group_its_own_target():
+    heading, rows = export_tables.widget_table(_indicator_widget({"North": 400, "South": 600}))
+
+    assert heading[2] == "Its own target"
+    assert rows[0] == ["North", 200.0, 400]
+    assert rows[1] == ["South", 300.0, 600]
+    # The headline belongs on the Total line, which is the only place it is
+    # the right number to compare with.
+    assert rows[2] == ["Total", 500.0, 1000]
+
+
+def test_a_group_without_a_quota_leaves_the_column_empty():
+    heading, rows = export_tables.widget_table(_indicator_widget({"North": 400}))
+
+    assert heading[2] == "Its own target"
+    assert rows[1] == ["South", 300.0, None]
+
+
+def test_an_indicator_with_no_quotas_keeps_the_old_two_columns():
+    heading, rows = export_tables.widget_table(_indicator_widget({}))
+
+    assert heading == ["region", "Interviews"]
+    assert rows[-1] == ["Target", 1000]
+
+
+def test_the_exported_page_draws_a_group_against_its_own_quota():
+    """The file is read offline, so this is checked in the script it carries."""
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "app/services/export_assets/dashboard.html"
+    ).read_text(encoding="utf-8")
+    drawing = script[script.index("function drawIndicator"):script.index("function drawMap")]
+
+    assert "spec.breakdown_targets" in drawing, (
+        "the exported page ignores the per-group quotas and draws bare values"
+    )
+    # The headline is still the tile's own progress bar, and must not be the
+    # thing a breakdown bar is measured against.
+    chart = drawing[drawing.index("if (breakdown.length && window.echarts)"):]
+    assert "spec.target_value" not in chart

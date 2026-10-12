@@ -230,25 +230,40 @@ def progress_percent(indicator: Indicator, value: float | None) -> float | None:
 
 
 def target_for(indicator: Indicator, category: str) -> float | None:
-    """The target one category of a breakdown is judged against.
+    """The target one category of a breakdown is judged against: its own, or none.
 
     A survey's quota is rarely a single number: it is so many interviews in
-    each region, so many of each sex. Judging every group against the headline
-    target reported groups as on track when they were not, because the headline
-    is the sum of quotas that are not equal to each other. A category with no
-    target of its own falls back to the headline, which is right for an
-    indicator broken down for interest rather than against a quota.
+    each region, so many of each sex, and the headline is what those add up
+    to. So a group is judged against its own quota and nothing else.
+
+    A group with no quota of its own has no target, rather than inheriting the
+    headline. The headline belongs to every group together - an enumeration
+    area of two hundred households measured against a national fifteen
+    thousand is at one per cent of a target that was never its own, which
+    reads as a disaster on a board full of them. Nothing is a more honest
+    answer than a wrong one.
     """
     targets = indicator.breakdown_targets or {}
     raw = targets.get(category)
     if raw is None:
-        return indicator.target_value
+        return None
     try:
         return float(raw)
     except (TypeError, ValueError):
         # Stored JSON, so it can hold whatever got past the schema. A junk
-        # target is not worth failing the whole tile for.
-        return indicator.target_value
+        # target is no target rather than a reason to fail the whole tile.
+        return None
+
+
+def targets_total(indicator: Indicator) -> float:
+    """What the per-group quotas add up to, for comparing with the headline."""
+    total = 0.0
+    for raw in (indicator.breakdown_targets or {}).values():
+        try:
+            total += float(raw)
+        except (TypeError, ValueError):
+            continue
+    return total
 
 
 def _status_against(
@@ -258,12 +273,18 @@ def _status_against(
 
     The thresholds are set against the headline. A region carrying half the
     quota should trip its warning at half the count, or every small region
-    would sit permanently in the red - so they move with the target.
+    would sit permanently in the red - so they move with the target. A region
+    with no quota at all is reported as unknown rather than measured against
+    a number that belongs to the whole survey.
     """
     if value is None:
         return IndicatorStatus.unknown
     headline = indicator.target_value
-    if not headline or not target or headline == target:
+    # A group with no quota of its own is not judged. Its thresholds would
+    # have to be the headline's, which is the comparison this exists to stop.
+    if target is None:
+        return IndicatorStatus.unknown
+    if not headline or headline == target:
         return indicator_status(indicator, value)
 
     scale = target / headline

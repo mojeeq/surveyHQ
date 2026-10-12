@@ -852,18 +852,59 @@
       var host = el('div', 'chart')
       body.appendChild(host)
       var instance = echarts.init(host)
-      instance.setOption({
+      // Each group against its own quota, never against the headline: the
+      // headline is what the quotas add up to, so a group measured against it
+      // reads as hopelessly behind whatever it has actually done. A group with
+      // no quota of its own is drawn as its value and nothing else.
+      var quotas = spec.breakdown_targets || {}
+      var quoted = breakdown.some(function (pair) { return Number(quotas[pair[0]]) > 0 })
+      var lower = spec.direction === 'lower_is_better'
+      var option = {
         color: PALETTE,
         grid: { left: 8, right: 30, top: 10, bottom: 6, containLabel: true },
         tooltip: Object.assign({}, TOOLTIP, { trigger: 'axis' }),
         xAxis: { type: 'value' },
         yAxis: { type: 'category', data: breakdown.map(function (p) { return p[0] }) },
-        series: [{
+      }
+      if (!quoted) {
+        option.series = [{
           type: 'bar', barMaxWidth: 22,
           label: { show: true, position: 'right', formatter: function (p) { return num(p.value) } },
           data: breakdown.map(function (p) { return p[1] }),
-        }],
-      })
+        }]
+      } else {
+        // The bar IS the quota, split into what has been done and what is
+        // left, with anything over it on the end. Stacking the value on top of
+        // the target would be arithmetic nobody can read: 86 interviews plus a
+        // quota of 100 is not 186 of anything.
+        var part = function (pick) {
+          return breakdown.map(function (pair) {
+            var target = Number(quotas[pair[0]])
+            var value = Number(pair[1]) || 0
+            if (!(target > 0)) return pick === 'within' ? value : 0
+            if (pick === 'within') return Math.min(value, target)
+            if (pick === 'left') return Math.max(target - value, 0)
+            return Math.max(value - target, 0)
+          })
+        }
+        var bar = function (name, values, colour) {
+          return {
+            type: 'bar', stack: 'quota', barMaxWidth: 22, name: name,
+            itemStyle: colour ? { color: colour } : undefined,
+            data: values,
+          }
+        }
+        option.legend = { bottom: 0, itemHeight: 8, itemWidth: 12, textStyle: { fontSize: 11 } }
+        option.grid.bottom = 24
+        option.series = lower
+          ? [bar('Within the limit', part('within')), bar('Over the limit', part('over'), '#dc2626')]
+          : [
+              bar('Achieved', part('within')),
+              bar('Still to go', part('left'), 'rgba(148,163,184,0.35)'),
+              bar('Over target', part('over'), '#16a34a'),
+            ]
+      }
+      instance.setOption(option)
       drawn.push({ chart: instance, refit: function () {} })
     }
   }
