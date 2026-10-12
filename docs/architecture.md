@@ -488,6 +488,7 @@ backend/app/
 
                 publishing it
                   static_export.py    a dashboard as one HTML file
+                  export_workbook.py  the same board's numbers as a workbook
                   export_lib.py       the drawing libraries it carries
                   export_fonts.py     the fonts it carries
                   export_appearance.py how it is dressed
