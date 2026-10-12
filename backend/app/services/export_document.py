@@ -18,27 +18,27 @@ from __future__ import annotations
 import io
 from typing import Any
 
-from app.services.export_tables import NO_NUMBERS, _said_plainly, widget_table
+from app.services.export_tables import (
+    NO_NUMBERS,
+    _said_plainly,
+    disclosure_note,
+    figure,
+    widget_table,
+)
 
 
 def _written(value: Any) -> str:
-    """A number as a document writes one.
+    """A value as a document writes one.
 
-    Thousands separated, and decimals only where there are any: a column of
-    counts with ".0" after each one reads as a measurement rather than a
-    count.
+    A number the way the tables write theirs, a boolean as the word a reader
+    expects rather than as a 1, and anything else as it stands.
     """
     if value is None:
         return ""
     if isinstance(value, bool):
         return "Yes" if value else "No"
     if isinstance(value, (int, float)):
-        number = float(value)
-        if number != number:  # NaN
-            return ""
-        if number == int(number) and abs(number) < 1e15:
-            return f"{int(number):,}"
-        return f"{number:,.2f}"
+        return figure(value)
     return str(value)
 
 
@@ -108,10 +108,15 @@ def _widget(board: Any, widget: dict[str, Any], muted: Any) -> None:
 
     table = widget_table(widget)
     if table is None:
+        # Why it is not here, in the widget's own terms where there are any: a
+        # frozen chart does have numbers, they just cannot be worked out again
+        # from what this file carries, and "it carries no numbers" would be
+        # the one explanation that is not true.
+        why = NO_NUMBERS.get(kind) or str(widget.get("frozen_because") or "")
+        if not why and str(widget.get("kind") or "") == "snapshot":
+            why = "its figures cannot be worked out again outside the platform"
         line = board.add_paragraph()
-        run = line.add_run(
-            "Not in this document: " + NO_NUMBERS.get(kind, "it carries no numbers") + "."
-        )
+        run = line.add_run("Not in this document: " + (why or "it carries no numbers") + ".")
         run.italic = True
         run.font.size = Pt(9)
         run.font.color.rgb = muted
@@ -130,6 +135,16 @@ def _widget(board: Any, widget: dict[str, Any], muted: Any) -> None:
         cells = written.add_row().cells
         for column, value in enumerate(row[: len(heading)]):
             cells[column].text = _written(value)
+
+    # An asterisk in a cell means a withheld figure, which has to be said
+    # under the table that has one or it reads as a missing footnote.
+    note = disclosure_note(widget)
+    if note:
+        line = board.add_paragraph()
+        run = line.add_run(note)
+        run.italic = True
+        run.font.size = Pt(9)
+        run.font.color.rgb = muted
 
     caption = str((widget.get("style") or {}).get("caption") or "").strip()
     if caption:

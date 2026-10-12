@@ -38,6 +38,41 @@ def _number(value: Any) -> float | None:
     return None if number != number else number  # NaN is not a number here
 
 
+#: What the exported page prints where a cell is withheld under disclosure
+#: control, and where there is no number to print at all. The same two marks
+#: here, because a reader holding both files should not have to learn a second
+#: notation for the same two things.
+WITHHELD = "*"
+MISSING = "-"
+
+
+def figure(value: Any) -> str:
+    """A number as a report writes one.
+
+    Thousands separated, and decimals only where there are any: a column of
+    counts with ".0" after each one reads as a measurement rather than a
+    count.
+    """
+    number = _number(value)
+    if number is None:
+        return ""
+    if number == int(number) and abs(number) < 1e15:
+        return f"{int(number):,}"
+    return f"{number:,.2f}"
+
+
+def _text(value: Any) -> str:
+    """A category label as the page writes one."""
+    if value is None:
+        return ""
+    written = str(value)
+    # A day is stored as a moment at midnight, and a row headed
+    # "2026-07-19 00:00:00" is a machine talking to itself.
+    if len(written) >= 19 and written[10] in " T" and written[11:19] == "00:00:00":
+        return written[:10]
+    return written
+
+
 def combine(cube: dict[str, Any]) -> tuple[list[dict[str, str]], list[list[Any]]]:
     """A cube added back up to the widget's own grouping.
 
@@ -163,6 +198,148 @@ def indicator_value(widget: dict[str, Any]) -> tuple[float | None, list[tuple[An
     return share, breakdown
 
 
+def crosstab_table(widget: dict[str, Any]) -> tuple[list[str], list[list[Any]]]:
+    """A cross-tabulation as the grid the board shows, not as a list of cells.
+
+    A crosstab's cube is one row per combination, which is how the page can
+    re-add it under a filter but not how anybody reads a cross-tabulation: the
+    row variable down the side, the column variable across the top, the cell
+    where they meet. So the grid is laid out again here the way the exported
+    page lays it out, including the percentages and the totals the widget was
+    set to show, and a reader comparing the two files finds the same table in
+    both.
+    """
+    spec = widget.get("crosstab") or {}
+    if spec.get("fixed"):
+        return _finished_crosstab(spec)
+
+    columns, rows = combine(widget.get("cube") or {})
+    # A table can be asked for with no cell values at all: the categories of
+    # the one variable it has and nothing beside them. There is nothing to
+    # total either, so the stand-in column and both total lines go.
+    shows_values = spec.get("show_values") is not False
+    with_totals = bool(spec.get("include_totals")) and shows_values
+    crossed = len(columns) > 2
+
+    down: list[str] = []
+    across: list[str] = []
+    cells: dict[tuple[str, str], float] = {}
+    for row in rows:
+        side = _text(row[0]) or "(missing)"
+        top = (_text(row[1]) or "(missing)") if crossed else str(spec.get("measure_label") or "")
+        if side not in down:
+            down.append(side)
+        if shows_values and top not in across:
+            across.append(top)
+        cells[(side, top)] = cells.get((side, top), 0.0) + (_number(row[-1]) or 0.0)
+    down.sort()
+    across.sort()
+
+    along = {side: sum(cells.get((side, top), 0.0) for top in across) for side in down}
+    downwards = {top: sum(cells.get((side, top), 0.0) for side in down) for top in across}
+    whole = sum(along.values())
+
+    def shown(value: float, side: str, top: str) -> Any:
+        """A cell as the widget shows it: a count, or its share of a margin."""
+        of = spec.get("percentages")
+        base = along.get(side) if of == "row" else downwards.get(top) if of == "column" else whole
+        if of in ("row", "column", "total"):
+            return f"{(value / base) * 100:,.1f}%" if base else MISSING
+        return value
+
+    heading = [str(spec.get("row_variable") or spec.get("column_variable") or "")]
+    heading.extend(across)
+    if with_totals:
+        heading.append("Total")
+
+    out: list[list[Any]] = []
+    for side in down:
+        line: list[Any] = [side]
+        line.extend(shown(cells.get((side, top), 0.0), side, top) for top in across)
+        if with_totals:
+            line.append(along[side])
+        out.append(line)
+    if with_totals:
+        last: list[Any] = ["Total"]
+        last.extend(downwards[top] for top in across)
+        last.append(whole)
+        out.append(last)
+    return heading, out
+
+
+def _finished_crosstab(spec: dict[str, Any]) -> tuple[list[str], list[list[Any]]]:
+    """A crosstab that arrived already computed, under disclosure control.
+
+    Where a disclosure floor is set the table is worked out on the server and
+    travels finished, because a cube is the cell values and the withheld ones
+    are exactly what must not travel. Nothing is recomputed here either: the
+    withheld cells stay withheld, marked as the page marks them.
+    """
+    fixed = spec.get("fixed") or {}
+    across = [str(label) for label in fixed.get("column_labels") or []]
+    down = fixed.get("row_labels") or []
+    values = fixed.get("values") or []
+    hidden = fixed.get("suppressed") or []
+    with_totals = bool(spec.get("include_totals")) and bool(across)
+    with_row_totals = len(across) > 1
+    suffix = "" if spec.get("percentages") == "none" else "%"
+
+    def margin(value: Any) -> Any:
+        return WITHHELD if value is None else value
+
+    heading = [str(spec.get("row_variable") or spec.get("column_variable") or "")]
+    heading.extend(across)
+    if with_row_totals:
+        heading.append("Total")
+
+    out: list[list[Any]] = []
+    for index, label in enumerate(down):
+        line: list[Any] = [str(label)]
+        withheld = hidden[index] if index < len(hidden) else []
+        for column, value in enumerate(values[index] if index < len(values) else []):
+            if column < len(withheld) and withheld[column]:
+                line.append(WITHHELD)
+            elif value is None:
+                line.append(MISSING)
+            else:
+                line.append(figure(value) + suffix if suffix else value)
+        if with_row_totals:
+            line.append(margin((fixed.get("row_totals") or [None] * len(down))[index]))
+        out.append(line)
+    if with_totals and len(down) > 1:
+        last: list[Any] = ["Total"]
+        last.extend(margin(value) for value in fixed.get("column_totals") or [])
+        if with_row_totals:
+            last.append(margin(fixed.get("grand_total")))
+        out.append(last)
+    return heading, out
+
+
+def disclosure_note(widget: dict[str, Any]) -> str:
+    """What a withheld cell means, for the foot of a table that has any.
+
+    An asterisk nobody explains is worse than a gap: a reader takes it for a
+    footnote that went missing. Said only where the table actually withheld
+    something, or dropped a category for being below the floor.
+    """
+    fixed = (widget.get("crosstab") or {}).get("fixed") or {}
+    if not fixed:
+        return ""
+    floor = fixed.get("threshold")
+    withheld = any(any(row or []) for row in fixed.get("suppressed") or [])
+    dropped = int(fixed.get("rows_withheld") or 0)
+    said = []
+    if withheld:
+        said.append(f"{WITHHELD} withheld to protect fewer than {floor} records.")
+    if dropped:
+        said.append(
+            f"{dropped} categor{'y' if dropped == 1 else 'ies'} below that floor "
+            + ("is" if dropped == 1 else "are")
+            + " not listed."
+        )
+    return " ".join(said)
+
+
 def widget_table(widget: dict[str, Any]) -> tuple[list[str], list[list[Any]]] | None:
     """One widget as a heading row and its rows, or None if it has no numbers."""
     kind = str(widget.get("kind") or "")
@@ -170,6 +347,9 @@ def widget_table(widget: dict[str, Any]) -> tuple[list[str], list[list[Any]]] | 
         cube = widget.get("cube") or {}
         columns, rows = combine(cube)
         return [column["label"] for column in columns], _sorted(columns, rows, cube)
+
+    if kind == "crosstab":
+        return crosstab_table(widget)
 
     if kind == "indicator":
         spec = widget.get("indicator") or {}

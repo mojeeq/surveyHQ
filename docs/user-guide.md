@@ -1201,6 +1201,15 @@ picture of it - a picture nobody can check is worth less than numbers somebody
 can quote - and a text box is carried as what it says, because that is already
 prose.
 
+A cross-tabulation comes out as the table you see on the board, not as a list
+of its cells: the row variable down the side, the columns across the top, the
+percentages and the totals it was set to show. Where a disclosure floor is in
+force the withheld cells stay withheld, marked `*`, and the line under the
+table says what the mark means and how many categories are not listed. A
+widget the file cannot work out again - a chart resting on a median, one whose
+dataset has gone - says so under its own heading, with the reason, rather than
+leaving a gap you have to notice.
+
 For **PDF**, open the web page and print it: it has a print layout, with
 margins, no tab strip, each card kept whole rather than split across a page
 break, folded groups opened for the printing, and the filters printed as the
