@@ -25,7 +25,14 @@ function useClickOutside(refs: React.RefObject<HTMLElement>[], onOutside: () => 
 type NavItem = { to: string; label: string; icon: AppIconName; end?: boolean }
 type NavGroup = { label: string; items: NavItem[] }
 
-const NAV_GROUPS: NavGroup[] = [
+/**
+ * The side navigation.
+ *
+ * Exported for the test that keeps every row's icon its own: Targets shipped
+ * wearing Indicators' radar, and two identical tiles one above the other read
+ * as one page listed twice.
+ */
+export const NAV_GROUPS: NavGroup[] = [
   {
     label: 'Workspace',
     items: [
@@ -51,7 +58,7 @@ const NAV_GROUPS: NavGroup[] = [
     label: 'Monitor',
     items: [
       { to: '/monitoring', label: 'Indicators', icon: 'monitoring' },
-      { to: '/targets', label: 'Targets', icon: 'monitoring' },
+      { to: '/targets', label: 'Targets', icon: 'targets' },
       { to: '/quality', label: 'Data quality', icon: 'quality' },
       { to: '/alerts', label: 'Alerts', icon: 'alerts' },
     ],
