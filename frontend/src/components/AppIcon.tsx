@@ -24,6 +24,7 @@ export type AppIconName =
   | 'explore'
   | 'dashboards'
   | 'monitoring'
+  | 'targets'
   | 'quality'
   | 'alerts'
   | 'admin'
@@ -111,6 +112,30 @@ function glyph(name: AppIconName, fill: string, shadow: string) {
           <circle cx="12" cy="12" r="7.2" fill="none" stroke={fill} strokeWidth="1.5" />
           <circle cx="12" cy="12" r="4.2" fill="none" stroke={fill} strokeWidth="1.2" opacity="0.8" />
           <circle cx="12" cy="12" r="1.8" fill={fill} />
+        </g>
+      )
+    case 'targets':
+      // Bars against the line they are aiming at: a quota per group, one of
+      // them past it and two short, which is what the page is for. Not a
+      // second bullseye - Indicators already has the radar, and two rings
+      // side by side in the sidebar are one icon printed twice.
+      return (
+        <g>
+          {/* The line sits clear of the bars rather than crossing them: a rule
+              in the shadow tone disappears into the gaps at sidebar size, and
+              an icon has to be identified before it is read. */}
+          <path
+            d="M5.6 9.1H18.4"
+            stroke={fill}
+            strokeWidth="2.3"
+            strokeLinecap="round"
+            fill="none"
+          />
+          <g fill={fill}>
+            <rect x="5.9" y="12.6" width="3.2" height="5.5" rx="0.8" />
+            <rect x="10.4" y="11.1" width="3.2" height="7.0" rx="0.8" />
+            <rect x="14.9" y="14.4" width="3.2" height="3.7" rx="0.8" />
+          </g>
         </g>
       )
     case 'quality':
