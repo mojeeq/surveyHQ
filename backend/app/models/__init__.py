@@ -42,6 +42,7 @@ from app.models.monitoring import (
     QualityResult,
     QualityRule,
     Severity,
+    TargetSet,
 )
 from app.models.project import (
     Project,
@@ -94,6 +95,7 @@ __all__ = [
     "WidgetType",
     "Indicator",
     "IndicatorSnapshot",
+    "TargetSet",
     "AlertRule",
     "Alert",
     "AlertStatus",

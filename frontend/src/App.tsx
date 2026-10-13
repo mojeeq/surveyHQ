@@ -23,6 +23,7 @@ const Explore = lazy(PAGES['/explore'])
 const Dashboards = lazy(PAGES['/dashboards'])
 const DashboardView = lazy(() => import('@/pages/DashboardView'))
 const Monitoring = lazy(PAGES['/monitoring'])
+const Targets = lazy(PAGES['/targets'])
 const Quality = lazy(PAGES['/quality'])
 const Alerts = lazy(PAGES['/alerts'])
 const Admin = lazy(PAGES['/admin'])
@@ -112,6 +113,7 @@ export default function App() {
           <Route path="dashboards" element={<Dashboards />} />
           <Route path="dashboards/:id" element={<DashboardView />} />
           <Route path="monitoring" element={<Monitoring />} />
+          <Route path="targets" element={<Targets />} />
           <Route path="quality" element={<Quality />} />
           <Route path="alerts" element={<Alerts />} />
           <Route path="help" element={<Help />} />

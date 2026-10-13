@@ -17,6 +17,7 @@ export const PAGES = {
   '/explore': () => import('@/pages/Explore'),
   '/dashboards': () => import('@/pages/Dashboards'),
   '/monitoring': () => import('@/pages/Monitoring'),
+  '/targets': () => import('@/pages/Targets'),
   '/quality': () => import('@/pages/Quality'),
   '/alerts': () => import('@/pages/Alerts'),
   '/help': () => import('@/pages/Help'),

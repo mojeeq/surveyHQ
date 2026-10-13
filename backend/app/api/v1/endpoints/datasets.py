@@ -920,9 +920,15 @@ def variable_values(
     variable: str,
     db: DbSession,
     user: CurrentUser,
-    limit: int = Query(default=200, le=1000),
+    limit: int = Query(default=200, le=20_000),
 ) -> list[dict[str, Any]]:
-    """Distinct values for building filters in the UI."""
+    """Distinct values for building filters in the UI.
+
+    The ceiling is generous because a filter dropdown is not the only caller:
+    a target list is one quota per enumeration area, and a census has
+    thousands of them. Checking a pasted list against the values the data
+    actually holds means being able to ask for all of them.
+    """
     dataset = get_ready_dataset(dataset_id, db, user)
     ctx = DatasetContext.from_model(dataset)
     try:

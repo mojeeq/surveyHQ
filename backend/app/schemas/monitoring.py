@@ -28,6 +28,8 @@ class IndicatorCreate(BaseModel):
     breakdown_variable: str = ""
     # {"North": 400, "South": 600} - a quota per category of that breakdown.
     breakdown_targets: dict[str, float] = Field(default_factory=dict)
+    # A shared target set instead, which wins over the inline quotas above.
+    target_set_id: str | None = None
     percent_of: Literal["", "all_rows", "answered"] = ""
     display_order: int = 0
 
@@ -48,6 +50,8 @@ class IndicatorUpdate(BaseModel):
     direction: Direction | None = None
     breakdown_variable: str | None = None
     breakdown_targets: dict[str, float] | None = None
+    # "" clears the link and goes back to this indicator's own quotas.
+    target_set_id: str | None = None
     percent_of: Literal["", "all_rows", "answered"] | None = None
     is_active: bool | None = None
     display_order: int | None = None
@@ -70,6 +74,7 @@ class IndicatorOut(BaseModel):
     breakdown_variable: str = ""
     # {"North": 400, "South": 600} - a quota per category of that breakdown.
     breakdown_targets: dict[str, float] = Field(default_factory=dict)
+    target_set_id: str | None = None
     percent_of: str = ""
     is_active: bool = True
     display_order: int = 0
@@ -93,10 +98,64 @@ class IndicatorValue(BaseModel):
     # makes it. Beside the raw breakdown rather than instead of it, so a reader
     # that only wants the numbers is unaffected.
     breakdown_progress: dict[str, dict[str, Any]] = Field(default_factory=dict)
+    # True where the breakdown has more groups than one answer reports.
+    breakdown_truncated: bool = False
     breakdown_variable: str = ""
     computed_at: dt.datetime | None = None
     error: str | None = None
     trend: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class TargetSetCreate(BaseModel):
+    """A quota per category of one variable, as its own record."""
+
+    name: str
+    description: str = ""
+    dataset_id: str
+    variable: str = ""
+    # Keyed by the value as the data holds it. Two thousand entries is normal
+    # for a census, so this is never rendered as a form field per key.
+    targets: dict[str, float] = Field(default_factory=dict)
+
+
+class TargetSetUpdate(BaseModel):
+    name: str | None = None
+    description: str | None = None
+    variable: str | None = None
+    # Replaces the lot. A pasted list is the whole list, and merging would make
+    # removing a category impossible.
+    targets: dict[str, float] | None = None
+
+
+class TargetSetOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    description: str
+    dataset_id: str
+    variable: str
+    targets: dict[str, float]
+    created_at: dt.datetime | None = None
+    updated_at: dt.datetime | None = None
+
+
+class TargetSetSummary(BaseModel):
+    """A set without its two thousand rows, for the list and the pickers."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    description: str
+    dataset_id: str
+    dataset_name: str = ""
+    variable: str
+    categories: int = 0
+    total: float = 0.0
+    used_by: int = 0
+    updated_at: dt.datetime | None = None
+
 
 
 class AlertRuleCreate(BaseModel):

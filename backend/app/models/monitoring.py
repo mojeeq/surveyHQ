@@ -91,6 +91,14 @@ class Indicator(UUIDMixin, TimestampMixin, Base):
     breakdown_targets: Mapped[dict] = mapped_column(
         JSON, default=dict, server_default=text("'{}'")
     )
+    # A shared target set, which wins over the inline targets above. Inline
+    # targets stay for the indicators that already carry them and for the small
+    # case - four provinces typed in once - where a separate record would be
+    # ceremony. Set this and the list lives in one place for every indicator
+    # reading it.
+    target_set_id: Mapped[str | None] = mapped_column(
+        ForeignKey("target_sets.id", ondelete="SET NULL"), index=True, nullable=True
+    )
     # What the value is a percentage of, if it is one. Empty means it is a
     # plain number. "all_rows" divides by every row in the dataset before the
     # indicator's own filters, which is how "% of interviews completed" is
@@ -107,11 +115,51 @@ class Indicator(UUIDMixin, TimestampMixin, Base):
     last_value: Mapped[float | None] = mapped_column(Float)
     last_computed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
 
+    # Loaded with the indicator rather than on demand: every list of
+    # indicators asks each one for its quotas, and a lazy load there is a query
+    # per tile on the page.
+    target_set: Mapped[TargetSet | None] = relationship(lazy="selectin")
+
     snapshots: Mapped[list[IndicatorSnapshot]] = relationship(
         back_populates="indicator",
         cascade="all, delete-orphan",
         order_by="desc(IndicatorSnapshot.computed_at)",
     )
+
+
+class TargetSet(UUIDMixin, TimestampMixin, Base):
+    """A quota per category of one variable, kept as a thing of its own.
+
+    A census carries its targets as a list: so many households in each of two
+    thousand enumeration areas. That list is not an attribute of one indicator.
+    It is prepared before fieldwork, by somebody who is not watching a
+    dashboard, it outlives the indicators that read it, and the same list is
+    usually read by several of them - households enumerated, questionnaires
+    received, interviews verified, all against the same area quotas.
+
+    Kept inside an indicator it had to be retyped for each one and could be
+    looked at only through that indicator's tile. So it is its own record,
+    pointed at by the indicators that use it, and free to be drawn however the
+    reader wants.
+
+    `targets` is {category: number}, keyed by the value as the data holds it.
+    Two thousand entries is a 40 KB JSON column, which is nothing to Postgres
+    and far simpler than a row per category: nothing joins against it, nothing
+    queries inside it, and it is always read whole.
+    """
+
+    __tablename__ = "target_sets"
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="")
+    # The dataset the categories belong to, which is also what decides who can
+    # see the set: a target list is as sensitive as the survey it is for.
+    dataset_id: Mapped[str] = mapped_column(
+        ForeignKey("datasets.id", ondelete="CASCADE"), index=True
+    )
+    # The variable whose values the keys are: "EA_Id", "province", "sex".
+    variable: Mapped[str] = mapped_column(String(300), default="")
+    targets: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'"))
 
 
 class IndicatorSnapshot(UUIDMixin, Base):
