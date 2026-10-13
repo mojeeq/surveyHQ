@@ -867,7 +867,10 @@ To build a dashboard:
    transparency, so the two settings do not cancel each other.
 5. **Pages** - **+ Page** adds one; double-click a tab to rename it, and ◀ ▶
    move it earlier or later. A page takes its widgets with it, so reordering is
-   safe. Each page lays out on its own and has its own filters.
+   safe. Each page lays out on its own and has its own filters, which is why
+   the tab strip sits above the filter bar rather than under it: a page with
+   three filters and a page with none would otherwise move the tabs up and
+   down under the pointer as you clicked along them.
 6. **Add group** - a named box around a handful of widgets; see below. It is
    offered while you are arranging, because that is when a board is being put
    in order.
