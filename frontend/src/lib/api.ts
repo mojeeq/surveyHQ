@@ -127,6 +127,20 @@ function filterScopedCollection<T>(requestedPath: string, value: T): T {
   return value
 }
 
+
+/**
+ * A validator's complaint, as a sentence rather than as a schema's notes.
+ *
+ * The server validates with pydantic, which prefixes a message written for a
+ * reader with the name of the thing that raised it: "Value error, the formula
+ * uses 'part_2', which is not one of its parts". The sentence after it was
+ * written to be read; the three words before it were not, and there is nothing
+ * the reader can do with them.
+ */
+export function plainly(message: string): string {
+  return String(message).replace(/^(Value|Type|Assertion) error,\s*/, '')
+}
+
 async function request<T>(path: string, options: Options = {}): Promise<T> {
   const { body, raw, headers, ...rest } = options
   const token = tokenStore.get()
@@ -177,7 +191,7 @@ async function request<T>(path: string, options: Options = {}): Promise<T> {
     try {
       const payload = await response.json()
       if (typeof payload.detail === 'string') message = payload.detail
-      else if (Array.isArray(payload.detail)) message = payload.detail[0]?.msg ?? message
+      else if (Array.isArray(payload.detail)) message = plainly(payload.detail[0]?.msg ?? message)
       if (Array.isArray(payload.errors)) fields = payload.errors
     } catch {
       /* keep the default message */
