@@ -33,7 +33,7 @@ def _text(document) -> str:
 
 def _payload(**extra):
     return {
-        "name": "Cook Islands Census 2026",
+        "name": "National Census 2026",
         "description": "Fieldwork monitoring",
         "generated_at": "2026-10-12T09:30:00+00:00",
         "pages": [{"name": "Home Page"}],
@@ -48,7 +48,7 @@ def test_it_opens_as_a_document_and_says_what_it_is_of():
     )))
     text = _text(document)
 
-    assert "Cook Islands Census 2026" in text
+    assert "National Census 2026" in text
     assert "Fieldwork monitoring" in text
     assert "Island: Pukapuka" in text
     assert "12 October 2026, 09:30 UTC" in text
@@ -65,7 +65,7 @@ def test_a_widget_becomes_a_heading_and_a_table():
             {"name": "province", "label": "Province", "type": "dimension", "data_type": "text"},
             {"name": "value", "label": "Interviews", "type": "measure", "data_type": "number"},
         ],
-        "rows": [["Shefa", 1240], ["Sanma", 860]],
+        "rows": [["Northern", 1240], ["Highland", 860]],
         "top": None,
         "sort": [],
     }
@@ -79,8 +79,8 @@ def test_a_widget_becomes_a_heading_and_a_table():
     rows = [[cell.text for cell in row.cells] for row in document.tables[0].rows]
     assert rows[0] == ["Province", "Interviews"]
     # Thousands separated, and no decimal point on a count.
-    assert rows[1] == ["Shefa", "1,240"]
-    assert rows[2] == ["Sanma", "860"]
+    assert rows[1] == ["Northern", "1,240"]
+    assert rows[2] == ["Highland", "860"]
 
 
 def test_a_text_widget_is_carried_as_what_it_says():
@@ -130,7 +130,7 @@ def test_the_document_and_the_board_hold_the_same_figures(client, auth_headers):
     frame = pd.DataFrame(
         {
             "interview__key": [f"k{i}" for i in range(10)],
-            "province": ["Shefa"] * 6 + ["Sanma"] * 4,
+            "province": ["Northern"] * 6 + ["Highland"] * 4,
             "age": [20.0, 30.0, 40.0, 50.0, 60.0, 10.0, 25.0, 35.0, 45.0, 55.0],
         }
     )
@@ -176,8 +176,8 @@ def test_the_document_and_the_board_hold_the_same_figures(client, auth_headers):
     # Read back as numbers: how they are written is the unit test above, and
     # what matters here is that the document holds the board's own figures.
     means = {row[0]: float(row[1].replace(",", "")) for row in rows[1:]}
-    assert means["Shefa"] == pytest.approx(frame[frame.province == "Shefa"]["age"].mean())
-    assert means["Sanma"] == pytest.approx(frame[frame.province == "Sanma"]["age"].mean())
+    assert means["Northern"] == pytest.approx(frame[frame.province == "Northern"]["age"].mean())
+    assert means["Highland"] == pytest.approx(frame[frame.province == "Highland"]["age"].mean())
 
 
 def test_a_number_with_a_decimal_keeps_it():
@@ -186,7 +186,7 @@ def test_a_number_with_a_decimal_keeps_it():
     assert export_document._written(36.6666) == "36.67"
     assert export_document._written(None) == ""
     assert export_document._written(float("nan")) == ""
-    assert export_document._written("Shefa") == "Shefa"
+    assert export_document._written("Northern") == "Northern"
 
 
 @pytest.mark.parametrize("value", [True, False])

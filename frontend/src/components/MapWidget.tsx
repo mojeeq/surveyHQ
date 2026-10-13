@@ -314,7 +314,7 @@ export default function MapWidget({
     // record of that has to be cleared with the map it belonged to: a fresh
     // instance opens on the whole planet, and if it still counted as framed
     // nothing would ever move it to the survey - which is what a torn-down and
-    // rebuilt map did, leaving every pin in one dot in the Pacific.
+    // rebuilt map did, leaving every pin in one dot on a world map.
     framed.current = ''
     setTilesFailed(false)
 

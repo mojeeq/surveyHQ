@@ -29,7 +29,7 @@ from app.services.stata_frame import Frame, Workspace, row_count, variables_of, 
 PEOPLE = pd.DataFrame(
     {
         "hhid": [3.0, 1.0, 2.0, 1.0],
-        "province": ["Tafea", "Shefa", "Sanma", "Shefa"],
+        "province": ["Southern", "Northern", "Highland", "Northern"],
         "wage": [30.0, 10.0, 20.0, None],
         # What ingest writes beside a variable that had Stata's .a and .b: which
         # kind of missing each blank was.

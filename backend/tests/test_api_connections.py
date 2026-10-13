@@ -172,12 +172,12 @@ def test_a_connection_can_be_told_what_time_to_import(client, auth_headers):
         sync_enabled=True,
         sync_mode="daily",
         sync_times=["18:00", "06:00"],
-        sync_timezone="Pacific/Efate",
+        sync_timezone="Etc/GMT-11",
     )
     assert connection["sync_mode"] == "daily"
     # Sorted and de-duplicated on the way in
     assert connection["sync_times"] == ["06:00", "18:00"]
-    assert connection["sync_timezone"] == "Pacific/Efate"
+    assert connection["sync_timezone"] == "Etc/GMT-11"
 
     changed = client.patch(
         f"/api/v1/connections/{connection['id']}",

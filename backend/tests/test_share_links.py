@@ -16,7 +16,7 @@ import datetime as dt
 
 import pytest
 
-PASSWORD = "vanuatu-lfs-2026"
+PASSWORD = "labour-force-2026"
 
 
 @pytest.fixture

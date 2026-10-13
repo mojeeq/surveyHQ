@@ -372,7 +372,7 @@ expression, so the scheduler ticking at any interval finer than a day cannot
 miss an occurrence, and cannot fire the same one twice.
 
 Times are read in the connection's zone because fieldwork happens somewhere:
-06:00 means six in the morning there, which in Vanuatu is five the previous
+06:00 means six in the morning there, which at UTC+11 is five the previous
 afternoon in UTC. Getting it wrong is not an hour's error, it is a day's.
 
 Each run's export zip is kept under `sync-archives/`, the last five per

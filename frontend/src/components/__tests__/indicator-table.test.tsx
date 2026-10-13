@@ -17,11 +17,11 @@ import { BreakdownTable } from '@/components/dashboard/BreakdownTable'
 import { breakdownRows, orderBreakdown, type BreakdownOrder } from '@/lib/breakdown-order'
 import { STATUS_COLORS } from '@/lib/charts'
 
-const breakdown: Record<string, number> = { Shefa: 103, Sanma: 100, Tafea: 97 }
+const breakdown: Record<string, number> = { Northern: 103, Highland: 100, Southern: 97 }
 
 const progress = {
-  Shefa: { value: 103, target: 150, percent: 68.67, status: 'warning' },
-  Sanma: { value: 100, target: 100, percent: 100, status: 'ok' },
+  Northern: { value: 103, target: 150, percent: 68.67, status: 'warning' },
+  Highland: { value: 100, target: 100, percent: 100, status: 'ok' },
 }
 
 /** The tile's own arithmetic, so the test reads what the widget would show. */
@@ -55,13 +55,13 @@ describe('a breakdown drawn as a table', () => {
   it('gives each group its value, its own quota and its share of it', () => {
     const read = words(render())
 
-    expect(read).toContain('Shefa 103 150 69%')
-    expect(read).toContain('Sanma 100 100 100%')
+    expect(read).toContain('Northern 103 150 69%')
+    expect(read).toContain('Highland 100 100 100%')
   })
 
   it('leaves the quota columns empty for a group that has none', () => {
     // Not nought per cent: there is no quota to be nought of.
-    expect(words(render())).toContain('Tafea 97 - -')
+    expect(words(render())).toContain('Southern 97 - -')
   })
 
   it('reads a limit as a share of the limit', () => {
@@ -71,7 +71,7 @@ describe('a breakdown drawn as a table', () => {
   it('colours each share the way that group is coloured anywhere else', () => {
     const html = render()
 
-    // Shefa is behind and Sanma is not, so the two figures cannot be one ink.
+    // Northern is behind and Highland is not, so the two figures cannot be one ink.
     expect(html).toContain(`color:${STATUS_COLORS.warning}`)
     expect(html).toContain(`color:${STATUS_COLORS.ok}`)
     expect(STATUS_COLORS.warning).not.toBe(STATUS_COLORS.ok)
@@ -81,9 +81,9 @@ describe('a breakdown drawn as a table', () => {
     const named = words(render({ order: 'name' }))
     const behind = words(render())
 
-    expect(named.indexOf('Sanma')).toBeLessThan(named.indexOf('Shefa'))
-    // The default asks who is behind, which is Shefa at 69% of its quota.
-    expect(behind.indexOf('Shefa')).toBeLessThan(behind.indexOf('Sanma'))
+    expect(named.indexOf('Highland')).toBeLessThan(named.indexOf('Northern'))
+    // The default asks who is behind, which is Northern at 69% of its quota.
+    expect(behind.indexOf('Northern')).toBeLessThan(behind.indexOf('Highland'))
   })
 
   it('drops the quota columns where no group has a quota', () => {
@@ -91,6 +91,6 @@ describe('a breakdown drawn as a table', () => {
 
     expect(read).toContain('province Interviews done')
     expect(read).not.toContain('Target')
-    expect(read).toContain('Shefa 103')
+    expect(read).toContain('Northern 103')
   })
 })

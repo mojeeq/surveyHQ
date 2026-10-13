@@ -53,7 +53,7 @@ def _finished_run(db, dashboard_id: str, *, days_ago: int, place: Path) -> tuple
     file.write_bytes(b"PK\x03\x04 pretend this is fourteen reports")
     job.result = {
         "variable": "province",
-        "written": ["Shefa"],
+        "written": ["Northern"],
         "skipped": [],
         "path": str(file),
         "bytes": file.stat().st_size,
@@ -78,7 +78,7 @@ def test_a_board_keeps_the_newest_runs_and_loses_the_rest(db_session, place):
     # The row stays and stops claiming a file: the run is still in the history
     # with what it wrote, and the download can say the zip is no longer there.
     assert [job.result["path"] for job, _ in runs[5:]] == ["", ""]
-    assert all(job.result["written"] == ["Shefa"] for job, _ in runs[5:])
+    assert all(job.result["written"] == ["Northern"] for job, _ in runs[5:])
     assert [job.result["path"] for job, file in runs[:5]] == [str(file) for _, file in runs[:5]]
 
 
@@ -205,7 +205,7 @@ def test_a_finished_burst_prunes_the_runs_behind_it(client, auth_headers, place,
         destination.write_bytes(b"PK\x03\x04 the newest run")
         return {
             "variable": variable,
-            "written": ["Shefa"],
+            "written": ["Northern"],
             "skipped": [],
             "path": str(destination),
             "bytes": destination.stat().st_size,

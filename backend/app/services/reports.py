@@ -7,8 +7,8 @@ already done.
 
 This does the loop. It enumerates a filter variable's values, builds a pinned
 export for each, and writes them into one zip. Each file is narrowed rather
-than preselected, exactly as a single pinned export is, so the Shefa file in
-the zip holds Shefa and nothing else and can be forwarded on its own.
+than preselected, exactly as a single pinned export is, so the Northern file in
+the zip holds Northern and nothing else and can be forwarded on its own.
 
 It is slow by nature: every value is a full pass over the dataset for every
 widget, so fourteen provinces is fourteen times the work of one export. That

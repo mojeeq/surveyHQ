@@ -1620,7 +1620,7 @@ def test_a_map_widget_groups_interviews_by_where_they_happened(client, auth_head
             "gps__latitude": [-17.74, -17.74, -15.5, 0.0],
             "gps__longitude": [168.31, 168.31, 167.2, 0.0],
             "people": [4.0, 6.0, 3.0, 9.0],
-            "region": ["Shefa", "Shefa", "Sanma", "Nowhere"],
+            "region": ["Northern", "Northern", "Highland", "Nowhere"],
         }
     )
     archive = _zip_bytes({"located.dta": _stata_bytes(frame)})
@@ -1665,7 +1665,7 @@ def test_a_map_widget_groups_interviews_by_where_they_happened(client, auth_head
     assert (busiest["lat"], busiest["lon"]) == (-17.74, 168.31)
     assert busiest["rows"] == 2
     assert busiest["value"] == 10  # the two households' people, summed
-    assert busiest["region"] == "Shefa"
+    assert busiest["region"] == "Northern"
 
 
 def test_a_dashboard_filter_narrows_the_map(client, auth_headers):
@@ -1675,7 +1675,7 @@ def test_a_dashboard_filter_narrows_the_map(client, auth_headers):
         {
             "gps__latitude": [-17.74, -15.5],
             "gps__longitude": [168.31, 167.2],
-            "region": ["Shefa", "Sanma"],
+            "region": ["Northern", "Highland"],
         }
     )
     uploaded = client.post(
@@ -1703,7 +1703,7 @@ def test_a_dashboard_filter_narrows_the_map(client, auth_headers):
         headers=auth_headers,
         json={
             "op": "and",
-            "conditions": [{"variable": "region", "operator": "eq", "value": "Shefa"}],
+            "conditions": [{"variable": "region", "operator": "eq", "value": "Northern"}],
             "groups": [],
         },
     ).json()

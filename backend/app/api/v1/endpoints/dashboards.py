@@ -1129,7 +1129,7 @@ def _pinned_from_view(
     """The filter selection a saved view stands for, and what to call it.
 
     A view already is the thing somebody wants a report of: its state holds
-    {"filters": {"province": "Malampa"}}, which is exactly one province's
+    {"filters": {"province": "Coastal"}}, which is exactly one province's
     report. Reusing it means the report and the on-screen view cannot drift,
     and nobody has to describe the same selection twice.
     """
@@ -1183,7 +1183,7 @@ def export_dashboard_html(
     db.commit()
     name = slugify(dashboard.name) or "dashboard"
     # The province in the file name, because a folder of fourteen files all
-    # called fiji-census-2017.html is not a set of provincial reports.
+    # called household-census-2017.html is not a set of provincial reports.
     if view_name:
         name = f"{name}-{slugify(view_name) or 'view'}"
     return Response(
@@ -1742,8 +1742,8 @@ def _get_view(
 #
 # The conversation about a board was happening in email beside it. A comment
 # belongs to the reading it was made under as well as to the widget: said while
-# the board was narrowed to Malampa, it is about Malampa, and showing it beside
-# Sanma's numbers would misattribute it.
+# the board was narrowed to Coastal, it is about Coastal, and showing it beside
+# Highland's numbers would misattribute it.
 
 
 def _comment_author(user: User | None) -> str:
@@ -2377,7 +2377,7 @@ def _recheck(ctx: DatasetContext, rule: QualityRule, filters: FilterGroup) -> di
     Nothing is written: this is one reader's view of the data, and a stored
     result is the dataset's. The rule's own filters are kept and the page's are
     added to them, so a check restricted to completed interviews stays
-    restricted to completed interviews in Shefa.
+    restricted to completed interviews in Northern.
     """
     own = quality.rule_filters(rule)
     combined = (

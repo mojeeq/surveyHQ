@@ -4,7 +4,7 @@
  * Projects and dashboards are both "a list of named things with some counts and
  * a date", and both wanted the same three controls: a search box, an order, and
  * a choice between cards and rows. Writing that twice would have meant two
- * search boxes that disagree about whether "palau census" should match "Palau
+ * search boxes that disagree about whether "census 2025" should match "National
  * Census 2025" - which is the kind of difference nobody notices until somebody
  * reports that search is broken on one page and fine on the other.
  *
@@ -19,8 +19,8 @@ export type Direction = 'asc' | 'desc'
 /**
  * Whether one item answers what was typed in the search box.
  *
- * Every word must match something, but not all in the same field: "palau 2025"
- * finds a dashboard called "Palau Census" described as "2025 round", because
+ * Every word must match something, but not all in the same field: "census 2025"
+ * finds a dashboard called "National Census" described as "2025 round", because
  * somebody searching types what they remember, not what is in one column.
  */
 export function matches(query: string, fields: Sortable[]): boolean {

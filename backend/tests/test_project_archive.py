@@ -21,7 +21,7 @@ from tests.test_api_analytics import _stata_bytes, _zip_bytes
 PEOPLE = pd.DataFrame(
     {
         "hhid": [1.0, 2.0, 3.0],
-        "province": ["Shefa", "Sanma", "Tafea"],
+        "province": ["Northern", "Highland", "Southern"],
         "age": [40.0, 9.0, 33.0],
     }
 )

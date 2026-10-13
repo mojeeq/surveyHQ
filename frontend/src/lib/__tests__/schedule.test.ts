@@ -35,10 +35,10 @@ describe('readySchedule', () => {
 
   it('keeps the days and zone it was given', () => {
     const ready = readySchedule(
-      { ...BLANK, days: [0, 3], timezone: 'Pacific/Efate', times: [] },
+      { ...BLANK, days: [0, 3], timezone: 'Etc/GMT-11', times: [] },
       BLANK,
     )
     expect(ready.days).toEqual([0, 3])
-    expect(ready.timezone).toBe('Pacific/Efate')
+    expect(ready.timezone).toBe('Etc/GMT-11')
   })
 })

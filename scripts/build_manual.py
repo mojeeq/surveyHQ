@@ -801,7 +801,7 @@ def chapter_monitoring(document: Document) -> None:
     para(
         document,
         "Once a breakdown variable is chosen, each of its values can be given "
-        "its own target: 140 interviews in Shefa, 50 in Torba. On the dashboard, "
+        "its own target: 140 interviews in Northern, 50 in Western. On the dashboard, "
         "an indicator tile with **Show the breakdown** turned on draws each "
         "group's achievement against its own target, so a province that is "
         "behind is visible without arithmetic.",

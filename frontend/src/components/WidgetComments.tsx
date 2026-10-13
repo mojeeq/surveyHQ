@@ -1,13 +1,13 @@
 /**
  * The conversation about one widget.
  *
- * A monitoring board raises questions - "why is Torba low", "does this include
+ * A monitoring board raises questions - "why is Western low", "does this include
  * allowances" - and those questions were being asked in email beside the
  * board, where the next person to open it never saw them. This puts them on
  * the widget they are about.
  *
  * A comment belongs to the reading it was made under as well as to the widget.
- * Said while the board is narrowed to Malampa, it is about Malampa, so it is
+ * Said while the board is narrowed to Coastal, it is about Coastal, so it is
  * shown under that view and not beside another province's numbers. A note made
  * on the board as it opens carries no view and is shown everywhere, because a
  * general remark is true whatever is selected.

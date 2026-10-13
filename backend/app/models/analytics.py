@@ -219,7 +219,7 @@ class Dashboard(UUIDMixin, TimestampMixin, Base):
     # The hierarchy the whole board drills through, outermost first, e.g.
     # [{"variable": "province", "label": "Province"}, {"variable": "district"}].
     # One list for the dashboard rather than one per chart: drilling is a
-    # question asked of the board ("show me Malampa"), and a page whose charts
+    # question asked of the board ("show me Coastal"), and a page whose charts
     # each sat at their own level would answer several questions at once.
     drilldown: Mapped[list] = mapped_column(
         JSON, default=list, server_default=text("'[]'")
@@ -364,7 +364,7 @@ class Widget(UUIDMixin, TimestampMixin, Base):
 class DashboardView(UUIDMixin, TimestampMixin, Base):
     """A named filter selection somebody wants to come back to.
 
-    A monitoring board is read the same few ways over and over - "Malampa, this
+    A monitoring board is read the same few ways over and over - "Coastal, this
     week", "everything a supervisor rejected" - and setting the filters by hand
     each morning is where the reading stops happening. A view is that selection
     under a name, not a copy of the board: the widgets, layout and data are the
@@ -378,8 +378,8 @@ class DashboardView(UUIDMixin, TimestampMixin, Base):
     )
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     description: Mapped[str] = mapped_column(Text, default="")
-    # What was selected: {"page": 1, "filters": {"province": "Malampa"},
-    # "drill": [{"variable": "province", "value": "Malampa"}]}. A dict because
+    # What was selected: {"page": 1, "filters": {"province": "Coastal"},
+    # "drill": [{"variable": "province", "value": "Coastal"}]}. A dict because
     # a board's controls change, and a view that names a filter the board no
     # longer offers should be ignored rather than refuse to open.
     state: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'"))
@@ -410,8 +410,8 @@ class WidgetComment(UUIDMixin, TimestampMixin, Base):
     would see it.
 
     A comment belongs to the reading it was made under as well as to the
-    widget. Saying "this looks wrong" while the board is narrowed to Malampa is
-    a statement about Malampa, and showing it beside Sanma's numbers would
+    widget. Saying "this looks wrong" while the board is narrowed to Coastal is
+    a statement about Coastal, and showing it beside Highland's numbers would
     misattribute it. So a comment made while a saved view was open is that
     view's; one made on the board as it opens carries no view and is shown
     under every view, because a general note is true whatever is selected.

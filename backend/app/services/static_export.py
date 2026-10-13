@@ -9,8 +9,8 @@ it and see the numbers move.
 So the export carries data rather than pictures. For each widget it takes the
 same query the widget is drawn from and runs it at a finer grain: grouped by
 what the widget groups on *and* by every variable the page's filter controls
-name. That table is the cube. Choosing "Shefa" in the exported page keeps the
-rows where province is Shefa and adds the measures back up, which gives exactly
+name. That table is the cube. Choosing "Northern" in the exported page keeps the
+rows where province is Northern and adds the measures back up, which gives exactly
 the number the platform would have returned for that filter - no approximation,
 because sums of counts are counts.
 
@@ -139,7 +139,7 @@ def _narrowed(
     A pinned export is one province's file, so the narrowing happens here
     rather than being left to the reader: the rows of the other provinces are
     never computed and never travel. That is the difference between a file
-    that opens on Shefa and a file that is Shefa, and it is the whole reason
+    that opens on Northern and a file that is Northern, and it is the whole reason
     not to simply preselect the dropdown - a standalone file is the copy
     nobody can withdraw, and one quietly carrying every other province's
     numbers is the wrong thing to email to a provincial office.
@@ -149,9 +149,9 @@ def _narrowed(
     """
     extra = [
         # use_label, because the values come from _values_for, which asks for
-        # them labelled - the dropdown offers "Aimeliik", not the code stored
+        # them labelled - the dropdown offers "Lowland", not the code stored
         # under it. Without this the comparison reaches DuckDB as
-        # CAST('Aimeliik' AS DOUBLE) against a coded column and the widget
+        # CAST('Lowland' AS DOUBLE) against a coded column and the widget
         # fails with a conversion error. A plain text column has no value
         # labels, so the flag changes nothing there.
         Condition(variable=name, operator="eq", value=value, use_label=True)
@@ -734,7 +734,7 @@ def build_payload(
     # before the widgets are built, which is what keeps it out of every cube.
     # One entry per variable, not per control. The same filter is usually
     # declared on every page that uses it, so a board with five pages read
-    # "State: Aimeliik" five times under its title.
+    # "State: Lowland" five times under its title.
     chosen: list[dict[str, str]] = []
     for control in controls:
         name = control["variable"]

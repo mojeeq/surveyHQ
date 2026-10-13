@@ -61,7 +61,7 @@ function resultFor(kind: ChartType): QueryResult {
       ],
       rows: [
         [PAYLOAD, 1, 2, 3, 4, 5],
-        ['Shefa', 2, 3, 4, 5, 6],
+        ['Northern', 2, 3, 4, 5, 6],
       ],
       row_count: 2,
       truncated: false,
@@ -86,11 +86,11 @@ function resultFor(kind: ChartType): QueryResult {
     rows: twoDim
       ? [
           [PAYLOAD, PAYLOAD, 40],
-          ['Shefa', 'F', 30],
+          ['Northern', 'F', 30],
         ]
       : [
           [PAYLOAD, 40],
-          ['Shefa', 60],
+          ['Northern', 60],
         ],
     row_count: 2,
     truncated: false,

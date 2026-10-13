@@ -1,8 +1,8 @@
 """Comments on widgets, and the reading each one belongs to.
 
 Monitoring is a conversation. "This district looks wrong" said while the board
-is narrowed to Malampa is a statement about Malampa, and showing it beside
-Sanma's numbers would misattribute it - so a comment carries the view it was
+is narrowed to Coastal is a statement about Coastal, and showing it beside
+Highland's numbers would misattribute it - so a comment carries the view it was
 made under, and a note made of the board itself is shown under every view.
 """
 
@@ -24,7 +24,7 @@ def board(client, auth_headers) -> dict:
         json={"title": "A note goes here", "widget_type": "text", "config": {"content": "hi"}},
     ).json()["widgets"][-1]
     views = {}
-    for name in ("Malampa", "Sanma"):
+    for name in ("Coastal", "Highland"):
         views[name] = client.post(
             f"/api/v1/dashboards/{dashboard['id']}/views",
             headers=auth_headers,
@@ -75,18 +75,18 @@ def listed(client, headers, board, view_id: str = "") -> list[str]:
 
 
 def test_a_comment_comes_back_with_who_said_it(client, auth_headers, board):
-    said = say(client, auth_headers, board, "The Torba figure looks low")
+    said = say(client, auth_headers, board, "The Western figure looks low")
     assert said["author_name"]
-    assert listed(client, auth_headers, board) == ["The Torba figure looks low"]
+    assert listed(client, auth_headers, board) == ["The Western figure looks low"]
 
 
 def test_a_comment_belongs_to_the_view_it_was_made_under(client, auth_headers, board):
-    say(client, auth_headers, board, "Malampa is behind", view_id=board["views"]["Malampa"])
-    assert listed(client, auth_headers, board, board["views"]["Malampa"]) == [
-        "Malampa is behind"
+    say(client, auth_headers, board, "Coastal is behind", view_id=board["views"]["Coastal"])
+    assert listed(client, auth_headers, board, board["views"]["Coastal"]) == [
+        "Coastal is behind"
     ]
     # Not shown beside another province's numbers, which it is not about.
-    assert listed(client, auth_headers, board, board["views"]["Sanma"]) == []
+    assert listed(client, auth_headers, board, board["views"]["Highland"]) == []
 
 
 def test_a_note_on_the_board_itself_is_shown_under_every_view(client, auth_headers, board):
@@ -97,7 +97,7 @@ def test_a_note_on_the_board_itself_is_shown_under_every_view(client, auth_heade
 
 
 def test_the_board_view_does_not_show_one_view_s_comments(client, auth_headers, board):
-    say(client, auth_headers, board, "Only about Malampa", view_id=board["views"]["Malampa"])
+    say(client, auth_headers, board, "Only about Coastal", view_id=board["views"]["Coastal"])
     say(client, auth_headers, board, "About the whole board")
     assert listed(client, auth_headers, board) == ["About the whole board"]
 
@@ -105,7 +105,7 @@ def test_the_board_view_does_not_show_one_view_s_comments(client, auth_headers, 
 def test_a_reply_joins_the_thread_and_its_reading(client, auth_headers, board):
     """An answer belongs to the question's view, not the answerer's selection."""
     asked = say(
-        client, auth_headers, board, "Why is this low?", view_id=board["views"]["Malampa"]
+        client, auth_headers, board, "Why is this low?", view_id=board["views"]["Coastal"]
     )
     answered = say(
         client,
@@ -113,10 +113,10 @@ def test_a_reply_joins_the_thread_and_its_reading(client, auth_headers, board):
         board,
         "Two teams were on leave",
         parent_id=asked["id"],
-        view_id=board["views"]["Sanma"],
+        view_id=board["views"]["Highland"],
     )
     assert answered["parent_id"] == asked["id"]
-    assert answered["view_id"] == board["views"]["Malampa"]
+    assert answered["view_id"] == board["views"]["Coastal"]
 
 
 def test_a_reply_to_a_reply_stays_at_one_level(client, auth_headers, board):
@@ -143,7 +143,7 @@ def test_only_the_author_can_change_what_a_comment_says(client, auth_headers, bo
 
 def test_anyone_reading_can_mark_a_thread_dealt_with(client, auth_headers, board, reader):
     """Resolving is not editing: it says the question was answered."""
-    said = say(client, reader, board, "Please check Torba")
+    said = say(client, reader, board, "Please check Western")
     done = client.patch(
         f"/api/v1/dashboards/{board['id']}/comments/{said['id']}",
         headers=auth_headers,
@@ -151,7 +151,7 @@ def test_anyone_reading_can_mark_a_thread_dealt_with(client, auth_headers, board
     )
     assert done.status_code == 200, done.text
     assert done.json()["is_resolved"] is True
-    assert done.json()["body"] == "Please check Torba"
+    assert done.json()["body"] == "Please check Western"
 
 
 def test_a_reader_cannot_delete_somebody_elses_comment(client, auth_headers, board, reader):
@@ -190,12 +190,12 @@ def test_a_comment_cannot_be_attached_to_another_board_s_widget(client, auth_hea
 
 def test_deleting_a_view_keeps_its_comments_as_board_wide(client, auth_headers, board):
     """A fortnight of discussion should not vanish with a renamed shortcut."""
-    say(client, auth_headers, board, "Said under Malampa", view_id=board["views"]["Malampa"])
+    say(client, auth_headers, board, "Said under Coastal", view_id=board["views"]["Coastal"])
     client.delete(
-        f"/api/v1/dashboards/{board['id']}/views/{board['views']['Malampa']}",
+        f"/api/v1/dashboards/{board['id']}/views/{board['views']['Coastal']}",
         headers=auth_headers,
     )
-    assert listed(client, auth_headers, board) == ["Said under Malampa"]
+    assert listed(client, auth_headers, board) == ["Said under Coastal"]
 
 
 def test_comments_can_be_asked_for_one_widget_at_a_time(client, auth_headers, board):

@@ -189,17 +189,17 @@ def test_a_gps_column_is_found_and_a_date_is_not_mistaken_for_one():
     ("value", "expected"),
     [
         # ODK Central: latitude, longitude, altitude, accuracy in one field.
-        ("-17.7333 168.3273 42.0 5.0", (-17.7333, 168.3273)),
-        ("-17.7333 168.3273", (-17.7333, 168.3273)),
-        ("-17.7333,168.3273", (-17.7333, 168.3273)),
-        ("-17.7333, 168.3273", (-17.7333, 168.3273)),
-        ("  -17.7333;168.3273  ", (-17.7333, 168.3273)),
+        ("-12.3456 134.5678 42.0 5.0", (-12.3456, 134.5678)),
+        ("-12.3456 134.5678", (-12.3456, 134.5678)),
+        ("-12.3456,134.5678", (-12.3456, 134.5678)),
+        ("-12.3456, 134.5678", (-12.3456, 134.5678)),
+        ("  -12.3456;134.5678  ", (-12.3456, 134.5678)),
         # WKT and GeoJSON are longitude first by specification.
-        ("POINT(168.3273 -17.7333)", (-17.7333, 168.3273)),
-        ("POINT Z (168.3273 -17.7333 42.0)", (-17.7333, 168.3273)),
-        ('{"type": "Point", "coordinates": [168.3273, -17.7333]}', (-17.7333, 168.3273)),
-        # A bare pair written longitude first: 168 cannot be a latitude.
-        ("168.3273 -17.7333", (-17.7333, 168.3273)),
+        ("POINT(134.5678 -12.3456)", (-12.3456, 134.5678)),
+        ("POINT Z (134.5678 -12.3456 42.0)", (-12.3456, 134.5678)),
+        ('{"type": "Point", "coordinates": [134.5678, -12.3456]}', (-12.3456, 134.5678)),
+        # A bare pair written longitude first: 134 cannot be a latitude.
+        ("134.5678 -12.3456", (-12.3456, 134.5678)),
     ],
 )
 def test_one_field_holding_both_coordinates_is_read(value, expected):
@@ -218,8 +218,8 @@ def test_one_field_holding_both_coordinates_is_read(value, expected):
         "",
         "   ",
         "not a location",
-        "-17.7333",                     # one number is not a point
-        "-117.7333 268.3273",           # neither can be a latitude
+        "-12.3456",                     # one number is not a point
+        "-112.3456 2134.5678",           # neither can be a latitude
         "91.5 190.2",                   # out of range both ways
         '{"type": "LineString", "coordinates": [[1.0, 2.0], [3.0, 4.0]]}',
         "{not json",
@@ -239,7 +239,7 @@ def test_a_combined_gps_column_becomes_two_numeric_columns(tmp_path):
         {
             "interview__key": [f"K{i}" for i in range(6)],
             "gps": [
-                "-17.7333 168.3273 42.0 5.0",
+                "-12.3456 134.5678 42.0 5.0",
                 "-17.7401 168.3150 38.5 4.0",
                 "-17.7288 168.3402 51.2 6.0",
                 "-17.7355 168.3199 44.1 5.5",
@@ -260,8 +260,8 @@ def test_a_combined_gps_column_becomes_two_numeric_columns(tmp_path):
     assert by_name["gps__latitude"].n_missing == 1
 
     stored = pd.read_parquet(result.parquet_path)
-    assert stored["gps__latitude"].iloc[0] == pytest.approx(-17.7333)
-    assert stored["gps__longitude"].iloc[0] == pytest.approx(168.3273)
+    assert stored["gps__latitude"].iloc[0] == pytest.approx(-12.3456)
+    assert stored["gps__longitude"].iloc[0] == pytest.approx(134.5678)
 
     # Named so the platform finds them without anybody configuring a thing.
     detected = detect_monitoring_fields(result.variables)
@@ -291,7 +291,7 @@ def test_a_mostly_unparseable_column_is_left_alone(tmp_path):
     frame = pd.DataFrame(
         {
             "notes": [
-                "-17.7333 168.3273",
+                "-12.3456 134.5678",
                 "-17.7401 168.3150",
                 "respondent not at home",
                 "call back on Tuesday",
@@ -310,8 +310,8 @@ def test_separate_coordinate_columns_are_not_disturbed(tmp_path):
 
     frame = pd.DataFrame(
         {
-            "GPS__Latitude": [-17.7333, -17.7401, -17.7288],
-            "GPS__Longitude": [168.3273, 168.3150, 168.3402],
+            "GPS__Latitude": [-12.3456, -17.7401, -17.7288],
+            "GPS__Longitude": [134.5678, 168.3150, 168.3402],
         }
     )
     result = ingest_frame(frame, {}, {}, tmp_path / "out")
@@ -347,8 +347,8 @@ def test_a_chunked_read_splits_every_chunk_the_same_way():
         "10.0.0.1",
         "192.168.1.1",
         "version 1.5 of 2.3",
-        "-17.7333 / 168.3273",
-        "lat -17.7333 lon 168.3273",
+        "-12.3456 / 134.5678",
+        "lat -12.3456 lon 134.5678",
         # More numbers than a reading has.
         "1.1 2.2 3.3 4.4 5.5",
     ],
@@ -437,9 +437,9 @@ def test_a_coordinate_that_is_not_a_number_is_not_a_location(value):
 @pytest.mark.parametrize(
     ("value", "expected"),
     [
-        ("POINT(1.683273e2 -1.77333e1)", (-17.7333, 168.3273)),
-        ("-1.77333e1 1.683273e2", (-17.7333, 168.3273)),
-        ("-17.7333 1.683273e2", (-17.7333, 168.3273)),
+        ("POINT(1.345678e2 -1.23456e1)", (-12.3456, 134.5678)),
+        ("-1.23456e1 1.345678e2", (-12.3456, 134.5678)),
+        ("-12.3456 1.345678e2", (-12.3456, 134.5678)),
     ],
 )
 def test_a_float_written_out_in_full_is_still_a_location(value, expected):

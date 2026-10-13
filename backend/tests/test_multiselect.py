@@ -22,13 +22,13 @@ def multi(client, auth_headers) -> str:
     """Six households and what each one has: water from more than one source."""
     rows = [
         # key, piped, well, rain, river, province
-        ("h1", 1, 0, 1, 0, "Shefa"),
-        ("h2", 1, 0, 0, 0, "Shefa"),
-        ("h3", 0, 1, 1, 0, "Tafea"),
-        ("h4", 0, 0, 1, 1, "Tafea"),
-        ("h5", 1, 1, 1, 0, "Shefa"),
+        ("h1", 1, 0, 1, 0, "Northern"),
+        ("h2", 1, 0, 0, 0, "Northern"),
+        ("h3", 0, 1, 1, 0, "Southern"),
+        ("h4", 0, 0, 1, 1, "Southern"),
+        ("h5", 1, 1, 1, 0, "Northern"),
         # Asked and chose nothing: still a respondent.
-        ("h6", 0, 0, 0, 0, "Tafea"),
+        ("h6", 0, 0, 0, 0, "Southern"),
     ]
     body = "interview__key,water__1,water__2,water__3,water__4,province\n" + "\n".join(
         ",".join(str(value) for value in row) for row in rows
@@ -106,7 +106,7 @@ def test_a_filter_narrows_the_respondents_and_the_base_with_them(
         multi,
         filters={
             "op": "and",
-            "conditions": [{"variable": "province", "operator": "eq", "value": "Shefa"}],
+            "conditions": [{"variable": "province", "operator": "eq", "value": "Northern"}],
             "groups": [],
         },
     )
@@ -213,7 +213,7 @@ def test_a_dashboard_filter_reaches_it(client, auth_headers, multi):
         headers=auth_headers,
         json={
             "op": "and",
-            "conditions": [{"variable": "province", "operator": "eq", "value": "Tafea"}],
+            "conditions": [{"variable": "province", "operator": "eq", "value": "Southern"}],
             "groups": [],
         },
     )

@@ -21,13 +21,13 @@ from app.models import Dataset, ProjectScript
 from tests.test_api_analytics import _stata_bytes, _zip_bytes
 
 FIRST = pd.DataFrame(
-    {"hhid": [1.0, 2.0, 3.0], "province": ["Shefa", "Sanma", "Tafea"], "wage": [10.0, 20.0, 30.0]}
+    {"hhid": [1.0, 2.0, 3.0], "province": ["Northern", "Highland", "Southern"], "wage": [10.0, 20.0, 30.0]}
 )
 # The same export, run again, with a fourth household and a changed wage.
 SECOND = pd.DataFrame(
     {
         "hhid": [1.0, 2.0, 3.0, 4.0],
-        "province": ["Shefa", "Sanma", "Tafea", "Torba"],
+        "province": ["Northern", "Highland", "Southern", "Western"],
         "wage": [10.0, 20.0, 30.0, 40.0],
     }
 )
@@ -226,14 +226,14 @@ def test_a_newer_export_re_runs_the_script_that_read_it(
     put_script(client, auth_headers, project)
     run_script(client, auth_headers, project)
     db_session.expire_all()
-    assert sorted(totals(db_session, project)["province"]) == ["Sanma", "Shefa", "Tafea"]
+    assert sorted(totals(db_session, project)["province"]) == ["Highland", "Northern", "Southern"]
 
     upload_again(client, auth_headers, project)
     db_session.expire_all()
 
     after = totals(db_session, project)
-    assert sorted(after["province"]) == ["Sanma", "Shefa", "Tafea", "Torba"]
-    assert after[after["province"] == "Torba"]["wage"].tolist() == [40.0]
+    assert sorted(after["province"]) == ["Highland", "Northern", "Southern", "Western"]
+    assert after[after["province"] == "Western"]["wage"].tolist() == [40.0]
 
 
 def test_the_upload_says_what_the_script_rebuilt(client, auth_headers, project):
@@ -321,7 +321,7 @@ def test_a_re_run_that_fails_is_a_note_rather_than_a_failed_upload(
     run_script(client, auth_headers, project)
 
     # The new export does not have `wage` at all, so the script cannot run.
-    thinner = pd.DataFrame({"hhid": [1.0, 2.0], "province": ["Shefa", "Sanma"]})
+    thinner = pd.DataFrame({"hhid": [1.0, 2.0], "province": ["Northern", "Highland"]})
     body = upload_again(client, auth_headers, project, thinner)
 
     assert any(

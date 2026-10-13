@@ -9,7 +9,8 @@
  *
  * Only latin and latin-ext are copied. Everything embedded is paid for in full
  * in every exported file - unlike the app, where the browser fetches one subset
- * on demand - and latin-ext is where the macrons Fijian needs live. A board in
+ * on demand - and latin-ext is where the macrons and accents many languages
+ * need live. A board in
  * a script outside those two exports with its text in the fallback face, which
  * is the right trade against putting a megabyte of Cyrillic in every file.
  *

@@ -7,7 +7,7 @@ the field teams sync their tablets. A monitoring dashboard is usually read at a
 particular hour, and the useful guarantee is that it was refreshed just before.
 
 The times are read in the connection's own zone. Fieldwork happens somewhere,
-and 06:00 means six in the morning there, not six in UTC - which in Vanuatu is
+and 06:00 means six in the morning there, not six in UTC - which at UTC+11 is
 five in the afternoon the day before.
 """
 

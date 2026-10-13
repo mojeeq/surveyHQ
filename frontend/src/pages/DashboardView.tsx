@@ -156,7 +156,7 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
   const pageControls = controlsForPage(filterControls, page)
 
   // One hierarchy for the whole board: drilling is a question asked of the
-  // page ("show me Malampa"), not of the one chart that was clicked.
+  // page ("show me Coastal"), not of the one chart that was clicked.
   const hierarchy = (dashboard.data?.drilldown ?? []) as DrillLevel[]
 
   // How much board there is to arrange on. More columns is finer placement

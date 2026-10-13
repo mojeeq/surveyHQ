@@ -25,9 +25,9 @@ def geography(client, auth_headers, request) -> dict:
     frame = pd.DataFrame(
         {
             "interview__key": [f"k{i}" for i in range(12)],
-            "province": ["Malampa"] * 7 + ["Sanma"] * 5,
+            "province": ["Coastal"] * 7 + ["Highland"] * 5,
             "district": (
-                ["Central"] * 4 + ["North"] * 3 + ["Luganville"] * 2 + ["West"] * 3
+                ["Central"] * 4 + ["North"] * 3 + ["Harbour"] * 2 + ["West"] * 3
             ),
             "sex": ["Male", "Female"] * 6,
         }
@@ -95,11 +95,11 @@ def categories(widget: dict) -> list:
     return [row[0] for row in widget["result"]["rows"]]
 
 
-def in_malampa() -> dict:
+def in_western() -> dict:
     return {
         "op": "and",
         "conditions": [
-            {"variable": "province", "operator": "eq", "value": "Malampa",
+            {"variable": "province", "operator": "eq", "value": "Coastal",
              "use_label": True}
         ],
         "groups": [],
@@ -111,22 +111,22 @@ def test_at_the_top_a_chart_groups_where_it_was_built(client, auth_headers, geog
         client, auth_headers, geography["board"], geography["dataset_id"], "province"
     )
     widget = render(client, auth_headers, geography["board"])[widget_id]
-    assert sorted(categories(widget)) == ["Malampa", "Sanma"]
+    assert sorted(categories(widget)) == ["Coastal", "Highland"]
     assert widget["grouped_on"] == ["province"]
 
 
 def test_drilling_regroups_the_chart_one_level_down(client, auth_headers, geography):
-    """The click narrows to Malampa and the bars become its districts."""
+    """The click narrows to Coastal and the bars become its districts."""
     widget_id = add_chart(
         client, auth_headers, geography["board"], geography["dataset_id"], "province"
     )
     widget = render(
-        client, auth_headers, geography["board"], level=1, filters=in_malampa()
+        client, auth_headers, geography["board"], level=1, filters=in_western()
     )[widget_id]
     assert sorted(categories(widget)) == ["Central", "North"]
     # Clicking again has to filter by what is now on the axis, not by province.
     assert widget["grouped_on"] == ["district"]
-    # And only Malampa's rows are counted: 4 Central plus 3 North.
+    # And only Coastal's rows are counted: 4 Central plus 3 North.
     assert sum(row[1] for row in widget["result"]["rows"]) == 7
 
 
@@ -139,7 +139,7 @@ def test_every_chart_on_the_page_follows(client, auth_headers, geography):
         client, auth_headers, geography["board"], geography["dataset_id"], "province"
     )
     widgets = render(
-        client, auth_headers, geography["board"], level=1, filters=in_malampa()
+        client, auth_headers, geography["board"], level=1, filters=in_western()
     )
     assert sorted(categories(widgets[first])) == ["Central", "North"]
     assert sorted(categories(widgets[second])) == ["Central", "North"]
@@ -151,7 +151,7 @@ def test_a_chart_outside_the_hierarchy_is_left_alone(client, auth_headers, geogr
         client, auth_headers, geography["board"], geography["dataset_id"], "sex"
     )
     widget = render(
-        client, auth_headers, geography["board"], level=1, filters=in_malampa()
+        client, auth_headers, geography["board"], level=1, filters=in_western()
     )[widget_id]
     assert sorted(categories(widget)) == ["Female", "Male"]
     assert widget["grouped_on"] == ["sex"]
@@ -164,7 +164,7 @@ def test_a_deeper_chart_does_not_climb_back_up(client, auth_headers, geography):
         client, auth_headers, geography["board"], geography["dataset_id"], "district"
     )
     widget = render(
-        client, auth_headers, geography["board"], level=1, filters=in_malampa()
+        client, auth_headers, geography["board"], level=1, filters=in_western()
     )[widget_id]
     assert sorted(categories(widget)) == ["Central", "North"]
 
@@ -174,7 +174,7 @@ def test_drilling_past_the_last_level_stops_there(client, auth_headers, geograph
         client, auth_headers, geography["board"], geography["dataset_id"], "province"
     )
     widget = render(
-        client, auth_headers, geography["board"], level=9, filters=in_malampa()
+        client, auth_headers, geography["board"], level=9, filters=in_western()
     )[widget_id]
     assert widget["grouped_on"] == ["district"]
 
@@ -186,4 +186,4 @@ def test_a_board_with_no_hierarchy_ignores_the_level(client, auth_headers, geogr
     ).json()["id"]
     widget_id = add_chart(client, auth_headers, plain, geography["dataset_id"], "province")
     widget = render(client, auth_headers, plain, level=2)[widget_id]
-    assert sorted(categories(widget)) == ["Malampa", "Sanma"]
+    assert sorted(categories(widget)) == ["Coastal", "Highland"]

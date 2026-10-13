@@ -37,7 +37,7 @@ def spread(tmp_path) -> DatasetContext:
             "lat": (-17.7 + rng.normal(0, 0.15, rows)).round(6),
             "lon": (168.3 + rng.normal(0, 0.15, rows)).round(6),
             "people": rng.integers(1, 9, rows).astype(float),
-            "province": rng.choice(["Shefa", "Tafea"], rows),
+            "province": rng.choice(["Northern", "Southern"], rows),
         }
     )
     path = tmp_path / "households.parquet"
@@ -119,18 +119,18 @@ def test_a_village_is_drawn_exactly_where_it_was_recorded(tmp_path):
 
 
 def test_a_filter_is_applied_before_anything_is_grouped(spread):
-    shefa = _points(
+    northern = _points(
         spread,
         filters=FilterGroup(
             conditions=[
-                Condition(variable="province", operator=FilterOperator.eq, value="Shefa")
+                Condition(variable="province", operator=FilterOperator.eq, value="Northern")
             ]
         ),
     )
     frame = pd.read_parquet(spread.parquet_path)
-    expected = int((frame["province"] == "Shefa").sum())
-    assert sum(point["rows"] for point in shefa["points"]) == expected
-    assert shefa["grouped"]["records"] == expected
+    expected = int((frame["province"] == "Northern").sum())
+    assert sum(point["rows"] for point in northern["points"]) == expected
+    assert northern["grouped"]["records"] == expected
 
 
 # --- Checking recorded areas, where the order is the correctness -----------

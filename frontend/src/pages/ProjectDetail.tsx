@@ -830,7 +830,7 @@ function RelationshipsTab({
             selectedId={selected?.id ?? null}
             storageKey={projectId}
             // Dropped from the front of every box. Eight tables all called
-            // "Palau Census 2025 something" spend most of their width saying
+            // "National Census 2025 something" spend most of their width saying
             // what the page already says at the top.
             projectName={projectName}
             onSelect={setSelected}

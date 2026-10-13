@@ -30,7 +30,7 @@ def floor(monkeypatch):
 def tiny(client, auth_headers, request) -> str:
     """Two large provinces, one with two households and one with a single one.
 
-    Tafea's single household is the interesting case: it is one record split
+    Southern's single household is the interesting case: it is one record split
     across two cells, so one cell holds it and the other holds nobody. Only the
     first is small enough to withhold on its own, and withholding only that one
     would leave it recoverable from the row total.
@@ -38,7 +38,7 @@ def tiny(client, auth_headers, request) -> str:
     frame = pd.DataFrame(
         {
             "interview__key": [f"k{i}" for i in range(23)],
-            "province": ["Shefa"] * 10 + ["Sanma"] * 10 + ["Torba"] * 2 + ["Tafea"],
+            "province": ["Northern"] * 10 + ["Highland"] * 10 + ["Western"] * 2 + ["Southern"],
             "sex": (["M", "F"] * 5) + (["M", "F"] * 5) + ["M", "F"] + ["M"],
             "wage": [100.0] * 23,
             "wt": [12.5] * 23,
@@ -88,9 +88,9 @@ def test_a_weighted_cell_estimates_a_population(client, auth_headers, tiny):
         row_variable="province",
         measure={"agg": "count", "weight": "wt"},
     )
-    assert cells(plain)["Shefa"] == [10]
+    assert cells(plain)["Northern"] == [10]
     # Ten interviews, each standing for 12.5 people.
-    assert cells(weighted)["Shefa"] == [125]
+    assert cells(weighted)["Northern"] == [125]
 
 
 def test_a_weighted_count_is_not_called_a_count(client, auth_headers, tiny):
@@ -170,23 +170,23 @@ def test_nothing_is_withheld_when_no_floor_is_set(client, auth_headers, tiny):
     )
     assert plain["disclosure_threshold"] == 0
     assert not any(any(row) for row in plain["suppressed"])
-    # The cells the floor would have taken are published in full. Tafea's
+    # The cells the floor would have taken are published in full. Southern's
     # female cell is null either way, because no woman lives there - that is an
     # absence rather than a withholding, which is exactly the distinction the
     # mask above exists to carry.
-    assert cells(plain)["Torba"] == [1, 1]
-    assert cells(plain)["Tafea"] == [None, 1]
+    assert cells(plain)["Western"] == [1, 1]
+    assert cells(plain)["Southern"] == [None, 1]
 
 
 def test_a_cell_below_the_floor_is_withheld(client, auth_headers, tiny, floor):
     result = table(
         client, auth_headers, tiny, row_variable="province", column_variable="sex"
     )
-    assert hidden(result)["Torba"] == [True, True]
-    assert cells(result)["Torba"] == [None, None]
+    assert hidden(result)["Western"] == [True, True]
+    assert cells(result)["Western"] == [None, None]
     # The large provinces are untouched.
-    assert hidden(result)["Shefa"] == [False, False]
-    assert cells(result)["Shefa"] == [5, 5]
+    assert hidden(result)["Northern"] == [False, False]
+    assert cells(result)["Northern"] == [5, 5]
 
 
 def test_a_zero_is_not_withheld(client, auth_headers, tiny, floor):
@@ -203,7 +203,7 @@ def test_a_lone_withheld_cell_takes_a_second_one_with_it(
 ):
     """Otherwise the withholding is decorative.
 
-    Tafea is one household, a man. The male cell rests on one record and is
+    Southern is one household, a man. The male cell rests on one record and is
     withheld; the female cell rests on none and is not small. Published beside
     a row total of 1, the withheld cell is simply 1 minus the other - so the
     other goes too.
@@ -211,7 +211,7 @@ def test_a_lone_withheld_cell_takes_a_second_one_with_it(
     result = table(
         client, auth_headers, tiny, row_variable="province", column_variable="sex"
     )
-    assert hidden(result)["Tafea"] == [True, True]
+    assert hidden(result)["Southern"] == [True, True]
 
 
 def test_a_published_total_is_the_true_one(client, auth_headers, tiny, floor):
@@ -229,20 +229,20 @@ def test_a_margin_that_would_give_a_cell_back_is_withheld_too(
     """A margin is a line sum, so it is recoverable arithmetic in both
     directions and has to be protected in the same pass as the cells.
 
-    Tafea is one household. Its row total is that household, so publishing it
+    Southern is one household. Its row total is that household, so publishing it
     beside two starred cells would say precisely what the stars refused to.
     """
     result = table(
         client, auth_headers, tiny, row_variable="province", column_variable="sex"
     )
     margins = dict(zip(result["row_labels"], result["row_totals"], strict=True))
-    assert margins["Tafea"] is None
-    assert margins["Torba"] is None
+    assert margins["Southern"] is None
+    assert margins["Western"] is None
     # The large provinces keep theirs.
-    assert margins["Shefa"] == 10
+    assert margins["Northern"] == 10
     assert dict(
         zip(result["row_labels"], result["row_totals_suppressed"], strict=True)
-    )["Tafea"] is True
+    )["Southern"] is True
 
 
 def test_a_one_way_row_total_never_reprints_its_own_withheld_cell(
@@ -257,8 +257,8 @@ def test_a_one_way_row_total_never_reprints_its_own_withheld_cell(
     result = table(client, auth_headers, tiny, row_variable="province")
     margins = dict(zip(result["row_labels"], result["row_totals"], strict=True))
     cell = dict(zip(result["row_labels"], result["values"], strict=True))
-    assert cell["Tafea"] == [None]
-    assert margins["Tafea"] is None, "the row total is the cell it just withheld"
+    assert cell["Southern"] == [None]
+    assert margins["Southern"] is None, "the row total is the cell it just withheld"
 
 
 def test_the_grand_total_goes_when_it_is_the_last_thing_standing(
@@ -300,7 +300,7 @@ def test_disclosure_is_judged_on_records_not_on_what_the_cell_shows(
 ):
     """The number that matters is how many people are behind the cell.
 
-    Weighted, Torba's cells read 12.5 and 12.5, which look like plenty. They
+    Weighted, Western's cells read 12.5 and 12.5, which look like plenty. They
     rest on one household each.
     """
     weighted = table(
@@ -311,7 +311,7 @@ def test_disclosure_is_judged_on_records_not_on_what_the_cell_shows(
         column_variable="sex",
         measure={"agg": "count", "weight": "wt"},
     )
-    assert hidden(weighted)["Torba"] == [True, True]
+    assert hidden(weighted)["Western"] == [True, True]
 
     # Same for a mean, where the displayed value says nothing about how many
     # incomes it averages.
@@ -323,7 +323,7 @@ def test_disclosure_is_judged_on_records_not_on_what_the_cell_shows(
         column_variable="sex",
         measure={"agg": "mean", "variable": "wage"},
     )
-    assert hidden(means)["Torba"] == [True, True]
+    assert hidden(means)["Western"] == [True, True]
 
 
 def test_only_the_records_that_reach_the_statistic_are_counted(
@@ -339,7 +339,7 @@ def test_only_the_records_that_reach_the_statistic_are_counted(
     frame = pd.DataFrame(
         {
             "interview__key": [f"k{i}" for i in range(100)],
-            "province": ["Shefa"] * 100,
+            "province": ["Northern"] * 100,
             # One reported wage in the whole province.
             "wage": [77777.0] + [None] * 99,
             "wt": [1.0] * 100,
@@ -365,14 +365,14 @@ def test_only_the_records_that_reach_the_statistic_are_counted(
         row_variable="province",
         measure={"agg": "mean", "variable": "wage"},
     )
-    assert cells(means)["Shefa"] == [None], "one wage is one person's wage"
-    assert hidden(means)["Shefa"] == [True]
+    assert cells(means)["Northern"] == [None], "one wage is one person's wage"
+    assert hidden(means)["Northern"] == [True]
 
     # Counting the province itself is safe: a hundred people are a hundred
     # people, and the count discloses nobody.
     counts = table(client, auth_headers, dataset, row_variable="province")
-    assert cells(counts)["Shefa"] == [100]
-    assert hidden(counts)["Shefa"] == [False]
+    assert cells(counts)["Northern"] == [100]
+    assert hidden(counts)["Northern"] == [False]
 
 
 def test_a_null_weight_does_not_count_towards_a_weighted_cell(
@@ -383,7 +383,7 @@ def test_a_null_weight_does_not_count_towards_a_weighted_cell(
     frame = pd.DataFrame(
         {
             "interview__key": [f"k{i}" for i in range(50)],
-            "province": ["Shefa"] * 50,
+            "province": ["Northern"] * 50,
             "wage": [100.0] * 50,
             "wt": [12.5] + [None] * 49,
         }
@@ -408,7 +408,7 @@ def test_a_null_weight_does_not_count_towards_a_weighted_cell(
         row_variable="province",
         measure={"agg": "count", "weight": "wt"},
     )
-    assert hidden(weighted)["Shefa"] == [True], "one weighted household, not fifty"
+    assert hidden(weighted)["Northern"] == [True], "one weighted household, not fifty"
 
 
 def test_a_weighted_count_is_not_withheld_over_a_variable_it_never_reads(
@@ -424,7 +424,7 @@ def test_a_weighted_count_is_not_withheld_over_a_variable_it_never_reads(
     frame = pd.DataFrame(
         {
             "interview__key": [f"k{i}" for i in range(50)],
-            "province": ["Shefa"] * 50,
+            "province": ["Northern"] * 50,
             # An optional question almost nobody answered.
             "wage": [100.0] + [None] * 49,
             "wt": [12.5] * 50,
@@ -451,8 +451,8 @@ def test_a_weighted_count_is_not_withheld_over_a_variable_it_never_reads(
         # `variable` is ignored by a weighted count, and the API accepts one.
         measure={"agg": "count", "variable": "wage", "weight": "wt"},
     )
-    assert hidden(counted)["Shefa"] == [False], "fifty weighted households"
-    assert cells(counted)["Shefa"] == [625]
+    assert hidden(counted)["Northern"] == [False], "fifty weighted households"
+    assert cells(counted)["Northern"] == [625]
 
     # The mean of the same sparse variable still is withheld: that one reads
     # the variable, and one answer is one person's answer.
@@ -463,7 +463,7 @@ def test_a_weighted_count_is_not_withheld_over_a_variable_it_never_reads(
         row_variable="province",
         measure={"agg": "mean", "variable": "wage", "weight": "wt"},
     )
-    assert hidden(means)["Shefa"] == [True]
+    assert hidden(means)["Northern"] == [True]
 
 
 def test_a_category_too_small_to_name_is_not_listed(client, auth_headers, tiny, floor):
@@ -473,7 +473,7 @@ def test_a_category_too_small_to_name_is_not_listed(client, auth_headers, tiny, 
     and where they are, so the category is left out of the list instead.
     """
     listing = table(client, auth_headers, tiny, row_variable="province", measure=None)
-    assert listing["row_labels"] == ["Sanma", "Shefa"]
+    assert listing["row_labels"] == ["Highland", "Northern"]
     assert listing["rows_withheld"] == 2
 
     everything = table(client, auth_headers, tiny, row_variable="province")
@@ -485,8 +485,8 @@ def test_a_one_way_table_is_protected_down_its_single_column(
 ):
     """The only direction a reader can subtract along is the column."""
     result = table(client, auth_headers, tiny, row_variable="province")
-    assert hidden(result)["Tafea"] == [True]
-    assert hidden(result)["Torba"] == [True]
+    assert hidden(result)["Southern"] == [True]
+    assert hidden(result)["Western"] == [True]
     # Two withheld cells sharing a known remainder cannot be told apart.
     assert sum(1 for row in result["suppressed"] if row[0]) >= 2
 
@@ -502,12 +502,12 @@ def test_the_csv_marks_a_withheld_cell_rather_than_leaving_it_blank(
     )
     assert response.status_code == 200, response.text
     body = response.content.decode("utf-8-sig")
-    torba = next(line for line in body.splitlines() if line.startswith("Torba"))
+    western = next(line for line in body.splitlines() if line.startswith("Western"))
     # Cells and the row total alike: the total is two households, which is
     # under the floor in its own right.
-    assert torba.split(",")[1:4] == ["*", "*", "*"]
-    shefa = next(line for line in body.splitlines() if line.startswith("Shefa"))
-    assert shefa.split(",")[1:4] == ["5.0", "5.0", "10.0"]
+    assert western.split(",")[1:4] == ["*", "*", "*"]
+    northern = next(line for line in body.splitlines() if line.startswith("Northern"))
+    assert northern.split(",")[1:4] == ["5.0", "5.0", "10.0"]
 
 
 # --- the standalone export --------------------------------------------------
@@ -554,7 +554,7 @@ def test_the_exported_file_does_not_carry_the_withheld_numbers(
 ):
     """The point of the whole exercise.
 
-    Torba is two households, one cell each. The ordinary export would write
+    Western is two households, one cell each. The ordinary export would write
     those two cells into the file as cube rows, so anyone opening it in a text
     editor would read exactly what the screen refused to show.
     """
@@ -569,9 +569,9 @@ def test_the_exported_file_does_not_carry_the_withheld_numbers(
     fixed = widget["crosstab"]["fixed"]
     rows = dict(zip(fixed["row_labels"], fixed["values"], strict=True))
     masks = dict(zip(fixed["row_labels"], fixed["suppressed"], strict=True))
-    assert masks["Torba"] == [True, True]
-    assert rows["Torba"] == [None, None]
-    assert masks["Tafea"] == [True, True]
+    assert masks["Western"] == [True, True]
+    assert rows["Western"] == [None, None]
+    assert masks["Southern"] == [True, True]
     # The totals still reach the file, which is what makes the secondary
     # withholding above necessary rather than fussy.
     assert fixed["grand_total"] == 23

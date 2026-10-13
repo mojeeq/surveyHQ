@@ -173,9 +173,9 @@ map is ever briefly pointing at nothing.
 ### If the GPS arrived as one column
 
 Not every export gives you two columns. ODK Central writes a whole reading into
-a single field - `-17.7333 168.3273 42.0 5.0`, being latitude, longitude,
-altitude and accuracy - a hand-assembled CSV often holds `-17.7333,168.3273`,
-and a database extract can hold `POINT(168.3273 -17.7333)` or a GeoJSON point.
+a single field - `-12.3456 134.5678 42.0 5.0`, being latitude, longitude,
+altitude and accuracy - a hand-assembled CSV often holds `-12.3456,134.5678`,
+and a database extract can hold `POINT(134.5678 -12.3456)` or a GeoJSON point.
 All of those arrive as text, and the **Latitude** and **Longitude** lists offer
 numeric variables only, so the reading was in the dataset and unreachable.
 

@@ -34,7 +34,7 @@ def listing(client, auth_headers) -> str:
     frame = pd.DataFrame(
         {
             "interview__key": [f"k-{index:06d}" for index in range(ROWS)],
-            "province": [["Shefa", "Sanma", "Malampa"][index % 3] for index in range(ROWS)],
+            "province": [["Northern", "Highland", "Coastal"][index % 3] for index in range(ROWS)],
         }
     )
     response = client.post(
@@ -62,7 +62,7 @@ def test_a_table_with_a_category_per_interview_comes_back_quickly(
     table = response.json()
     # Every interview is a row, and the table says what it had to leave out.
     assert len(table["row_labels"]) == min(ROWS, 5000)
-    assert table["column_labels"] == ["Malampa", "Sanma", "Shefa"]
+    assert table["column_labels"] == ["Coastal", "Highland", "Northern"]
     assert took < SECONDS, f"the table took {took:.1f}s, which is the quadratic shape"
 
 
@@ -75,8 +75,8 @@ def test_the_rows_are_the_interviews_they_say_they_are(client, auth_headers, lis
     )
     table = response.json()
     assert table["row_labels"][:3] == ["k-000000", "k-000001", "k-000002"]
-    # k-000000 is in Shefa, and in no other province - where a cell is blank
+    # k-000000 is in Northern, and in no other province - where a cell is blank
     # rather than zero, because no record is not the same as none counted.
     first = dict(zip(table["column_labels"], table["values"][0], strict=True))
-    assert first["Shefa"] == 1
-    assert not first["Sanma"] and not first["Malampa"]
+    assert first["Northern"] == 1
+    assert not first["Highland"] and not first["Coastal"]

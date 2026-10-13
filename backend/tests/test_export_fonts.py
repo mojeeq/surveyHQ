@@ -62,7 +62,7 @@ def faces(html: str) -> list[str]:
 def test_a_board_set_in_a_bundled_font_carries_it():
     html = render_html(board(INTER))
     assert faces(html) == ["Inter Variable", "Inter Variable"], (
-        "latin and latin-ext, which is where the macrons Fijian needs live"
+        "latin and latin-ext, which is where the macrons and accents live"
     )
     assert "data:font/woff2;base64," in html
 

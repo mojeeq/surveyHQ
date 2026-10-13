@@ -446,7 +446,7 @@ export default function AppearanceModal({
           value={title}
           maxLength={200}
           onChange={(event) => setTitle(event.target.value)}
-          placeholder="Vanuatu Labour Force Survey"
+          placeholder="National Labour Force Survey"
         />
       </Field>
 

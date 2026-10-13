@@ -257,7 +257,7 @@ def evaluate_indicator(
 
     An extra filter narrows the rows the indicator is computed over, which is
     what a dashboard's filter controls pass in: "interviews completed" becomes
-    "interviews completed in Shefa" without the indicator itself being
+    "interviews completed in Northern" without the indicator itself being
     redefined. It is applied to the denominator as well, so a percentage stays
     a share of the rows being looked at rather than of the whole file.
     """
@@ -371,7 +371,7 @@ def _as_percentages(
     """Turn a count and its breakdown into percentages of their own totals.
 
     Each group is divided by its own total rather than by the whole: "72% in
-    Shefa" means 72% of Shefa's interviews, not that Shefa holds 72% of the
+    Northern" means 72% of Northern's interviews, not that Northern holds 72% of the
     completed ones. The second reading is what a share-of-total chart already
     says, and it answers a different question from the one a target is set on.
     """

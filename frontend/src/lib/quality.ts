@@ -310,7 +310,7 @@ export const MONTHS = [
  *
  * A fortnight of full dates does not fit across a widget, and the year is the
  * same on every one of them. Cut from the string rather than parsed into a
- * Date: an ISO day parsed as a moment is midnight UTC, which in Port Vila is
+ * Date: an ISO day parsed as a moment is midnight UTC, which at UTC+11 is
  * the same day and in Lima is the day before.
  */
 export function shortDay(day: string): string {
