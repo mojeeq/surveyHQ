@@ -226,3 +226,36 @@ def test_a_file_too_big_to_hold_is_still_read(incoming):
     path.write_bytes(b"0" * (3 * 1024 * 1024 + 7))
 
     assert len(file_source.digest_of(path, chunk=1024)) == 64
+
+
+def test_a_link_inside_the_folder_pointing_out_is_not_read(incoming, tmp_path):
+    """The fence is around what is read, not only around what is named.
+
+    A folder connection reads a directory somebody else fills. If a link in it
+    could point at another project's export, or at anything else the container
+    can reach, the root would be a fence with a door in it.
+    """
+    outside = tmp_path / "another-project"
+    outside.mkdir()
+    secret = outside / "export.csv"
+    secret.write_text("a,b\n1,2\n")
+    link = incoming / "leak.csv"
+    link.symlink_to(secret)
+    aged(link, 3600)
+    staged(incoming, "ours.csv")
+
+    assert [one.name for one in file_source.listing(incoming)] == ["ours.csv"]
+
+
+def test_a_link_inside_the_folder_pointing_inside_it_is_read(incoming):
+    """Only where it leads matters. A link to a file in the same folder is a
+    file in the same folder."""
+    real = staged(incoming, "export.zip")
+    link = incoming / "latest.zip"
+    link.symlink_to(real)
+    aged(link, 3600)
+
+    assert {one.name for one in file_source.listing(incoming)} == {
+        "export.zip",
+        "latest.zip",
+    }

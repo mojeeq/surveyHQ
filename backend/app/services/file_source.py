@@ -28,7 +28,10 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from app.core.config import settings
+from app.core.logging import get_logger
 from app.services.ingest import SUPPORTED_EXTENSIONS
+
+logger = get_logger(__name__)
 
 #: What a folder connection will pick up. An export from a survey server is a
 #: zip of one file per roster level; the rest are what somebody saves out of a
@@ -107,6 +110,15 @@ def digest_of(path: Path, chunk: int = 1024 * 1024) -> str:
     return hashed.hexdigest()
 
 
+def inside_a_root(path: Path) -> bool:
+    """Whether a path, once followed, is still somewhere this server may read."""
+    try:
+        real = path.resolve()
+    except (OSError, RuntimeError):  # pragma: no cover - a link that loops
+        return False
+    return any(real == root or root in real.parents for root in roots())
+
+
 def listing(folder: Path, now: dt.datetime | None = None) -> list[FoundFile]:
     """Every file in the folder this platform could read, oldest first.
 
@@ -117,6 +129,11 @@ def listing(folder: Path, now: dt.datetime | None = None) -> list[FoundFile]:
     Not recursive. A folder connection is pointed at the directory the files
     land in, and walking into whatever else is under it - a backup, an
     unrelated project's archive - is a surprise nobody asked for.
+
+    Every entry is followed before it is accepted. The fence around the folder
+    is no fence at all if a link inside it may point out: a `leak.csv` in the
+    staging folder aimed at another project's export would otherwise be
+    imported as a dataset, which is the one thing naming a root was for.
     """
     moment = now or dt.datetime.now(dt.UTC)
     settle = dt.timedelta(seconds=max(0, settings.import_settle_seconds))
@@ -125,6 +142,11 @@ def listing(folder: Path, now: dt.datetime | None = None) -> list[FoundFile]:
         if not entry.is_file() or entry.name.startswith("."):
             continue
         if entry.suffix.lower() not in READABLE_EXTENSIONS:
+            continue
+        if not inside_a_root(entry):
+            logger.warning(
+                "Ignoring %s: it leads outside the folders this server reads from", entry
+            )
             continue
         try:
             stat = entry.stat()

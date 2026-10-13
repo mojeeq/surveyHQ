@@ -377,6 +377,95 @@ def test_a_server_connection_with_nothing_ticked_is_still_skipped(
     assert queued == []
 
 
+def test_a_run_where_every_file_failed_is_a_failed_job(
+    client, auth_headers, db_session, incoming
+):
+    """Marked succeeded, an import that read nothing is invisible in the job
+    list - which is where somebody looks when the dashboard has not moved."""
+    drop(incoming, "broken.zip", b"not a zip")
+    connection = make_connection(client, auth_headers, incoming)
+
+    job_id, _ = run_import(client, auth_headers, db_session, connection["id"])
+
+    job = db_session.get(Job, job_id)
+    assert job.status.value == "failed"
+    assert job.error
+
+
+def test_a_run_where_one_of_two_files_failed_still_counts_as_done(
+    client, auth_headers, db_session, incoming, level
+):
+    """One unreadable file among several is a failed run, not a failed import:
+    the others arrived, and the job list should not say otherwise."""
+    drop(incoming, "broken.zip", b"not a zip")
+    drop(incoming, "good.zip", export_zip(**{level: interviews(4)}))
+    connection = make_connection(client, auth_headers, incoming)
+
+    job_id, _ = run_import(client, auth_headers, db_session, connection["id"])
+
+    job = db_session.get(Job, job_id)
+    assert job.status.value == "success"
+    assert job.result["imported"] == 1
+    assert len(job.result["errors"]) == 1
+
+
+def test_changing_a_connection_from_a_server_to_a_folder_takes(
+    client, auth_headers, db_session, incoming
+):
+    """The form offers the choice when editing, so a save that reported
+    success while the connection went on behaving as a server would be a lie
+    nobody could see."""
+    made = client.post(
+        BASE,
+        headers=auth_headers,
+        json={"name": "Was a server", "base_url": "https://survey.example.org"},
+    ).json()
+
+    changed = client.patch(
+        f"{BASE}/{made['id']}",
+        headers=auth_headers,
+        json={"source_kind": "folder", "folder_path": str(incoming)},
+    )
+
+    assert changed.status_code == 200, changed.text
+    assert changed.json()["source_kind"] == "folder"
+    assert changed.json()["folder_path"] == str(incoming)
+
+
+def test_becoming_a_folder_connection_without_a_readable_folder_is_refused(
+    client, auth_headers, tmp_path
+):
+    made = client.post(
+        BASE,
+        headers=auth_headers,
+        json={"name": "Was a server too", "base_url": "https://survey.example.org"},
+    ).json()
+
+    refused = client.patch(
+        f"{BASE}/{made['id']}",
+        headers=auth_headers,
+        json={"source_kind": "folder", "folder_path": str(tmp_path / "elsewhere")},
+    )
+
+    assert refused.status_code == 400
+    assert "outside the folders" in refused.text
+
+
+def test_the_settings_a_folder_connection_reads_reach_the_containers():
+    """Compose substitutes .env into this file and nothing else, so a setting
+    the file does not name never reaches the container - and uncommenting it
+    in .env would change nothing at all."""
+    yaml = pytest.importorskip("yaml")
+
+    compose = yaml.safe_load(
+        (Path(__file__).resolve().parents[2] / "docker-compose.yml").read_text()
+    )
+    for name in ("api", "worker"):
+        env = compose["services"][name]["environment"]
+        assert "IMPORT_ROOTS" in env, name
+        assert "IMPORT_SETTLE_SECONDS" in env, name
+
+
 def test_the_worker_can_see_the_folder_the_api_offers():
     """The API lists the folder; the worker reads it.
 

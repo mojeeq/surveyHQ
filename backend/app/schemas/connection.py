@@ -84,6 +84,9 @@ class ConnectionCreate(ConnectionBase):
 
 class ConnectionUpdate(BaseModel):
     name: str | None = None
+    # Without this the edit form could send a changed kind and be told the
+    # save worked while the connection went on behaving as it did.
+    source_kind: SourceKind | None = None
     base_url: str | None = None
     folder_path: str | None = None
     workspace: str | None = None

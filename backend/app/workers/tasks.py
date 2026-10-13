@@ -469,10 +469,29 @@ def run_folder_import(self: Any, job_id: str) -> dict[str, Any]:
         if replaced:
             ids = list(dict.fromkeys(replaced))
             with session_scope() as db:
+                problems: list[str] = []
                 for dataset_id in ids:
                     dataset = db.get(Dataset, dataset_id)
                     if dataset is not None:
-                        stata.replay(db, dataset)
+                        problems.extend(stata.replay(db, dataset))
+                db.flush()
+                # After the replays, not before: the import rebuilt the merges
+                # standing on these datasets from the file as it arrived, and a
+                # recorded `drop if` or a generated column runs after that. A
+                # merge left as it was would hold the pre-replay rows while its
+                # source holds the replayed ones, and nothing on either would
+                # say which was which.
+                rebuild_dependents(db, ids)
+                # The counts were read before those commands ran, so a dropped
+                # row would leave the job reporting the file's rows rather than
+                # the dataset's.
+                for entry in summary["datasets"]:
+                    if entry["id"] in ids:
+                        dataset = db.get(Dataset, entry["id"])
+                        if dataset is not None:
+                            entry["rows"] = dataset.row_count
+                if problems:
+                    summary.setdefault("warnings", []).extend(problems)
 
         with session_scope() as db:
             connection = db.get(Connection, connection_id)
@@ -486,8 +505,16 @@ def run_folder_import(self: Any, job_id: str) -> dict[str, Any]:
                 )
             job = db.get(Job, job_id)
             if job:
-                job.status = JobStatus.success
+                # A run where every file failed imported nothing, and a job
+                # that reports success for it hides the whole import from
+                # whoever is watching the job list.
+                job.status = (
+                    JobStatus.failed
+                    if summary["errors"] and not summary["datasets"]
+                    else JobStatus.success
+                )
                 job.finished_at = utcnow()
+                job.progress = 100.0
                 job.result = {
                     "imported": len(summary["datasets"]),
                     "rows": summary["rows"],
@@ -495,6 +522,8 @@ def run_folder_import(self: Any, job_id: str) -> dict[str, Any]:
                     "still_arriving": waiting,
                     "errors": summary["errors"],
                 }
+                if summary["errors"]:
+                    job.error = summary["errors"][0]["error"]
         return {"imported": len(summary["datasets"]), "rows": summary["rows"]}
 
     except file_source.FolderError as exc:

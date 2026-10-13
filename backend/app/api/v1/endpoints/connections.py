@@ -170,6 +170,21 @@ def update_connection(
 ) -> ConnectionOut:
     connection = _editable(connection_id, db, user)
     data = payload.model_dump(exclude_unset=True)
+    # What the connection will be once this patch lands, which is what decides
+    # whether it has what it needs: a server without a URL, or a folder
+    # without a folder, is not a connection.
+    kind = data.get("source_kind") or connection.source_kind
+    folder = data.get("folder_path", connection.folder_path)
+    url = data.get("base_url", connection.base_url)
+    if kind == SourceKind.folder:
+        try:
+            file_source.resolve(folder)
+        except file_source.FolderError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
+    elif not (url or "").strip():
+        raise HTTPException(
+            status_code=400, detail="A server connection needs the server URL"
+        )
     password = data.pop("password", None)
     # Moving a connection is a write to where it is going as well as to where
     # it was, so both ends are checked.

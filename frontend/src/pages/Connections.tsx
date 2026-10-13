@@ -692,6 +692,10 @@ function ConnectionModal({
 function ImportModal({ connection, onClose }: { connection: Connection; onClose: () => void }) {
   const toast = useToast()
   const queryClient = useQueryClient()
+  // A folder connection chooses nothing: what is in the folder is what there
+  // is. Asking it which questionnaires to pull would be asking a question
+  // only a server can answer, with a submit button that never enables.
+  const isFolder = connection.source_kind === 'folder'
   const [selected, setSelected] = useState<string[]>(connection.questionnaires)
   const [projectId, setProjectId] = useState(connection.project_id ?? '')
   const [mode, setMode] = useState<'replace' | 'append'>('replace')
@@ -702,12 +706,17 @@ function ImportModal({ connection, onClose }: { connection: Connection; onClose:
 
   const start = useMutation({
     mutationFn: () =>
-      api.post(`/connections/${connection.id}/sync`, {
-        questionnaires: selected,
-        project_id: projectId || null,
-        mode,
-        export_format: format,
-      }),
+      api.post(
+        `/connections/${connection.id}/sync`,
+        isFolder
+          ? { project_id: projectId || null, mode }
+          : {
+              questionnaires: selected,
+              project_id: projectId || null,
+              mode,
+              export_format: format,
+            },
+      ),
     onSuccess: () => {
       toast.push(
         'Import started. It runs in the background and can take a few minutes for large surveys.',
@@ -734,10 +743,10 @@ function ImportModal({ connection, onClose }: { connection: Connection; onClose:
           <button
             className="btn-primary"
             onClick={() => start.mutate()}
-            disabled={!selected.length || start.isPending}
+            disabled={(!isFolder && !selected.length) || start.isPending}
           >
             {start.isPending && <Spinner className="h-4 w-4 text-white" />}
-            Import {describeSelection(selected)}
+            {isFolder ? 'Import what is new' : `Import ${describeSelection(selected)}`}
           </button>
         </>
       }
@@ -761,6 +770,7 @@ function ImportModal({ connection, onClose }: { connection: Connection; onClose:
             <option value="append">Add these rows to them</option>
           </select>
         </Field>
+        {!isFolder && (
         <Field
           label="Ask the server for"
           hint="This import only. The connection keeps its own default for scheduled imports."
@@ -779,18 +789,30 @@ function ImportModal({ connection, onClose }: { connection: Connection; onClose:
             ))}
           </select>
         </Field>
+        )}
       </div>
 
-      <p className="mb-3 text-sm text-ink-500">
-        Each questionnaire's whole export is imported - one dataset per roster level, with
-        the paradata - and re-importing refreshes them in place, so saved charts and
-        indicators keep working.
-      </p>
-      <QuestionnairePicker
-        connectionId={connection.id}
-        value={selected}
-        onChange={setSelected}
-      />
+      {isFolder ? (
+        <p className="text-sm text-ink-500">
+          Every file in <code>{connection.folder_path}</code> that has not been imported
+          yet, and has stopped being written to, is read now - an export archive as one
+          dataset per roster level, a single data file as one dataset. Re-importing
+          refreshes them in place, so saved charts and indicators keep working.
+        </p>
+      ) : (
+        <>
+          <p className="mb-3 text-sm text-ink-500">
+            Each questionnaire's whole export is imported - one dataset per roster level,
+            with the paradata - and re-importing refreshes them in place, so saved charts
+            and indicators keep working.
+          </p>
+          <QuestionnairePicker
+            connectionId={connection.id}
+            value={selected}
+            onChange={setSelected}
+          />
+        </>
+      )}
     </Modal>
   )
 }

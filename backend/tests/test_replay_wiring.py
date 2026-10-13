@@ -29,9 +29,13 @@ SOURCES = [
     Path("app/api/v1/endpoints/datasets.py"),
 ]
 
-#: Callers that replay later instead, by the function that does it for them.
+#: Callers that replay later instead, by the functions that do it for them.
+#:
+#: More than one may: the same archive import serves a server connection and a
+#: folder connection, and each replays once it has imported everything it is
+#: going to. Naming only one of them would leave the other free to stop.
 DEFERRED = {
-    "_import_export_archive": "run_connection_sync",
+    "_import_export_archive": ("run_connection_sync", "run_folder_import"),
 }
 
 
@@ -84,10 +88,11 @@ def test_every_archive_import_replays_recorded_commands(source: Path):
             f"commands recorded on them. Pass after_replace=stata.replay, or "
             f"replay afterwards and say so in DEFERRED."
         )
-        assert _replays(tree, deferred_to), (
-            f"{source}:{call.lineno} defers its replay to {deferred_to}(), "
-            f"which no longer replays anything."
-        )
+        for later in deferred_to:
+            assert _replays(tree, later), (
+                f"{source}:{call.lineno} defers its replay to {later}(), "
+                f"which no longer replays anything."
+            )
 
 
 def test_publishing_a_reviewed_import_replays_before_it_rebuilds():
@@ -140,3 +145,23 @@ def test_a_sync_replays_only_what_it_replaced():
         "the sync is collecting every dataset it touched, not only the ones it "
         "replaced, so an append would be replayed over twice"
     )
+
+
+def test_a_folder_import_replays_and_rebuilds_in_the_same_order_a_sync_does():
+    """The folder path is the sync with the download taken out, and it owes
+    the same order: replay what was recorded, then rebuild the merges standing
+    on those datasets, then read the row counts.
+
+    Rebuilt first, a merge holds the rows as the file delivered them while its
+    source holds the replayed ones, and nothing on either says which is which.
+    """
+    body = Path("app/workers/tasks.py").read_text()
+    folder = body.index("def run_folder_import(")
+    nextdef = body.index("def _import_export_archive(", folder)
+    inside = body[folder:nextdef]
+
+    replay = inside.index("problems.extend(stata.replay(db, dataset))")
+    rebuild = inside.index("rebuild_dependents(db, ids)")
+    counts = inside.index('entry["rows"] = dataset.row_count')
+    assert replay < rebuild, "the folder import rebuilds dependents before it replays"
+    assert replay < counts, "it reports row counts read before the replay"
