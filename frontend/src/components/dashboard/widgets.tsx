@@ -14,6 +14,7 @@ import { STATUS_COLORS } from "@/lib/charts";
 import type { BuildOptions } from "@/lib/charts";
 
 import { formatNumber, formatValue, relativeTime } from "@/lib/format";
+import { orderBreakdown, type BreakdownOrder } from '@/lib/breakdown-order';
 
 import {
   CHARTED_VIEWS,
@@ -641,7 +642,6 @@ export function IndicatorWidget({
     STATUS_COLORS[payload.status as keyof typeof STATUS_COLORS] ??
     STATUS_COLORS.unknown;
   const breakdown: Record<string, number> = payload.breakdown ?? {};
-  const groups = Object.entries(breakdown);
 
   /**
    * Each group's progress towards its own quota, drawn as one bar.
@@ -668,6 +668,14 @@ export function IndicatorWidget({
       status: string;
     }
   > = payload.breakdown_progress ?? {};
+  // A breakdown arrives in the order the query answered in, which is no order
+  // at all on a chart of sixty areas. The default asks the monitoring
+  // question - who is behind - and the widget can be set to any of the others.
+  const groups = orderBreakdown(
+    Object.entries(breakdown),
+    progress,
+    (payload.breakdown_order as BreakdownOrder) || 'behind',
+  );
   const hasTargets = groups.some(
     ([key]) => (progress[key]?.target ?? null) !== null,
   );

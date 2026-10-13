@@ -8,6 +8,7 @@ import { useToast } from '@/hooks/useToast'
 import { buildSparkline, STATUS_COLORS } from '@/lib/charts'
 import { by } from '@/lib/collections'
 import { quotaSummary } from '@/lib/quotas'
+import { orderBreakdown } from '@/lib/breakdown-order'
 import { formatNumber, formatValue, relativeTime } from '@/lib/format'
 import type {
   Aggregation,
@@ -276,11 +277,16 @@ function IndicatorCard({
             const quoted = Object.keys(breakdown.data!.breakdown).some(
               (key) => (progress[key]?.target ?? null) !== null,
             )
-            const rows = Object.entries(breakdown.data!.breakdown)
-              .sort(by(([key]) => key))
-              .map(([key, val]) =>
-                quoted ? [key, val, progress[key]?.target ?? null] : [key, val],
-              )
+            // Furthest from its own quota first, which is the question this
+            // page exists to answer. The dashboard tile offers the other
+            // orders; here there is one chart and it should open on the
+            // areas that need somebody.
+            const rows = orderBreakdown(
+              Object.entries(breakdown.data!.breakdown),
+              progress,
+            ).map(([key, val]) =>
+              quoted ? [key, val, progress[key]?.target ?? null] : [key, val],
+            )
             return (
               <ChartCard
                 showToggle={false}

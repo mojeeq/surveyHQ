@@ -275,3 +275,22 @@ def test_an_unlabelled_variable_is_unaffected():
 
     assert target_for(indicator, "North", {}) == 400
     assert target_for(indicator, "South", {}) is None
+
+
+def test_the_exported_page_orders_its_breakdown_the_way_the_board_does():
+    """A file that sorted its own way would be a different chart of the same
+    numbers, and a reader holding both could not tell which was the board."""
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "app/services/export_assets/dashboard.html"
+    ).read_text(encoding="utf-8")
+    ordering = script[script.index("function ordered("):script.index("function drawIndicator")]
+
+    # The four orders lib/breakdown-order offers, and the two rules that are
+    # easy to drop: a group with no quota goes last, and with no quotas at all
+    # the fallback is the largest first.
+    for how in ("name", "largest", "done"):
+        assert f"'{how}'" in ordering, how
+    assert "!quoted" in ordering
+    assert "return 1" in ordering and "return -1" in ordering
+    assert "widget.config && widget.config.breakdown_order" in script
