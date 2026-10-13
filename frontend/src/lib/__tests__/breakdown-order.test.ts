@@ -8,7 +8,7 @@
  * finished, and a board with no quotas at all, where "behind" means nothing.
  */
 import { describe, expect, it } from 'vitest'
-import { orderBreakdown, type Progress } from '@/lib/breakdown-order'
+import { breakdownRows, orderBreakdown, type Progress } from '@/lib/breakdown-order'
 
 const groups: [string, number][] = [
   ['0302', 19],
@@ -87,5 +87,38 @@ describe('orderBreakdown', () => {
 
   it('reads a group the progress says nothing about at all', () => {
     expect(names(orderBreakdown(groups, {}))).toEqual(['4302', '0302', '0101', '0805'])
+  })
+})
+
+describe('breakdownRows', () => {
+  it('carries each group with its quota, its share of it and what is left', () => {
+    const rows = breakdownRows([['0302', 19]], {
+      '0302': { value: 19, target: 60, percent: 31.7, status: 'warning' },
+    })
+
+    expect(rows).toEqual([
+      { group: '0302', value: 19, target: 60, percent: 31.7, shortfall: 41, status: 'warning' },
+    ])
+  })
+
+  it('has nothing to be short of where there is no quota', () => {
+    const rows = breakdownRows([['0302', 19]], {})
+
+    expect(rows[0]).toMatchObject({ target: null, percent: null, shortfall: null })
+    expect(rows[0].status).toBe('unknown')
+  })
+
+  it('is not short of anything once the quota is passed', () => {
+    const rows = breakdownRows([['0302', 70]], {
+      '0302': { value: 70, target: 60, percent: 116.7, status: 'ok' },
+    })
+
+    expect(rows[0].shortfall).toBe(0)
+  })
+
+  it('keeps the order it was handed', () => {
+    const rows = breakdownRows([['b', 1], ['a', 2]], {})
+
+    expect(rows.map((row) => row.group)).toEqual(['b', 'a'])
   })
 })

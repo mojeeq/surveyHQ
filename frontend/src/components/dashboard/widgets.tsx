@@ -14,7 +14,12 @@ import { STATUS_COLORS } from "@/lib/charts";
 import type { BuildOptions } from "@/lib/charts";
 
 import { formatNumber, formatValue, relativeTime } from "@/lib/format";
-import { orderBreakdown, type BreakdownOrder } from '@/lib/breakdown-order';
+import {
+  breakdownRows,
+  orderBreakdown,
+  type BreakdownOrder,
+} from '@/lib/breakdown-order';
+import { BreakdownTable } from '@/components/dashboard/BreakdownTable';
 
 import {
   CHARTED_VIEWS,
@@ -699,6 +704,12 @@ export function IndicatorWidget({
     ? [achievedLabel, overLabel]
     : [achievedLabel, "Still to go", overLabel];
 
+  // Sixty bars in a tile the size of a postcard is a smear. The same sixty as
+  // lines of figures is a list somebody can read down and quote from, so the
+  // widget can be set to either; both are drawn from the same numbers.
+  const asTable = payload.breakdown_view === "table";
+  const tableRows = breakdownRows(groups, progress);
+
   const quotaRows = groups.map(([key, value]) => {
     const target = progress[key]?.target ?? null;
     const within = target === null ? value : Math.min(value, target);
@@ -766,7 +777,21 @@ export function IndicatorWidget({
 
       {/* The headline is an average of something. Which regions or teams are
           behind it is the next question, and it used to need another page. */}
-      {groups.length > 0 && (
+      {groups.length > 0 && asTable && (
+        <div className="mt-3 min-h-0 flex-1 overflow-auto">
+          <BreakdownTable
+            rows={tableRows}
+            variable={payload.breakdown_variable}
+            name={payload.name}
+            valueFormat={payload.value_format}
+            unit={payload.unit}
+            lowerIsBetter={lowerIsBetter}
+            onSelect={onSelect}
+          />
+        </div>
+      )}
+
+      {groups.length > 0 && !asTable && (
         <div className="mt-3 min-h-0 flex-1">
           <ChartCard
             showToggle={false}

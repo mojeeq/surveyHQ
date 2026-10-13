@@ -2534,6 +2534,8 @@ def _render_widget(
             # Which question the chart answers first: who is behind, who is
             # done, the largest, or the one a reader is looking up by name.
             "breakdown_order": str((widget.config or {}).get("breakdown_order") or "behind"),
+            # A chart or a list of figures. The same numbers either way.
+            "breakdown_view": str((widget.config or {}).get("breakdown_view") or "chart"),
             # Which way the indicator is meant to move. A quota chart reads
             # differently for each: with "higher is better" the bar is progress
             # towards the target and the shortfall is what is left to do; with
