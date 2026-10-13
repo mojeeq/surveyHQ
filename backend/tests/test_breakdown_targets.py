@@ -226,3 +226,52 @@ def test_the_exported_page_draws_a_group_against_its_own_quota():
     # thing a breakdown bar is measured against.
     chart = drawing[drawing.index("if (breakdown.length && window.echarts)"):]
     assert "spec.target_value" not in chart
+
+
+# --- A labelled breakdown ----------------------------------------------------
+#
+# A labelled variable is reported by its label and the quotas were offered by
+# the code behind it, so an enumeration area labelled "0405" over the code 405
+# carried a quota that was never applied - and nothing said so. The bars that
+# worked were the ones whose label happens to be their code written out, which
+# is why a board could look as though quotas were only set for some areas.
+
+
+def test_a_quota_stored_against_the_code_answers_to_the_label():
+    indicator = make(breakdown_targets={"405": 10, "4302": 5})
+    labels = {"405": "0405", "4302": "4302"}
+
+    assert target_for(indicator, "0405", labels) == 10
+    assert target_for(indicator, "4302", labels) == 5
+
+
+def test_the_label_keeps_its_own_quota_where_it_has_one():
+    """A quota keyed the way quotas are keyed now wins over the code's."""
+    indicator = make(breakdown_targets={"405": 10, "0405": 7})
+
+    assert target_for(indicator, "0405", {"405": "0405"}) == 7
+
+
+def test_the_breakdown_judges_a_labelled_variable_by_its_quotas():
+    indicator = make(breakdown_targets={"405": 10, "902": 8})
+    labels = {"405": "0405", "902": "0902"}
+
+    report = breakdown_progress(indicator, {"0405": 4.0, "0902": 8.0}, labels)
+
+    assert report["0405"]["target"] == 10
+    assert report["0405"]["percent"] == 40.0
+    assert report["0902"]["percent"] == 100.0
+
+
+def test_the_quotas_still_add_up_to_what_was_entered():
+    """The aliases are for looking up, not for counting: the sum is the list."""
+    indicator = make(breakdown_targets={"405": 10, "902": 8})
+
+    assert targets_total(indicator) == 18.0
+
+
+def test_an_unlabelled_variable_is_unaffected():
+    indicator = make(breakdown_targets={"North": 400})
+
+    assert target_for(indicator, "North", {}) == 400
+    assert target_for(indicator, "South", {}) is None

@@ -57,6 +57,7 @@ from app.services.monitoring import (
     breakdown_progress,
     evaluate_alert_rule,
     indicator_status,
+    label_map,
     progress_percent,
     refresh_indicator,
 )
@@ -219,7 +220,9 @@ def indicator_values(
                 status=indicator_status(indicator, indicator.last_value),
                 direction=indicator.direction,
                 breakdown=breakdown,
-                breakdown_progress=breakdown_progress(indicator, breakdown),
+                breakdown_progress=breakdown_progress(
+                    indicator, breakdown, label_map(db, indicator)
+                ),
                 breakdown_truncated=bool(truncated),
                 breakdown_variable=indicator.breakdown_variable,
                 computed_at=indicator.last_computed_at,
@@ -251,7 +254,9 @@ def refresh_single_indicator(
         status=indicator_status(indicator, indicator.last_value),
         direction=indicator.direction,
         breakdown=outcome.get("breakdown") or {},
-        breakdown_progress=breakdown_progress(indicator, outcome.get("breakdown") or {}),
+        breakdown_progress=breakdown_progress(
+            indicator, outcome.get("breakdown") or {}, label_map(db, indicator)
+        ),
         breakdown_truncated=bool(outcome.get("breakdown_truncated")),
         breakdown_variable=indicator.breakdown_variable,
         computed_at=indicator.last_computed_at,

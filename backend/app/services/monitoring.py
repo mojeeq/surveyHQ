@@ -271,7 +271,52 @@ def quotas(indicator: Indicator) -> dict[str, Any]:
     return dict(indicator.breakdown_targets or {})
 
 
-def target_for(indicator: Indicator, category: str) -> float | None:
+def label_map(db: Session, indicator: Indicator) -> dict[str, str]:
+    """{code: label} for the breakdown variable, where it is a labelled one.
+
+    A labelled variable is reported by its label - "0405" - and the quotas
+    were stored against the code behind it - 405 - because that is what the
+    list of values offers. The two never met, so an enumeration area whose
+    label is its code with a zero in front of it had a quota that was never
+    applied and no sign that it was not.
+    """
+    if not indicator.breakdown_variable:
+        return {}
+    dataset = db.get(Dataset, indicator.dataset_id)
+    if dataset is None:
+        return {}
+    try:
+        info = DatasetContext.from_model(dataset).variables.get(indicator.breakdown_variable)
+    except Exception:  # pragma: no cover - a dataset whose files have gone
+        return {}
+    if info is None or not info.value_labels:
+        return {}
+    return {str(code): str(label) for code, label in info.value_labels.items()}
+
+
+def effective_quotas(
+    indicator: Indicator, labels: dict[str, str] | None = None
+) -> dict[str, float | Any]:
+    """The quotas, answering to the spelling the breakdown reports them by.
+
+    A quota is kept under one key and looked up by another whenever the
+    variable is labelled, so each one also answers to its label. The stored
+    key wins where both exist, and a label already carrying a quota of its own
+    is never overwritten by the code's.
+    """
+    stored = quotas(indicator)
+    if not labels or not stored:
+        return stored
+    answered = dict(stored)
+    for code, label in labels.items():
+        if label not in answered and code in stored:
+            answered[label] = stored[code]
+    return answered
+
+
+def target_for(
+    indicator: Indicator, category: str, labels: dict[str, str] | None = None
+) -> float | None:
     """The target one category of a breakdown is judged against: its own, or none.
 
     A survey's quota is rarely a single number: it is so many interviews in
@@ -285,7 +330,7 @@ def target_for(indicator: Indicator, category: str) -> float | None:
     reads as a disaster on a board full of them. Nothing is a more honest
     answer than a wrong one.
     """
-    raw = quotas(indicator).get(category)
+    raw = effective_quotas(indicator, labels).get(category)
     if raw is None:
         return None
     try:
@@ -346,16 +391,27 @@ def _status_against(
 
 
 def breakdown_progress(
-    indicator: Indicator, breakdown: dict[str, float]
+    indicator: Indicator,
+    breakdown: dict[str, float],
+    labels: dict[str, str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Each category's value against its own target.
 
     Returned beside the raw breakdown rather than instead of it, so a caller
     that only wants the numbers is unaffected.
+
+    `labels` is {code: label} for the breakdown variable, from `label_map`.
+    Without it a quota stored against a labelled variable's code is invisible
+    to a breakdown reported by its label.
     """
     report: dict[str, dict[str, Any]] = {}
+    resolved = effective_quotas(indicator, labels)
     for category, value in breakdown.items():
-        target = target_for(indicator, category)
+        raw = resolved.get(category)
+        try:
+            target = None if raw is None else float(raw)
+        except (TypeError, ValueError):
+            target = None
         report[category] = {
             "value": value,
             "target": target,
