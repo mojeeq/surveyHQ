@@ -119,6 +119,25 @@ class Settings(BaseSettings):
     # charge wherever it was already doing its job.
     max_extracted_gb: int = 64
 
+    # Where a folder connection may read from.
+    #
+    # A folder connection names a directory on this server and imports what
+    # lands in it, which without a fence is a way for anyone who may add a
+    # connection to read any file the API container can reach - /etc, the
+    # storage directory, another project's data. So the directory has to sit
+    # inside one of these roots, and nothing else on the machine is reachable
+    # however the path is written. The default is the one directory the
+    # compose file already mounts for hand-staged imports.
+    import_roots: str = "/incoming"
+    # How settled a file has to be before it is read, in seconds.
+    #
+    # A 40 MB export copied in over a network link exists, with its final
+    # name, long before it is whole: importing it at that moment reads half an
+    # archive and fails, or worse, imports half a survey. Waiting until it has
+    # stopped changing is the cheap version of a lock file that the thing
+    # doing the copying does not have to know about.
+    import_settle_seconds: int = 60
+
     # Mail
     smtp_host: str = ""
     smtp_port: int = 587
@@ -153,6 +172,15 @@ class Settings(BaseSettings):
             f"postgresql+psycopg2://{self.postgres_user}:{self.postgres_password}"
             f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
         )
+
+    @property
+    def import_root_paths(self) -> list[Path]:
+        """The directories a folder connection may be pointed at."""
+        return [
+            Path(item.strip()).resolve()
+            for item in self.import_roots.split(",")
+            if item.strip()
+        ]
 
     @property
     def storage_path(self) -> Path:

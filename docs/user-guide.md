@@ -399,6 +399,22 @@ variables and detected types.
 
 See [survey-solutions.md](survey-solutions.md).
 
+### Importing from a folder
+
+A connection does not have to be a server. **Connections -> Add a connection**
+with **Where the data comes from** set to *A folder on this server* reads a
+directory on the SurveyHQ host instead: whatever is put there - an export
+downloaded by hand, a cloud drive's synced folder, a file copied up by a
+scheduled task - is imported on the same schedule, into the same datasets,
+replaced in place.
+
+It exists for the offices that cannot be given an API user on the survey
+server, which is an administrator's privilege. The folder has to sit inside a
+directory the administrator of *this* server allows, so a connection cannot be
+pointed at the rest of the machine. The details, including what is read and
+what is left alone, are in
+[survey-solutions.md](survey-solutions.md#when-there-is-no-api-user).
+
 ### Refreshing
 
 A dataset can be refreshed in place - by re-importing from its connection, or

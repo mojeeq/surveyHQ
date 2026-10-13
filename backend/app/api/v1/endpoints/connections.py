@@ -14,7 +14,17 @@ from app.api.deps import CurrentUser, DbSession, RequireManager
 from app.core.crypto import decrypt, encrypt
 from app.core.logging import get_logger
 from app.core.rate_limit import enforce
-from app.models import Connection, Job, JobStatus, JobType, Role, SyncRun, User
+from app.models import (
+    Connection,
+    FolderImport,
+    Job,
+    JobStatus,
+    JobType,
+    Role,
+    SourceKind,
+    SyncRun,
+    User,
+)
 from app.schemas.common import Message
 from app.schemas.connection import (
     ConnectionCreate,
@@ -26,6 +36,7 @@ from app.schemas.connection import (
     SyncRunOut,
 )
 from app.schemas.monitoring import JobOut
+from app.services import file_source
 from app.services.audit import record
 from app.services.projects import can_edit, can_view, restrict, scope_for
 from app.services.survey_solutions import (
@@ -107,8 +118,18 @@ def create_connection(
 ) -> ConnectionOut:
     if payload.project_id and not can_edit(db, user, payload.project_id, Role.manager):
         raise HTTPException(status_code=404, detail="Project not found")
+    if payload.source_kind == SourceKind.folder:
+        # Checked here rather than in the schema because the answer is about
+        # this machine: whether the folder exists, and whether this server
+        # will read from it at all.
+        try:
+            file_source.resolve(payload.folder_path)
+        except file_source.FolderError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from None
     connection = Connection(
         name=payload.name,
+        source_kind=payload.source_kind,
+        folder_path=payload.folder_path.strip(),
         base_url=payload.base_url,
         workspace=payload.workspace or "primary",
         username=payload.username,
@@ -188,12 +209,64 @@ def delete_connection(connection_id: str, db: DbSession, user: RequireManager) -
     return Message(detail=f"Connection '{name}' deleted")
 
 
+def _test_folder(connection: Connection, db: DbSession) -> ConnectionTestResult:
+    """What this connection can see in its folder, now.
+
+    The useful answer is not "the folder is there" - it is how many files are
+    in it, how many of those have been imported already, and whether any is
+    still being copied, because that is what somebody staring at an empty
+    dashboard needs to know.
+    """
+    try:
+        folder = file_source.resolve(connection.folder_path)
+    except file_source.FolderError as exc:
+        connection.last_sync_error = str(exc)
+        db.commit()
+        return ConnectionTestResult(ok=False, message=str(exc))
+
+    found = file_source.listing(folder)
+    seen = {
+        record.digest
+        for record in db.scalars(
+            select(FolderImport).where(FolderImport.connection_id == connection.id)
+        ).all()
+    }
+    settled = [one for one in found if one.settled]
+    arriving = len(found) - len(settled)
+    fresh = [one for one in settled if one.digest not in seen]
+
+    if not found:
+        message = f"{folder} is readable, and empty."
+    else:
+        parts = [f"{len(found)} file(s) in {folder}"]
+        parts.append(f"{len(fresh)} not imported yet" if fresh else "all already imported")
+        if arriving:
+            parts.append(f"{arriving} still being written")
+        message = ", ".join(parts) + "."
+
+    connection.last_sync_error = ""
+    db.commit()
+    return ConnectionTestResult(
+        ok=True,
+        message=message,
+        details={
+            "folder": str(folder),
+            "files": len(found),
+            "new": len(fresh),
+            "still_arriving": arriving,
+            "names": [one.name for one in fresh[:20]],
+        },
+    )
+
+
 @router.post("/{connection_id}/test", response_model=ConnectionTestResult)
 def test_connection(
     connection_id: str, db: DbSession, user: RequireManager
 ) -> ConnectionTestResult:
     connection = _editable(connection_id, db, user)
     _throttle_tests(user)
+    if connection.source_kind == SourceKind.folder:
+        return _test_folder(connection, db)
     if not connection.username or not connection.password_encrypted:
         return ConnectionTestResult(
             ok=False, message="Set an API user name and password before testing."
@@ -225,8 +298,25 @@ def test_connection(
 def test_unsaved_connection(
     payload: ConnectionCreate, user: RequireManager
 ) -> ConnectionTestResult:
-    """Let the UI validate credentials before the connection is saved."""
+    """Let the UI check what it has been given before the connection is saved."""
     _throttle_tests(user)
+    if payload.source_kind == SourceKind.folder:
+        # Nothing is stored yet, so there is no history of imports to compare
+        # against: the answer here is what is in the folder, full stop.
+        try:
+            folder = file_source.resolve(payload.folder_path)
+        except file_source.FolderError as exc:
+            return ConnectionTestResult(ok=False, message=str(exc))
+        found = file_source.listing(folder)
+        return ConnectionTestResult(
+            ok=True,
+            message=(
+                f"{folder} is readable, and empty."
+                if not found
+                else f"{len(found)} file(s) in {folder}."
+            ),
+            details={"folder": str(folder), "files": len(found)},
+        )
     try:
         with SurveySolutionsClient(
             base_url=payload.base_url,
@@ -304,12 +394,69 @@ def list_interviews(
     return {"interviews": interviews, "count": len(interviews), "by_status": by_status}
 
 
+def _queue_folder_import(
+    connection: Connection, payload: SyncRequest, db: DbSession, user: Any
+) -> Job:
+    """Queue the import of whatever is new in a folder connection's folder."""
+    target_project = payload.project_id or connection.project_id
+    if target_project and not can_edit(db, user, target_project, Role.manager):
+        raise HTTPException(status_code=404, detail="Project not found")
+    try:
+        folder = file_source.resolve(connection.folder_path)
+    except file_source.FolderError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+    job = Job(
+        job_type=JobType.sync,
+        status=JobStatus.queued,
+        title=f"Import from {connection.name}",
+        params={
+            "connection_id": connection.id,
+            "project_id": target_project,
+            "mode": payload.mode,
+            "source_kind": SourceKind.folder.value,
+        },
+        created_by=user.id,
+    )
+    db.add(job)
+    record(
+        db,
+        user=user,
+        action="trigger_sync",
+        entity_type="connection",
+        entity_id=connection.id,
+        detail={"folder": str(folder)},
+    )
+    db.commit()
+    db.refresh(job)
+
+    from app.workers.tasks import run_folder_import
+
+    try:
+        async_result = run_folder_import.delay(job.id)
+        job.celery_task_id = async_result.id
+        db.commit()
+        db.refresh(job)
+    except Exception as exc:  # noqa: BLE001 - broker unreachable
+        logger.error("Could not queue folder import job %s: %s", job.id, exc)
+        job.status = JobStatus.failed
+        job.error = (
+            "The background worker could not be reached. Check that the worker and "
+            "Redis are running."
+        )
+        db.commit()
+        db.refresh(job)
+    return job
+
+
 @router.post("/{connection_id}/sync", response_model=JobOut, status_code=202)
 def trigger_sync(
     connection_id: str, payload: SyncRequest, db: DbSession, user: RequireManager
 ) -> Job:
     """Queue an export + import run for the selected questionnaires."""
     connection = _editable(connection_id, db, user)
+    if connection.source_kind == SourceKind.folder:
+        return _queue_folder_import(connection, payload, db, user)
     if not connection.username or not connection.password_encrypted:
         raise HTTPException(
             status_code=400, detail="This connection has no credentials configured."

@@ -7,6 +7,7 @@ import enum
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     DateTime,
     Enum,
@@ -45,12 +46,34 @@ class ExportFormat(str, enum.Enum):
 sync_status_type = Enum(SyncStatus, name="sync_status")
 
 
+class SourceKind(str, enum.Enum):
+    """Where a connection's data comes from.
+
+    A server is the original: credentials, an export job, a download. A folder
+    is for the offices that cannot have an API user - somebody puts the export
+    where the platform can read it and everything after that is the same.
+    """
+
+    survey_solutions = "survey_solutions"
+    folder = "folder"
+
+
 class Connection(UUIDMixin, TimestampMixin, Base):
-    """Credentials and sync settings for one Survey Solutions workspace."""
+    """Where one stream of data comes from, and when to go and get it."""
 
     __tablename__ = "connections"
 
     name: Mapped[str] = mapped_column(String(200), nullable=False)
+    source_kind: Mapped[SourceKind] = mapped_column(
+        Enum(SourceKind, name="source_kind"),
+        default=SourceKind.survey_solutions,
+        server_default=text("'survey_solutions'"),
+    )
+    # For a folder connection: the directory on this server to read, which has
+    # to sit inside one of the configured import roots. Empty for a server.
+    folder_path: Mapped[str] = mapped_column(
+        String(500), default="", server_default=text("''")
+    )
     base_url: Mapped[str] = mapped_column(String(500), nullable=False)
     workspace: Mapped[str] = mapped_column(String(120), default="primary")
     username: Mapped[str] = mapped_column(String(200), default="")
@@ -104,6 +127,10 @@ class Connection(UUIDMixin, TimestampMixin, Base):
         order_by="desc(SyncRun.started_at)",
     )
 
+    @property
+    def is_folder(self) -> bool:
+        return self.source_kind == SourceKind.folder
+
 
 class SyncRun(UUIDMixin, Base):
     __tablename__ = "sync_runs"
@@ -133,3 +160,25 @@ class SyncRun(UUIDMixin, Base):
     )
 
     connection: Mapped[Connection] = relationship(back_populates="runs")
+
+
+class FolderImport(UUIDMixin, Base):
+    """One file a folder connection has already read.
+
+    Kept by content rather than by name. A nightly export is called the same
+    thing every night and the only thing that says this morning's is a new one
+    is that it reads differently - so the digest is what decides, and a file
+    re-saved unchanged under a new name is correctly left alone.
+    """
+
+    __tablename__ = "folder_imports"
+
+    connection_id: Mapped[str] = mapped_column(
+        ForeignKey("connections.id", ondelete="CASCADE"), index=True
+    )
+    file_name: Mapped[str] = mapped_column(String(500), default="")
+    digest: Mapped[str] = mapped_column(String(64), index=True)
+    size: Mapped[int] = mapped_column(BigInteger, default=0)
+    modified_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    imported_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    run_id: Mapped[str | None] = mapped_column(String(36), nullable=True)

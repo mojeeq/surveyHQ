@@ -138,6 +138,10 @@ services:
     environment: *backend-env
     volumes:
       - survey-data:/data
+      # The same staging folder the API mounts, because a folder connection is
+      # listed by the API and read here. Mounted on one of them only, the
+      # connection tests green and every import after it fails.
+      - ./incoming:/incoming:ro
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
