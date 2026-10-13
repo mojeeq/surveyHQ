@@ -746,7 +746,8 @@ def build_payload(
                 # The whole query and its options are already in the cube; what
                 # is kept here is what the page draws with.
                 if key in ("content", "html", "target", "label", "expired_text",
-                           "show_breakdown", "breakdown_order", "columns")
+                           "show_breakdown", "breakdown_order", "breakdown_view",
+                           "columns")
             },
         }
         builder = BUILDERS.get(widget.widget_type.value)

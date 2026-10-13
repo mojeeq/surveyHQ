@@ -809,6 +809,32 @@
   }
 
   /**
+   * One group's status against its own quota.
+   *
+   * Mirrors services/monitoring._status_against: the thresholds are set
+   * against the headline, so a region carrying a tenth of the quota has them
+   * scaled to a tenth as well, or every small region would sit permanently in
+   * the red. A group with no quota of its own is not judged at all.
+   */
+  function groupStatus(spec, value, target) {
+    if (value === null || value === undefined || !target) return 'unknown'
+    var headline = spec.target_value
+    if (!headline || headline === target) return indicatorStatus(spec, value)
+    var scale = target / headline
+    return indicatorStatus({
+      direction: spec.direction,
+      warning_threshold:
+        spec.warning_threshold === null || spec.warning_threshold === undefined
+          ? null
+          : spec.warning_threshold * scale,
+      critical_threshold:
+        spec.critical_threshold === null || spec.critical_threshold === undefined
+          ? null
+          : spec.critical_threshold * scale,
+    }, value)
+  }
+
+  /**
    * The groups of a breakdown, in the order the board was set to.
    *
    * Follows lib/breakdown-order exactly: furthest from its own quota first by
@@ -883,21 +909,58 @@
       body.appendChild(el('p', 'muted',
         num(((value || 0) / spec.target_value) * 100, 0) + '% of ' + num(spec.target_value)))
     }
+    // Each group against its own quota, never against the headline: the
+    // headline is what the quotas add up to, so a group measured against it
+    // reads as hopelessly behind whatever it has actually done. A group with
+    // no quota of its own is shown as its value and nothing else.
+    var quotas = spec.breakdown_targets || {}
+    var quoted = breakdown.some(function (pair) { return Number(quotas[pair[0]]) > 0 })
+    var lower = spec.direction === 'lower_is_better'
+    // The same order the board was set to. A file that ordered its own way
+    // would be a different reading of the same numbers, and the reader holding
+    // both has no way to tell which one is the board.
+    breakdown = ordered(breakdown, quotas, widget.config && widget.config.breakdown_order)
+
+    // A list of figures where the widget was set to one: a tile of sixty bars
+    // is a smear, and the file has to be the board rather than a tidier
+    // relative of it.
+    if (breakdown.length && widget.config && widget.config.breakdown_view === 'table') {
+      var table = el('table', 'data')
+      var head = document.createElement('tr')
+      head.appendChild(el('th', '', spec.breakdown_variable || 'Group'))
+      head.appendChild(el('th', 'n', spec.name || 'Value'))
+      if (quoted) {
+        head.appendChild(el('th', 'n', 'Target'))
+        head.appendChild(el('th', 'n', lower ? 'Of limit' : 'Done'))
+      }
+      var header = document.createElement('thead')
+      header.appendChild(head)
+      table.appendChild(header)
+      var lines = document.createElement('tbody')
+      breakdown.forEach(function (pair) {
+        var target = Number(quotas[pair[0]]) > 0 ? Number(quotas[pair[0]]) : null
+        var line = document.createElement('tr')
+        line.appendChild(el('td', '', pair[0]))
+        line.appendChild(el('td', 'n', formatValue(pair[1], spec.value_format, spec.unit)))
+        if (quoted) {
+          line.appendChild(el('td', 'n', target === null ? '-' : num(target)))
+          var share = el('td', 'n',
+            target === null ? '-' : num(((Number(pair[1]) || 0) / target) * 100, 0) + '%')
+          share.style.fontWeight = '600'
+          if (target !== null) share.style.color = STATUS[groupStatus(spec, pair[1], target)]
+          line.appendChild(share)
+        }
+        lines.appendChild(line)
+      })
+      table.appendChild(lines)
+      body.appendChild(table)
+      return
+    }
+
     if (breakdown.length && window.echarts) {
       var host = el('div', 'chart')
       body.appendChild(host)
       var instance = echarts.init(host)
-      // Each group against its own quota, never against the headline: the
-      // headline is what the quotas add up to, so a group measured against it
-      // reads as hopelessly behind whatever it has actually done. A group with
-      // no quota of its own is drawn as its value and nothing else.
-      var quotas = spec.breakdown_targets || {}
-      var quoted = breakdown.some(function (pair) { return Number(quotas[pair[0]]) > 0 })
-      var lower = spec.direction === 'lower_is_better'
-      // The same order the board was set to. A file that sorted its own way
-      // would be a different chart of the same numbers, and the reader
-      // holding both has no way to tell which one is the board.
-      breakdown = ordered(breakdown, quotas, widget.config && widget.config.breakdown_order)
       var option = {
         color: PALETTE,
         grid: { left: 8, right: 30, top: 10, bottom: 6, containLabel: true },

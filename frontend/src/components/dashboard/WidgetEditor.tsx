@@ -998,6 +998,21 @@ export function EditWidgetModal({
           </label>
           {Boolean(config.show_breakdown) && (
             <Field
+              label="Draw the breakdown as"
+              hint="Sixty bars in a small tile is a smear; the same sixty as lines of figures is a list somebody can read down and quote from."
+            >
+              <select
+                className="input"
+                value={String(config.breakdown_view ?? 'chart')}
+                onChange={(event) => set({ breakdown_view: event.target.value })}
+              >
+                <option value="chart">A chart</option>
+                <option value="table">A table</option>
+              </select>
+            </Field>
+          )}
+          {Boolean(config.show_breakdown) && (
+            <Field
               label="Order the groups by"
               hint="Which question the chart answers first. Furthest behind is the one a monitoring board is usually asking; by name is how a reader looks one up."
             >

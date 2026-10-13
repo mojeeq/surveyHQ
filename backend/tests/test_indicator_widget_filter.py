@@ -219,3 +219,38 @@ def test_a_filter_on_a_variable_the_dataset_lacks_is_reported_not_applied(
     # Nothing could be narrowed, so the stored value is what it reports.
     assert tile["filtered"] is False
     assert tile["value"] == 10
+
+
+def test_the_tile_says_which_form_its_breakdown_takes(client, auth_headers, surveyed):
+    """A chart of sixty groups in a small tile is a smear, so the widget can be
+    set to lines of figures instead. Which form is the reader's choice, so it
+    travels with the tile rather than being decided in the browser."""
+    indicator = make_indicator(
+        client, auth_headers, surveyed["dataset_id"], breakdown_variable="status"
+    )
+    place_tile(
+        client,
+        auth_headers,
+        surveyed["board"],
+        indicator["id"],
+        {"show_breakdown": True, "breakdown_view": "table"},
+    )
+
+    tile = render(client, auth_headers, surveyed["board"])
+    assert tile["breakdown_view"] == "table"
+    # Same numbers either way: a table is a way of reading them, not another
+    # question about them.
+    assert tile["breakdown"] == {"done": 4, "open": 6}
+
+
+def test_a_tile_that_was_never_asked_draws_the_chart_it_always_did(
+    client, auth_headers, surveyed
+):
+    indicator = make_indicator(
+        client, auth_headers, surveyed["dataset_id"], breakdown_variable="status"
+    )
+    place_tile(
+        client, auth_headers, surveyed["board"], indicator["id"], {"show_breakdown": True}
+    )
+
+    assert render(client, auth_headers, surveyed["board"])["breakdown_view"] == "chart"

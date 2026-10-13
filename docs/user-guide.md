@@ -1726,9 +1726,21 @@ On a dashboard, an indicator tile shows its breakdown as a chart when **Show
 the breakdown** is ticked on the widget, and clicking one of those bars filters
 the page by that group, like any other chart.
 
-**Order the groups by** decides what the chart opens on, because a breakdown
-arrives in whatever order the query answered in and that is no order at all
-once there are sixty areas on it:
+**Draw the breakdown as** chooses between a chart and a table. Sixty bars in a
+tile the size of a postcard is a smear: the labels collide, no figure can be
+quoted and a reader looking up one enumeration area reads every bar to find it.
+As a table the same sixty groups are lines of figures - the group, its value,
+its own quota and its share of that quota - which scrolls inside the tile and
+can be read down, and the group names stay clickable so a row still filters
+the page. Both forms are drawn from the same numbers, so a tile switched from
+one to the other says nothing different; the quota columns are left out
+entirely where no group has a quota, and a group without one carries hyphens
+rather than a nought per cent it is not. An exported board keeps the form the
+widget was set to.
+
+**Order the groups by** decides what the chart or table opens on, because a
+breakdown arrives in whatever order the query answered in and that is no order
+at all once there are sixty areas on it:
 
 - *Furthest behind first* - the default, and the question a monitoring board
   is usually asking. A group with no quota of its own sorts last: it is not

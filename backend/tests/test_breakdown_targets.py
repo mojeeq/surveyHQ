@@ -294,3 +294,57 @@ def test_the_exported_page_orders_its_breakdown_the_way_the_board_does():
     assert "!quoted" in ordering
     assert "return 1" in ordering and "return -1" in ordering
     assert "widget.config && widget.config.breakdown_order" in script
+
+
+# --- A breakdown read as a table ---------------------------------------------
+#
+# Sixty bars in a tile the size of a postcard is a smear, so the widget can be
+# set to draw its groups as lines of figures instead. The exported file has to
+# be the board rather than a tidier relative of it: the same groups, in the
+# same order, as the same form.
+
+
+def _exported_indicator() -> str:
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "app/services/export_assets/dashboard.html"
+    ).read_text(encoding="utf-8")
+    return script[script.index("function drawIndicator"):script.index("function drawMap")]
+
+
+def test_the_exported_page_can_read_its_breakdown_as_a_table():
+    drawing = _exported_indicator()
+
+    assert "widget.config.breakdown_view === 'table'" in drawing, (
+        "the exported page draws a chart whatever the widget was set to"
+    )
+    table = drawing[drawing.index("breakdown_view === 'table'"):]
+    # The same four columns the tile has: the group, its value, its own quota
+    # and its share of that quota.
+    assert "el('table', 'data')" in table
+    assert "quotas[pair[0]]" in table
+    assert "spec.breakdown_variable" in table
+
+
+def test_the_exported_table_is_ordered_before_it_is_drawn():
+    """Both forms are the same numbers in the same order, or the reader holding
+    the file and the board cannot tell which one is the board."""
+    drawing = _exported_indicator()
+
+    assert drawing.index("breakdown = ordered(breakdown") < drawing.index(
+        "breakdown_view === 'table'"
+    ), "the table is built from the order the query answered in"
+
+
+def test_the_exported_table_judges_a_group_by_its_own_scaled_thresholds():
+    """Mirrors _status_against: a region carrying a tenth of the quota trips
+    its warning at a tenth of the count, and one with no quota is not judged."""
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "app/services/export_assets/dashboard.html"
+    ).read_text(encoding="utf-8")
+    helper = script[script.index("function groupStatus("):script.index("function ordered(")]
+
+    assert "target / headline" in helper
+    assert "return 'unknown'" in helper
+    assert "warning_threshold" in helper and "critical_threshold" in helper

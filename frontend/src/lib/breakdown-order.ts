@@ -1,5 +1,6 @@
 /**
- * The order a broken-down indicator's groups are drawn in.
+ * How a broken-down indicator's groups are presented: in what order, and as
+ * what.
  *
  * A breakdown arrives in whatever order the query answered in, which is no
  * order at all once there are sixty enumeration areas on the chart: a reader
@@ -63,5 +64,43 @@ export function orderBreakdown(
     if (mine === null) return 1
     if (theirs === null) return -1
     return order === 'done' ? theirs - mine : mine - theirs
+  })
+}
+
+export type BreakdownView = 'chart' | 'table'
+
+export interface BreakdownRow {
+  group: string
+  value: number
+  target: number | null
+  percent: number | null
+  /** target - value, where there is a target and the work is not done. */
+  shortfall: number | null
+  status: string
+}
+
+/**
+ * The groups as rows, for reading rather than for looking at.
+ *
+ * Sixty bars in a tile the size of a postcard is a smear; the same sixty as
+ * lines of figures is a list somebody can read down, quote from and check.
+ * Both are drawn from exactly the same numbers, so a reader comparing the two
+ * forms of one widget finds no difference between them.
+ */
+export function breakdownRows(
+  groups: [string, number][],
+  progress: Record<string, Progress | undefined>,
+): BreakdownRow[] {
+  return groups.map(([group, value]) => {
+    const found = progress[group]
+    const target = found?.target ?? null
+    return {
+      group,
+      value,
+      target,
+      percent: found?.percent ?? null,
+      shortfall: target === null ? null : Math.max(target - value, 0),
+      status: found?.status ?? 'unknown',
+    }
   })
 }
