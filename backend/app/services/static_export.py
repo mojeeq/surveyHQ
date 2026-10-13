@@ -48,6 +48,7 @@ from app.schemas.query import (
 )
 from app.services import export_appearance, export_fonts, export_lib, preferences
 from app.services.datasets import dataset_is_queryable
+from app.services.monitoring import COUNTED, formula_of, part_spec
 from app.services.query_engine import (
     DatasetContext,
     QueryError,
@@ -465,6 +466,7 @@ def _indicator_widget(
             "limit": MAX_CUBE_ROWS + 1,
         }
     )
+    written = formula_of(indicator)
     payload: dict[str, Any] = {
         "kind": "indicator",
         "indicator": {
@@ -481,6 +483,30 @@ def _indicator_widget(
         },
         "cube": _cube(ctx, headline, names, pinned),
     }
+    if written is not None:
+        # One cube per part, each with that part's own filters: the file has to
+        # be able to work the sum out again for any filter the reader picks,
+        # and no single grouping holds "how many were done" and "how many were
+        # issued" at once. The single measure's cube above is left in place and
+        # unused, so a file made before the formula was written still opens.
+        payload["formula"] = {
+            "expression": written.expression,
+            # "counted" is what a group the part matched none of is worth: no
+            # refusals is nought refusals, where the mean of no rows is not
+            # nought but nothing. The file has to make the same distinction
+            # the server does, so it is told rather than left to guess.
+            "parts": [
+                {"name": part.name, "counted": part.measure.agg in COUNTED}
+                for part in written.parts
+            ],
+        }
+        payload["parts"] = {
+            part.name: _cube(
+                ctx, part_spec(part, indicator, None, bool(breakdown)), names, pinned
+            )
+            for part in written.parts
+        }
+        return payload
     if indicator.percent_of:
         # The rows the indicator's own count is a share of. Its filters are
         # dropped and the page's are not, exactly as the live tile does it, so

@@ -23,6 +23,7 @@ from app.models import (
     User,
 )
 from app.schemas.query import Aggregation, Condition, Dimension, FilterGroup, Measure, QuerySpec
+from app.services import formula as arithmetic
 from app.services.datasets import dataset_is_queryable
 from app.services.query_engine import DatasetContext, QueryError, execute_query
 
@@ -72,6 +73,183 @@ def and_also(left: FilterGroup | None, right: FilterGroup | None) -> FilterGroup
 BREAKDOWN_LIMIT = 5_000
 
 
+#: Aggregations whose answer for a group that matched nothing is zero.
+#:
+#: A province where no interview was refused has nought refusals, and a rate
+#: with nought on top is a real nought per cent. The mean of no rows, on the
+#: other hand, is not zero - there is nothing to take the mean of - so those
+#: leave the group with no value at all and the whole sum reports none.
+COUNTED = {Aggregation.count, Aggregation.count_distinct, Aggregation.sum}
+
+
+def formula_of(indicator: Indicator) -> Any:
+    """The indicator's formula, or None where it is defined the plain way."""
+    from app.schemas.monitoring import Formula
+
+    raw = indicator.formula or {}
+    if not raw:
+        return None
+    try:
+        parsed = Formula.model_validate(raw)
+    except Exception:  # noqa: BLE001 - a stored formula may predate a rule
+        return None
+    return None if parsed.is_empty else parsed
+
+
+def part_spec(
+    part: Any,
+    indicator: Indicator,
+    filters: FilterGroup | None,
+    breakdown: bool,
+) -> QuerySpec:
+    """The query behind one part of a formula.
+
+    The part's own filters are what make it a part - "done" counts the rows
+    whose status says so - and the page's filters narrow every part alike, so
+    a rate stays a rate when the board is filtered to one province rather than
+    becoming that province's share of the country.
+    """
+    return QuerySpec(
+        dimensions=(
+            [Dimension(variable=indicator.breakdown_variable)] if breakdown else []
+        ),
+        measures=[part.measure.model_copy(update={"alias": "value"})],
+        filters=and_also(part.filters, filters),
+        limit=BREAKDOWN_LIMIT + 1 if breakdown else 1,
+    )
+
+
+def part_values(
+    ctx: DatasetContext,
+    indicator: Indicator,
+    spec: Any,
+    filters: FilterGroup | None = None,
+) -> dict[str, float | None]:
+    """Each part of a formula, counted over the whole of what is being looked at.
+
+    A part that matched nothing is nought where it counts things and nothing
+    at all where it averages them: no refusals is nought refusals, but the
+    mean of no rows is not nought, and a rate built on one would be a number
+    about rows that are not there.
+    """
+    values: dict[str, float | None] = {}
+    for part in spec.parts:
+        result = execute_query(ctx, part_spec(part, indicator, filters, breakdown=False))
+        raw = result.rows[0][0] if result.rows and result.rows[0] else None
+        if raw is None:
+            values[part.name] = 0.0 if part.measure.agg in COUNTED else None
+        else:
+            values[part.name] = float(raw)
+    return values
+
+
+def preview_formula(
+    db: Session, dataset_id: str, spec: Any, breakdown_variable: str = ""
+) -> dict[str, Any]:
+    """What a formula would report, before anybody saves it.
+
+    A formula is typed, and a typed formula is wrong until it is not: a part
+    counting nothing, a denominator that is the wrong rows, a bracket in the
+    wrong place. The parts are reported beside the answer, because "17 over 0"
+    says which half is wrong where a blank tile says only that something is.
+    """
+    dataset = db.get(Dataset, dataset_id)
+    if dataset is None or not dataset_is_queryable(dataset):
+        return {"value": None, "parts": {}, "error": "Dataset is not available"}
+    held = Indicator(dataset_id=dataset_id, breakdown_variable=breakdown_variable)
+    ctx = DatasetContext.from_model(dataset)
+    try:
+        arithmetic.parse(spec.expression)
+        values = part_values(ctx, held, spec)
+    except arithmetic.FormulaError as exc:
+        return {"value": None, "parts": {}, "error": str(exc)}
+    except QueryError as exc:
+        return {"value": None, "parts": {}, "error": str(exc)}
+    return {
+        "value": arithmetic.compute(spec.expression, values),
+        "parts": values,
+        "error": None,
+    }
+
+
+def _by_formula(
+    ctx: DatasetContext,
+    indicator: Indicator,
+    spec: Any,
+    filters: FilterGroup | None,
+) -> dict[str, Any]:
+    """An indicator computed as arithmetic over its parts.
+
+    One query per part, twice over where there is a breakdown: the parts are
+    counted separately because each carries its own filter, and no one query
+    can answer "how many were done" and "how many were issued" at once.
+    """
+    try:
+        tree = arithmetic.parse(spec.expression)
+    except arithmetic.FormulaError as exc:
+        return {"value": None, "error": f"Invalid formula: {exc}", "breakdown": {}}
+
+    try:
+        headline = part_values(ctx, indicator, spec, filters)
+    except QueryError as exc:
+        return {"value": None, "error": str(exc), "breakdown": {}}
+
+    value = arithmetic.evaluate(tree, headline)
+
+    breakdown: dict[str, float] = {}
+    truncated = False
+    if indicator.breakdown_variable:
+        per_part: dict[str, dict[str, float]] = {}
+        # Every group any part saw, in the order they were first seen, so the
+        # list is not silently shortened to whichever part matched fewest rows
+        # and not reordered by which part was counted first.
+        groups: list[str] = []
+        seen: set[str] = set()
+        for part in spec.parts:
+            try:
+                rows = execute_query(
+                    ctx, part_spec(part, indicator, filters, breakdown=True)
+                ).rows
+            except QueryError as exc:
+                logger.warning("Breakdown failed for indicator %s: %s", indicator.name, exc)
+                return {
+                    "value": value,
+                    "breakdown": {},
+                    "breakdown_truncated": False,
+                    "error": None,
+                }
+            truncated = truncated or len(rows) > BREAKDOWN_LIMIT
+            found: dict[str, float] = {}
+            for row in rows[:BREAKDOWN_LIMIT]:
+                key = "(missing)" if row[0] is None else str(row[0])
+                if key not in seen:
+                    seen.add(key)
+                    groups.append(key)
+                found[key] = float(row[1]) if row[1] is not None else 0.0
+            per_part[part.name] = found
+        for key in groups:
+            here = {
+                part.name: (
+                    per_part[part.name].get(key)
+                    if key in per_part[part.name]
+                    else (0.0 if part.measure.agg in COUNTED else None)
+                )
+                for part in spec.parts
+            }
+            group_value = arithmetic.evaluate(tree, here)
+            # A group the sum has nothing to say about - nothing issued there,
+            # so no rate - is left out rather than drawn as a nought.
+            if group_value is not None:
+                breakdown[key] = round(group_value, 4)
+
+    return {
+        "value": value,
+        "breakdown": breakdown,
+        "breakdown_truncated": truncated,
+        "error": None,
+    }
+
+
 def evaluate_indicator(
     db: Session, indicator: Indicator, filters: FilterGroup | None = None
 ) -> dict[str, Any]:
@@ -88,6 +266,14 @@ def evaluate_indicator(
         return {"value": None, "error": "Dataset is not available", "breakdown": {}}
 
     ctx = DatasetContext.from_model(dataset)
+
+    # An indicator defined as arithmetic over named parts is computed from
+    # those parts, and the single measure below is not consulted at all: the
+    # formula is the definition, not an adjustment to one.
+    written = formula_of(indicator)
+    if written is not None:
+        return _by_formula(ctx, indicator, written, filters)
+
     try:
         spec = QuerySpec.model_validate(indicator.spec or {})
     except Exception as exc:  # noqa: BLE001 - stored spec may predate a schema change

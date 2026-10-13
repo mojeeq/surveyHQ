@@ -17,6 +17,8 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
+from app.services import formula
+
 #: Widgets whose numbers no table can hold. A map's answer is where things
 #: are, a text box has no numbers in it at all; both are named in their place
 #: rather than dropped silently, so a reader can see nothing went missing.
@@ -160,6 +162,73 @@ def _sorted(columns: list[dict[str, str]], rows: list[list[Any]], cube: dict[str
     return rows
 
 
+def _whole(cube: dict[str, Any]) -> float | None:
+    """One part's cube added up over everything in it.
+
+    Over everything rather than over its groups: the headline of a formula is
+    the sum asked of the whole, and a mean averaged again across group means
+    is not the mean. Dropping the grouping puts every row in one bucket and
+    lets the recipe that rebuilds a mean from its total and its count run over
+    all of it, which is what the exported page's own reader does.
+    """
+    flat = {**cube, "dimensions": []}
+    _, rows = combine(flat)
+    if not rows or not rows[0]:
+        return None
+    return _number(rows[0][0])
+
+
+def _formula_value(
+    widget: dict[str, Any], written: dict[str, Any]
+) -> tuple[float | None, list[tuple[Any, float]]]:
+    """An indicator written as arithmetic over named parts, for the document.
+
+    The same reading the board and the exported page give: each part from its
+    own cube, the sum over the whole and then once per group, a group a
+    counting part matched nothing in worth nought, and a group the sum has
+    nothing to say about left out rather than printed as a nought.
+    """
+    cubes = widget.get("parts") or {}
+    try:
+        tree = formula.parse(str(written.get("expression") or ""))
+    except formula.FormulaError:
+        return None, []
+
+    parts = written.get("parts") or []
+    headline: dict[str, float | None] = {}
+    per_part: dict[str, dict[Any, float]] = {}
+    groups: list[Any] = []
+    seen: set[Any] = set()
+    for part in parts:
+        name = str(part.get("name") or "")
+        cube = cubes.get(name) or {}
+        headline[name] = _whole(cube)
+        _, rows = combine(cube)
+        grouped = len([one for one in (cube.get("dimensions") or []) if one])
+        if not grouped:
+            continue
+        found: dict[Any, float] = {}
+        for row in rows:
+            key = row[0]
+            if key not in seen:
+                seen.add(key)
+                groups.append(key)
+            found[key] = _number(row[grouped]) or 0.0
+        per_part[name] = found
+
+    breakdown: list[tuple[Any, float]] = []
+    for key in groups:
+        here: dict[str, float | None] = {}
+        for part in parts:
+            name = str(part.get("name") or "")
+            found = per_part.get(name) or {}
+            here[name] = found.get(key, 0.0 if part.get("counted") else None)
+        value = formula.evaluate(tree, here)
+        if value is not None:
+            breakdown.append((key, value))
+    return formula.evaluate(tree, headline), breakdown
+
+
 def indicator_value(widget: dict[str, Any]) -> tuple[float | None, list[tuple[Any, float]]]:
     """An indicator tile's headline and its breakdown, as the page works them out.
 
@@ -168,6 +237,9 @@ def indicator_value(widget: dict[str, Any]) -> tuple[float | None, list[tuple[An
     the same way.
     """
     spec = widget.get("indicator") or {}
+    written = widget.get("formula")
+    if written:
+        return _formula_value(widget, written)
     cube = widget.get("cube") or {}
     _, rows = combine(cube)
     # The measure sits after the groupings, which is one column when the tile
