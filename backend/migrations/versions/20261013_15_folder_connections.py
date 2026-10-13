@@ -61,7 +61,12 @@ def upgrade() -> None:
                 sa.ForeignKey("connections.id", ondelete="CASCADE"),
                 nullable=False,
             ),
-            sa.Column("file_name", sa.String(length=500), nullable=False, server_default=sa.text("''")),
+            sa.Column(
+                "file_name",
+                sa.String(length=500),
+                nullable=False,
+                server_default=sa.text("''"),
+            ),
             sa.Column("digest", sa.String(length=64), nullable=False),
             sa.Column("size", sa.BigInteger(), nullable=False, server_default=sa.text("0")),
             sa.Column("modified_at", sa.DateTime(timezone=True), nullable=True),
