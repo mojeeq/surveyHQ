@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { BREAKDOWN_ORDERS } from '@/lib/breakdown-order';
 
 import { useState } from "react";
 
@@ -995,6 +996,24 @@ export function EditWidgetModal({
             />
             Show the breakdown chart under the number
           </label>
+          {Boolean(config.show_breakdown) && (
+            <Field
+              label="Order the groups by"
+              hint="Which question the chart answers first. Furthest behind is the one a monitoring board is usually asking; by name is how a reader looks one up."
+            >
+              <select
+                className="input"
+                value={String(config.breakdown_order ?? 'behind')}
+                onChange={(event) => set({ breakdown_order: event.target.value })}
+              >
+                {BREAKDOWN_ORDERS.map((one) => (
+                  <option key={one.id} value={one.id}>
+                    {one.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
           <label className="mb-4 flex items-center gap-2 text-sm text-ink-700">
             <input
               type="checkbox"

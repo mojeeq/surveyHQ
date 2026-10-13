@@ -808,6 +808,41 @@
     return 'ok'
   }
 
+  /**
+   * The groups of a breakdown, in the order the board was set to.
+   *
+   * Follows lib/breakdown-order exactly: furthest from its own quota first by
+   * default, a group with no quota last because it is not behind and not
+   * finished, and the largest first where nothing has a quota at all.
+   */
+  function ordered(pairs, quotas, how) {
+    var rows = pairs.slice()
+    var quota = function (pair) {
+      var target = Number(quotas[pair[0]])
+      return target > 0 ? target : null
+    }
+    var share = function (pair) {
+      var target = quota(pair)
+      return target === null ? null : ((Number(pair[1]) || 0) / target) * 100
+    }
+    var quoted = rows.some(function (pair) { return quota(pair) !== null })
+    if (how === 'name') {
+      return rows.sort(function (one, other) {
+        return String(one[0]).localeCompare(String(other[0]), undefined, { numeric: true })
+      })
+    }
+    if (how === 'largest' || !quoted) {
+      return rows.sort(function (one, other) { return other[1] - one[1] })
+    }
+    return rows.sort(function (one, other) {
+      var mine = share(one), theirs = share(other)
+      if (mine === null && theirs === null) return other[1] - one[1]
+      if (mine === null) return 1
+      if (theirs === null) return -1
+      return how === 'done' ? theirs - mine : mine - theirs
+    })
+  }
+
   function drawIndicator(body, widget) {
     var spec = widget.indicator
     var result = combine(widget.cube)
@@ -859,6 +894,10 @@
       var quotas = spec.breakdown_targets || {}
       var quoted = breakdown.some(function (pair) { return Number(quotas[pair[0]]) > 0 })
       var lower = spec.direction === 'lower_is_better'
+      // The same order the board was set to. A file that sorted its own way
+      // would be a different chart of the same numbers, and the reader
+      // holding both has no way to tell which one is the board.
+      breakdown = ordered(breakdown, quotas, widget.config && widget.config.breakdown_order)
       var option = {
         color: PALETTE,
         grid: { left: 8, right: 30, top: 10, bottom: 6, containLabel: true },

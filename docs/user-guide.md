@@ -1726,6 +1726,23 @@ On a dashboard, an indicator tile shows its breakdown as a chart when **Show
 the breakdown** is ticked on the widget, and clicking one of those bars filters
 the page by that group, like any other chart.
 
+**Order the groups by** decides what the chart opens on, because a breakdown
+arrives in whatever order the query answered in and that is no order at all
+once there are sixty areas on it:
+
+- *Furthest behind first* - the default, and the question a monitoring board
+  is usually asking. A group with no quota of its own sorts last: it is not
+  behind and not finished, it is simply not being judged.
+- *Most complete first*, for a board reporting what is done rather than what
+  is left.
+- *Largest first*, which is the order to use where the groups have no quotas
+  and the question is only where the work is.
+- *By name*, which is how somebody looks up one particular area.
+
+The Indicators page draws its own breakdown furthest behind first, and an
+exported board keeps whichever order the widget was set to, so the file and
+the board cannot be read as two different charts.
+
 Once groups have targets, that chart becomes a quota chart: **the bar is the
 target**, split into what has been achieved and what is still to go, with
 anything past the target as its own segment. Read across, the coloured part is
