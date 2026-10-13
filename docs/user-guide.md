@@ -1696,6 +1696,12 @@ values actually in the data and listed in order.
 Type them in for four provinces. Use a target set for a census: see
 [Targets](#targets) below.
 
+A quota is keyed by the group **as it is written on screen**. Where a variable
+carries value labels - an enumeration area stored as 405 and labelled `0405` -
+the label is what the breakdown reports and what a quota is looked up by.
+Quotas entered before this was true, against the code behind the label, still
+apply: the platform looks for both.
+
 **Each box is that group's own quota, not a share of the overall target**, and
 the overall target is what the quotas add up to. Under the list the form says
 what they currently add up to and how that compares with the overall figure -

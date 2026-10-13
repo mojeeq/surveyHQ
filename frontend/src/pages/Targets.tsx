@@ -220,7 +220,10 @@ function TargetSetModal({
     enabled: Boolean(datasetId && variable),
   })
   const known = useMemo(
-    () => (values.data ?? []).map((one) => String(one.value)),
+    // The label rather than the code: a breakdown reports a labelled
+    // variable by its label, so that is the spelling a quota has to be
+    // keyed by to be found.
+    () => (values.data ?? []).map((one) => String(one.label || one.value)),
     [values.data],
   )
 

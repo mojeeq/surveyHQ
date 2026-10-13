@@ -111,6 +111,7 @@ from app.services.monitoring import (
     breakdown_progress,
     evaluate_indicator,
     indicator_status,
+    label_map,
     progress_percent,
 )
 from app.services.projects import (
@@ -2526,7 +2527,9 @@ def _render_widget(
             # Each category against its own quota, so a tile broken down by
             # region can say which regions are behind rather than only what
             # the totals are.
-            "breakdown_progress": breakdown_progress(indicator, breakdown),
+            "breakdown_progress": breakdown_progress(
+                indicator, breakdown, label_map(db, indicator)
+            ),
             "breakdown_variable": indicator.breakdown_variable if wants_breakdown else "",
             # Which way the indicator is meant to move. A quota chart reads
             # differently for each: with "higher is better" the bar is progress

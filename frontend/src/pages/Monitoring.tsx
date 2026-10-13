@@ -764,7 +764,12 @@ function IndicatorModal({
             {[...(categories.data ?? [])]
               .sort(by((option) => String(option.label || option.value)))
               .map((option) => {
-                const key = String(option.value)
+                // Keyed by the label, because that is what the breakdown
+                // reports and so what a quota is looked up by. Keyed by the
+                // code - which is what this list offers - an area labelled
+                // "0405" behind the code 405 had a quota that was never
+                // applied, with nothing on screen saying so.
+                const key = String(option.label || option.value)
                 return (
                   <label key={key} className="flex items-center gap-2 text-sm text-ink-700 dark:text-dark-700">
                     <span className="min-w-0 flex-1 truncate" title={option.label || key}>

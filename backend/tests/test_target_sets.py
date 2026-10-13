@@ -310,3 +310,63 @@ def test_a_breakdown_past_the_ceiling_says_so(monkeypatch, client, auth_headers)
 
     assert len(refreshed["breakdown"]) == 2
     assert refreshed["breakdown_truncated"] is True
+
+
+# --- A labelled breakdown, end to end ----------------------------------------
+
+
+def test_a_labelled_area_gets_the_quota_it_was_given(client, auth_headers):
+    """The bug a census board showed: quotas applying to some areas only.
+
+    A labelled variable is reported by its label, and the quotas were offered
+    by the code behind it. An area labelled "0405" over the code 405 therefore
+    had a quota nothing ever looked up, while an area whose label is its own
+    code - "4302" - worked. On a board of enumeration areas that reads as
+    quotas being set for some of them and not others.
+    """
+    frame = pd.DataFrame(
+        {
+            "interview__key": [f"k{i}" for i in range(9)],
+            "area": [405] * 4 + [902] * 3 + [4302] * 2,
+        }
+    )
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "labelled.zip",
+                _zip_bytes({"labelled.dta": _stata_bytes(frame)}),
+                "application/zip",
+            )
+        },
+    )
+    dataset_id = uploaded.json()["datasets"][0]["id"]
+    client.patch(
+        f"/api/v1/datasets/{dataset_id}/variables/area",
+        headers=auth_headers,
+        json={"value_labels": {"405": "0405", "902": "0902", "4302": "4302"}},
+    )
+    indicator = client.post(
+        "/api/v1/monitoring/indicators",
+        headers=auth_headers,
+        json={
+            "name": "Interviews",
+            "dataset_id": dataset_id,
+            "spec": {"measures": [{"agg": "count"}]},
+            "target_value": 30,
+            "breakdown_variable": "area",
+            # As a board saved before this was keyed: by the code.
+            "breakdown_targets": {"405": 10, "902": 8, "4302": 5},
+        },
+    ).json()
+
+    refreshed = client.post(
+        f"/api/v1/monitoring/indicators/{indicator['id']}/refresh", headers=auth_headers
+    ).json()
+
+    progress = refreshed["breakdown_progress"]
+    assert sorted(progress) == ["0405", "0902", "4302"]
+    assert progress["0405"]["target"] == 10
+    assert progress["0902"]["target"] == 8
+    assert progress["4302"]["target"] == 5
