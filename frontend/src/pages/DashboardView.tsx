@@ -940,15 +940,12 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         </div>
       )}
 
-      <DashboardFilters
-        basePath={basePath}
-        labelColor={appearance.filter_color}
-        background={appearance.filter_background}
-        controls={pageControls}
-        value={filterValues}
-        onChange={setFilterValues}
-      />
-
+      {/* The tabs sit above the filter bar, not below it. The controls belong
+          to the page they are on, so their number changes from page to page -
+          and with the bar above, the tab strip moved up and down under the
+          pointer as somebody clicked along it, which is a row of buttons that
+          will not hold still. Above the bar, the tabs are in the same place on
+          every page, and the exported file is laid out this way too. */}
       <PageTabs
         pages={pages}
         active={page}
@@ -962,6 +959,15 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
         onChange={(next) => savePages.mutate(next)}
         onMove={(from, to) => movePage.mutate({ from, to })}
         onRemove={(index) => removePage.mutate(index)}
+      />
+
+      <DashboardFilters
+        basePath={basePath}
+        labelColor={appearance.filter_color}
+        background={appearance.filter_background}
+        controls={pageControls}
+        value={filterValues}
+        onChange={setFilterValues}
       />
 
       {/* `widgets` leaves out a folded group's members, so it is empty on a
