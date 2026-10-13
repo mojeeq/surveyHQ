@@ -27,6 +27,7 @@ from app.models import (
     QualityResult,
     QualityRule,
     Severity,
+    TargetSet,
     User,
 )
 from app.schemas.common import Message
@@ -44,6 +45,10 @@ from app.schemas.monitoring import (
     QualityRuleOut,
     QualityRuleUpdate,
     QualityRuleWithResult,
+    TargetSetCreate,
+    TargetSetOut,
+    TargetSetSummary,
+    TargetSetUpdate,
 )
 from app.schemas.query import FilterGroup
 from app.services.audit import record
@@ -110,6 +115,7 @@ def create_indicator(
         direction=payload.direction,
         breakdown_variable=payload.breakdown_variable,
         breakdown_targets=payload.breakdown_targets,
+        target_set_id=_linked_set(payload.target_set_id, payload.dataset_id, db, user),
         percent_of=payload.percent_of,
         display_order=payload.display_order,
     )
@@ -136,6 +142,12 @@ def update_indicator(
         get_dataset(data["dataset_id"], db, user)
     if "spec" in data and data["spec"] is not None:
         data["spec"] = payload.spec.model_dump(mode="json") if payload.spec else {}
+    if "target_set_id" in data:
+        # Checked against whichever dataset the indicator ends up on, so moving
+        # an indicator and its set in one call is judged on the pair.
+        data["target_set_id"] = _linked_set(
+            data["target_set_id"], data.get("dataset_id") or indicator.dataset_id, db, user
+        )
     for field, value in data.items():
         setattr(indicator, field, value)
     refresh_indicator(db, indicator, store_snapshot=False)
@@ -178,10 +190,12 @@ def indicator_values(
     for indicator in indicators:
         error = None
         breakdown: dict[str, float] = {}
+        truncated = False
         if refresh:
             outcome = refresh_indicator(db, indicator, store_snapshot=False)
             error = outcome.get("error")
             breakdown = outcome.get("breakdown") or {}
+            truncated = bool(outcome.get("breakdown_truncated"))
 
         snapshots = db.scalars(
             select(IndicatorSnapshot)
@@ -206,6 +220,7 @@ def indicator_values(
                 direction=indicator.direction,
                 breakdown=breakdown,
                 breakdown_progress=breakdown_progress(indicator, breakdown),
+                breakdown_truncated=bool(truncated),
                 breakdown_variable=indicator.breakdown_variable,
                 computed_at=indicator.last_computed_at,
                 error=error,
@@ -237,6 +252,7 @@ def refresh_single_indicator(
         direction=indicator.direction,
         breakdown=outcome.get("breakdown") or {},
         breakdown_progress=breakdown_progress(indicator, outcome.get("breakdown") or {}),
+        breakdown_truncated=bool(outcome.get("breakdown_truncated")),
         breakdown_variable=indicator.breakdown_variable,
         computed_at=indicator.last_computed_at,
         error=outcome.get("error"),
@@ -301,6 +317,179 @@ def _get_alert(alert_id: str, db: DbSession, user: User) -> Alert:
     elif not can_view(db, user, None):
         raise HTTPException(status_code=404, detail="Alert not found")
     return alert
+
+
+# --- target sets -----------------------------------------------------------
+#
+# A quota list is prepared before fieldwork, by somebody who is not watching a
+# dashboard, and read by several indicators at once. Kept inside an indicator
+# it had to be retyped for each of them. Here it is a record of its own.
+
+
+def _get_target_set(set_id: str, db: DbSession, user: User) -> TargetSet:
+    found = db.get(TargetSet, set_id)
+    if found is None or not can_view(db, user, found.dataset_id):
+        # Not found rather than forbidden, so a reader cannot learn which ids
+        # exist in a project they are not in.
+        raise HTTPException(status_code=404, detail="Target set not found")
+    return found
+
+
+def _linked_set(
+    set_id: str | None, dataset_id: str, db: DbSession, user: User
+) -> str | None:
+    """The set an indicator may link to: one the caller can see, on its dataset.
+
+    A set belongs to the dataset whose categories it names, so linking an
+    indicator to a set built on another dataset would key quotas by values
+    that cannot appear in it.
+    """
+    if not set_id:
+        return None
+    found = _get_target_set(set_id, db, user)
+    if found.dataset_id != dataset_id:
+        raise HTTPException(
+            status_code=400,
+            detail="That target set belongs to a different dataset",
+        )
+    return found.id
+
+
+@router.get("/target-sets", response_model=list[TargetSetSummary])
+def list_target_sets(
+    db: DbSession,
+    user: CurrentUser,
+    dataset_id: str = "",
+    project_id: str | None = None,
+) -> list[TargetSetSummary]:
+    """Every set the caller can see, without the rows.
+
+    A census set holds two thousand quotas and a list page needs none of them:
+    how many categories it covers and what they add up to is what says whether
+    it is the one you are looking for.
+    """
+    statement = restrict(
+        select(TargetSet).order_by(TargetSet.name),
+        dataset_clause(db, user, TargetSet.dataset_id),
+    )
+    if dataset_id:
+        statement = statement.where(TargetSet.dataset_id == dataset_id)
+    if project_id is not None:
+        statement = statement.where(in_project_clause(TargetSet.dataset_id, project_id))
+    sets = list(db.scalars(statement).all())
+
+    names = dict(
+        db.execute(
+            select(Dataset.id, Dataset.name).where(
+                Dataset.id.in_({one.dataset_id for one in sets})
+            )
+        ).all()
+    )
+    used = dict(
+        db.execute(
+            select(Indicator.target_set_id, func.count(Indicator.id))
+            .where(Indicator.target_set_id.in_({one.id for one in sets}))
+            .group_by(Indicator.target_set_id)
+        ).all()
+    )
+    return [
+        TargetSetSummary(
+            id=one.id,
+            name=one.name,
+            description=one.description,
+            dataset_id=one.dataset_id,
+            dataset_name=names.get(one.dataset_id, ""),
+            variable=one.variable,
+            categories=len(one.targets or {}),
+            total=sum(_as_number(value) for value in (one.targets or {}).values()),
+            used_by=used.get(one.id, 0),
+            updated_at=one.updated_at,
+        )
+        for one in sets
+    ]
+
+
+@router.post("/target-sets", response_model=TargetSetOut, status_code=201)
+def create_target_set(
+    payload: TargetSetCreate, db: DbSession, user: RequireManager
+) -> TargetSet:
+    get_ready_dataset(payload.dataset_id, db, user)
+    created = TargetSet(
+        name=payload.name,
+        description=payload.description,
+        dataset_id=payload.dataset_id,
+        variable=payload.variable,
+        targets=payload.targets,
+    )
+    db.add(created)
+    db.flush()
+    record(
+        db,
+        user=user,
+        action="create_target_set",
+        entity_type="target_set",
+        entity_id=created.id,
+        detail={"categories": len(payload.targets)},
+    )
+    db.commit()
+    db.refresh(created)
+    return created
+
+
+@router.get("/target-sets/{set_id}", response_model=TargetSetOut)
+def read_target_set(set_id: str, db: DbSession, user: CurrentUser) -> TargetSet:
+    return _get_target_set(set_id, db, user)
+
+
+@router.patch("/target-sets/{set_id}", response_model=TargetSetOut)
+def update_target_set(
+    set_id: str, payload: TargetSetUpdate, db: DbSession, user: RequireManager
+) -> TargetSet:
+    found = _get_target_set(set_id, db, user)
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(found, field, value)
+    record(
+        db,
+        user=user,
+        action="update_target_set",
+        entity_type="target_set",
+        entity_id=found.id,
+        detail={"categories": len(found.targets or {})},
+    )
+    db.commit()
+    db.refresh(found)
+    return found
+
+
+@router.delete("/target-sets/{set_id}", response_model=Message)
+def delete_target_set(set_id: str, db: DbSession, user: RequireManager) -> Message:
+    found = _get_target_set(set_id, db, user)
+    # The indicators reading it keep working: the link clears and each falls
+    # back to whatever quotas it carries itself, which is nothing for most.
+    using = db.scalars(
+        select(Indicator).where(Indicator.target_set_id == found.id)
+    ).all()
+    for indicator in using:
+        indicator.target_set_id = None
+    db.delete(found)
+    record(
+        db,
+        user=user,
+        action="delete_target_set",
+        entity_type="target_set",
+        entity_id=set_id,
+        detail={"indicators_unlinked": len(using)},
+    )
+    db.commit()
+    return Message(detail=f"Target set deleted. {len(using)} indicator(s) unlinked.")
+
+
+def _as_number(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
 
 
 @router.get("/alert-rules", response_model=list[AlertRuleOut])

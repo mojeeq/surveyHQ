@@ -712,8 +712,10 @@ export interface Indicator {
   critical_threshold: number | null
   direction: Direction
   breakdown_variable: string
-  /** A quota per category of the breakdown; absent categories use the overall target. */
+  /** A quota per category of the breakdown; a category with none is not judged. */
   breakdown_targets?: Record<string, number>
+  /** A shared target set, which wins over the quotas above. */
+  target_set_id?: string | null
   /** '' for a plain number, or what the value is a percentage of. */
   percent_of?: '' | 'all_rows' | 'answered'
   is_active: boolean
@@ -744,6 +746,8 @@ export interface IndicatorValue {
     string,
     { value: number; target: number | null; percent: number | null; status: IndicatorState }
   >
+  /** True where the breakdown has more groups than one answer reports. */
+  breakdown_truncated?: boolean
   breakdown_variable: string
   computed_at: string | null
   error: string | null

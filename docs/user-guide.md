@@ -1688,9 +1688,13 @@ indicator and losing its history.
 
 **A target per group.** A survey's quota is rarely one number: "6,000
 interviews" is really 3,500 in one province and 2,500 in another, or a set
-number of men and of women. Once a breakdown variable is chosen, each of its
-groups gets a target box, filled from the values actually in the data and
-listed in order, which matters once there are sixty enumeration areas in it.
+number of men and of women. Once a breakdown variable is chosen, **Where the
+quotas come from** offers two answers: a **target set**, which is a list kept
+in one place and shared, or boxes typed in here, one per group, filled from the
+values actually in the data and listed in order.
+
+Type them in for four provinces. Use a target set for a census: see
+[Targets](#targets) below.
 
 **Each box is that group's own quota, not a share of the overall target**, and
 the overall target is what the quotas add up to. Under the list the form says
@@ -1738,6 +1742,54 @@ built as progress through the target instead.
 target is a ceiling, so there is no "still to go" - the space under a limit is
 not something anyone is trying to fill - and passing it is drawn as a warning
 rather than as good news.
+
+### Targets
+
+**Monitor → Targets** keeps the quotas themselves: a list of groups and the
+number each is aiming at, named, and read by whichever indicators are judged
+against it.
+
+A census is why it exists. The quotas are two thousand enumeration areas,
+prepared before fieldwork in a spreadsheet by somebody who is not watching a
+dashboard, and the same list is read by several indicators at once - households
+enumerated, questionnaires received, interviews verified. Typed into each
+indicator it had to be entered again every time and could only be looked at
+through that indicator's tile.
+
+**New target set** asks for a name, the dataset the groups belong to, and the
+variable they are values of - `EA_Id`, `province`, `team`. Then paste the list.
+
+**Pasting.** Two shapes, both of which are what comes off a clipboard:
+
+- **A pair per line**: `EA0508,346`, or tab separated as a spreadsheet copies
+  it, or semicolon separated. A header line like `EA_Id,target` is recognised
+  and dropped. A comma inside a number is read as part of it, so
+  `EA0508,15,040` is one area with a quota of 15,040; a category with a comma
+  in it survives too.
+- **One column of numbers**, which is what selecting a single spreadsheet
+  column gives you. They land on the groups in the order the data holds them,
+  sorted, so the spreadsheet has to be sorted the same way - and the list below
+  shows which number landed on which group so you can see that it did.
+
+Pasting **replaces** the list rather than merging into it, because a pasted
+list is the whole list and merging would make removing a group impossible.
+
+**What the paste did is said before anything is saved**: how many quotas were
+read, how many matched a value the data actually holds, and which did not.
+That last one matters more than it sounds: a spreadsheet drops the leading zero
+from `0508`, and a list keyed `508` against data keyed `0508` matches nothing
+at all, silently, at two thousand rows. Groups the data has no such value for
+are marked in the list underneath.
+
+An indicator reads a set by pointing at it, and a set can be read by any number
+of indicators. Where one is linked it wins outright over quotas typed into the
+indicator - two lists half-applied is a number nobody can account for - and the
+quotas typed in are kept, so unlinking goes back to them. **Deleting a set**
+leaves every indicator reading it working: the link clears, and each falls back
+to whatever it carries itself.
+
+A breakdown reports up to five thousand groups. Past that the answer says so
+rather than being quietly short.
 
 Indicators recompute on a schedule and store a snapshot each time, which is what
 gives every indicator a trend line.

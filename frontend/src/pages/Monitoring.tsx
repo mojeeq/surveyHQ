@@ -315,6 +315,12 @@ function IndicatorCard({
               />
             )
           })()}
+          {breakdown.data.breakdown_truncated && (
+            <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">
+              This breakdown has more groups than one answer reports, so what is
+              drawn here is the first of them.
+            </p>
+          )}
         </div>
       )}
     </Card>
@@ -455,6 +461,9 @@ function IndicatorModal({
   // Kept as typed text rather than numbers so a half-entered "12" is not
   // rounded away under the cursor, and an emptied box means "no quota here"
   // rather than zero.
+  // Either a shared set or this indicator's own quotas, never both: two lists
+  // half-applied is a number nobody can account for.
+  const [targetSet, setTargetSet] = useState(indicator?.target_set_id ?? '')
   const [categoryTargets, setCategoryTargets] = useState<Record<string, string>>(() =>
     Object.fromEntries(
       Object.entries(indicator?.breakdown_targets ?? {}).map(([k, v]) => [k, String(v)]),
@@ -491,6 +500,15 @@ function IndicatorModal({
   // The categories a per-category target can be set for. Read from the data
   // rather than typed, so a quota cannot be attached to a spelling that does
   // not occur - "Northern" against a column that says "North".
+  const targetSets = useQuery({
+    queryKey: ['target-sets', datasetId],
+    queryFn: () =>
+      api.get<
+        { id: string; name: string; variable: string; categories: number; total: number }[]
+      >(`/monitoring/target-sets?dataset_id=${datasetId}`),
+    enabled: Boolean(datasetId),
+  })
+
   const categories = useQuery({
     queryKey: ['values', datasetId, breakdown],
     queryFn: () =>
@@ -545,6 +563,7 @@ function IndicatorModal({
                 .map(([category, value]) => [category, Number(value)]),
             )
           : {},
+        target_set_id: breakdown ? targetSet : '',
         warning_threshold: warning ? Number(warning) : null,
         critical_threshold: critical ? Number(critical) : null,
         direction,
@@ -711,7 +730,29 @@ function IndicatorModal({
             onChange={(event) => setTarget(event.target.value)}
           />
         </Field>
-        {breakdown && (categories.data?.length ?? 0) > 0 && (
+        {breakdown && (
+          <Field
+            label="Where the quotas come from"
+            hint="A target set is one list kept in one place and read by every indicator judged against it - which is what a census needs, where the quotas are two thousand enumeration areas. Typing them here instead is right for four provinces."
+          >
+            <select
+              className="input"
+              value={targetSet}
+              onChange={(event) => setTargetSet(event.target.value)}
+            >
+              <option value="">Quotas typed in below</option>
+              {(targetSets.data ?? [])
+                .filter((one) => !one.variable || one.variable === breakdown)
+                .map((one) => (
+                  <option key={one.id} value={one.id}>
+                    {one.name} ({formatNumber(one.categories)} groups, {formatNumber(one.total)})
+                  </option>
+                ))}
+            </select>
+          </Field>
+        )}
+
+        {breakdown && !targetSet && (categories.data?.length ?? 0) > 0 && (
         <Field
           label="Target for each group"
           hint="Optional, and each one is that group's own quota rather than a share of the overall target. A group left empty is reported but not judged: the overall target belongs to all of them together, so measuring one group against it says nothing."
@@ -749,7 +790,7 @@ function IndicatorModal({
           because sixty boxes is exactly where one gets mistyped, and nothing
           else would ever mention it. Outside the field so it reads after the
           explanation rather than between the boxes and it. */}
-      {breakdown && (categories.data?.length ?? 0) > 0 && (
+      {breakdown && !targetSet && (categories.data?.length ?? 0) > 0 && (
         <div className="-mt-2 mb-4">
           <QuotaTotal targets={categoryTargets} headline={target} />
         </div>

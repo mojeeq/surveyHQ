@@ -60,6 +60,18 @@ def and_also(left: FilterGroup | None, right: FilterGroup | None) -> FilterGroup
     return FilterGroup(op="and", conditions=[], groups=parts)
 
 
+#: How many groups a breakdown reports.
+#:
+#: Two hundred was a dropdown's worth, and an indicator broken down by
+#: enumeration area has two thousand groups in a small census: nine tenths of
+#: the country was quietly left out of the tile, the chart and the quota
+#: comparison, with nothing saying so. There is still a ceiling, because a
+#: breakdown by interview key is one row per interview and that is not a
+#: breakdown; where it bites the answer says so rather than being short in
+#: silence.
+BREAKDOWN_LIMIT = 5_000
+
+
 def evaluate_indicator(
     db: Session, indicator: Indicator, filters: FilterGroup | None = None
 ) -> dict[str, Any]:
@@ -97,16 +109,20 @@ def evaluate_indicator(
         value = float(raw) if raw is not None else None
 
     breakdown: dict[str, float] = {}
+    truncated = False
     if indicator.breakdown_variable:
         breakdown_spec = spec.model_copy(
             update={
                 "dimensions": [Dimension(variable=indicator.breakdown_variable)],
-                "limit": 200,
+                # One more than the ceiling, which is how a short answer is
+                # told apart from a truncated one.
+                "limit": BREAKDOWN_LIMIT + 1,
             }
         )
         try:
             breakdown_result = execute_query(ctx, breakdown_spec)
-            for row in breakdown_result.rows:
+            truncated = len(breakdown_result.rows) > BREAKDOWN_LIMIT
+            for row in breakdown_result.rows[:BREAKDOWN_LIMIT]:
                 key = "(missing)" if row[0] is None else str(row[0])
                 breakdown[key] = float(row[1]) if row[1] is not None else 0.0
         except QueryError as exc:
@@ -118,7 +134,15 @@ def evaluate_indicator(
         except QueryError as exc:
             return {"value": None, "error": str(exc), "breakdown": {}}
 
-    return {"value": value, "breakdown": breakdown, "error": None}
+    return {
+        "value": value,
+        "breakdown": breakdown,
+        # Said rather than left to be noticed: a tile reporting five
+        # thousand of six thousand areas looks exactly like one reporting
+        # all of them.
+        "breakdown_truncated": truncated,
+        "error": None,
+    }
 
 
 def _denominator_spec(
@@ -178,7 +202,7 @@ def _as_percentages(
     per_group = denominator.model_copy(
         update={
             "dimensions": [Dimension(variable=indicator.breakdown_variable)],
-            "limit": 200,
+            "limit": BREAKDOWN_LIMIT,
         }
     )
     totals: dict[str, float] = {}
@@ -229,6 +253,24 @@ def progress_percent(indicator: Indicator, value: float | None) -> float | None:
     return round(value / indicator.target_value * 100, 2)
 
 
+def quotas(indicator: Indicator) -> dict[str, Any]:
+    """The quotas this indicator is judged by: a linked set's, or its own.
+
+    A target set is the same list kept once and read by several indicators -
+    households enumerated, questionnaires received and interviews verified all
+    against the same area quotas. Where one is linked it wins outright rather
+    than merging with the indicator's own: two lists half-applied is a number
+    nobody can account for, and the set is the one somebody maintains.
+
+    A set that has been deleted leaves the link empty, and the indicator falls
+    back to whatever it carries itself.
+    """
+    linked = getattr(indicator, "target_set", None)
+    if linked is not None and linked.targets:
+        return dict(linked.targets)
+    return dict(indicator.breakdown_targets or {})
+
+
 def target_for(indicator: Indicator, category: str) -> float | None:
     """The target one category of a breakdown is judged against: its own, or none.
 
@@ -243,8 +285,7 @@ def target_for(indicator: Indicator, category: str) -> float | None:
     reads as a disaster on a board full of them. Nothing is a more honest
     answer than a wrong one.
     """
-    targets = indicator.breakdown_targets or {}
-    raw = targets.get(category)
+    raw = quotas(indicator).get(category)
     if raw is None:
         return None
     try:
@@ -258,7 +299,7 @@ def target_for(indicator: Indicator, category: str) -> float | None:
 def targets_total(indicator: Indicator) -> float:
     """What the per-group quotas add up to, for comparing with the headline."""
     total = 0.0
-    for raw in (indicator.breakdown_targets or {}).values():
+    for raw in quotas(indicator).values():
         try:
             total += float(raw)
         except (TypeError, ValueError):
