@@ -20,8 +20,15 @@ On the Survey Solutions server, signed in as an administrator:
 2. Add a user, set a strong password.
 3. Grant it access to the workspace holding your survey.
 
-A headquarters or admin account also works, but a dedicated API user is better:
-it can be revoked without disturbing anyone's login.
+An **administrator** account also works, but a dedicated API user is better: it
+can be revoked without disturbing anyone's login.
+
+An ordinary **headquarters** account does not. The export API is open to the
+API user and administrator roles only, so a headquarters login that can export
+perfectly well through the web interface is refused here - which is worth
+knowing before you spend a week wondering what you typed wrong. If your server
+administrator will not create an API user, the data can still come in: see
+[importing from a folder or a cloud drive](#when-there-is-no-api-user) below.
 
 ## Setting up the connection
 
@@ -151,6 +158,30 @@ by area, GPS map - with no configuration. What it recognises is listed on the
 dataset page, so you can see exactly what was matched.
 
 Uploaded files with the same column names get the same treatment.
+
+## When there is no API user
+
+Only a server administrator can create an API user, and some will not. Nothing
+about that stops the data arriving - it stops it arriving *through this
+connection*. Three routes need no account on the survey server at all:
+
+- **Have the export pushed to a cloud drive.** On the Survey Solutions Data
+  Export page, the destination can be OneDrive, Dropbox or Google Drive
+  instead of a download. Whoever runs the export picks the destination once;
+  the file lands in a folder. Sync that folder to the SurveyHQ host and import
+  from there.
+- **Read the server's own export folder.** A self-hosted Survey Solutions
+  writes its export archives to a directory it is configured with
+  (`Export_ExportSettings__DirectoryPath`, often `/app/AppData/Export`), and
+  on AWS that storage can be an S3 bucket. A read-only mount of either is a
+  folder full of exports.
+- **Drop the file in `./incoming`.** Anyone who can download an export from
+  the web interface can put it on the server, and `make import` loads it
+  through exactly the path an upload takes. A scheduled task on somebody's
+  machine can do the copying.
+
+All three end in the same place: a file, imported the same way, replacing the
+same datasets in place.
 
 ## Common errors
 
