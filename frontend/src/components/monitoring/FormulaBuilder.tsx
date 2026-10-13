@@ -48,13 +48,39 @@ export const PART_MEASURES: {
   },
 ]
 
-const kindOf = (part: FormulaPart) => {
-  const named = Boolean(part.measure.variable)
+/**
+ * Which kind a part is, read back off the part itself.
+ *
+ * The select holds no state of its own, so this is what keeps a choice on
+ * screen. A variable of `null` means the measure takes none; an empty one
+ * means it takes one that has not been picked yet. Telling those apart is the
+ * whole of it: reading "unchosen" as "takes none" sent every option that needs
+ * a variable straight back to Records, which made a part a row count and
+ * nothing else.
+ */
+export const kindOf = (part: FormulaPart) => {
+  const named = part.measure.variable !== null && part.measure.variable !== undefined
   const found = PART_MEASURES.find(
     (one) => one.agg === part.measure.agg && one.needsVariable === named,
   )
   return found?.value ?? 'records'
 }
+
+/** The measure a chosen kind starts as, with its variable still to pick. */
+export function measureFor(kind: string): { agg: Aggregation; variable: string | null } {
+  const found = PART_MEASURES.find((one) => one.value === kind) ?? PART_MEASURES[0]
+  return { agg: found.agg, variable: found.needsVariable ? '' : null }
+}
+
+/** Whether a part is finished enough to be counted. */
+export const isReady = (part: FormulaPart) =>
+  Boolean(part.name) &&
+  (PART_MEASURES.find((one) => one.value === kindOf(part))?.needsVariable
+    ? Boolean(part.measure.variable)
+    : true)
+
+/** Whether every part is, which is when the trial below is worth asking for. */
+export const allReady = (parts: FormulaPart[]) => parts.every(isReady)
 
 /** A name nobody has used yet: part_1, part_2, and so on. */
 export function freeName(parts: FormulaPart[]): string {
@@ -107,7 +133,10 @@ export function FormulaBuilder({
         dataset_id: datasetId,
         formula: { expression: settled, parts },
       }),
-    enabled: Boolean(datasetId && settled.trim() && parts.length > 0),
+    // A part whose variable has not been chosen cannot be counted, and asking
+    // anyway answers with a validation error about an empty variable - which
+    // is a complaint about a form somebody is still filling in.
+    enabled: Boolean(datasetId && settled.trim() && parts.length > 0 && allReady(parts)),
     retry: false,
   })
 
@@ -144,14 +173,9 @@ export function FormulaBuilder({
                 <select
                   className="input mt-1 w-44"
                   value={kind}
-                  onChange={(event) => {
-                    const next = PART_MEASURES.find(
-                      (one) => one.value === event.target.value,
-                    )!
-                    change(index, {
-                      measure: { agg: next.agg, variable: next.needsVariable ? '' : null },
-                    })
-                  }}
+                  onChange={(event) =>
+                    change(index, { measure: measureFor(event.target.value) })
+                  }
                 >
                   {PART_MEASURES.map((one) => (
                     <option key={one.value} value={one.value}>
@@ -200,6 +224,11 @@ export function FormulaBuilder({
                 onChange={(next) => change(index, { filters: next })}
               />
             </div>
+            {!isReady(part) && (
+              <p className="mt-2 text-xs text-ink-400 dark:text-dark-400">
+                Choose a variable for this part to see what it counts.
+              </p>
+            )}
             {check.data?.parts?.[part.name] !== undefined && (
               <p className="mt-2 text-xs text-ink-500 dark:text-dark-500">
                 {part.name} counts{' '}

@@ -24,7 +24,7 @@ import type {
 import ChartCard from '@/components/ChartCard'
 import ProjectFilter, { datasetProjectParam, projectParam } from '@/components/ProjectFilter'
 import FilterBuilder, { emptyFilter } from '@/components/FilterBuilder'
-import { FormulaBuilder } from '@/components/monitoring/FormulaBuilder'
+import { allReady, FormulaBuilder } from '@/components/monitoring/FormulaBuilder'
 import type { BadgeTone } from '@/components/ui'
 import {
   Badge,
@@ -642,7 +642,7 @@ function IndicatorModal({
     name &&
     datasetId &&
     (usingFormula
-      ? Boolean(expression.trim()) && parts.length > 0
+      ? Boolean(expression.trim()) && parts.length > 0 && allReady(parts)
       : !measure.needsVariable || Boolean(variable))
 
   return (
