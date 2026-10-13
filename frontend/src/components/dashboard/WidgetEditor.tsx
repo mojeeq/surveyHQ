@@ -173,7 +173,7 @@ function QualityForm({
 
 const UNSPLIT_GPS_HINT =
   "No numeric coordinate in this dataset. If the reading is one column of " +
-  "text, like \"-17.7333 168.3273 42.0 5.0\", import the file again: it is " +
+  "text, like \"-12.3456 134.5678 42.0 5.0\", import the file again: it is " +
   "then split into __latitude and __longitude columns that appear here.";
 
 export function AddWidgetModal({

@@ -115,7 +115,7 @@ Runs on Ubuntu with Docker. One command to install.
 - Drill-down: name the levels a board goes through - province, district,
   enumeration area - and a click narrows the page and regroups every chart one
   level deeper.
-- Saved views: name a reading of the board - "this week in Malampa" - and it
+- Saved views: name a reading of the board - "this week in Coastal" - and it
   becomes one click away for everybody who opens it, shared links included. One
   can be the view the board opens in.
 - Comments on any widget, threaded and resolvable, kept against the view they

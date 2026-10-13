@@ -91,7 +91,7 @@ def test_a_category_axis_still_reads_biggest_first():
     Provinces are stored as codes with value labels, which arrive as
     `categorical`: a number on the axis, and still not a quantity.
     """
-    provinces = [["Malampa", 40], ["Sanma", 90], ["Shefa", 65]]
+    provinces = [["Coastal", 40], ["Highland", 90], ["Northern", 65]]
     assert [row[1] for row in order(provinces, cube("categorical"))] == [90, 65, 40]
 
 

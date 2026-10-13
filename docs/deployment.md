@@ -425,11 +425,11 @@ non-enterprise plans, which no setting in this platform can lift.
 Copy the file to the server with something that resumes, and import it there:
 
 ```bash
-rsync -P "Fiji Census 2017 Household- FINAL.dta" server:~/surveyHQ/incoming/
+rsync -P "Household Census 2017 - FINAL.dta" server:~/surveyHQ/incoming/
 ```
 
 ```bash
-make import FILE="/incoming/Fiji Census 2017 Household- FINAL.dta" PROJECT="Fiji Census 2017"
+make import FILE="/incoming/Household Census 2017 - FINAL.dta" PROJECT="Household Census 2017"
 ```
 
 `./incoming` beside `docker-compose.yml` is mounted read-only into the API
@@ -447,7 +447,7 @@ Several files at once, each becoming its own dataset:
 ```bash
 docker compose exec api python -m app.cli import \
   /incoming/household.dta /incoming/roster_pp.dta /incoming/interview_actions.dta \
-  --project "Fiji Census 2017"
+  --project "Household Census 2017"
 ```
 
 A `.zip` is unpacked into one dataset per member file, the same as uploading

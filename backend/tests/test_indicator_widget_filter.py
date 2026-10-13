@@ -20,7 +20,7 @@ from tests.test_api_analytics import _stata_bytes, _zip_bytes
 def surveyed(client, auth_headers, request) -> dict:
     """Ten interviews, unevenly completed, in two provinces.
 
-    Shefa has 6 rows of which 3 are complete; Sanma has 4 of which 1 is. So the
+    Northern has 6 rows of which 3 are complete; Highland has 4 of which 1 is. So the
     count, the completion rate and the breakdown all differ between the two
     provinces and from the whole - which is what makes a filter visible rather
     than merely plausible.
@@ -28,7 +28,7 @@ def surveyed(client, auth_headers, request) -> dict:
     frame = pd.DataFrame(
         {
             "interview__key": [f"k{i}" for i in range(10)],
-            "province": ["Shefa"] * 6 + ["Sanma"] * 4,
+            "province": ["Northern"] * 6 + ["Highland"] * 4,
             "status": ["done", "done", "done", "open", "open", "open",
                        "done", "open", "open", "open"],
         }
@@ -115,12 +115,12 @@ def test_a_filter_narrows_what_the_tile_counts(client, auth_headers, surveyed):
     indicator = make_indicator(client, auth_headers, surveyed["dataset_id"])
     place_tile(client, auth_headers, surveyed["board"], indicator["id"])
 
-    shefa = render(client, auth_headers, surveyed["board"], only("Shefa"))
-    assert shefa["filtered"] is True
-    assert shefa["value"] == 6
+    northern = render(client, auth_headers, surveyed["board"], only("Northern"))
+    assert northern["filtered"] is True
+    assert northern["value"] == 6
 
-    sanma = render(client, auth_headers, surveyed["board"], only("Sanma"))
-    assert sanma["value"] == 4
+    highland = render(client, auth_headers, surveyed["board"], only("Highland"))
+    assert highland["value"] == 4
 
 
 def test_progress_against_the_target_follows_the_filter(client, auth_headers, surveyed):
@@ -130,7 +130,7 @@ def test_progress_against_the_target_follows_the_filter(client, auth_headers, su
     )
     place_tile(client, auth_headers, surveyed["board"], indicator["id"])
 
-    tile = render(client, auth_headers, surveyed["board"], only("Shefa"))
+    tile = render(client, auth_headers, surveyed["board"], only("Northern"))
     assert tile["value"] == 6
     assert tile["progress_percent"] == pytest.approx(60.0)
 
@@ -138,8 +138,8 @@ def test_progress_against_the_target_follows_the_filter(client, auth_headers, su
 def test_a_percentage_is_a_share_of_the_filtered_rows(client, auth_headers, surveyed):
     """Both halves of the fraction narrow, or the rate is not a rate.
 
-    3 of Shefa's 6 interviews are complete and 1 of Sanma's 4, against 4 of 10
-    overall. Narrowing only the numerator would report Shefa as 30% - its three
+    3 of Northern's 6 interviews are complete and 1 of Highland's 4, against 4 of 10
+    overall. Narrowing only the numerator would report Northern as 30% - its three
     completions over everybody's ten - which is not a completion rate for
     anywhere.
     """
@@ -161,10 +161,10 @@ def test_a_percentage_is_a_share_of_the_filtered_rows(client, auth_headers, surv
     place_tile(client, auth_headers, surveyed["board"], indicator["id"])
 
     assert render(client, auth_headers, surveyed["board"])["value"] == pytest.approx(40.0)
-    assert render(client, auth_headers, surveyed["board"], only("Shefa"))["value"] == (
+    assert render(client, auth_headers, surveyed["board"], only("Northern"))["value"] == (
         pytest.approx(50.0)
     )
-    assert render(client, auth_headers, surveyed["board"], only("Sanma"))["value"] == (
+    assert render(client, auth_headers, surveyed["board"], only("Highland"))["value"] == (
         pytest.approx(25.0)
     )
 
@@ -180,7 +180,7 @@ def test_the_breakdown_is_counted_over_the_filtered_rows_too(
         client, auth_headers, surveyed["board"], indicator["id"], {"show_breakdown": True}
     )
 
-    tile = render(client, auth_headers, surveyed["board"], only("Shefa"))
+    tile = render(client, auth_headers, surveyed["board"], only("Northern"))
     assert tile["breakdown"] == {"done": 3, "open": 3}
     assert sum(tile["breakdown"].values()) == tile["value"] == 6
 
@@ -192,7 +192,7 @@ def test_a_tile_without_a_breakdown_is_not_given_one(client, auth_headers, surve
     )
     place_tile(client, auth_headers, surveyed["board"], indicator["id"])
 
-    tile = render(client, auth_headers, surveyed["board"], only("Shefa"))
+    tile = render(client, auth_headers, surveyed["board"], only("Northern"))
     assert tile["value"] == 6
     assert tile["breakdown"] == {}
     assert tile["breakdown_variable"] == ""

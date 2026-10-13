@@ -166,7 +166,7 @@ def _formula_widget() -> dict:
         },
         # Left in place and not read: a file made before the formula was
         # written still opens, and this must not be what the document prints.
-        "cube": _cube([["Shefa", 103], ["Sanma", 100], ["Tafea", 97]]),
+        "cube": _cube([["Northern", 103], ["Highland", 100], ["Southern", 97]]),
         "formula": {
             "expression": "women / interviews * 100",
             "parts": [
@@ -175,8 +175,8 @@ def _formula_widget() -> dict:
             ],
         },
         "parts": {
-            "women": _cube([["Shefa", 50], ["Sanma", 51], ["Tafea", 39]]),
-            "interviews": _cube([["Shefa", 103], ["Sanma", 100], ["Tafea", 97]]),
+            "women": _cube([["Northern", 50], ["Highland", 51], ["Southern", 39]]),
+            "interviews": _cube([["Northern", 103], ["Highland", 100], ["Southern", 97]]),
         },
     }
 
@@ -186,7 +186,7 @@ def test_the_document_prints_the_formula_and_not_the_leftover_count():
 
     _, rows = export_tables.widget_table(_formula_widget())
 
-    assert rows[0][0] == "Shefa"
+    assert rows[0][0] == "Northern"
     assert rows[0][1] == pytest.approx(48.5436, abs=0.001)
     assert rows[1][1] == pytest.approx(51.0)
     assert rows[2][1] == pytest.approx(40.2061, abs=0.001)
@@ -208,8 +208,8 @@ def test_a_group_with_nothing_to_divide_by_is_left_out_of_the_document():
     from app.services import export_tables
 
     widget = _formula_widget()
-    widget["parts"]["interviews"] = _cube([["Shefa", 103], ["Sanma", 100], ["Tafea", 0]])
+    widget["parts"]["interviews"] = _cube([["Northern", 103], ["Highland", 100], ["Southern", 0]])
 
     _, rows = export_tables.widget_table(widget)
 
-    assert [row[0] for row in rows] == ["Shefa", "Sanma", "Total", "Target"]
+    assert [row[0] for row in rows] == ["Northern", "Highland", "Total", "Target"]

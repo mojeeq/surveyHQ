@@ -310,7 +310,7 @@ A connection carries where its imports land and when they happen:
 | `sync_mode` | `interval` or `times` |
 | `sync_interval_minutes` | For `interval`: how long since the last import |
 | `sync_times` | For `times`: `["06:00", "18:00"]`, in `sync_timezone` |
-| `sync_timezone` | An IANA zone, e.g. `Pacific/Efate`. Times mean that clock |
+| `sync_timezone` | An IANA zone, e.g. `Etc/GMT-11`. Times mean that clock |
 | `export_format` | `STATA` recommended - it carries labels |
 | `interview_status` | `All`, or e.g. `ApprovedBySupervisor` |
 

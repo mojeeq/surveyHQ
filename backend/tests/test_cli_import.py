@@ -98,13 +98,16 @@ def test_it_imports_into_the_project_it_was_given(
     Landing in the shared area instead would publish it to every user on the
     platform, which is the one mistake this command must not make quietly.
     """
-    project = Project(name="Palau Census 2025", slug="palau-census-2025")
+    project = Project(name="National Census 2025", slug="national-census-2025")
     db_session.add(project)
     db_session.commit()
 
-    run(monkeypatch, str(stata_file), "--name", "Palau roster", "--project", "Palau Census 2025")
+    run(
+        monkeypatch, str(stata_file), "--name", "Project roster",
+        "--project", "National Census 2025",
+    )
 
-    dataset = db_session.scalar(select(Dataset).where(Dataset.name == "Palau roster"))
+    dataset = db_session.scalar(select(Dataset).where(Dataset.name == "Project roster"))
     assert dataset is not None and dataset.project_id == project.id
 
 

@@ -40,7 +40,7 @@ TENURE = {
 }
 # The revision: one more way to answer the same question.
 REVISED = {**TENURE, 6: "Other tenure"}
-PROVINCE = {1: "Shefa", 2: "Sanma", 3: "Malampa"}
+PROVINCE = {1: "Northern", 2: "Highland", 3: "Coastal"}
 
 
 def _archive(frame: pd.DataFrame, value_labels: dict) -> bytes:
@@ -257,8 +257,8 @@ def test_merging_keeps_the_established_meaning_and_adds_the_new_code():
 
 
 def test_merging_takes_a_variable_the_dataset_had_no_labels_for():
-    merged = merge_value_labels({}, {"province": {"1": "Shefa"}})
-    assert merged == {"province": {"1": "Shefa"}}
+    merged = merge_value_labels({}, {"province": {"1": "Northern"}})
+    assert merged == {"province": {"1": "Northern"}}
 
 
 def test_merging_does_not_write_through_to_what_it_was_given():

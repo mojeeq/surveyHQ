@@ -43,7 +43,7 @@ export interface Parsed {
  * thousands separator, so "EA0508,15,040" is one area with a quota of 15,040
  * and not an area called "EA0508,15". It is read by taking the earliest break
  * whose right-hand side is a number, which gets that line right and leaves
- * "Shefa, North,120" - a category with a comma in it, unquoted - right too.
+ * "Northern, North,120" - a category with a comma in it, unquoted - right too.
  */
 function split(line: string): string[] {
   if (line.includes('\t')) return twoOf(line.split('\t'))
@@ -68,7 +68,7 @@ function twoOf(fields: string[]): string[] {
   return [fields.slice(0, -1).join(' '), fields[fields.length - 1]]
 }
 
-/** A comma-separated line, honouring quotes so "Shefa, North",120 survives. */
+/** A comma-separated line, honouring quotes so "Northern, North",120 survives. */
 function splitCsv(line: string): string[] {
   const fields: string[] = []
   let field = ''

@@ -84,14 +84,14 @@ describe('a simple bar chart', () => {
   it('draws one bar per row, in the order the query returned them', () => {
     const option = buildChartOption(
       simple([
-        ['Shefa', 120],
-        ['Sanma', 80],
-        ['Tafea', 200],
+        ['Northern', 120],
+        ['Highland', 80],
+        ['Southern', 200],
       ]),
       'bar',
       {},
     )
-    expect(categoriesOf(option)).toEqual(['Shefa', 'Sanma', 'Tafea'])
+    expect(categoriesOf(option)).toEqual(['Northern', 'Highland', 'Southern'])
     expect(seriesOf(option)[0].data).toEqual([120, 80, 200])
   })
 
@@ -101,9 +101,9 @@ describe('a simple bar chart', () => {
     // has lost one of them.
     const option = buildChartOption(
       simple([
-        ['Shefa', 120],
-        ['Sanma', null],
-        ['Tafea', 0],
+        ['Northern', 120],
+        ['Highland', null],
+        ['Southern', 0],
       ]),
       'bar',
       {},
@@ -116,14 +116,14 @@ describe('a simple bar chart', () => {
 
 describe('ordering the categories', () => {
   const data = simple([
-    ['Shefa', 120],
-    ['Sanma', 80],
-    ['Tafea', 200],
+    ['Northern', 120],
+    ['Highland', 80],
+    ['Southern', 200],
   ])
 
   it('largest first', () => {
     const option = buildChartOption(data, 'bar', { sort: 'value_desc' })
-    expect(categoriesOf(option)).toEqual(['Tafea', 'Shefa', 'Sanma'])
+    expect(categoriesOf(option)).toEqual(['Southern', 'Northern', 'Highland'])
     expect(seriesOf(option)[0].data).toEqual([200, 120, 80])
   })
 
@@ -151,7 +151,7 @@ describe('ordering the categories', () => {
 
   it('by label, as words when they are words', () => {
     const option = buildChartOption(data, 'bar', { sort: 'label_asc' })
-    expect(categoriesOf(option)).toEqual(['Sanma', 'Shefa', 'Tafea'])
+    expect(categoriesOf(option)).toEqual(['Highland', 'Northern', 'Southern'])
   })
 
   it('moves the values with their labels, never just the labels', () => {
@@ -162,9 +162,9 @@ describe('ordering the categories', () => {
     const names = categoriesOf(option)
     const values = seriesOf(option)[0].data as number[]
     expect(Object.fromEntries(names.map((name, i) => [name, values[i]]))).toEqual({
-      Shefa: 120,
-      Sanma: 80,
-      Tafea: 200,
+      Northern: 120,
+      Highland: 80,
+      Southern: 200,
     })
   })
 })
@@ -213,10 +213,10 @@ describe('folding the tail into Other', () => {
 
 describe('stacking to 100%', () => {
   const split = crosstab([
-    ['Shefa', 'Primary', 30],
-    ['Shefa', 'Secondary', 10],
-    ['Sanma', 'Primary', 25],
-    ['Sanma', 'Secondary', 75],
+    ['Northern', 'Primary', 30],
+    ['Northern', 'Secondary', 10],
+    ['Highland', 'Primary', 25],
+    ['Highland', 'Secondary', 75],
   ])
 
   it('every category adds to 100', () => {
@@ -234,18 +234,18 @@ describe('stacking to 100%', () => {
     const series = seriesOf(option)
     const primary = series.find((s) => s.name === 'Primary')!.data as number[]
     const names = categoriesOf(option)
-    expect(primary[names.indexOf('Shefa')]).toBeCloseTo(75, 6)
-    expect(primary[names.indexOf('Sanma')]).toBeCloseTo(25, 6)
+    expect(primary[names.indexOf('Northern')]).toBeCloseTo(75, 6)
+    expect(primary[names.indexOf('Highland')]).toBeCloseTo(25, 6)
   })
 
   it('a category with nothing in it is blank, not nought per cent', () => {
     const empty = crosstab([
-      ['Shefa', 'Primary', 30],
-      ['Torba', 'Primary', 0],
+      ['Northern', 'Primary', 30],
+      ['Western', 'Primary', 0],
     ])
     const option = buildChartOption(empty, 'bar', { percentStack: true, stacked: true })
     const data = seriesOf(option)[0].data as (number | null)[]
-    expect(data[categoriesOf(option).indexOf('Torba')]).toBeNull()
+    expect(data[categoriesOf(option).indexOf('Western')]).toBeNull()
   })
 })
 
@@ -255,10 +255,10 @@ describe('a cross-tab', () => {
   it('becomes one series per value of the second dimension', () => {
     const option = buildChartOption(
       crosstab([
-        ['Shefa', 'Primary', 30],
-        ['Shefa', 'Secondary', 10],
-        ['Sanma', 'Primary', 25],
-        ['Sanma', 'Secondary', 75],
+        ['Northern', 'Primary', 30],
+        ['Northern', 'Secondary', 10],
+        ['Highland', 'Primary', 25],
+        ['Highland', 'Secondary', 75],
       ]),
       'bar',
       {},
@@ -266,7 +266,7 @@ describe('a cross-tab', () => {
     const series = seriesOf(option)
     expect(series.map((s) => s.name)).toEqual(['Primary', 'Secondary'])
     const names = categoriesOf(option)
-    expect(names).toEqual(['Shefa', 'Sanma'])
+    expect(names).toEqual(['Northern', 'Highland'])
     expect(series[0].data).toEqual([30, 25])
     expect(series[1].data).toEqual([10, 75])
   })
@@ -274,21 +274,21 @@ describe('a cross-tab', () => {
   it('leaves a combination that never occurred empty', () => {
     const option = buildChartOption(
       crosstab([
-        ['Shefa', 'Primary', 30],
-        ['Sanma', 'Secondary', 75],
+        ['Northern', 'Primary', 30],
+        ['Highland', 'Secondary', 75],
       ]),
       'bar',
       {},
     )
     const series = seriesOf(option)
-    // Nobody in Sanma reported Primary. That is a gap, not a zero.
+    // Nobody in Highland reported Primary. That is a gap, not a zero.
     expect((series[0].data as unknown[])[1]).toBeNull()
   })
 })
 
 describe('a cross-tab with more series than there are colours', () => {
   const twelve = crosstab(
-    ['Shefa', 'Sanma'].flatMap((province) =>
+    ['Northern', 'Highland'].flatMap((province) =>
       Array.from(
         { length: 12 },
         (_, i) => [province, `Level ${i + 1}`, 10] as [string, string, number],
@@ -323,15 +323,15 @@ describe('other marks', () => {
   it('a pie carries a name and a value for each slice', () => {
     const option = buildChartOption(
       simple([
-        ['Shefa', 120],
-        ['Sanma', 80],
+        ['Northern', 120],
+        ['Highland', 80],
       ]),
       'pie',
       {},
     )
     expect(seriesOf(option)[0].data).toEqual([
-      expect.objectContaining({ name: 'Shefa', value: 120 }),
-      expect.objectContaining({ name: 'Sanma', value: 80 }),
+      expect.objectContaining({ name: 'Northern', value: 120 }),
+      expect.objectContaining({ name: 'Highland', value: 80 }),
     ])
   })
 
@@ -375,7 +375,7 @@ describe('an empty result', () => {
   })
 
   it('survives a result with no measure at all', () => {
-    const noMeasure = result([column('province', 'dimension')], [['Shefa'], ['Sanma']])
+    const noMeasure = result([column('province', 'dimension')], [['Northern'], ['Highland']])
     expect(() => buildChartOption(noMeasure, 'bar', {})).not.toThrow()
   })
 })
@@ -408,7 +408,7 @@ describe('a tooltip that is wider than the widget it belongs to', () => {
 
   it.each(everyKind)('hangs %s off the body, not the chart', (kind) => {
     const option = buildChartOption(
-      simple([['Torba', 120], ['Sanma', 90], ['Shefa', 60]]),
+      simple([['Western', 120], ['Highland', 90], ['Northern', 60]]),
       kind,
     ) as { tooltip?: { appendToBody?: boolean } }
     expect(option.tooltip?.appendToBody).toBe(true)
@@ -450,7 +450,7 @@ describe('a tooltip that is wider than the widget it belongs to', () => {
           column('province', 'dimension'),
           ...BOX_MEASURES.map((measure) => column(measure.alias, 'measure')),
         ],
-        [['Torba', 12, 22, 31, 44, 68]],
+        [['Western', 12, 22, 31, 44, 68]],
       ),
       'boxplot',
     ) as { tooltip?: { appendToBody?: boolean } }
@@ -606,26 +606,26 @@ describe('a chart of categories', () => {
   it('still reads biggest first', () => {
     const option = buildChartOption(
       simple([
-        ['Shefa', 120],
-        ['Tafea', 200],
-        ['Sanma', 80],
+        ['Northern', 120],
+        ['Southern', 200],
+        ['Highland', 80],
       ]),
       'bar',
       { sort: 'value_desc' },
     )
-    expect(categoriesOf(option)).toEqual(['Tafea', 'Shefa', 'Sanma'])
+    expect(categoriesOf(option)).toEqual(['Southern', 'Northern', 'Highland'])
   })
 
   it('still reads by name when asked', () => {
     const option = buildChartOption(
       simple([
-        ['Shefa', 120],
-        ['Tafea', 200],
-        ['Sanma', 80],
+        ['Northern', 120],
+        ['Southern', 200],
+        ['Highland', 80],
       ]),
       'bar',
       { sort: 'label_asc' },
     )
-    expect(categoriesOf(option)).toEqual(['Sanma', 'Shefa', 'Tafea'])
+    expect(categoriesOf(option)).toEqual(['Highland', 'Northern', 'Southern'])
   })
 })

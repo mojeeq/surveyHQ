@@ -34,9 +34,9 @@ describe('parsePasted, a pair per line', () => {
   })
 
   it('keeps a category that has a comma in it', () => {
-    const { rows } = parsePasted('"Shefa, North",120')
+    const { rows } = parsePasted('"Northern, North",120')
 
-    expect(rows).toEqual([{ category: 'Shefa, North', target: 120 }])
+    expect(rows).toEqual([{ category: 'Northern, North', target: 120 }])
   })
 
   it('reads a thousands separator as part of the number', () => {

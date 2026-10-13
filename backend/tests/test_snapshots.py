@@ -11,10 +11,10 @@ def test_due_respects_weekday_time_and_last_run():
         snapshot_enabled = True
         snapshot_times = ["08:00"]
         snapshot_days = [0]          # Monday
-        snapshot_timezone = "Pacific/Efate"
+        snapshot_timezone = "Etc/GMT-11"
         last_snapshot_at = None
 
-    # 2026-03-09 08:00 in Vanuatu == 2026-03-08T21:00Z
+    # 2026-03-09 08:00 eleven hours ahead of UTC == 2026-03-08T21:00Z
     after = dt.datetime(2026, 3, 8, 21, 5, tzinfo=dt.UTC)
     assert snapshots.due(Board(), after)
 
@@ -47,7 +47,7 @@ def test_enabled_with_no_time_is_never_due():
 
 def test_the_label_is_written_in_the_boards_zone():
     moment = dt.datetime(2026, 10, 12, 21, 0, tzinfo=dt.UTC)
-    assert snapshots.describe(moment, "Pacific/Efate") == "Tuesday 13 October 2026, 08:00"
+    assert snapshots.describe(moment, "Etc/GMT-11") == "Tuesday 13 October 2026, 08:00"
     assert snapshots.describe(moment, "UTC") == "Monday 12 October 2026, 21:00"
 
 
@@ -66,7 +66,7 @@ def test_schedule_round_trips(client, auth_headers):
         "enabled": True,
         "times": ["08:00"],
         "days": [2, 0, 0],
-        "timezone": "Pacific/Efate",
+        "timezone": "Etc/GMT-11",
         "keep": 8,
     }
     put = client.put(
@@ -82,7 +82,7 @@ def test_schedule_round_trips(client, auth_headers):
     assert got["times"] == ["08:00"]
     # Deduplicated and sorted on the way in, so one schedule has one spelling.
     assert got["days"] == [0, 2]
-    assert got["timezone"] == "Pacific/Efate"
+    assert got["timezone"] == "Etc/GMT-11"
     assert got["keep"] == 8
 
 

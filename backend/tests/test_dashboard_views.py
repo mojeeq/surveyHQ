@@ -43,8 +43,8 @@ def viewer(client, auth_headers) -> dict[str, str]:
 
 SELECTION = {
     "page": 1,
-    "filters": {"province": "Malampa"},
-    "drill": [{"variable": "province", "value": "Malampa", "label": "Malampa"}],
+    "filters": {"province": "Coastal"},
+    "drill": [{"variable": "province", "value": "Coastal", "label": "Coastal"}],
 }
 
 
@@ -52,14 +52,14 @@ def test_a_view_stores_the_selection_and_gives_it_back(client, auth_headers, boa
     created = client.post(
         f"/api/v1/dashboards/{board}/views",
         headers=auth_headers,
-        json={"name": "Malampa this week", "state": SELECTION},
+        json={"name": "Coastal this week", "state": SELECTION},
     )
     assert created.status_code == 201, created.text
     assert created.json()["state"] == SELECTION
 
     listed = client.get(f"/api/v1/dashboards/{board}/views", headers=auth_headers).json()
-    assert [v["name"] for v in listed] == ["Malampa this week"]
-    assert listed[0]["state"]["drill"][0]["value"] == "Malampa"
+    assert [v["name"] for v in listed] == ["Coastal this week"]
+    assert listed[0]["state"]["drill"][0]["value"] == "Coastal"
 
 
 def test_only_one_view_at_a_time_is_the_default(client, auth_headers, board):

@@ -21,7 +21,7 @@ from app.models import ShareLink
 def as_utc(moment: dt.datetime | None) -> dt.datetime | None:
     """A moment in UTC, whatever zone it arrived in.
 
-    A date chosen in a browser in Port Vila arrives with an offset on it, and
+    A date chosen in a browser eleven hours ahead of UTC arrives with an offset, and
     SQLite hands back what it stored without one. Comparing the two raises
     rather than answering, so both ends of the comparison are made aware and
     put in UTC here: a naive value is read as UTC, which is what this platform

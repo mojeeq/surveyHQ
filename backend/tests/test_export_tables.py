@@ -40,13 +40,13 @@ def test_the_finer_grain_a_filter_needs_is_added_back_up():
         ["province"],
         [("province", "Province", "dimension"), ("interviewer", "Interviewer", "dimension"),
          ("value", "Interviews", "measure")],
-        [["Shefa", "int1", 4], ["Shefa", "int2", 6], ["Sanma", "int1", 3]],
+        [["Northern", "int1", 4], ["Northern", "int2", 6], ["Highland", "int1", 3]],
         [{"name": "value", "label": "Interviews", "how": "sum", "parts": ["value"]}],
     )
     columns, rows = export_tables.combine(cube)
 
     assert [column["label"] for column in columns] == ["Province", "Interviews"]
-    assert rows == [["Shefa", 10], ["Sanma", 3]]
+    assert rows == [["Northern", 10], ["Highland", 3]]
 
 def test_a_mean_is_rebuilt_from_its_total_and_its_count():
     """Averaging group averages is not the average, which is why the export
@@ -56,14 +56,14 @@ def test_a_mean_is_rebuilt_from_its_total_and_its_count():
         ["province"],
         [("province", "Province", "dimension"), ("interviewer", "Interviewer", "dimension"),
          ("__x0_total", "", "measure"), ("__x0_count", "", "measure")],
-        [["Shefa", "int1", 100.0, 1], ["Shefa", "int2", 20.0, 3]],
+        [["Northern", "int1", 100.0, 1], ["Northern", "int2", 20.0, 3]],
         [{"name": "mean_age", "label": "Mean age", "how": "mean",
           "parts": ["__x0_total", "__x0_count"]}],
     )
     _, rows = export_tables.combine(cube)
 
     # 120 over 4 people, not the average of 100 and 6.67.
-    assert rows == [["Shefa", 30.0]]
+    assert rows == [["Northern", 30.0]]
 
 def test_the_youngest_in_a_province_is_the_youngest_of_its_parts():
     """A minimum combines as a minimum, not as a total and not as a maximum."""
@@ -72,12 +72,12 @@ def test_the_youngest_in_a_province_is_the_youngest_of_its_parts():
             ["province"],
             [("province", "Province", "dimension"), ("interviewer", "Interviewer", "dimension"),
              ("value", label, "measure")],
-            [["Shefa", "int1", 31], ["Shefa", "int2", 18], ["Shefa", "int3", 44]],
+            [["Northern", "int1", 31], ["Northern", "int2", 18], ["Northern", "int3", 44]],
             [{"name": "value", "label": label, "how": how, "parts": ["value"]}],
         )
 
-    assert export_tables.combine(over("min", "Youngest"))[1] == [["Shefa", 18]]
-    assert export_tables.combine(over("max", "Oldest"))[1] == [["Shefa", 44]]
+    assert export_tables.combine(over("min", "Youngest"))[1] == [["Northern", 18]]
+    assert export_tables.combine(over("max", "Oldest"))[1] == [["Northern", 44]]
 
 def test_a_share_is_a_share_of_the_table_it_is_on():
     cube = _cube(
@@ -94,11 +94,11 @@ def test_a_table_is_in_the_order_the_widget_is():
     cube = _cube(
         ["province"],
         [("province", "Province", "dimension"), ("value", "Interviews", "measure")],
-        [["Sanma", 3], ["Shefa", 10], ["Tafea", 7]],
+        [["Highland", 3], ["Northern", 10], ["Southern", 7]],
         [{"name": "value", "label": "Interviews", "how": "sum", "parts": ["value"]}],
         sort=[{"field": "value", "direction": "desc"}],
     )
     table = export_tables.widget_table({"kind": "chart", "cube": cube})
 
     assert table is not None
-    assert [row[0] for row in table[1]] == ["Shefa", "Tafea", "Sanma"]
+    assert [row[0] for row in table[1]] == ["Northern", "Southern", "Highland"]

@@ -13,19 +13,19 @@ import { arrange, by, matches } from '@/lib/collections'
 
 describe('what the search box finds', () => {
   it('finds a word anywhere in any field', () => {
-    expect(matches('census', ['Palau Census 2025', 'Field work'])).toBe(true)
-    expect(matches('field', ['Palau Census 2025', 'Field work'])).toBe(true)
+    expect(matches('census', ['National Census 2025', 'Field work'])).toBe(true)
+    expect(matches('field', ['National Census 2025', 'Field work'])).toBe(true)
   })
 
   it('ignores case', () => {
-    expect(matches('PALAU', ['Palau Census 2025'])).toBe(true)
-    expect(matches('palau', ['PALAU CENSUS'])).toBe(true)
+    expect(matches('NATIONAL', ['National Census 2025'])).toBe(true)
+    expect(matches('national', ['NATIONAL CENSUS'])).toBe(true)
   })
 
   it('needs every word, but not all in one field', () => {
     // Somebody types what they remember, not what is in one column.
-    expect(matches('palau 2025', ['Palau Census', '2025 round'])).toBe(true)
-    expect(matches('palau fiji', ['Palau Census', '2025 round'])).toBe(false)
+    expect(matches('national 2025', ['National Census', '2025 round'])).toBe(true)
+    expect(matches('national labour', ['National Census', '2025 round'])).toBe(false)
   })
 
   it('matches everything when nothing is typed', () => {
@@ -35,16 +35,16 @@ describe('what the search box finds', () => {
 
   it('does not trip over a field that is missing', () => {
     // A project with no description, a dashboard with no project.
-    expect(matches('palau', ['Palau Census', null, undefined])).toBe(true)
-    expect(matches('palau', [null, undefined])).toBe(false)
+    expect(matches('national', ['National Census', null, undefined])).toBe(true)
+    expect(matches('national', [null, undefined])).toBe(false)
   })
 
   it('never matches a missing field on the word for it', () => {
     // A missing field is dropped rather than stringified. Keeping it would
     // put "null" and "undefined" in the haystack, and then "un" - a real
     // prefix somebody types - would find every row with a blank description.
-    expect(matches('un', ['Palau Census', undefined])).toBe(false)
-    expect(matches('null', ['Palau Census', null])).toBe(false)
+    expect(matches('un', ['National Census', undefined])).toBe(false)
+    expect(matches('null', ['National Census', null])).toBe(false)
     expect(matches('undefined', [undefined])).toBe(false)
   })
 
@@ -53,20 +53,26 @@ describe('what the search box finds', () => {
   })
 
   it('treats extra spaces between words as one', () => {
-    expect(matches('palau   census', ['Palau Census 2025'])).toBe(true)
+    expect(matches('national   census', ['National Census 2025'])).toBe(true)
   })
 })
 
 describe('how the order is decided', () => {
+  // The lower-case one sits in the middle by letter and last by character
+  // code, which is what tells a case-insensitive order from a naive one.
   const rows = [
-    { name: 'Vanuatu LFS', widgets: 5 },
-    { name: 'Fiji Census', widgets: 12 },
-    { name: 'palau census', widgets: 9 },
+    { name: 'National Census', widgets: 5 },
+    { name: 'Household Census', widgets: 12 },
+    { name: 'labour force survey', widgets: 9 },
   ]
 
   it('orders text the way a person reads it, ignoring case', () => {
     const sorted = [...rows].sort(by((r) => r.name))
-    expect(sorted.map((r) => r.name)).toEqual(['Fiji Census', 'palau census', 'Vanuatu LFS'])
+    expect(sorted.map((r) => r.name)).toEqual([
+      'Household Census',
+      'labour force survey',
+      'National Census',
+    ])
   })
 
   it('orders numbers by size, not as text', () => {
@@ -147,9 +153,9 @@ describe('rows with nothing to order by', () => {
 
 describe('narrowing and ordering together', () => {
   const boards = [
-    { name: 'Palau Census 2025', about: 'Field work', widgets: 9, at: '2026-02-01T00:00:00Z' },
-    { name: 'Fiji Census 2017', about: '', widgets: 3, at: '2026-02-03T00:00:00Z' },
-    { name: 'Vanuatu LFS', about: 'Census frame', widgets: 5, at: '2026-02-02T00:00:00Z' },
+    { name: 'National Census 2025', about: 'Field work', widgets: 9, at: '2026-02-01T00:00:00Z' },
+    { name: 'Household Census 2017', about: '', widgets: 3, at: '2026-02-03T00:00:00Z' },
+    { name: 'Labour Force Survey', about: 'Census frame', widgets: 5, at: '2026-02-02T00:00:00Z' },
   ]
 
   it('searches across the fields it is given, then orders', () => {
@@ -159,19 +165,19 @@ describe('narrowing and ordering together', () => {
       read: (b) => b.widgets,
       direction: 'desc',
     })
-    // Vanuatu matches on its description, not its name.
+    // The labour force survey matches on its description, not its name.
     expect(shown.map((b) => b.name)).toEqual([
-      'Palau Census 2025',
-      'Vanuatu LFS',
-      'Fiji Census 2017',
+      'National Census 2025',
+      'Labour Force Survey',
+      'Household Census 2017',
     ])
   })
 
   it('leaves the server order alone when nothing is asked of it', () => {
     expect(arrange(boards).map((b) => b.name)).toEqual([
-      'Palau Census 2025',
-      'Fiji Census 2017',
-      'Vanuatu LFS',
+      'National Census 2025',
+      'Household Census 2017',
+      'Labour Force Survey',
     ])
   })
 
@@ -197,6 +203,6 @@ describe('narrowing and ordering together', () => {
   })
 
   it('shows nothing when the search matches nothing', () => {
-    expect(arrange(boards, { query: 'tonga', searchable: (b) => [b.name] })).toEqual([])
+    expect(arrange(boards, { query: 'nothing here', searchable: (b) => [b.name] })).toEqual([])
   })
 })

@@ -22,7 +22,7 @@ def surveyed(client, auth_headers, request) -> dict:
     frame = pd.DataFrame(
         {
             "interview__key": [f"k{i}" for i in range(10)],
-            "province": ["Shefa"] * 6 + ["Sanma"] * 4,
+            "province": ["Northern"] * 6 + ["Highland"] * 4,
         }
     )
     name = request.node.name[:40]
@@ -146,7 +146,7 @@ def test_the_variance_follows_the_filter(client, auth_headers, surveyed):
         {
             "op": "and",
             "conditions": [
-                {"variable": "province", "operator": "eq", "value": "Shefa"}
+                {"variable": "province", "operator": "eq", "value": "Northern"}
             ],
             "groups": [],
         },
@@ -195,7 +195,7 @@ def test_a_filtered_tile_draws_no_sparkline(client, auth_headers, surveyed):
         {
             "op": "and",
             "conditions": [
-                {"variable": "province", "operator": "eq", "value": "Shefa"}
+                {"variable": "province", "operator": "eq", "value": "Northern"}
             ],
             "groups": [],
         },

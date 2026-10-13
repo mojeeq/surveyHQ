@@ -40,7 +40,7 @@ def board(client, auth_headers, request) -> dict:
     frame = pd.DataFrame(
         {
             "interview__key": [f"k{i}" for i in range(8)],
-            "province": ["Shefa"] * 4 + ["Sanma"] * 4,
+            "province": ["Northern"] * 4 + ["Highland"] * 4,
             "wage": [100.0, 200.0, 300.0, 400.0, 1000.0, 1000.0, 1000.0, 2000.0],
         }
     )
@@ -127,7 +127,7 @@ def test_the_file_stands_on_its_own(client, auth_headers, board):
     payload = payload_of(html)
     assert payload["name"] == "Exportable"
     assert [control["variable"] for control in payload["filters"]] == ["province"]
-    assert payload["filters"][0]["values"] == ["Sanma", "Shefa"]
+    assert payload["filters"][0]["values"] == ["Highland", "Northern"]
 
 
 def test_a_count_is_carried_at_the_grain_its_filter_needs(client, auth_headers, board):
@@ -138,13 +138,13 @@ def test_a_count_is_carried_at_the_grain_its_filter_needs(client, auth_headers, 
     # same column rather than a second copy of it.
     assert cube["filters"] == [{"variable": "province", "column": "province"}]
     counts = {row[0]: row[1] for row in cube["rows"]}
-    assert counts == {"Shefa": 4, "Sanma": 4}
+    assert counts == {"Northern": 4, "Highland": 4}
 
 
 def test_a_mean_travels_as_its_total_and_its_count(client, auth_headers, board):
     """An average of averages is not an average.
 
-    Shefa's mean wage is 250 and Sanma's is 1,250; the mean over both is 750,
+    Northern's mean wage is 250 and Highland's is 1,250; the mean over both is 750,
     which is not the average of 250 and 1,250 unless the groups happen to be
     the same size. Carrying the total and the number of values lets the browser
     divide them again and get the right number for any filter.
@@ -156,10 +156,10 @@ def test_a_mean_travels_as_its_total_and_its_count(client, auth_headers, board):
     at = {column["name"]: index for index, column in enumerate(cube["columns"])}
     totals = {row[at["province"]]: row[at[recipe["parts"][0]]] for row in cube["rows"]}
     counts = {row[at["province"]]: row[at[recipe["parts"][1]]] for row in cube["rows"]}
-    assert totals == {"Shefa": 1000.0, "Sanma": 5000.0}
-    assert counts == {"Shefa": 4, "Sanma": 4}
+    assert totals == {"Northern": 1000.0, "Highland": 5000.0}
+    assert counts == {"Northern": 4, "Highland": 4}
     # What the browser will work out, checked here where it can be:
-    assert totals["Shefa"] / counts["Shefa"] == 250.0
+    assert totals["Northern"] / counts["Northern"] == 250.0
     assert sum(totals.values()) / sum(counts.values()) == 750.0
 
 
@@ -197,7 +197,7 @@ def test_survey_answers_cannot_become_script_on_the_page(client, auth_headers, r
     frame = pd.DataFrame(
         {
             "interview__key": ["k1", "k2"],
-            "place": ["</script><script>alert(1)</script>", "Shefa"],
+            "place": ["</script><script>alert(1)</script>", "Northern"],
         }
     )
     name = request.node.name[:40]
@@ -284,7 +284,7 @@ def test_a_table_with_no_cell_values_travels_as_a_table_with_no_cell_values(
     assert widget["crosstab"]["measure_label"] == ""
     # The counts are still carried, because that is how the file knows which
     # categories survive a filter.
-    assert {row[0] for row in widget["cube"]["rows"]} == {"Shefa", "Sanma"}
+    assert {row[0] for row in widget["cube"]["rows"]} == {"Northern", "Highland"}
 
 
 def test_a_counted_table_still_says_so(client, auth_headers, board):
@@ -337,34 +337,34 @@ def _pinned_payload(client, auth_headers, board, view_id: str) -> dict:
 
 
 def test_a_pinned_export_carries_only_that_province(client, auth_headers, board):
-    view = _view(client, auth_headers, board, "Shefa", {"province": "Shefa"})
+    view = _view(client, auth_headers, board, "Northern", {"province": "Northern"})
     payload = _pinned_payload(client, auth_headers, board, view)
 
     everything = json.dumps(payload)
-    assert "Shefa" in everything
-    # The whole point. Not "Sanma is not selected" but "Sanma is not in here".
-    assert "Sanma" not in everything
+    assert "Northern" in everything
+    # The whole point. Not "Highland is not selected" but "Highland is not in here".
+    assert "Highland" not in everything
 
 
 def test_a_pinned_export_drops_the_control_rather_than_presetting_it(
     client, auth_headers, board
 ):
-    view = _view(client, auth_headers, board, "Shefa", {"province": "Shefa"})
+    view = _view(client, auth_headers, board, "Northern", {"province": "Northern"})
     payload = _pinned_payload(client, auth_headers, board, view)
 
     # No picker: there is nothing left to choose, and a dropdown offering one
     # option is furniture.
     assert [control["variable"] for control in payload["filters"]] == []
-    # And the file says what it is of, or Shefa's printout and Sanma's are
+    # And the file says what it is of, or Northern's printout and Highland's are
     # indistinguishable on a desk.
     assert payload["pinned"] == [
-        {"variable": "province", "label": "Province", "value": "Shefa"}
+        {"variable": "province", "label": "Province", "value": "Northern"}
     ]
 
 
 def test_a_pinned_export_reports_that_province_s_own_numbers(client, auth_headers, board):
-    """Shefa's wages are 100, 200, 300, 400; the country's mean is not Shefa's."""
-    view = _view(client, auth_headers, board, "Shefa", {"province": "Shefa"})
+    """Northern's wages are 100, 200, 300, 400; the country's mean is not Northern's."""
+    view = _view(client, auth_headers, board, "Northern", {"province": "Northern"})
     payload = _pinned_payload(client, auth_headers, board, view)
 
     counts = widget_named(payload, "Interviews by province")
@@ -394,7 +394,7 @@ def test_a_view_from_another_dashboard_cannot_narrow_this_one(
     stray = client.post(
         f"/api/v1/dashboards/{other['id']}/views",
         headers=auth_headers,
-        json={"name": "Theirs", "state": {"filters": {"province": "Sanma"}}},
+        json={"name": "Theirs", "state": {"filters": {"province": "Highland"}}},
     ).json()["id"]
     response = client.get(
         f"/api/v1/dashboards/{board['id']}/export.html?view={stray}", headers=auth_headers
@@ -416,14 +416,14 @@ def test_pinning_narrows_a_widget_whose_own_filter_is_an_any_of(
 ):
     """The case where appending the pinned condition would widen, not narrow.
 
-    A chart saved with "any of these" holds an OR. Adding `province = Shefa`
+    A chart saved with "any of these" holds an OR. Adding `province = Northern`
     beside those conditions makes it a third alternative, so the widget would
-    report every row matching the original OR plus every row in Shefa, which
+    report every row matching the original OR plus every row in Northern, which
     is more than it started with and includes the provinces the file is
     supposed to exclude. Nesting the saved group under an AND is the only
     arrangement that narrows whatever shape it happens to be.
 
-    Shefa holds one wage of 100; Sanma holds three of 1000. Pinned to Shefa,
+    Northern holds one wage of 100; Highland holds three of 1000. Pinned to Northern,
     "wage is 100 or 1000" is one row. Appended, it is seven.
     """
     either = client.post(
@@ -455,22 +455,22 @@ def test_pinning_narrows_a_widget_whose_own_filter_is_an_any_of(
         json={"title": "Either wage", "widget_type": "chart", "chart_id": either["id"]},
     )
 
-    view = _view(client, auth_headers, board, "Shefa", {"province": "Shefa"})
+    view = _view(client, auth_headers, board, "Northern", {"province": "Northern"})
     payload = _pinned_payload(client, auth_headers, board, view)
 
     widget = widget_named(payload, "Either wage")
     assert [row[-1] for row in widget["cube"]["rows"]] == [1]
-    assert "Sanma" not in json.dumps(payload)
+    assert "Highland" not in json.dumps(payload)
 
 
 def test_the_file_is_named_after_the_view(client, auth_headers, board):
-    view = _view(client, auth_headers, board, "Shefa", {"province": "Shefa"})
+    view = _view(client, auth_headers, board, "Northern", {"province": "Northern"})
     response = client.get(
         f"/api/v1/dashboards/{board['id']}/export.html?view={view}", headers=auth_headers
     )
     # A folder of fourteen files all called exportable.html is not a set of
     # provincial reports.
-    assert "exportable-shefa.html" in response.headers["content-disposition"]
+    assert "exportable-northern.html" in response.headers["content-disposition"]
 
 
 # --- A report for every province, in one run --------------------------------
@@ -510,16 +510,16 @@ def test_the_burst_writes_one_report_per_value_and_each_holds_only_its_own(
     finally:
         db.close()
 
-    assert sorted(summary["written"]) == ["Sanma", "Shefa"]
+    assert sorted(summary["written"]) == ["Highland", "Northern"]
     assert summary["skipped"] == []
     assert out.exists()
 
     with zipfile.ZipFile(out) as bundle:
         names = sorted(bundle.namelist())
-        assert names == ["exportable-sanma.html", "exportable-shefa.html"]
+        assert names == ["exportable-highland.html", "exportable-northern.html"]
         for name, mine, theirs in (
-            ("exportable-shefa.html", "Shefa", "Sanma"),
-            ("exportable-sanma.html", "Sanma", "Shefa"),
+            ("exportable-northern.html", "Northern", "Highland"),
+            ("exportable-highland.html", "Highland", "Northern"),
         ):
             html = bundle.read(name).decode()
             # Against the data rather than the file text: the template's own
@@ -573,7 +573,7 @@ def test_one_failing_value_is_skipped_and_the_rest_still_arrive(
     real = static_export.build_payload
 
     def sometimes(db, dashboard, render, pinned=None):
-        if (pinned or {}).get("province") == "Sanma":
+        if (pinned or {}).get("province") == "Highland":
             raise RuntimeError("its dataset went away")
         return real(db, dashboard, render, pinned=pinned)
 
@@ -591,15 +591,15 @@ def test_one_failing_value_is_skipped_and_the_rest_still_arrive(
     finally:
         db.close()
 
-    assert summary["written"] == ["Shefa"]
+    assert summary["written"] == ["Northern"]
     assert summary["skipped"] == [
-        {"value": "Sanma", "error": "its dataset went away"}
+        {"value": "Highland", "error": "its dataset went away"}
     ]
     # And the zip is a real one holding the report that did build.
     import zipfile
 
     with zipfile.ZipFile(tmp_path / "partial.zip") as bundle:
-        assert bundle.namelist() == ["exportable-shefa.html"]
+        assert bundle.namelist() == ["exportable-northern.html"]
 
 
 def test_the_service_refuses_too_many_values_even_if_the_route_did_not(
@@ -653,7 +653,7 @@ def test_the_values_a_burst_would_cover_can_be_asked_for_first(
     )
     assert response.status_code == 200, response.text
     body = response.json()
-    assert sorted(body["values"]) == ["Sanma", "Shefa"]
+    assert sorted(body["values"]) == ["Highland", "Northern"]
     # So the dialog can say "2 reports" and refuse before anybody waits.
     assert body["limit"] >= 2
 
@@ -759,7 +759,7 @@ def coded_board(client, auth_headers, request) -> dict:
         buffer,
         write_index=False,
         version=118,
-        value_labels={"state": {1: "Aimeliik", 2: "Koror"}},
+        value_labels={"state": {1: "Lowland", 2: "Harbour"}},
     )
     name = request.node.name[:40]
     uploaded = client.post(
@@ -815,16 +815,16 @@ def coded_board(client, auth_headers, request) -> dict:
 def test_pinning_a_labelled_code_does_not_ask_duckdb_to_cast_the_label(
     client, auth_headers, coded_board
 ):
-    """The dropdown offers "Aimeliik"; the column holds 1.
+    """The dropdown offers "Lowland"; the column holds 1.
 
-    Without use_label the comparison reaches DuckDB as CAST('Aimeliik' AS
+    Without use_label the comparison reaches DuckDB as CAST('Lowland' AS
     DOUBLE) and every widget on the board comes back as a conversion error,
     which is exactly how the first provincial reports shipped.
     """
     view = client.post(
         f"/api/v1/dashboards/{coded_board['id']}/views",
         headers=auth_headers,
-        json={"name": "Aimeliik", "state": {"filters": {"state": "Aimeliik"}}},
+        json={"name": "Lowland", "state": {"filters": {"state": "Lowland"}}},
     ).json()["id"]
     response = client.get(
         f"/api/v1/dashboards/{coded_board['id']}/export.html?view={view}",
@@ -836,7 +836,7 @@ def test_pinning_a_labelled_code_does_not_ask_duckdb_to_cast_the_label(
     widget = widget_named(payload, "Mean age")
     assert widget["kind"] == "chart", widget.get("frozen_because")
     assert "convert" not in json.dumps(widget).lower()
-    # Aimeliik is the five rows coded 1: ages 20 to 60, mean 40, carried as
+    # Lowland is the five rows coded 1: ages 20 to 60, mean 40, carried as
     # its total and its count.
     assert widget["cube"]["rows"] == [[200.0, 5]]
 
@@ -844,12 +844,12 @@ def test_pinning_a_labelled_code_does_not_ask_duckdb_to_cast_the_label(
 def test_the_pinned_line_names_each_variable_once(client, auth_headers, coded_board):
     """The same filter is declared on four pages, as a real board declares it.
 
-    One entry per control read "State: Aimeliik" four times under the title.
+    One entry per control read "State: Lowland" four times under the title.
     """
     view = client.post(
         f"/api/v1/dashboards/{coded_board['id']}/views",
         headers=auth_headers,
-        json={"name": "Aimeliik", "state": {"filters": {"state": "Aimeliik"}}},
+        json={"name": "Lowland", "state": {"filters": {"state": "Lowland"}}},
     ).json()["id"]
     payload = payload_of(
         client.get(
@@ -858,7 +858,7 @@ def test_the_pinned_line_names_each_variable_once(client, auth_headers, coded_bo
         ).text
     )
     assert payload["pinned"] == [
-        {"variable": "state", "label": "State", "value": "Aimeliik"}
+        {"variable": "state", "label": "State", "value": "Lowland"}
     ]
 
 
@@ -902,7 +902,7 @@ def test_a_widget_drawn_as_it_stands_is_drawn_narrowed(client, auth_headers, cod
             db,
             db.get(Dashboard, coded_board["id"]),
             render=spy,
-            pinned={"state": "Aimeliik"},
+            pinned={"state": "Lowland"},
         )
     finally:
         db.close()
@@ -911,7 +911,7 @@ def test_a_widget_drawn_as_it_stands_is_drawn_narrowed(client, auth_headers, cod
     group = seen[0]
     assert group is not None, "the frozen widget was drawn without the pin"
     assert [(c.variable, c.value, c.use_label) for c in group.conditions] == [
-        ("state", "Aimeliik", True)
+        ("state", "Lowland", True)
     ]
     # And an ordinary export still draws them unfiltered, as it always did.
     assert static_export.pinned_filters({}) is None

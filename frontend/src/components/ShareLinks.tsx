@@ -62,8 +62,8 @@ function dateInputValue(iso: string | null | undefined): string {
  *
  * "Expires on the 3rd" means it works on the 3rd and is shut on the 4th, which
  * is how anyone reads a date on a pass. Taking the date at midnight would kill
- * it a day early, and doing the arithmetic in UTC would kill it early in Port
- * Vila and late in Suva.
+ * it a day early, and doing the arithmetic in UTC would kill it early for a
+ * reader east of it and late for one to the west.
  */
 function endOfDay(value: string): string | null {
   if (!value) return null
@@ -293,7 +293,7 @@ export default function ShareLinks({
  */
 function DownloadCopy({ dashboard }: { dashboard: Dashboard }) {
   // Saved views are the selections somebody already wrote down, so they are
-  // what a report is of: "Malampa this week" is a report of Malampa this week.
+  // what a report is of: "Coastal this week" is a report of Coastal this week.
   // Nobody has to describe the same thing twice, and the file and the view
   // cannot drift apart.
   const views = useQuery({

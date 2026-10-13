@@ -25,7 +25,7 @@ def _frame(rows: int) -> pd.DataFrame:
     return pd.DataFrame(
         {
             "interview__key": [f"k{i}" for i in range(rows)],
-            "province": ["Shefa" if i % 2 else "Sanma" for i in range(rows)],
+            "province": ["Northern" if i % 2 else "Highland" for i in range(rows)],
         }
     )
 

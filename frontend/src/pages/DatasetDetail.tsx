@@ -306,8 +306,8 @@ export default function DatasetDetail() {
 function Codes({ variable }: { variable: Variable }) {
   const pairs = Object.entries(variable.value_labels ?? {})
   if (!pairs.length) {
-    // Only where the values really are codes. A column holding "Shefa" and
-    // "Tafea" needs no names for them, and saying it lacks some would send
+    // Only where the values really are codes. A column holding "Northern" and
+    // "Southern" needs no names for them, and saying it lacks some would send
     // people looking for work that is not there.
     // A column of 0s and 1s is a tick, not a code: it is one option of a
     // multiple-select or a yes-or-no, and naming 0 and 1 would add nothing

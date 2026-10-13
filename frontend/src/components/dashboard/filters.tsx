@@ -69,7 +69,7 @@ export function withCrossFilter(
 
 /** Fold the path taken down the hierarchy into the page's filters.
  *
- *  Each step is the value clicked at that level, so drilling to Malampa then
+ *  Each step is the value clicked at that level, so drilling to Coastal then
  *  Central asks for the rows that are in both. The level itself does not
  *  travel here: it changes what the charts group on rather than which rows
  *  they count, and goes to the server as its own parameter.
@@ -481,7 +481,7 @@ export function SavedViews({
             const name = await ask.prompt({
               title: "Save this view",
               label: "Name",
-              placeholder: "Malampa this week",
+              placeholder: "Coastal this week",
               message:
                 "Remembers the filters, page and drill position you are looking at.",
               confirmLabel: "Save view",

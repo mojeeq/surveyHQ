@@ -27,14 +27,14 @@ from tests.test_indicator_widget_filter import place_tile, render
 def fieldwork(client, auth_headers, request) -> dict:
     """Ten interviews in two provinces, unevenly complete, two refused.
 
-    Shefa: 6 issued, 3 done, 1 refused. Sanma: 4 issued, 1 done, 1 refused.
+    Northern: 6 issued, 3 done, 1 refused. Highland: 4 issued, 1 done, 1 refused.
     So every rate differs between the provinces and from the whole, which is
     what makes a wrong denominator visible rather than merely possible.
     """
     frame = pd.DataFrame(
         {
             "interview__key": [f"k{i}" for i in range(10)],
-            "province": ["Shefa"] * 6 + ["Sanma"] * 4,
+            "province": ["Northern"] * 6 + ["Highland"] * 4,
             "status": ["done", "done", "done", "open", "refused", "open",
                        "done", "refused", "open", "open"],
             "visits": [2, 1, 3, 1, 1, 2, 4, 1, 1, 1],
@@ -104,7 +104,7 @@ def test_a_rate_is_counted_from_its_own_two_parts(client, auth_headers, fieldwor
 
 def test_the_breakdown_asks_the_same_sum_of_each_group(client, auth_headers, fieldwork):
     """Each province against its own issued count, not against the national
-    one: Shefa is 3 of its own 6, which is 50%, not 3 of 10."""
+    one: Northern is 3 of its own 6, which is 50%, not 3 of 10."""
     indicator = make(
         client,
         auth_headers,
@@ -114,7 +114,7 @@ def test_the_breakdown_asks_the_same_sum_of_each_group(client, auth_headers, fie
     )
 
     reported = value_of(client, auth_headers, indicator["id"])["breakdown"]
-    assert reported == {"Shefa": pytest.approx(50.0), "Sanma": pytest.approx(25.0)}
+    assert reported == {"Northern": pytest.approx(50.0), "Highland": pytest.approx(25.0)}
 
 
 def test_a_part_that_matched_nothing_in_a_group_is_nought_rather_than_missing(
@@ -136,8 +136,8 @@ def test_a_part_that_matched_nothing_in_a_group_is_nought_rather_than_missing(
     reported = value_of(client, auth_headers, indicator["id"])["breakdown"]
     # Rounded to four places on the way out: a breakdown is up to five
     # thousand groups, and nobody reads the ninth decimal of a percentage.
-    assert reported["Shefa"] == pytest.approx(16.6667)
-    assert reported["Sanma"] == pytest.approx(25.0)
+    assert reported["Northern"] == pytest.approx(16.6667)
+    assert reported["Highland"] == pytest.approx(25.0)
 
 
 def test_nothing_on_the_bottom_of_the_fraction_is_no_value_at_all(
@@ -196,7 +196,7 @@ def test_the_single_measure_is_not_consulted_when_a_formula_is_set(
         fieldwork["dataset_id"],
         spec={
             "measures": [{"agg": "count", "alias": "value"}],
-            "filters": where("province", "Sanma"),
+            "filters": where("province", "Highland"),
         },
         percent_of="all_rows",
         formula=RATE,
@@ -261,7 +261,7 @@ def test_a_formula_that_does_not_add_up_is_refused_on_the_way_in(
 
 def test_a_page_filter_narrows_every_part_alike(client, auth_headers, fieldwork):
     """A filtered rate has to stay a rate. Narrowing only the top of the
-    fraction would turn "half of Shefa is done" into "Shefa holds three
+    fraction would turn "half of Northern is done" into "Northern holds three
     tenths of the country's completed work", which is a different question
     and is already answered by a share-of-total chart."""
     board = client.post(
@@ -271,11 +271,11 @@ def test_a_page_filter_narrows_every_part_alike(client, auth_headers, fieldwork)
     place_tile(client, auth_headers, board, indicator["id"])
 
     whole = render(client, auth_headers, board)
-    shefa = render(client, auth_headers, board, where("province", "Shefa"))
+    northern = render(client, auth_headers, board, where("province", "Northern"))
 
     assert whole["value"] == pytest.approx(40.0)
-    assert shefa["filtered"] is True
-    assert shefa["value"] == pytest.approx(50.0)
+    assert northern["filtered"] is True
+    assert northern["value"] == pytest.approx(50.0)
 
 
 def preview(client, auth_headers, dataset_id: str, formula: dict) -> dict:

@@ -16,7 +16,7 @@ import pandas as pd
 from tests.test_api_analytics import _stata_bytes, _zip_bytes
 
 # The same households, identified two different ways.
-HOUSEHOLDS = pd.DataFrame({"hhid": ["H1", "H2", "H3"], "province": ["Shefa", "Sanma", "Tafea"]})
+HOUSEHOLDS = pd.DataFrame({"hhid": ["H1", "H2", "H3"], "province": ["Northern", "Highland", "Southern"]})
 PEOPLE = pd.DataFrame({"hhid": [1.0, 1.0, 2.0], "age": [40.0, 9.0, 33.0]})
 
 
@@ -171,7 +171,7 @@ def test_anything_else_duckdb_refuses_is_a_422_and_not_a_500(
 # known" in them, which is what an enumerator writes and what keeps the whole
 # column text.
 MIXED = pd.DataFrame(
-    {"hhid": ["1", "2", "not known"], "province": ["Shefa", "Sanma", "Tafea"]}
+    {"hhid": ["1", "2", "not known"], "province": ["Northern", "Highland", "Southern"]}
 )
 
 

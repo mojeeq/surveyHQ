@@ -24,7 +24,7 @@ from tests.test_api_analytics import _stata_bytes, _zip_bytes
 HOUSEHOLDS = pd.DataFrame(
     {
         "hhid": [1.0, 2.0, 3.0],
-        "province": ["Shefa", "Sanma", "Tafea"],
+        "province": ["Northern", "Highland", "Southern"],
         "urban": [1.0, 0.0, 0.0],
     }
 )
@@ -37,7 +37,7 @@ PEOPLE = pd.DataFrame(
 )
 # A second round, with a question the first did not have.
 ROUND2 = pd.DataFrame(
-    {"hhid": [5.0, 6.0], "province": ["Torba", "Penama"], "phone": [1.0, 0.0]}
+    {"hhid": [5.0, 6.0], "province": ["Western", "Eastern"], "phone": [1.0, 0.0]}
 )
 
 
@@ -123,7 +123,7 @@ def test_a_using_only_row_keeps_its_key(db_session, project):
     data = rows_of(saved(db_session, project, "j"))
     only_there = data[data["_merge"] == 2]
     assert not only_there["hhid"].isna().any()
-    assert only_there["province"].tolist() == ["Tafea"]
+    assert only_there["province"].tolist() == ["Southern"]
 
 
 def test_the_other_datasets_columns_come_across(db_session, project):
@@ -296,10 +296,10 @@ def test_collapse_makes_one_row_per_group(db_session, project):
         "collapse (mean) wage (count) age, by(province)\nsave as by_province",
     )
     data = rows_of(saved(db_session, project, "by_province"))
-    assert sorted(data["province"].tolist()) == ["Sanma", "Shefa"]
-    shefa = data[data["province"] == "Shefa"].iloc[0]
-    assert shefa["wage"] == pytest.approx(250.0)
-    assert shefa["age"] == 2
+    assert sorted(data["province"].tolist()) == ["Highland", "Northern"]
+    northern = data[data["province"] == "Northern"].iloc[0]
+    assert northern["wage"] == pytest.approx(250.0)
+    assert northern["age"] == 2
 
 
 def test_a_bare_varlist_means_the_mean(db_session, project):
@@ -396,9 +396,9 @@ def test_a_script_that_reads_two_files_and_writes_a_third(db_session, project):
 
     made = saved(db_session, project, "province_summary")
     data = rows_of(made)
-    assert sorted(data["province"].tolist()) == ["Sanma", "Shefa"]
-    assert data[data["province"] == "Shefa"]["adult"].tolist() == [1]
-    assert data[data["province"] == "Sanma"]["adult"].tolist() == [2]
+    assert sorted(data["province"].tolist()) == ["Highland", "Northern"]
+    assert data[data["province"] == "Northern"]["adult"].tolist() == [1]
+    assert data[data["province"] == "Highland"]["adult"].tolist() == [2]
 
     label = {v.name: v.label for v in made.variables}
     assert label["adult"] == "Adults in the province"

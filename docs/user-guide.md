@@ -274,8 +274,8 @@ say what happens next:
   same interviews twice.
 
 **A GPS reading held in one column is split as it comes in.** ODK writes
-`-17.7333 168.3273 42.0 5.0` into a single field, a hand-made CSV often holds
-`-17.7333,168.3273`, and a database extract can hold WKT or GeoJSON. All of
+`-12.3456 134.5678 42.0 5.0` into a single field, a hand-made CSV often holds
+`-12.3456,134.5678`, and a database extract can hold WKT or GeoJSON. All of
 those arrive as text, which a map cannot use, so a column named `gps` gains
 `gps__latitude` and `gps__longitude` beside it as numbers. The original stays as
 it was, and the import notes say which columns were split. Appending a later
@@ -1183,7 +1183,7 @@ their own disk.
 **Its filters still work.** That is the point of it. The file carries the
 numbers behind each widget rather than a picture of it, grouped by what the
 widget groups on *and* by every variable the page's filter controls name.
-Choosing "Shefa" keeps the rows where the province is Shefa and adds the
+Choosing "Northern" keeps the rows where the province is Northern and adds the
 measures back up, which is exactly the number the platform would have returned:
 a sum of counts is a count. An average is carried as its total and the number
 of values behind it, so it is divided again rather than averaged twice - an
@@ -1248,13 +1248,13 @@ they should be newer.
 
 **Of** on the download panel turns the file into one saved view's report.
 Leave it on "everything" and you get the board with its filters open, as
-above. Choose a view and you get that view's file: Shefa's report, titled
-Shefa, with the province named under the heading.
+above. Choose a view and you get that view's file: Northern's report, titled
+Northern, with the province named under the heading.
 
 It is **narrowed, not preselected**, and the difference matters. The rows
-outside the view are never computed and never travel, so Shefa's file holds
-Shefa's numbers and nothing else, and the control is gone rather than sitting
-there set to Shefa with the rest of the country one click away. A file is the
+outside the view are never computed and never travel, so Northern's file holds
+Northern's numbers and nothing else, and the control is gone rather than sitting
+there set to Northern with the rest of the country one click away. A file is the
 copy nobody can withdraw, so it should hold only what the person you send it
 to is meant to have.
 
@@ -1320,8 +1320,8 @@ along with the DNS record and certificate described in
 
 Click a mark and the rest of the page follows it. That means a bar, a slice, a
 point on a line or scatter, a heatmap cell, a table row, an indicator's
-breakdown bar, or the row and column headings of a cross-tab. Click the Shefa
-bar on "Interviews by province" and every other widget on that page shows Shefa
+breakdown bar, or the row and column headings of a cross-tab. Click the Northern
+bar on "Interviews by province" and every other widget on that page shows Northern
 only, with a bar across the top saying what is selected and a **Clear** beside
 it.
 
@@ -1408,7 +1408,7 @@ one.
 ### Saved views
 
 A board is usually read several ways: the national picture, this week in
-Malampa, everything the supervisors are behind on. Setting the filters by hand
+Coastal, everything the supervisors are behind on. Setting the filters by hand
 every time is how a board stops being opened.
 
 Narrow the board however you want it - page, filters and drill path - then
@@ -1564,7 +1564,7 @@ with the widget, so the discussion about a number sits on the number.
 
 A comment also belongs to **the view it was made under**. "This looks wrong"
 means something different under the national figures than under this week in
-Malampa, so a comment made while a saved view was open is shown when that view
+Coastal, so a comment made while a saved view was open is shown when that view
 is open, and the board's own comments are shown on the board. Deleting a view
 does not take its comments with it - they lose the view and stay on the widget.
 
@@ -1974,7 +1974,7 @@ A check can also be restricted to part of the dataset: **Only check part of the
 dataset** adds the filter, and is already open where the check you are editing
 has one. The filter narrows the total as well as the flagged rows, so the
 failure rate stays a rate of what was actually checked: "3% of interviews in
-Shefa", not "3% of everything, some of which was in Shefa".
+Northern", not "3% of everything, some of which was in Northern".
 
 Checks run every six hours, and on demand with **Run** or **Run all**. Add a
 **data quality panel** to a dashboard to keep the results where people look;

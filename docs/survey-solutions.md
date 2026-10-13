@@ -101,7 +101,7 @@ Turn on **Import automatically**, then choose how the schedule is expressed:
 
 Times are read in the connection's **timezone**, which you set alongside them.
 Fieldwork happens somewhere, and 06:00 means six in the morning there - in
-Vanuatu that is five the previous afternoon in UTC, so getting the zone wrong is
+UTC+11 that is five the previous afternoon in UTC, so getting the zone wrong is
 a day's error, not an hour's.
 
 Which questionnaires a scheduled import pulls is set on the connection itself,

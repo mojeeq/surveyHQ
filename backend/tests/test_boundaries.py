@@ -24,21 +24,21 @@ import pytest
 
 BASE = "/api/v1/boundaries"
 
-# Two adjacent wards near Port Vila. The first has a hole in it, because a
-# lagoon in the middle of an enumeration area is the case that separates real
+# Two adjacent wards. The first has a hole in it, because a lagoon in the
+# middle of an enumeration area is the case that separates real
 # point-in-polygon from a bounding-box check.
 WARDS = [
     {
         "code": "001",
         "name": "North ward",
         "rings": [
-            [(168.0, -17.9), (168.1, -17.9), (168.1, -17.8), (168.0, -17.8), (168.0, -17.9)],
+            [(34.0, -12.9), (34.1, -12.9), (34.1, -12.8), (34.0, -12.8), (34.0, -12.9)],
             [
-                (168.04, -17.86),
-                (168.06, -17.86),
-                (168.06, -17.84),
-                (168.04, -17.84),
-                (168.04, -17.86),
+                (34.04, -12.86),
+                (34.06, -12.86),
+                (34.06, -12.84),
+                (34.04, -12.84),
+                (34.04, -12.86),
             ],
         ],
     },
@@ -46,7 +46,7 @@ WARDS = [
         "code": "002",
         "name": "South ward",
         "rings": [
-            [(168.1, -17.9), (168.2, -17.9), (168.2, -17.8), (168.1, -17.8), (168.1, -17.9)]
+            [(34.1, -12.9), (34.2, -12.9), (34.2, -12.8), (34.1, -12.8), (34.1, -12.9)]
         ],
     },
 ]
@@ -146,7 +146,7 @@ def layer(client, auth_headers):
 def test_geojson_is_read(client, auth_headers, layer):
     assert layer["feature_count"] == 2
     assert layer["properties"] == ["code", "name"]
-    assert [round(v, 3) for v in layer["bbox"]] == [168.0, -17.9, 168.2, -17.8]
+    assert [round(v, 3) for v in layer["bbox"]] == [34.0, -12.9, 34.2, -12.8]
     assert layer["source_format"] == "geojson"
 
 
@@ -157,7 +157,7 @@ def test_a_geopackage_reads_to_the_same_thing(client, auth_headers, tmp_path):
     body = response.json()
     assert body["feature_count"] == 2
     assert body["source_format"] == "geopackage"
-    assert [round(v, 3) for v in body["bbox"]] == [168.0, -17.9, 168.2, -17.8]
+    assert [round(v, 3) for v in body["bbox"]] == [34.0, -12.9, 34.2, -12.8]
     assert {"code", "name"} <= set(body["properties"])
 
 
@@ -167,7 +167,7 @@ def test_a_zipped_shapefile_reads_to_the_same_thing(client, auth_headers):
     body = response.json()
     assert body["feature_count"] == 2
     assert body["source_format"] == "shapefile"
-    assert [round(v, 3) for v in body["bbox"]] == [168.0, -17.9, 168.2, -17.8]
+    assert [round(v, 3) for v in body["bbox"]] == [34.0, -12.9, 34.2, -12.8]
     assert {"code", "name"} <= set(body["properties"])
 
 
@@ -209,11 +209,11 @@ def test_which_area_a_point_falls_in():
     areas = Areas(read_geojson(geojson_bytes()))
     at = lambda lon, lat: areas.value(areas.locate(lon, lat), "code")  # noqa: E731
 
-    assert at(168.02, -17.87) == "001"
-    assert at(168.15, -17.85) == "002"
+    assert at(34.02, -12.87) == "001"
+    assert at(34.15, -12.85) == "002"
     # Inside the outer ring but inside the hole, so outside the area.
-    assert at(168.05, -17.85) is None
-    assert at(167.50, -17.85) is None
+    assert at(34.05, -12.85) is None
+    assert at(167.50, -12.85) is None
 
 
 def test_a_code_is_the_same_code_however_it_was_written():
@@ -236,13 +236,13 @@ def mapped(client, auth_headers, layer):
     """A dataset of four households and a map widget checking them against the wards."""
     rows = [
         # In North ward, and says so: agrees.
-        ("h1", "001", -17.87, 168.02),
+        ("h1", "001", -12.87, 34.02),
         # In South ward but says North: the mismatch this whole feature is for.
-        ("h2", "001", -17.85, 168.15),
+        ("h2", "001", -12.85, 34.15),
         # In the lagoon inside North ward, so in no area at all.
-        ("h3", "001", -17.85, 168.05),
+        ("h3", "001", -12.85, 34.05),
         # Nowhere near the frame.
-        ("h4", "002", -17.85, 167.50),
+        ("h4", "002", -12.85, 167.50),
     ]
     body = "key,ea_code,latitude,longitude\n" + "\n".join(
         f"{k},{c},{lat},{lon}" for k, c, lat, lon in rows
@@ -303,10 +303,10 @@ def test_each_point_carries_its_own_verdict(client, auth_headers, mapped):
         round(point["lon"], 2): (point["area_status"], point["area_expected"])
         for point in payload["points"]
     }
-    assert verdicts[168.02] == ("match", "001")
+    assert verdicts[34.02] == ("match", "001")
     # The one that matters: it says 001, it is standing in 002.
-    assert verdicts[168.15] == ("mismatch", "002")
-    assert verdicts[168.05] == ("outside", None)
+    assert verdicts[34.15] == ("mismatch", "002")
+    assert verdicts[34.05] == ("outside", None)
     assert verdicts[167.50] == ("outside", None)
 
 

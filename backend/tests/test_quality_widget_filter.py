@@ -19,15 +19,15 @@ from tests.test_api_analytics import _stata_bytes, _zip_bytes
 def graded(client, auth_headers, request) -> dict:
     """A dataset where the failures are all in one province.
 
-    Shefa's four rows are all out of range; Sanma's four are all inside it. So
-    the whole dataset fails half its rows, Shefa fails all of them, and Sanma
+    Northern's four rows are all out of range; Highland's four are all inside it. So
+    the whole dataset fails half its rows, Northern fails all of them, and Highland
     fails none - three different answers, which is what makes the filter
     visible rather than merely plausible.
     """
     frame = pd.DataFrame(
         {
             "interview__key": [f"k{i}" for i in range(8)],
-            "province": ["Shefa"] * 4 + ["Sanma"] * 4,
+            "province": ["Northern"] * 4 + ["Highland"] * 4,
             "age": [200.0, 201.0, 202.0, 203.0, 30.0, 31.0, 32.0, 33.0],
         }
     )
@@ -113,8 +113,8 @@ def test_unfiltered_it_still_reports_the_stored_run(client, auth_headers, graded
 
 
 def test_a_filter_narrows_what_the_panel_counts(client, auth_headers, graded):
-    """Shefa is where the bad ages are: every one of its rows should fail."""
-    panel = render(client, auth_headers, graded["board"], only("Shefa"))
+    """Northern is where the bad ages are: every one of its rows should fail."""
+    panel = render(client, auth_headers, graded["board"], only("Northern"))
     check = panel["checks"][0]
     assert panel["filtered"] is True
     assert check["total_rows"] == 4
@@ -126,8 +126,8 @@ def test_a_filter_narrows_what_the_panel_counts(client, auth_headers, graded):
 
 
 def test_a_filter_can_make_the_panel_pass(client, auth_headers, graded):
-    """The other half of it: Sanma's rows are all fine, so the check passes."""
-    panel = render(client, auth_headers, graded["board"], only("Sanma"))
+    """The other half of it: Highland's rows are all fine, so the check passes."""
+    panel = render(client, auth_headers, graded["board"], only("Highland"))
     check = panel["checks"][0]
     assert check["total_rows"] == 4
     assert check["failed_rows"] == 0
