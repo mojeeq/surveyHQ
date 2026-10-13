@@ -809,6 +809,122 @@
   }
 
   /**
+   * The little arithmetic an indicator can be defined by, read offline.
+   *
+   * Mirrors services/formula.py exactly - numbers, part names, + - * /,
+   * brackets and a leading minus, and nothing else. It is a parser rather
+   * than a call to eval for the same reason the server has one: the
+   * expression was typed by a reader and stored, and a file that evaluated
+   * it would run whatever came with the board.
+   *
+   * No value propagates, and a division by nothing is no value rather than
+   * an infinity: a province where nothing was issued has no completion rate,
+   * and a blank is what that is.
+   */
+  function readFormula(text) {
+    var tokens = []
+    var at = 0
+    var source = String(text || '')
+    while (at < source.length) {
+      var char = source.charAt(at)
+      if (/\s/.test(char)) { at += 1; continue }
+      if ('+-*/()'.indexOf(char) >= 0) { tokens.push([char, char]); at += 1; continue }
+      var number = /^(?:\d+(?:\.\d+)?|\.\d+)/.exec(source.slice(at))
+      if (number) { tokens.push(['number', number[0]]); at += number[0].length; continue }
+      var name = /^[A-Za-z_][A-Za-z0-9_]*/.exec(source.slice(at))
+      if (name) { tokens.push(['name', name[0]]); at += name[0].length; continue }
+      throw new Error('bad character in formula')
+    }
+    var here = 0
+    var peek = function () { return here < tokens.length ? tokens[here] : null }
+    var take = function () {
+      if (here >= tokens.length) throw new Error('formula ends mid sum')
+      return tokens[here++]
+    }
+    var expression = function () {
+      var left = term()
+      var token = peek()
+      while (token && (token[0] === '+' || token[0] === '-')) {
+        take()
+        left = [token[0], left, term()]
+        token = peek()
+      }
+      return left
+    }
+    var term = function () {
+      var left = factor()
+      var token = peek()
+      while (token && (token[0] === '*' || token[0] === '/')) {
+        take()
+        left = [token[0], left, factor()]
+        token = peek()
+      }
+      return left
+    }
+    var factor = function () {
+      var token = peek()
+      if (token && (token[0] === '+' || token[0] === '-')) {
+        take()
+        var inner = factor()
+        // A leading minus is nought take it away, which is the same tree the
+        // server builds for it.
+        return token[0] === '-' ? ['-', ['number', 0, null], inner] : inner
+      }
+      return primary()
+    }
+    var primary = function () {
+      var token = take()
+      if (token[0] === 'number') return ['number', Number(token[1]), null]
+      if (token[0] === 'name') return ['name', token[1], null]
+      if (token[0] === '(') {
+        var inside = expression()
+        var closing = peek()
+        if (!closing || closing[0] !== ')') throw new Error('bracket never closed')
+        take()
+        return inside
+      }
+      throw new Error('cannot start a sum with ' + token[1])
+    }
+    var tree = expression()
+    if (peek()) throw new Error('left over at the end')
+    return tree
+  }
+
+  function runFormula(tree, parts) {
+    var kind = tree[0]
+    if (kind === 'number') return tree[1]
+    if (kind === 'name') {
+      var held = parts[tree[1]]
+      return held === undefined || held === null ? null : Number(held)
+    }
+    var one = runFormula(tree[1], parts)
+    var other = runFormula(tree[2], parts)
+    if (one === null || other === null) return null
+    if (kind === '+') return one + other
+    if (kind === '-') return one - other
+    if (kind === '*') return one * other
+    if (kind === '/') return other === 0 ? null : one / other
+    return null
+  }
+
+  /**
+   * One part's cube read whole, ignoring its grouping.
+   *
+   * The headline of a formula is the sum asked of everything the reader is
+   * looking at, not the sum of the groups' answers: a mean averaged again
+   * across groups is not the mean. Bucketing with no dimensions puts every
+   * row in one bucket, and the recipe that rebuilds a mean from its total and
+   * its count then runs over the whole of it.
+   */
+  function wholeOf(cube) {
+    var flat = {}
+    for (var key in cube) if (Object.prototype.hasOwnProperty.call(cube, key)) flat[key] = cube[key]
+    flat.dimensions = []
+    var result = combine(flat)
+    return result.rows.length ? Number(result.rows[0][0]) : null
+  }
+
+  /**
    * One group's status against its own quota.
    *
    * Mirrors services/monitoring._status_against: the thresholds are set
@@ -869,19 +985,77 @@
     })
   }
 
+  /**
+   * A formula indicator's headline and its groups.
+   *
+   * Follows services/monitoring._by_formula: each part read from its own
+   * cube, the sum taken over the whole and then once per group, and a group
+   * a part matched nothing in counted as nought where the part counts things
+   * and as no value where it averages them - the mean of no rows is not
+   * nought. A group the sum has nothing to say about is left out rather than
+   * drawn as a nought.
+   */
+  function formulaFigures(widget) {
+    var tree = readFormula(widget.formula.expression)
+    var parts = widget.formula.parts || []
+    var cubes = widget.parts || {}
+    var head = {}
+    var perGroup = {}
+    var groups = []
+    parts.forEach(function (part) {
+      var cube = cubes[part.name]
+      if (!cube) return
+      head[part.name] = wholeOf(cube)
+      var read = combine(cube)
+      var dims = read.columns.filter(function (c) { return c.type === 'dimension' }).length
+      if (!dims) return
+      var found = {}
+      read.rows.forEach(function (row) {
+        var key = text(row[0])
+        if (groups.indexOf(key) < 0) groups.push(key)
+        found[key] = Number(row[dims]) || 0
+      })
+      perGroup[part.name] = found
+    })
+    var breakdown = []
+    groups.forEach(function (key) {
+      var here = {}
+      parts.forEach(function (part) {
+        var found = perGroup[part.name]
+        var held = found ? found[key] : undefined
+        here[part.name] = held === undefined ? (part.counted ? 0 : null) : held
+      })
+      var got = runFormula(tree, here)
+      if (got !== null) breakdown.push([key, got])
+    })
+    return { value: runFormula(tree, head), breakdown: breakdown }
+  }
+
   function drawIndicator(body, widget) {
     var spec = widget.indicator
+    var breakdown = []
+    var value = null
+    if (widget.formula) {
+      // An indicator written as arithmetic over named parts: each part has
+      // its own cube because each has its own filter, and the sum is worked
+      // out here for the whole and again for every group, which is what the
+      // platform does with the same numbers.
+      var figures = formulaFigures(widget)
+      value = figures.value
+      breakdown = figures.breakdown
+      drawIndicatorBody(body, widget, spec, value, breakdown)
+      return
+    }
     var result = combine(widget.cube)
     var denominator = widget.denominator ? combine(widget.denominator) : null
     var dims = result.columns.filter(function (c) { return c.type === 'dimension' }).length
-    var breakdown = []
     var total = 0
     result.rows.forEach(function (row) {
-      var value = Number(row[dims]) || 0
-      total += value
-      if (dims) breakdown.push([text(row[0]), value])
+      var one = Number(row[dims]) || 0
+      total += one
+      if (dims) breakdown.push([text(row[0]), one])
     })
-    var value = total
+    value = total
     if (spec.percent_of && denominator) {
       var whole = denominator.rows.reduce(function (sum, row) {
         return sum + (Number(row[denominator.columns.filter(function (c) { return c.type === 'dimension' }).length]) || 0)
@@ -896,6 +1070,18 @@
           .map(function (pair) { return [pair[0], (pair[1] / per[pair[0]]) * 100] })
       }
     }
+    drawIndicatorBody(body, widget, spec, value, breakdown)
+  }
+
+  /**
+   * The tile itself, given a number and its groups.
+   *
+   * Which numbers those are is the only difference between an indicator
+   * written as one aggregate and one written as a formula, so the drawing is
+   * shared: the headline, its progress bar, and the groups as a chart or as
+   * a table, all read the same either way.
+   */
+  function drawIndicatorBody(body, widget, spec, value, breakdown) {
     var status = indicatorStatus(spec, value)
     if (!breakdown.length) body.className += ' middle'
     body.appendChild(el('p', 'kpi', formatValue(value, spec.value_format, spec.unit)))

@@ -493,6 +493,8 @@ backend/app/
 
                 monitoring it
                   monitoring.py       indicators, thresholds, alerts
+                  formula.py          the arithmetic an indicator can be
+                                      written as, parsed rather than run
                   field_progress.py   the automatic monitoring views
                   monitoring_precompute.py  those views, computed on import
                   quality.py          the eight checks

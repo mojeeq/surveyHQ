@@ -15,6 +15,8 @@ import type {
   Dataset,
   Direction,
   FilterGroup,
+  Formula,
+  FormulaPart,
   Indicator,
   IndicatorValue,
   Page,
@@ -22,6 +24,7 @@ import type {
 import ChartCard from '@/components/ChartCard'
 import ProjectFilter, { datasetProjectParam, projectParam } from '@/components/ProjectFilter'
 import FilterBuilder, { emptyFilter } from '@/components/FilterBuilder'
+import { FormulaBuilder } from '@/components/monitoring/FormulaBuilder'
 import type { BadgeTone } from '@/components/ui'
 import {
   Badge,
@@ -366,9 +369,26 @@ const MEASURES: {
     needsVariable: true,
     numericOnly: false,
   },
+  // Not one aggregate at all: several, under names, combined by a sum. Most
+  // of what a survey office reports is a rate between two different counts,
+  // and none of the rows above can be two counts.
+  {
+    value: 'formula',
+    label: 'A formula over several counts',
+    agg: 'count',
+    needsVariable: false,
+    numericOnly: false,
+  },
 ]
 
-type MeasureKind = 'records' | 'answered' | 'sum' | 'mean' | 'median' | 'distinct'
+type MeasureKind =
+  | 'records'
+  | 'answered'
+  | 'sum'
+  | 'mean'
+  | 'median'
+  | 'distinct'
+  | 'formula'
 type PercentOf = '' | 'all_rows' | 'answered'
 
 /** Which of the measures above produced this indicator's spec.
@@ -378,6 +398,9 @@ type PercentOf = '' | 'all_rows' | 'answered'
  *  variable is enough to tell them apart.
  */
 function measureKindOf(indicator: Indicator): MeasureKind {
+  // A formula is the definition where there is one, so it is what the form
+  // opens on - the single measure underneath is left over and not read.
+  if ((indicator.formula as Formula | undefined)?.parts?.length) return 'formula'
   const measure = indicator.spec?.measures?.[0]
   if (!measure) return 'records'
   const named = Boolean(measure.variable)
@@ -445,6 +468,21 @@ function IndicatorModal({
     indicator?.spec?.filters ?? emptyFilter(),
   )
   const [percentOf, setPercentOf] = useState<PercentOf>(indicator?.percent_of ?? '')
+  // The parts of a formula and the sum over them, where the indicator is
+  // written that way. Kept beside the single measure rather than instead of
+  // it, so switching back and forth does not throw either away.
+  const [parts, setParts] = useState<FormulaPart[]>(
+    () => (indicator?.formula as Formula | undefined)?.parts ?? [],
+  )
+  const [expression, setExpression] = useState(
+    (indicator?.formula as Formula | undefined)?.expression ?? '',
+  )
+  // A rate written as "× 100" is a percentage and a ratio is not, and only
+  // the person writing it knows which. It decides how the tile prints the
+  // number, nothing else.
+  const [formulaPercent, setFormulaPercent] = useState(
+    indicator?.value_format === 'percent',
+  )
   const [breakdown, setBreakdown] = useState(indicator?.breakdown_variable ?? '')
   const [target, setTarget] = useState(
     indicator?.target_value === null || indicator?.target_value === undefined
@@ -530,6 +568,7 @@ function IndicatorModal({
   const measure = MEASURES.find((m) => m.value === kind)!
   const choices = measure.numericOnly ? numeric : variables
   const isPercent = percentOf !== ''
+  const usingFormula = kind === 'formula'
 
   // Only a counted measure has a meaningful share: the mean of a variable is
   // not a portion of anything, and dividing it by a row count says nothing.
@@ -555,9 +594,21 @@ function IndicatorModal({
         },
         breakdown_variable: breakdown,
         percent_of: canBePercent ? percentOf : '',
+        // Arithmetic over named parts, or nothing at all: an empty formula
+        // leaves the indicator defined by the single measure above, and
+        // clears one that was there.
+        formula: usingFormula
+          ? { expression, parts }
+          : { expression: '', parts: [] },
         // A percentage says so in how it is written, rather than in a unit
         // typed by hand that the tile would then print twice.
-        value_format: isPercent && canBePercent ? 'percent' : 'number',
+        value_format: usingFormula
+          ? formulaPercent
+            ? 'percent'
+            : 'number'
+          : isPercent && canBePercent
+            ? 'percent'
+            : 'number',
         target_value: target ? Number(target) : null,
         // Only the categories actually given a quota. An empty box means the
         // category falls back to the headline target, which is not the same
@@ -587,7 +638,12 @@ function IndicatorModal({
     onError: (error: Error) => toast.push(error.message, 'error'),
   })
 
-  const ready = name && datasetId && (!measure.needsVariable || variable)
+  const ready =
+    name &&
+    datasetId &&
+    (usingFormula
+      ? Boolean(expression.trim()) && parts.length > 0
+      : !measure.needsVariable || Boolean(variable))
 
   return (
     <Modal
@@ -657,7 +713,7 @@ function IndicatorModal({
             ))}
           </select>
         </Field>
-        {measure.needsVariable && (
+        {measure.needsVariable && !usingFormula && (
           <Field label={measure.numericOnly ? 'Numeric variable' : 'Variable'}>
             <select
               className="input"
@@ -675,16 +731,53 @@ function IndicatorModal({
         )}
       </div>
 
-      <Field
-        label="Only the records where"
-        hint="Optional. This is where a status, a yes/no or a chosen option goes - the values are offered by name."
-      >
-        {datasetId ? (
-          <FilterBuilder variables={variables} value={where} onChange={setWhere} />
-        ) : (
-          <p className="text-xs text-ink-400">Choose a dataset first.</p>
-        )}
-      </Field>
+      {usingFormula ? (
+        <Field
+          label="The parts and the sum"
+          hint="Each part is counted on its own terms. The formula combines them - a rate is one part over another, times a hundred."
+        >
+          {datasetId ? (
+            <FormulaBuilder
+              datasetId={datasetId}
+              variables={variables}
+              parts={parts}
+              expression={expression}
+              format={formulaPercent ? 'percent' : 'number'}
+              onParts={setParts}
+              onExpression={setExpression}
+            />
+          ) : (
+            <p className="text-xs text-ink-400">Choose a dataset first.</p>
+          )}
+        </Field>
+      ) : (
+        <Field
+          label="Only the records where"
+          hint="Optional. This is where a status, a yes/no or a chosen option goes - the values are offered by name."
+        >
+          {datasetId ? (
+            <FilterBuilder variables={variables} value={where} onChange={setWhere} />
+          ) : (
+            <p className="text-xs text-ink-400">Choose a dataset first.</p>
+          )}
+        </Field>
+      )}
+
+      {usingFormula && (
+        <Field
+          label="Report it as"
+          hint="Only how the number is printed: a rate written with a hundred in it is a percentage, a ratio is not."
+        >
+          <select
+            className="input"
+            value={formulaPercent ? 'percent' : 'number'}
+            onChange={(event) => setFormulaPercent(event.target.value === 'percent')}
+          >
+            <option value="number">A number</option>
+            <option value="percent">A percentage</option>
+          </select>
+        </Field>
+      )}
 
       {canBePercent && (
         <Field

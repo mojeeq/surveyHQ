@@ -99,6 +99,14 @@ class Indicator(UUIDMixin, TimestampMixin, Base):
     target_set_id: Mapped[str | None] = mapped_column(
         ForeignKey("target_sets.id", ondelete="SET NULL"), index=True, nullable=True
     )
+    # An indicator defined as arithmetic over named parts instead of as one
+    # aggregate: {"expression": "done / issued * 100", "parts": [...]}, each
+    # part an aggregate with its own filter. Empty for an indicator defined the
+    # plain way, which is most of them and all of the old ones. A rate between
+    # two different counts - refusals per interview, the share among those who
+    # answered - cannot be written as one aggregate and a denominator of every
+    # row, and that is the shape most of a survey office's real indicators have.
+    formula: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'"))
     # What the value is a percentage of, if it is one. Empty means it is a
     # plain number. "all_rows" divides by every row in the dataset before the
     # indicator's own filters, which is how "% of interviews completed" is

@@ -699,6 +699,25 @@ export type Direction = 'higher_is_better' | 'lower_is_better' | 'neutral'
 export type Severity = 'info' | 'warning' | 'critical'
 export type IndicatorState = 'ok' | 'warning' | 'critical' | 'unknown'
 
+/**
+ * One counted thing inside a formula, under a name the formula can use.
+ *
+ * Each part carries its own filters, which is the whole reason parts exist:
+ * "done" counts the rows whose status says so and "issued" counts all of
+ * them, and no single filter can be both halves of that fraction.
+ */
+export interface FormulaPart {
+  name: string
+  measure: Measure
+  filters: FilterGroup
+}
+
+/** Named parts and the sum over them, where an indicator is written that way. */
+export interface Formula {
+  expression: string
+  parts: FormulaPart[]
+}
+
 export interface Indicator {
   id: string
   name: string
@@ -718,6 +737,8 @@ export interface Indicator {
   target_set_id?: string | null
   /** '' for a plain number, or what the value is a percentage of. */
   percent_of?: '' | 'all_rows' | 'answered'
+  /** Arithmetic over named parts instead of the single measure in `spec`. */
+  formula?: Formula | Record<string, never>
   is_active: boolean
   display_order: number
   last_value: number | null

@@ -36,6 +36,8 @@ from app.schemas.monitoring import (
     AlertRuleCreate,
     AlertRuleOut,
     AlertRuleUpdate,
+    FormulaCheck,
+    FormulaPreview,
     IndicatorCreate,
     IndicatorOut,
     IndicatorUpdate,
@@ -58,6 +60,7 @@ from app.services.monitoring import (
     evaluate_alert_rule,
     indicator_status,
     label_map,
+    preview_formula,
     progress_percent,
     refresh_indicator,
 )
@@ -98,6 +101,21 @@ def list_indicators(
     return list(db.scalars(statement).all())
 
 
+@router.post("/formula-preview", response_model=FormulaPreview)
+def check_formula(
+    payload: FormulaCheck, db: DbSession, user: RequireManager
+) -> dict[str, object]:
+    """What a formula would say, asked from the form that is writing it.
+
+    A formula is typed, and a typed formula is wrong until it is not. Saving
+    one and reading the tile is a slow way to find that out, and a tile that
+    is blank because the denominator counts nothing looks exactly like a tile
+    that is blank because the field has not started.
+    """
+    get_ready_dataset(payload.dataset_id, db, user)
+    return preview_formula(db, payload.dataset_id, payload.formula)
+
+
 @router.post("/indicators", response_model=IndicatorOut, status_code=201)
 def create_indicator(
     payload: IndicatorCreate, db: DbSession, user: RequireManager
@@ -118,6 +136,9 @@ def create_indicator(
         breakdown_targets=payload.breakdown_targets,
         target_set_id=_linked_set(payload.target_set_id, payload.dataset_id, db, user),
         percent_of=payload.percent_of,
+        # Stored as nothing at all when it is nothing, so an indicator defined
+        # the plain way does not carry an empty formula around with it.
+        formula={} if payload.formula.is_empty else payload.formula.model_dump(mode="json"),
         display_order=payload.display_order,
     )
     db.add(indicator)
@@ -143,6 +164,13 @@ def update_indicator(
         get_dataset(data["dataset_id"], db, user)
     if "spec" in data and data["spec"] is not None:
         data["spec"] = payload.spec.model_dump(mode="json") if payload.spec else {}
+    if "formula" in data:
+        # An empty one clears it: the indicator goes back to its single measure
+        # rather than keeping half a formula nobody can see on the form.
+        data["formula"] = (
+            {} if payload.formula is None or payload.formula.is_empty
+            else payload.formula.model_dump(mode="json")
+        )
     if "target_set_id" in data:
         # Checked against whichever dataset the indicator ends up on, so moving
         # an indicator and its set in one call is judged on the pair.

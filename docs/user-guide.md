@@ -1681,6 +1681,41 @@ expressed. "Of those who answered" divides by the rows that answered the
 measured variable, which is the same question asked of a variable rather than of
 the file.
 
+**A formula over several counts.** Most of what a survey office reports is a
+ratio between two different counts - refusals per completed interview, the
+share of households with electricity among those who answered that question,
+the gap between households visited and households interviewed - and none of
+those is one count with a denominator of every row. Choosing **A formula over
+several counts** under *Count* gives you parts and a sum over them:
+
+- each **part** is counted on its own terms - what it counts, and the records
+  it counts it over - and carries a name you choose: `done`, `issued`,
+  `refused`, `visits`;
+- **the formula** combines them with the part names, numbers, `+ - * /` and
+  brackets. A percentage is a division and a hundred: `done / issued * 100`.
+  A ratio is just a division: `visits / interviews`.
+
+Nothing has to be saved to be checked. Each part says what it counts right
+now - "issued counts 300 right now" - and the line under the formula says what
+the whole thing comes to, so a denominator that counts nothing is visible
+while you are writing it rather than as a blank tile the week after.
+
+**Report it as** says only how the number is printed: a rate written with a
+hundred in it is a percentage, a ratio is not.
+
+A formula is the whole definition of its indicator: the single measure and the
+*percent of* setting above it are not consulted at all. It answers the same way
+everywhere else - the breakdown asks the same sum of each group, against that
+group's own parts, so a province is 50% of its own issued work rather than its
+share of the country's; a page filter narrows every part alike, so a filtered
+rate is still a rate; and a group with nothing to divide by reports nothing
+rather than a nought. The exported web page and the Word report carry the parts
+and work the same sum out again, so all three agree.
+
+The formula is read rather than run. It understands part names, numbers, the
+four operators and brackets, and nothing else - there is no way to write
+something in that box that does anything but arithmetic.
+
 **✎ on an indicator** edits all of it - the measure, the filters, the target and
 thresholds, the breakdown, even which dataset it reads. A threshold set before
 fieldwork started is a guess, and correcting one should not mean deleting the
