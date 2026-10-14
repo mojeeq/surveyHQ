@@ -37,7 +37,7 @@ describe('summarise', () => {
   })
 
   it('is empty rather than wrong for an empty shelf', () => {
-    expect(summarise([])).toEqual({ count: 0, bytes: 0, unready: 0, updated: null })
+    expect(summarise([])).toEqual({ count: 0, bytes: 0, unready: 0, waiting: 0, updated: null })
   })
 
   it('keeps the size a number when a dataset reports none yet', () => {
@@ -49,5 +49,23 @@ describe('summarise', () => {
     ])
     expect(totals.bytes).toBe(50)
     expect(Number.isNaN(totals.bytes)).toBe(false)
+  })
+})
+
+
+describe('a dataset emptied on purpose', () => {
+  it('is counted as waiting rather than as not ready', () => {
+    // Red over a state somebody chose reads as a fault to chase. An emptied
+    // dataset is working as intended: its charts are attached and it wants
+    // the export uploading again.
+    const totals = summarise([
+      { file_size: 0, status: 'archived', updated_at: '2026-01-02T00:00:00Z' },
+      { file_size: 10, status: 'ready', updated_at: '2026-01-01T00:00:00Z' },
+      { file_size: 0, status: 'failed', updated_at: '2026-01-01T00:00:00Z' },
+    ])
+
+    expect(totals.waiting).toBe(1)
+    expect(totals.unready).toBe(1)
+    expect(totals.count).toBe(3)
   })
 })

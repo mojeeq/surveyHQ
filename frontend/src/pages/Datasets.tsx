@@ -200,6 +200,13 @@ export default function Datasets() {
               hint="still importing, or failed"
             />
           )}
+          {totals.waiting > 0 && (
+            <Figure
+              label="Waiting for data"
+              value={formatNumber(totals.waiting)}
+              hint="emptied, charts still attached"
+            />
+          )}
           {totals.updated && (
             <Figure label="Last import" value={relativeTime(totals.updated)} />
           )}
@@ -239,7 +246,9 @@ export default function Datasets() {
               const sure = await ask.confirm({
                 title: `Delete ${selected.size} dataset${selected.size === 1 ? '' : 's'}?`,
                 message:
-                  'Charts, indicators and merges built on them will stop working.',
+                  'The data goes. Any that have charts, indicators or merges ' +
+                  'built on them are kept as empty datasets so that work stays ' +
+                  'attached, and upload the same export again to fill them back in.',
                 confirmLabel: 'Delete selected',
                 tone: 'danger',
               })
@@ -330,7 +339,10 @@ export default function Datasets() {
                             group.datasets.length === 1 ? '' : 's'
                           } in ${group.name}?`,
                           message:
-                            'Charts, indicators and merges built on them will stop working.',
+                            'The data goes. Any that have charts, indicators or ' +
+                            'merges built on them are kept as empty datasets so ' +
+                            'that work stays attached, and upload the same export ' +
+                            'again to fill them back in.',
                           confirmLabel: 'Delete all',
                           tone: 'danger',
                         })
@@ -370,7 +382,11 @@ export default function Datasets() {
                         const sure = await ask.confirm({
                           title: `Delete \u201C${dataset.name}\u201D?`,
                           message:
-                            'Charts and indicators built on it will stop working.',
+                            'The data goes. If charts or indicators are built on ' +
+                            'it, the dataset itself is kept empty so they stay ' +
+                            'attached, and uploading the same export again fills ' +
+                            'it back in. Delete it a second time to remove it ' +
+                            'for good.',
                           confirmLabel: 'Delete dataset',
                           tone: 'danger',
                         })
@@ -442,6 +458,12 @@ function GroupSummary({ datasets }: { datasets: Dataset[] }) {
       {totals.unready > 0 && (
         <Badge tone="danger">
           {formatNumber(totals.unready)} not ready
+        </Badge>
+      )}
+      {/* Chosen, not broken, so it is told apart from the red one above. */}
+      {totals.waiting > 0 && (
+        <Badge tone="warning">
+          {formatNumber(totals.waiting)} waiting for data
         </Badge>
       )}
     </div>
@@ -542,6 +564,10 @@ function DatasetCard({
 function StatusBadge({ status }: { status: Dataset['status'] }) {
   if (status === 'ready') return <Badge tone="success">Ready</Badge>
   if (status === 'failed') return <Badge tone="danger" icon="⚠">Failed</Badge>
+  // Not the word the database uses: somebody who just deleted this needs to
+  // know their charts are still attached and what to do about it, and
+  // "archived" says neither.
+  if (status === 'archived') return <Badge tone="warning">Waiting for data</Badge>
   return <Badge tone="warning" icon="◷">{status}</Badge>
 }
 

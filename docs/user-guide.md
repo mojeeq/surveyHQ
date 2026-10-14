@@ -454,6 +454,42 @@ and says so rather than writing a file Excel would refuse to open.
 
 Downloading is a manager's action, and it is recorded in the audit log.
 
+### Deleting a dataset, and getting it back
+
+Deleting one erases its data and frees the disk. What happens to the dataset
+itself depends on whether anybody built on it:
+
+- **Nothing is built on it.** It is deleted outright, as you would expect.
+- **Charts, indicators, quality rules, targets, alerts or merges are built on
+  it.** The data goes and the dataset stays, empty, marked **Waiting for
+  data**. Everything built on it stays attached to it.
+
+The reason is that all of that work points at the dataset's identity rather
+than at its rows. Remove the dataset and the database removes them with it,
+and uploading the file again does not bring them back, because an upload is a
+new dataset with a new identity. So the identity is kept, and the dataset waits
+with its variable list intact.
+
+**To get it back, upload the same export again.** The import recognises the
+file as that dataset's and fills the slot, and every chart and widget is
+working again. Nothing has to be relinked, and no dashboard has to be rebuilt:
+
+    Delete "persons"
+      'persons' emptied. 3 charts and 2 dashboard widgets stay attached
+      and are waiting for data: upload this export again and they will work.
+
+    Upload persons.dta again
+      persons: 4 rows replaced by 4
+
+An empty dataset deletes for good when you delete it a second time, so a
+project can still be cleared out completely.
+
+This is the same mechanism as archiving a project, which empties every dataset
+in it and keeps the dashboards. If what you actually want is fresher numbers
+rather than an empty slate, you do not need to delete at all: uploading the
+export again replaces the data in place, which is what **Replace their data**
+does on an import.
+
 ## Looking at a dataset
 
 The dataset page has four tabs:
