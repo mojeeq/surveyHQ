@@ -418,20 +418,38 @@ class _Parser:
         return left
 
     def _multiplicative(self) -> Value:
-        left = self._power()
+        left = self._unary()
         while self.peek() in ("*", "/"):
             operator = self.take().text
-            right = self._power()
+            right = self._unary()
             left = self._arithmetic(operator, left, right)
         return left
 
     def _power(self) -> Value:
-        left = self._unary()
-        if self.peek() == "^":
+        """Exponentiation, which binds tighter than the sign in front of it.
+
+        `-age^2` is `-(age^2)` in Stata and not `(-age)^2`, so the sign is
+        applied by `_unary` after this has run rather than being swept into the
+        base. Left to right among themselves, as Stata evaluates operators of
+        equal precedence, so `2^3^2` is 64 and not 512 - which is why the
+        exponent is parsed as a signed primary that cannot itself take a `^`.
+        """
+        left = self._primary()
+        while self.peek() == "^":
             self.take()
-            right = self._power()
-            return Value(f"({left.sql}^{right.sql})", NUMBER)
+            right = self._signed_primary()
+            left = Value(f"({_as_number(left)}^{_as_number(right)})", NUMBER)
         return left
+
+    def _signed_primary(self) -> Value:
+        """An exponent: a primary, possibly signed, as in `2^-1`."""
+        if self.peek() == "-":
+            self.take()
+            return Value(f"(-{_as_number(self._signed_primary())})", NUMBER)
+        if self.peek() == "+":
+            self.take()
+            return self._signed_primary()
+        return self._primary()
 
     def _arithmetic(self, operator: str, left: Value, right: Value) -> Value:
         """Arithmetic, where missing is left to propagate.
@@ -440,13 +458,19 @@ class _Parser:
         one place the two already agree and the missing rule stays out of it.
         A text operand would be a silent cast, so it is refused instead.
         """
-        if operator == "+" and (left.kind == TEXT or right.kind == TEXT):
-            # Stata joins strings with +, and so should this.
+        if operator == "+" and left.kind == TEXT and right.kind == TEXT:
+            # Stata joins two strings with +, and only two strings.
             return Value(f"({_as_text(left)}||{_as_text(right)})", TEXT)
         for side in (left, right):
             if side.kind == TEXT:
+                # Stata calls this a type mismatch rather than guessing, and so
+                # does this: quietly turning `name + age` into "Alice30" is the
+                # sort of silent coercion the rest of this module exists to
+                # avoid. Say which way to resolve it instead.
                 raise ExpressionError(
-                    f"'{operator}' needs numbers, and one side of it is text"
+                    f"'{operator}' needs numbers, and one side of it is text. "
+                    "Convert it first, with string(...) to join as text or "
+                    "real(...) to use it as a number."
                 )
         return Value(f"({_as_number(left)}{operator}{_as_number(right)})", NUMBER)
 
@@ -462,7 +486,7 @@ class _Parser:
         if self.peek() == "+":
             self.take()
             return self._unary()
-        return self._primary()
+        return self._power()
 
     def _primary(self) -> Value:
         if self.done:
