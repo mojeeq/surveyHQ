@@ -164,8 +164,8 @@ def apply(run: Run, text: str) -> CommandResult:
     handler = verbs().get(verb.lower().rstrip(","))
     if handler is None:
         raise CommandError(
-            f"'{verb}' is not a command this understands. Available: "
-            "use, save, gen, replace, egen, label, rename, drop, keep"
+            f"'{verb}' is not a command this understands. "
+            f"Available: {', '.join(verb_names())}"
         )
     if verb.lower().endswith(",") and not rest.startswith(","):
         rest = "," + rest
@@ -1315,6 +1315,24 @@ def verbs() -> dict[str, Any]:
         "drop": _drop,
         "keep": _keep,
     }
+
+
+def verb_names() -> list[str]:
+    """One name per command, for saying what is available.
+
+    Read off the table rather than written out next to it, because the two
+    drifted: the list this used to carry named nine commands and left out
+    `collapse`, `contract`, `merge` and `append`, all of which have worked for
+    as long as they have been in the table. Somebody who mistyped a collapse
+    was told, in so many words, that collapse was not a command here.
+
+    Aliases are folded away by handler, so `gen` is offered once rather than
+    as four spellings of itself.
+    """
+    first: dict[Any, str] = {}
+    for name, handler in verbs().items():
+        first.setdefault(handler, name)
+    return list(first.values())
 
 
 def _context(dataset: Dataset) -> DatasetContext:
