@@ -64,7 +64,11 @@ from app.services.datasets import (
     ArchiveImport,
     append_file_into_dataset,
     create_dataset_record,
+    dataset_is_empty,
     delete_dataset_files,
+    dependents_of,
+    describe_dependents,
+    empty_dataset,
     load_archive_as_datasets,
     load_file_into_dataset,
     merge_imports,
@@ -625,9 +629,11 @@ def delete_datasets(payload: BulkDeleteRequest, db: DbSession, user: RequireMana
         raise HTTPException(status_code=404, detail="Nothing to delete")
 
     names = [dataset.name for dataset in targets]
+    emptied: list[str] = []
+    removed: list[str] = []
     for dataset in targets:
-        delete_dataset_files(dataset)
-        db.delete(dataset)
+        what, _ = _remove_or_empty(db, dataset)
+        (removed if what == "deleted" else emptied).append(dataset.name)
     record(
         db,
         user=user,
@@ -636,29 +642,70 @@ def delete_datasets(payload: BulkDeleteRequest, db: DbSession, user: RequireMana
         detail={"count": len(names), "names": names[:20]},
     )
     db.commit()
-    return Message(
-        detail=f"Deleted {len(names)} dataset(s): "
-        + ", ".join(names[:5])
-        + ("…" if len(names) > 5 else "")
-    )
+    said = []
+    if removed:
+        said.append(f"Deleted {len(removed)} dataset(s)")
+    if emptied:
+        # Named rather than counted, because these are the ones still on the
+        # page afterwards and it would otherwise read as a delete that failed.
+        said.append(
+            f"emptied {len(emptied)} that other work is built on "
+            f"({', '.join(emptied[:5])}{'…' if len(emptied) > 5 else ''}), "
+            "which keep their charts and fill back in when the export is "
+            "uploaded again"
+        )
+    return Message(detail=". ".join(said) + "." if said else "Nothing to delete")
+
+
+def _remove_or_empty(db: DbSession, dataset: Dataset) -> tuple[str, dict[str, int]]:
+    """Delete the dataset, or empty it if anything is built on it.
+
+    Deleting the row cascades: the charts, indicators, quality rules, target
+    sets, alert rules and relationships built on it are deleted by the
+    database, and the dashboard widgets pointing at them are blanked. None of
+    that comes back when the same file is uploaded again, because the upload is
+    a new dataset with a new id.
+
+    So when somebody has built on it, the data goes and the dataset stays, in
+    the state archiving a project already leaves it in: no file, same id,
+    variables intact. Re-upload the export and the import recognises it, fills
+    the slot, and every one of those charts is working again without anybody
+    relinking anything.
+
+    An empty slot deletes for real on the second go, so there is always a way
+    to finish the job.
+    """
+    found = {} if dataset_is_empty(dataset) else dependents_of(db, dataset)
+    if not found:
+        delete_dataset_files(dataset)
+        db.delete(dataset)
+        return "deleted", {}
+    empty_dataset(db, dataset)
+    return "emptied", found
 
 
 @router.delete("/{dataset_id}", response_model=Message)
 def delete_dataset(dataset_id: str, db: DbSession, user: RequireManager) -> Message:
     dataset = get_dataset(dataset_id, db, user)
     name = dataset.name
-    delete_dataset_files(dataset)
-    db.delete(dataset)
+    what, found = _remove_or_empty(db, dataset)
     record(
         db,
         user=user,
-        action="delete_dataset",
+        action="delete_dataset" if what == "deleted" else "empty_dataset",
         entity_type="dataset",
         entity_id=dataset_id,
-        detail={"name": name},
+        detail={"name": name, "kept_for": found} if found else {"name": name},
     )
     db.commit()
-    return Message(detail=f"Dataset '{name}' deleted")
+    if what == "deleted":
+        return Message(detail=f"Dataset '{name}' deleted")
+    return Message(
+        detail=(
+            f"'{name}' emptied. {describe_dependents(found)} stay attached and are "
+            "waiting for data: upload this export again and they will work."
+        )
+    )
 
 
 @router.post("/{dataset_id}/replace", response_model=DatasetDetail)

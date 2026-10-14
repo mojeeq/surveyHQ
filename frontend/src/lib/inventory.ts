@@ -23,6 +23,13 @@ export interface Totals {
   bytes: number
   /** Anything not yet usable: still processing, or failed outright. */
   unready: number
+  /**
+   * Datasets whose data was deliberately removed and whose charts are still
+   * attached, waiting for the export to be uploaded again. Counted apart from
+   * `unready` because nothing has gone wrong with one of these, and a red
+   * badge over a state somebody chose reads as a fault that needs chasing.
+   */
+  waiting: number
   /** The most recent touch, or null when the shelf is empty. */
   updated: string | null
 }
@@ -30,13 +37,15 @@ export interface Totals {
 export function summarise(datasets: readonly Countable[]): Totals {
   let bytes = 0
   let unready = 0
+  let waiting = 0
   let updated: string | null = null
   for (const dataset of datasets) {
     bytes += dataset.file_size || 0
-    if (dataset.status !== 'ready') unready += 1
+    if (dataset.status === 'archived') waiting += 1
+    else if (dataset.status !== 'ready') unready += 1
     if (dataset.updated_at && (updated === null || dataset.updated_at > updated)) {
       updated = dataset.updated_at
     }
   }
-  return { count: datasets.length, bytes, unready, updated }
+  return { count: datasets.length, bytes, unready, waiting, updated }
 }

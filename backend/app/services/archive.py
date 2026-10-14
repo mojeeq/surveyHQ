@@ -105,26 +105,15 @@ def _datasets(db: Session, project_id: str) -> list[Dataset]:
 
 def archive(db: Session, project: Project) -> ArchiveOutcome:
     """Remove the project's survey data and keep everything else."""
-    from app.services.datasets import delete_dataset_files
+    from app.services.datasets import empty_dataset
 
     outcome = ArchiveOutcome()
     for dataset in _datasets(db, project.id):
-        outcome.bytes_freed += _directory_size(dataset_directory(dataset.id))
-        delete_dataset_files(dataset)
-
-        dataset.status = DatasetStatus.archived
-        # Cleared because it names a file that is gone. The counts and the
-        # variables stay: they are the description of what was here, which is
-        # the whole point of archiving rather than deleting.
-        dataset.storage_path = ""
-        dataset.file_size = 0
-        # The retained versions were files in the same directory, so the list of
-        # them is now a list of nothing. Left in place it would offer a rollback
-        # that cannot happen.
-        meta = dict(dataset.meta or {})
-        meta.pop("retained_versions", None)
-        dataset.meta = meta
-
+        # The same step deleting one dataset takes, for the same reason: the
+        # counts and the variables stay, so a later import recognises the file
+        # as this dataset's and fills it back in under the id everything is
+        # already pointing at.
+        outcome.bytes_freed += empty_dataset(db, dataset)
         outcome.datasets += 1
         outcome.names.append(dataset.name)
 

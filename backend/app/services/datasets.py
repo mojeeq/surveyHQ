@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pandas as pd
 from slugify import slugify
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
@@ -224,6 +224,113 @@ def delete_dataset_files(dataset: Dataset) -> None:
     directory = dataset_directory(dataset.id)
     if directory.exists():
         shutil.rmtree(directory, ignore_errors=True)
+
+
+#: What a dataset can have built on it. Each is a model and the column that
+#: points at the dataset, which is all that is needed to count them - and
+#: counting them is what decides whether deleting the dataset would destroy
+#: somebody's work or merely free some disk.
+DEPENDENTS: tuple[tuple[str, str, str], ...] = (
+    ("charts", "Chart", "dataset_id"),
+    ("indicators", "Indicator", "dataset_id"),
+    ("quality rules", "QualityRule", "dataset_id"),
+    ("target sets", "TargetSet", "dataset_id"),
+    ("alert rules", "AlertRule", "dataset_id"),
+    ("saved questions", "SavedQuery", "dataset_id"),
+    ("dashboard widgets", "Widget", "dataset_id"),
+)
+
+
+def dependents_of(db: Session, dataset: Dataset) -> dict[str, int]:
+    """What is built on this dataset, counted by kind, skipping the empties.
+
+    A relationship names two datasets, so it is counted against either side
+    rather than by one column like the rest.
+    """
+    from app import models
+
+    found: dict[str, int] = {}
+    for label, model_name, column in DEPENDENTS:
+        model = getattr(models, model_name, None)
+        if model is None:  # pragma: no cover - a model renamed away
+            continue
+        count = db.scalar(
+            select(func.count())
+            .select_from(model)
+            .where(getattr(model, column) == dataset.id)
+        )
+        if count:
+            found[label] = int(count)
+
+    joins = db.scalar(
+        select(func.count())
+        .select_from(models.DatasetRelationship)
+        .where(
+            or_(
+                models.DatasetRelationship.left_dataset_id == dataset.id,
+                models.DatasetRelationship.right_dataset_id == dataset.id,
+            )
+        )
+    )
+    if joins:
+        found["relationships"] = int(joins)
+    return found
+
+
+def describe_dependents(found: dict[str, int]) -> str:
+    """"3 charts, 1 indicator and 2 dashboard widgets", for saying out loud."""
+    parts = [
+        f"{count} {label[:-1] if count == 1 and label.endswith('s') else label}"
+        for label, count in found.items()
+    ]
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    return ", ".join(parts[:-1]) + " and " + parts[-1]
+
+
+def empty_dataset(db: Session, dataset: Dataset) -> int:
+    """Take the data away and leave the dataset itself standing.
+
+    Everything built on a dataset points at its id, so the id is the one thing
+    that must not move: keep the row and a chart, an indicator, a quality rule
+    and a dashboard widget all stay attached, waiting. Drop the row and the
+    database cascades them out of existence, and no amount of re-uploading
+    brings them back, because the next upload is a new id.
+
+    The variables and counts stay too. They are the description of what was
+    here, which is what lets a later import recognise the file as this
+    dataset's rather than some other survey's, and what lets the page say what
+    the charts are waiting for.
+
+    Returns the bytes freed, because that is the part somebody deleting data
+    actually wanted.
+    """
+    directory = dataset_directory(dataset.id)
+    freed = (
+        sum(f.stat().st_size for f in directory.rglob("*") if f.is_file())
+        if directory.exists()
+        else 0
+    )
+    delete_dataset_files(dataset)
+
+    dataset.status = DatasetStatus.archived
+    # Cleared because it names a file that is gone.
+    dataset.storage_path = ""
+    dataset.file_size = 0
+    # The retained versions were files in the same directory, so the list of
+    # them is now a list of nothing. Left in place it would offer a rollback
+    # that cannot happen.
+    meta = dict(dataset.meta or {})
+    meta.pop("retained_versions", None)
+    dataset.meta = meta
+    return freed
+
+
+def dataset_is_empty(dataset: Dataset) -> bool:
+    """Whether this is a slot waiting for data rather than a dataset."""
+    return dataset.status == DatasetStatus.archived or not dataset.storage_path
 
 
 def dataset_is_queryable(dataset: Dataset) -> bool:
