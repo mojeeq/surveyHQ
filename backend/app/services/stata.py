@@ -391,18 +391,27 @@ def _comment_at(line: str) -> int | None:
 # --- commands ---------------------------------------------------------------
 
 
-def _expression_kinds(ctx: DatasetContext) -> dict[str, str]:
+def _expression_kinds(frame: Frame) -> dict[str, str]:
     """Each variable, as either a quantity or text.
 
     The expression translator needs this to order missing values: Stata puts a
     missing number above every number and a missing string, which is "", below
-    every string. Passing only the names would read a text column as a number
-    and sort its missing the wrong way round.
+    every string, and arithmetic on text is a type mismatch rather than a join.
+
+    Asked of the working file rather than of the variable rows, because the
+    file is the only thing that cannot be stale or absent. A dataset ingested
+    before `storage_type` was recorded carries an empty one, which reads as
+    text, and `gen next = age + 1` on it would then be refused as arithmetic on
+    text - or worse, before mixed addition was refused, written as "301".
     """
-    return {
-        name: ("text" if kind_of(info.storage_type) == "text" else "number")
-        for name, info in ctx.variables.items()
-    }
+    stored = column_types(str(frame.path))
+    kinds: dict[str, str] = {}
+    for name, info in frame.variables.items():
+        if name in stored:
+            kinds[name] = "text" if kind_of(stored[name]) == "text" else "number"
+        else:  # pragma: no cover - a variable the file does not carry
+            kinds[name] = "number" if info.holds_numbers else "text"
+    return kinds
 
 
 
@@ -412,8 +421,8 @@ def _generate(run: Run, rest: str) -> CommandResult:
     name, expression, condition = _assignment(rest)
     _check_new_name(frame, name)
     ctx = frame.context
-    value = translate(expression, _expression_kinds(ctx), quote_ident)
-    where = _condition_sql(ctx, condition)
+    value = translate(expression, _expression_kinds(frame), quote_ident)
+    where = _condition_sql(frame, condition)
     # Outside the if, the new variable is missing - which is what Stata does.
     column = f"CASE WHEN {where} THEN {value} ELSE NULL END" if where else value
     write(work, frame, _select_sql(frame, ctx, extra=[(name, _as_number(frame, column))]))
@@ -432,8 +441,8 @@ def _replace(run: Run, rest: str) -> CommandResult:
     ctx = frame.context
     if name not in ctx.variables:
         raise CommandError(f"'{name}' is not a variable in the data. Use gen to create it.")
-    value = translate(expression, _expression_kinds(ctx), quote_ident)
-    where = _condition_sql(ctx, condition)
+    value = translate(expression, _expression_kinds(frame), quote_ident)
+    where = _condition_sql(frame, condition)
     column = f"CASE WHEN {where} THEN {value} ELSE {quote_ident(name)} END" if where else value
 
     changed = _count_matching(frame, where) if where else None
@@ -483,7 +492,7 @@ def _egen(run: Run, rest: str) -> CommandResult:
     elif function in EGEN_AGGREGATES:
         if not arguments:
             raise CommandError(f"egen {function}() needs an expression")
-        inner = translate(arguments, _expression_kinds(ctx), quote_ident)
+        inner = translate(arguments, _expression_kinds(frame), quote_ident)
         over = f" OVER (PARTITION BY {', '.join(quote_ident(v) for v in by)})" if by else " OVER ()"
         column = f"{EGEN_AGGREGATES[function]}({inner}){over}"
     else:
@@ -579,7 +588,7 @@ def _drop(run: Run, rest: str) -> CommandResult:
     frame, work = run.data, run.work
     ctx = frame.context
     if rest.lower().startswith("if "):
-        where = _condition_sql(ctx, rest[3:].strip())
+        where = _condition_sql(frame, rest[3:].strip())
         before = frame.rows
         write(work, frame, _select_sql(frame, ctx, where=f"NOT ({where}) OR ({where}) IS NULL"))
         return CommandResult(
@@ -608,7 +617,7 @@ def _keep(run: Run, rest: str) -> CommandResult:
     frame, work = run.data, run.work
     ctx = frame.context
     if rest.lower().startswith("if "):
-        where = _condition_sql(ctx, rest[3:].strip())
+        where = _condition_sql(frame, rest[3:].strip())
         before = frame.rows
         write(work, frame, _select_sql(frame, ctx, where=where))
         return CommandResult(
@@ -1403,10 +1412,10 @@ def _rowwise(ctx: DatasetContext, function: str, arguments: str) -> str:
     return f"(({total}) / NULLIF({present}, 0))"
 
 
-def _condition_sql(ctx: DatasetContext, condition: str) -> str:
+def _condition_sql(frame: Frame, condition: str) -> str:
     if not condition:
         return ""
-    return translate(condition, _expression_kinds(ctx), quote_ident)
+    return translate(condition, _expression_kinds(frame), quote_ident)
 
 
 def _count_matching(frame: Frame, where: str) -> int:

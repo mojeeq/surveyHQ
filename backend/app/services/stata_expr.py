@@ -335,10 +335,14 @@ def _truthy(value: Value) -> str:
 class _Parser:
     """Stata's expression grammar, by precedence.
 
-    Lowest to highest: `|`, `&`, the comparisons, `+ -`, `* /`, `^`, then the
-    unary operators and the primaries. `!` sits with unary minus and binds to
-    what follows it, which is Stata's own precedence: `!inlist(x, 1, 2)` negates
-    the inlist, and `!x == 1` compares `!x` against 1.
+    Stata's own order of evaluation, which it gives as `!`, `^`, negation,
+    `/`, `*`, subtraction, addition, the comparisons, `&`, `|`. So, lowest
+    first: `|`, `&`, the comparisons, `+ -`, `* /`, the sign, `^`, and `!`
+    tightest of all.
+
+    Three consequences worth knowing, because each differs from the obvious
+    reading: `!inlist(x, 1, 2)` negates the inlist; `!x == 1` compares `!x`
+    against 1; and `!flag^2` raises `!flag`, rather than negating `flag^2`.
     """
 
     def __init__(
@@ -418,20 +422,57 @@ class _Parser:
         return left
 
     def _multiplicative(self) -> Value:
-        left = self._power()
+        left = self._unary()
         while self.peek() in ("*", "/"):
             operator = self.take().text
-            right = self._power()
+            right = self._unary()
             left = self._arithmetic(operator, left, right)
         return left
 
     def _power(self) -> Value:
-        left = self._unary()
-        if self.peek() == "^":
+        """Exponentiation, which sits between `!` above it and the sign below.
+
+        Stata's order of evaluation runs `!`, `^`, negation, `/`, `*`,
+        subtraction, addition, the comparisons, `&`, `|`. So `-age^2` is
+        `-(age^2)` and not `(-age)^2`, because the sign is applied by `_unary`
+        after this has run; and `!flag^2` is `(!flag)^2` and not `!(flag^2)`,
+        because `_not` binds first and is therefore what this takes as its
+        operands.
+
+        Left to right among themselves, as Stata evaluates operators of equal
+        precedence, so `2^3^2` is 64 and not 512.
+        """
+        left = self._not()
+        while self.peek() == "^":
             self.take()
-            right = self._power()
-            return Value(f"({left.sql}^{right.sql})", NUMBER)
+            right = self._exponent()
+            left = Value(f"({_as_number(left)}^{_as_number(right)})", NUMBER)
         return left
+
+    def _exponent(self) -> Value:
+        """What may follow a `^`.
+
+        A signed one as well as a plain one, so that `2^-1` parses. Strictly
+        the sign binds looser than `^` and this would be ambiguous, which is
+        why it is spelt out here rather than left to `_unary`: Stata accepts
+        `2^-1` and so does this, without letting the sign reach back over the
+        base.
+        """
+        if self.peek() == "-":
+            self.take()
+            return Value(f"(-{_as_number(self._exponent())})", NUMBER)
+        if self.peek() == "+":
+            self.take()
+            return self._exponent()
+        return self._not()
+
+    def _not(self) -> Value:
+        """Logical negation, which Stata evaluates before everything else."""
+        if self.peek() in ("!", "~"):
+            self.take()
+            inner = self._not()
+            return Value(f"(NOT {_truthy(inner)})", BOOL, nullable=False)
+        return self._primary()
 
     def _arithmetic(self, operator: str, left: Value, right: Value) -> Value:
         """Arithmetic, where missing is left to propagate.
@@ -440,21 +481,24 @@ class _Parser:
         one place the two already agree and the missing rule stays out of it.
         A text operand would be a silent cast, so it is refused instead.
         """
-        if operator == "+" and (left.kind == TEXT or right.kind == TEXT):
-            # Stata joins strings with +, and so should this.
+        if operator == "+" and left.kind == TEXT and right.kind == TEXT:
+            # Stata joins two strings with +, and only two strings.
             return Value(f"({_as_text(left)}||{_as_text(right)})", TEXT)
         for side in (left, right):
             if side.kind == TEXT:
+                # Stata calls this a type mismatch rather than guessing, and so
+                # does this: quietly turning `name + age` into "Alice30" is the
+                # sort of silent coercion the rest of this module exists to
+                # avoid. Say which way to resolve it instead.
                 raise ExpressionError(
-                    f"'{operator}' needs numbers, and one side of it is text"
+                    f"'{operator}' needs numbers, and one side of it is text. "
+                    "Convert it first, with string(...) to join as text or "
+                    "real(...) to use it as a number."
                 )
         return Value(f"({_as_number(left)}{operator}{_as_number(right)})", NUMBER)
 
     def _unary(self) -> Value:
-        if self.peek() in ("!", "~"):
-            self.take()
-            inner = self._unary()
-            return Value(f"(NOT {_truthy(inner)})", BOOL, nullable=False)
+        """The sign in front of a value, which binds looser than `^`."""
         if self.peek() == "-":
             self.take()
             inner = self._unary()
@@ -462,7 +506,7 @@ class _Parser:
         if self.peek() == "+":
             self.take()
             return self._unary()
-        return self._primary()
+        return self._power()
 
     def _primary(self) -> Value:
         if self.done:
