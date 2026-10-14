@@ -335,10 +335,14 @@ def _truthy(value: Value) -> str:
 class _Parser:
     """Stata's expression grammar, by precedence.
 
-    Lowest to highest: `|`, `&`, the comparisons, `+ -`, `* /`, `^`, then the
-    unary operators and the primaries. `!` sits with unary minus and binds to
-    what follows it, which is Stata's own precedence: `!inlist(x, 1, 2)` negates
-    the inlist, and `!x == 1` compares `!x` against 1.
+    Stata's own order of evaluation, which it gives as `!`, `^`, negation,
+    `/`, `*`, subtraction, addition, the comparisons, `&`, `|`. So, lowest
+    first: `|`, `&`, the comparisons, `+ -`, `* /`, the sign, `^`, and `!`
+    tightest of all.
+
+    Three consequences worth knowing, because each differs from the obvious
+    reading: `!inlist(x, 1, 2)` negates the inlist; `!x == 1` compares `!x`
+    against 1; and `!flag^2` raises `!flag`, rather than negating `flag^2`.
     """
 
     def __init__(
@@ -426,29 +430,48 @@ class _Parser:
         return left
 
     def _power(self) -> Value:
-        """Exponentiation, which binds tighter than the sign in front of it.
+        """Exponentiation, which sits between `!` above it and the sign below.
 
-        `-age^2` is `-(age^2)` in Stata and not `(-age)^2`, so the sign is
-        applied by `_unary` after this has run rather than being swept into the
-        base. Left to right among themselves, as Stata evaluates operators of
-        equal precedence, so `2^3^2` is 64 and not 512 - which is why the
-        exponent is parsed as a signed primary that cannot itself take a `^`.
+        Stata's order of evaluation runs `!`, `^`, negation, `/`, `*`,
+        subtraction, addition, the comparisons, `&`, `|`. So `-age^2` is
+        `-(age^2)` and not `(-age)^2`, because the sign is applied by `_unary`
+        after this has run; and `!flag^2` is `(!flag)^2` and not `!(flag^2)`,
+        because `_not` binds first and is therefore what this takes as its
+        operands.
+
+        Left to right among themselves, as Stata evaluates operators of equal
+        precedence, so `2^3^2` is 64 and not 512.
         """
-        left = self._primary()
+        left = self._not()
         while self.peek() == "^":
             self.take()
-            right = self._signed_primary()
+            right = self._exponent()
             left = Value(f"({_as_number(left)}^{_as_number(right)})", NUMBER)
         return left
 
-    def _signed_primary(self) -> Value:
-        """An exponent: a primary, possibly signed, as in `2^-1`."""
+    def _exponent(self) -> Value:
+        """What may follow a `^`.
+
+        A signed one as well as a plain one, so that `2^-1` parses. Strictly
+        the sign binds looser than `^` and this would be ambiguous, which is
+        why it is spelt out here rather than left to `_unary`: Stata accepts
+        `2^-1` and so does this, without letting the sign reach back over the
+        base.
+        """
         if self.peek() == "-":
             self.take()
-            return Value(f"(-{_as_number(self._signed_primary())})", NUMBER)
+            return Value(f"(-{_as_number(self._exponent())})", NUMBER)
         if self.peek() == "+":
             self.take()
-            return self._signed_primary()
+            return self._exponent()
+        return self._not()
+
+    def _not(self) -> Value:
+        """Logical negation, which Stata evaluates before everything else."""
+        if self.peek() in ("!", "~"):
+            self.take()
+            inner = self._not()
+            return Value(f"(NOT {_truthy(inner)})", BOOL, nullable=False)
         return self._primary()
 
     def _arithmetic(self, operator: str, left: Value, right: Value) -> Value:
@@ -475,10 +498,7 @@ class _Parser:
         return Value(f"({_as_number(left)}{operator}{_as_number(right)})", NUMBER)
 
     def _unary(self) -> Value:
-        if self.peek() in ("!", "~"):
-            self.take()
-            inner = self._unary()
-            return Value(f"(NOT {_truthy(inner)})", BOOL, nullable=False)
+        """The sign in front of a value, which binds looser than `^`."""
         if self.peek() == "-":
             self.take()
             inner = self._unary()

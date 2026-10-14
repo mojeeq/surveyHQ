@@ -17,6 +17,7 @@ COLUMNS = {
     "income": "number",
     "region": "number",
     "name": "text",
+    "flag": "number",
 }
 
 
@@ -134,6 +135,47 @@ def test_a_sign_does_not_capture_the_exponent():
     assert value("-age^2", age=2) == -4
     assert value("(-age)^2", age=2) == 4
     assert value("-age^3", age=2) == -8
+
+
+def test_negation_binds_tighter_than_a_power():
+    """Stata evaluates `!` before everything else, `^` included.
+
+    Its order of evaluation is `!`, `^`, negation, `/`, `*`, subtraction,
+    addition, the comparisons, `&`, `|`, so `!flag^2` raises `!flag` rather
+    than negating `flag^2`.
+
+    Pinned at exponent 0, which is the case that can tell the two apart.
+    `!flag` is always 0 or 1, and for any positive exponent `(!flag)^n` and
+    `!(flag^n)` agree for every input, so an exponent of 2 proves nothing here
+    however it is parsed. At 0 they diverge: anything to the power 0 is 1, so
+    the Stata reading is `(!flag)^0` and always 1, while negating afterwards
+    gives `!1` and always 0.
+    """
+    assert value("!flag^0", flag=0) == 1
+    assert value("!flag^0", flag=1) == 1
+    assert value("!flag^0", flag=2) == 1
+
+
+def test_an_exponent_may_be_negated():
+    """`2^!flag` is a valid Stata expression and was refused outright by the
+    first attempt at this precedence, which let a `^` be followed only by a
+    sign or a plain value."""
+    assert value("2^!flag", flag=0) == 2
+    assert value("2^!flag", flag=1) == 1
+    assert value("age^!flag", age=3, flag=1) == 1
+
+
+def test_a_missing_value_is_not_zero_so_negating_it_is_zero():
+    """Stata reads anything nonzero as true, and missing is not zero."""
+    assert value("!flag", flag=None) is False
+    assert value("!flag", flag=0) is True
+    assert value("2^!flag", flag=None) == 1
+
+
+def test_negation_applies_before_a_comparison():
+    """`!x == 1` is `(!x) == 1`, because `!` comes first."""
+    assert value("!flag==1", flag=0) is True
+    assert value("!flag==1", flag=2) is False
 
 
 def test_exponents_go_left_to_right_as_stata_does():
