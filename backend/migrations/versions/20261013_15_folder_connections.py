@@ -19,6 +19,9 @@ down_revision = "20261013_14"
 branch_labels = None
 depends_on = None
 
+KINDS = ("survey_solutions", "folder")
+TYPE_NAME = "source_kind"
+
 
 def upgrade() -> None:
     bind = op.get_bind()
@@ -28,16 +31,20 @@ def upgrade() -> None:
     if "connections" in tables:
         columns = {column["name"] for column in inspector.get_columns("connections")}
         if "source_kind" not in columns:
-            # Enum as text on SQLite, as a real type on Postgres; SQLAlchemy's
-            # Enum does the right thing either way, and every existing row is
-            # a server connection.
+            kind = sa.Enum(*KINDS, name=TYPE_NAME)
+            # PostgreSQL needs the type to exist before a column can be of it,
+            # and alembic does not create it for an added column the way
+            # CREATE TABLE does. On SQLite an enum is text with a check
+            # constraint and this does nothing. Every existing row is a server
+            # connection.
+            kind.create(bind, checkfirst=True)
             op.add_column(
                 "connections",
                 sa.Column(
                     "source_kind",
-                    sa.Enum("survey_solutions", "folder", name="source_kind"),
+                    kind,
                     nullable=False,
-                    server_default=sa.text("'survey_solutions'"),
+                    server_default="survey_solutions",
                 ),
             )
         if "folder_path" not in columns:
@@ -93,4 +100,4 @@ def downgrade() -> None:
             op.drop_column("connections", "folder_path")
         if "source_kind" in columns:
             op.drop_column("connections", "source_kind")
-            sa.Enum(name="source_kind").drop(bind, checkfirst=True)
+    sa.Enum(*KINDS, name=TYPE_NAME).drop(bind, checkfirst=True)

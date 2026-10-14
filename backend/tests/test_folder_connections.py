@@ -338,13 +338,23 @@ def test_a_folder_connection_is_due_without_choosing_questionnaires(
         client, auth_headers, incoming, sync_enabled=True, sync_interval_minutes=5
     )
     db_session.expire_all()
+    # Scheduling looks at every connection in the database, and this one test
+    # does not own all of them. What it claims is about its own connection:
+    # that it came due, and came due once.
+    before = {found for (found,) in db_session.query(Job.id)}
 
     queued = schedule_due_syncs()
 
-    assert queued["queued"] == 1
-    job = db_session.query(Job).order_by(Job.created_at.desc()).first()
-    assert job.params["connection_id"] == connection["id"]
-    assert job.params["source_kind"] == SourceKind.folder.value
+    assert queued["queued"] >= 1
+    db_session.expire_all()
+    mine = [
+        job
+        for job in db_session.query(Job)
+        if job.id not in before
+        and (job.params or {}).get("connection_id") == connection["id"]
+    ]
+    assert len(mine) == 1
+    assert mine[0].params["source_kind"] == SourceKind.folder.value
 
 
 def test_a_server_connection_with_nothing_ticked_is_still_skipped(
