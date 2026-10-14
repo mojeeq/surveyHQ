@@ -391,3 +391,34 @@ def test_a_variable_whose_name_holds_if(client, auth_headers, workbench):
     adult = rows["columns"].index("adult")
     # Four, not three: the row with no age satisfies `age >= 18` in Stata.
     assert [r[adult] for r in rows["rows"]].count(1.0) == 4
+
+
+def test_a_dataset_too_old_to_record_its_types_still_does_arithmetic(
+    client, auth_headers, workbench, db_session
+):
+    """A column whose `storage_type` was never written is still a number.
+
+    An ingest old enough to predate that field leaves it empty, and asking the
+    variable rows what a column holds would then read every one of them as
+    text - which would refuse `gen next = age + 1` as arithmetic on text, or,
+    before mixed addition was refused, quietly write "171" for an age of 17.
+
+    So the kinds are asked of the working file instead, which cannot be stale
+    or absent. This clears the field to prove it is not being consulted.
+    """
+    from app.models import Dataset, Variable
+
+    dataset = db_session.get(Dataset, workbench)
+    for variable in db_session.query(Variable).filter(
+        Variable.dataset_id == dataset.id
+    ):
+        variable.storage_type = ""
+    db_session.flush()
+    db_session.commit()
+
+    made = command(client, auth_headers, workbench, "gen next_year = age + 1")
+    assert made.status_code == 200, made.text
+    # 17 + 1, and the missing age stays missing rather than becoming text.
+    assert values(client, auth_headers, workbench, "next_year") == [
+        18, 26, 41, 64, 13, None
+    ]
