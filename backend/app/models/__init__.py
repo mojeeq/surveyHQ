@@ -17,6 +17,8 @@ from app.models.analytics import (
 from app.models.connection import (
     Connection,
     ExportFormat,
+    FolderImport,
+    SourceKind,
     SyncRun,
     SyncStatus,
 )
@@ -81,6 +83,8 @@ __all__ = [
     "ShareLink",
     "Connection",
     "ExportFormat",
+    "FolderImport",
+    "SourceKind",
     "SyncRun",
     "SyncStatus",
     "SavedQuery",

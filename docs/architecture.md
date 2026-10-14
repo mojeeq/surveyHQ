@@ -474,6 +474,8 @@ backend/app/
                   import_review.py    prepare candidates, publish the reviewed
                   dataset_versions.py retained versions of a dataset's data
                   survey_solutions.py the CAPI server client
+                  file_source.py      a folder of exports read as a
+                                      source, and the fence around it
                   scheduling.py       when the next import is due
 
                 querying it

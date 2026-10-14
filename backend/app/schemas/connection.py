@@ -3,15 +3,20 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
-from app.models.connection import ExportFormat, SyncStatus
+from app.models.connection import ExportFormat, SourceKind, SyncStatus
 from app.services.scheduling import valid_time, valid_timezone
 
 
 class ConnectionBase(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    base_url: str
+    # A server, or a folder on this machine that exports are put in. The
+    # second exists because creating an API user is an administrator's
+    # privilege on the survey server and the answer is sometimes no.
+    source_kind: SourceKind = SourceKind.survey_solutions
+    base_url: str = ""
+    folder_path: str = ""
     workspace: str = "primary"
     username: str = ""
     verify_ssl: bool = True
@@ -47,11 +52,30 @@ class ConnectionBase(BaseModel):
     @classmethod
     def _validate_url(cls, value: str) -> str:
         value = value.strip().rstrip("/")
+        if not value:
+            # A folder connection has no server. Whether that is allowed is
+            # decided below, where the kind is known.
+            return value
         if not value.startswith(("http://", "https://")):
             raise ValueError("The server URL must start with http:// or https://")
         # Reject a URL that already includes an API path; we build those ourselves
         HttpUrl(value)
         return value
+
+    @model_validator(mode="after")
+    def _has_what_its_kind_needs(self) -> ConnectionBase:
+        """A server needs a URL; a folder needs a folder.
+
+        Whether the folder exists, and whether this server will read from it,
+        is answered where the filesystem is - the message there can say which
+        of the two is wrong, and this cannot.
+        """
+        if self.source_kind == SourceKind.folder:
+            if not self.folder_path.strip():
+                raise ValueError("A folder connection needs the folder to read")
+        elif not self.base_url.strip():
+            raise ValueError("A server connection needs the server URL")
+        return self
 
 
 class ConnectionCreate(ConnectionBase):
@@ -60,7 +84,11 @@ class ConnectionCreate(ConnectionBase):
 
 class ConnectionUpdate(BaseModel):
     name: str | None = None
+    # Without this the edit form could send a changed kind and be told the
+    # save worked while the connection went on behaving as it did.
+    source_kind: SourceKind | None = None
     base_url: str | None = None
+    folder_path: str | None = None
     workspace: str | None = None
     username: str | None = None
     password: str | None = None
@@ -85,7 +113,9 @@ class ConnectionOut(BaseModel):
 
     id: str
     name: str
+    source_kind: SourceKind = SourceKind.survey_solutions
     base_url: str
+    folder_path: str = ""
     workspace: str
     username: str
     verify_ssl: bool

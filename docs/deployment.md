@@ -432,10 +432,19 @@ rsync -P "Household Census 2017 - FINAL.dta" server:~/surveyHQ/incoming/
 make import FILE="/incoming/Household Census 2017 - FINAL.dta" PROJECT="Household Census 2017"
 ```
 
-`./incoming` beside `docker-compose.yml` is mounted read-only into the API
-container as `/incoming`, so `FILE` is that path, not the host's. It is a bind
-rather than a copy into the data volume, so a gigabyte file is not written to
-disk a second time just to be read once.
+`./incoming` beside `docker-compose.yml` is mounted read-only into the API and
+import-worker containers as `/incoming`, so `FILE` is that path, not the
+host's. It is a bind rather than a copy into the data volume, so a gigabyte
+file is not written to disk a second time just to be read once.
+
+The same folder can be imported from **without the command line**: a
+connection whose source is *A folder on this server* reads it on a schedule,
+which is how an office whose survey server will not give out an API user keeps
+a dashboard current. A connection may only be pointed inside the directories
+`IMPORT_ROOTS` names, `/incoming` by default; add others comma separated, and
+mount each into both containers. `IMPORT_SETTLE_SECONDS` (60) is how long a
+file must have stopped changing before it is read, which is what keeps a large
+copy still in flight from being imported half-written.
 
 The import runs through the same code the upload route uses, so what lands is
 indistinguishable from an uploaded dataset: the same parsing, variable and

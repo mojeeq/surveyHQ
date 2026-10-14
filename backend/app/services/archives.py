@@ -242,7 +242,23 @@ def _safe_members(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
 
 
 def extract_members(archive_path: Path, destination: Path) -> list[ExtractedMember]:
-    """Unpack an archive and read every data file inside it."""
+    """Unpack an archive and read every data file inside it.
+
+    A bare data file is an archive of one member, and is read as one. Nothing
+    arrives that way through an upload - the browser sends what it was given -
+    but a folder somebody drops a `.dta` into is exactly that case, and the
+    alternative is copying the file into a zip to take it straight out again.
+    """
+    if archive_path.suffix.lower() != ".zip":
+        if archive_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
+            raise IngestError(
+                f"'{archive_path.name}' is not a zip archive or a data file. "
+                "Expected one of: " + ", ".join(sorted(SUPPORTED_EXTENSIONS))
+            )
+        # Left where it is: the caller's temporary directory is cleared when
+        # the import finishes, and this file belongs to whoever put it there.
+        return [ExtractedMember(name=archive_path.name, path=archive_path)]
+
     destination.mkdir(parents=True, exist_ok=True)
     try:
         archive = zipfile.ZipFile(archive_path)

@@ -39,6 +39,13 @@ x-backend-env: &backend-env
   STORAGE_DIR: /data
   MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-20480}
   MAX_EXTRACTED_GB: ${MAX_EXTRACTED_GB:-64}
+  # Where a folder connection may read from, and how settled a file must be
+  # before it is read. Named here because compose uses .env only to substitute
+  # ${...} into this file: a variable this file does not name never reaches
+  # the container, so uncommenting it in .env would have changed nothing.
+  # Any root added here needs mounting into the api and worker containers too.
+  IMPORT_ROOTS: ${IMPORT_ROOTS:-/incoming}
+  IMPORT_SETTLE_SECONDS: ${IMPORT_SETTLE_SECONDS:-60}
   SMTP_HOST: ${SMTP_HOST:-}
   SMTP_PORT: ${SMTP_PORT:-587}
   SMTP_USER: ${SMTP_USER:-}
@@ -138,6 +145,10 @@ services:
     environment: *backend-env
     volumes:
       - survey-data:/data
+      # The same staging folder the API mounts, because a folder connection is
+      # listed by the API and read here. Mounted on one of them only, the
+      # connection tests green and every import after it fails.
+      - ./incoming:/incoming:ro
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }

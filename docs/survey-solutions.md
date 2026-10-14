@@ -180,8 +180,47 @@ connection*. Three routes need no account on the survey server at all:
   through exactly the path an upload takes. A scheduled task on somebody's
   machine can do the copying.
 
-All three end in the same place: a file, imported the same way, replacing the
-same datasets in place.
+All three end in the same place: a file in a folder. **A folder connection**
+imports it from there, on a schedule, with no account on the survey server at
+all.
+
+### A folder connection
+
+**Connections -> Add a connection**, then set **Where the data comes from** to
+*A folder on this server* and give it the folder. There is no URL, no user
+name and no password: the folder is the credential, which is why the server
+will only read from the directories its administrator has allowed - by default
+`/incoming`, the one the compose file already mounts. Setting `IMPORT_ROOTS`
+names others, comma separated.
+
+**Test connection** says what is in there: how many files, how many not
+imported yet, and how many are still being written. Then **Import data**, or
+turn on **Import automatically** and let the schedule do it - the same every-N
+-minutes or at-set-times choice a server connection has.
+
+What it reads:
+
+- **A `.zip`** is treated as an export: one dataset per file inside it, the
+  interview level and every roster.
+- **A single `.dta`, `.sav`, `.csv`, `.tab` or `.xlsx`** becomes one dataset.
+- Anything else in the folder is left alone, as is anything beginning with a
+  dot, and anything in a subdirectory.
+
+Three things worth knowing:
+
+- **A file is imported once.** What makes it "the same file" is its content,
+  not its name - so tomorrow's export under the same name is imported, and a
+  copy of today's under a new name is not.
+- **A file still being copied in is left until next time.** A large export has
+  its final name long before it is whole, so nothing is read until it has
+  stopped changing for `IMPORT_SETTLE_SECONDS` (a minute by default). Set it
+  to 0 where files are produced on the machine itself.
+- **Your files are never moved or deleted.** The folder is yours; the platform
+  only reads it. That also means a folder nobody clears grows forever, which
+  is a housekeeping job for whoever fills it.
+
+Re-importing replaces the datasets in place, exactly as a server connection
+does, so the charts, indicators and quality rules built on them keep working.
 
 ## Common errors
 

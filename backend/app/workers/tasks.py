@@ -24,16 +24,18 @@ from app.models import (
     Dashboard,
     Dataset,
     DatasetSource,
+    FolderImport,
     Indicator,
     IndicatorSnapshot,
     Job,
     JobStatus,
     QualityResult,
     QualityRule,
+    SourceKind,
     SyncRun,
     SyncStatus,
 )
-from app.services import snapshots, stata
+from app.services import file_source, snapshots, stata
 from app.services.datasets import (
     ArchiveImport,
     load_archive_as_datasets,
@@ -337,6 +339,207 @@ def plan_version_imports(
     return plan
 
 
+@celery_app.task(name="app.workers.tasks.run_folder_import", bind=True)
+def run_folder_import(self: Any, job_id: str) -> dict[str, Any]:
+    """Import whatever is new in a folder connection's directory.
+
+    The same import a server connection runs, with the download taken out: a
+    file somebody put there stands where the export would have been, and
+    everything after it - one dataset per roster level, replaced in place,
+    derived columns replayed - is the same code.
+    """
+    with session_scope() as db:
+        job = db.get(Job, job_id)
+        if job is None:
+            return {"error": "job not found"}
+        job.status = JobStatus.running
+        job.started_at = utcnow()
+        job.celery_task_id = getattr(self.request, "id", "") or ""
+        params = dict(job.params or {})
+        db.flush()
+
+    connection_id = params.get("connection_id")
+    mode = params.get("mode") or "replace"
+    summary: dict[str, Any] = {"datasets": [], "errors": [], "rows": 0, "skipped": 0}
+
+    try:
+        with session_scope() as db:
+            connection = db.get(Connection, connection_id)
+            if connection is None:
+                raise file_source.FolderError("The connection no longer exists")
+            folder = file_source.resolve(connection.folder_path)
+            connection.last_sync_status = SyncStatus.running
+            connection_name = connection.name
+            project_id = params.get("project_id") or connection.project_id
+            seen = {
+                record.digest
+                for record in db.scalars(
+                    select(FolderImport).where(FolderImport.connection_id == connection_id)
+                ).all()
+            }
+
+        waiting = 0
+        pending: list[Any] = []
+        for found in file_source.listing(folder):
+            if not found.settled:
+                # Still being copied in. It will be picked up on the next run,
+                # which is a minute away, rather than read half-written now.
+                waiting += 1
+                continue
+            if found.digest in seen:
+                summary["skipped"] += 1
+                continue
+            pending.append(found)
+
+        replaced: list[str] = []
+        for found in pending:
+            with session_scope() as db:
+                run = SyncRun(
+                    connection_id=connection_id,
+                    questionnaire=found.name,
+                    status=SyncStatus.running,
+                    started_at=utcnow(),
+                    export_format="",
+                )
+                db.add(run)
+                db.flush()
+                run_id = run.id
+            try:
+                outcome = _import_export_archive(
+                    connection_id=str(connection_id),
+                    connection_name=connection_name,
+                    title=Path(found.name).stem,
+                    archive=found.path,
+                    project_id=project_id,
+                    mode=mode,
+                    summary=summary,
+                )
+                with session_scope() as db:
+                    run = db.get(SyncRun, run_id)
+                    if run:
+                        run.status = SyncStatus.success
+                        run.finished_at = utcnow()
+                        run.rows_imported = outcome["rows"]
+                        run.datasets_created = outcome["datasets"]
+                        # Deliberately no archive_path: the file is the
+                        # operator's own, sitting where they put it, and the
+                        # pruning that keeps five archives per connection must
+                        # never reach into their folder and delete it.
+                        run.message = (
+                            f"Imported {found.name}: {outcome['rows']:,} records into "
+                            f"{outcome['datasets']} dataset(s)"
+                        )
+                        run.log = outcome["log"]
+                    db.add(
+                        FolderImport(
+                            connection_id=str(connection_id),
+                            file_name=found.name,
+                            digest=found.digest,
+                            size=found.size,
+                            modified_at=found.modified,
+                            imported_at=utcnow(),
+                            run_id=run_id,
+                        )
+                    )
+                replaced.extend(outcome.get("replaced_ids") or [])
+            except (IngestError, OSError) as exc:
+                logger.error("Folder import failed for %s: %s", found.name, exc)
+                summary["errors"].append({"questionnaire": found.name, "error": str(exc)})
+                with session_scope() as db:
+                    run = db.get(SyncRun, run_id)
+                    if run:
+                        run.status = SyncStatus.failed
+                        run.finished_at = utcnow()
+                        run.message = str(exc)
+                    # Recorded even though it failed, so a file that cannot be
+                    # read is not retried every five minutes for a week. A
+                    # corrected file is a different file and will be seen.
+                    db.add(
+                        FolderImport(
+                            connection_id=str(connection_id),
+                            file_name=found.name,
+                            digest=found.digest,
+                            size=found.size,
+                            modified_at=found.modified,
+                            imported_at=utcnow(),
+                            run_id=run_id,
+                        )
+                    )
+
+        if replaced:
+            ids = list(dict.fromkeys(replaced))
+            with session_scope() as db:
+                problems: list[str] = []
+                for dataset_id in ids:
+                    dataset = db.get(Dataset, dataset_id)
+                    if dataset is not None:
+                        problems.extend(stata.replay(db, dataset))
+                db.flush()
+                # After the replays, not before: the import rebuilt the merges
+                # standing on these datasets from the file as it arrived, and a
+                # recorded `drop if` or a generated column runs after that. A
+                # merge left as it was would hold the pre-replay rows while its
+                # source holds the replayed ones, and nothing on either would
+                # say which was which.
+                rebuild_dependents(db, ids)
+                # The counts were read before those commands ran, so a dropped
+                # row would leave the job reporting the file's rows rather than
+                # the dataset's.
+                for entry in summary["datasets"]:
+                    if entry["id"] in ids:
+                        dataset = db.get(Dataset, entry["id"])
+                        if dataset is not None:
+                            entry["rows"] = dataset.row_count
+                if problems:
+                    summary.setdefault("warnings", []).extend(problems)
+
+        with session_scope() as db:
+            connection = db.get(Connection, connection_id)
+            if connection:
+                connection.last_sync_at = utcnow()
+                connection.last_sync_status = (
+                    SyncStatus.failed if summary["errors"] else SyncStatus.success
+                )
+                connection.last_sync_error = (
+                    summary["errors"][0]["error"] if summary["errors"] else ""
+                )
+            job = db.get(Job, job_id)
+            if job:
+                # A run where every file failed imported nothing, and a job
+                # that reports success for it hides the whole import from
+                # whoever is watching the job list.
+                job.status = (
+                    JobStatus.failed
+                    if summary["errors"] and not summary["datasets"]
+                    else JobStatus.success
+                )
+                job.finished_at = utcnow()
+                job.progress = 100.0
+                job.result = {
+                    "imported": len(summary["datasets"]),
+                    "rows": summary["rows"],
+                    "already_imported": summary["skipped"],
+                    "still_arriving": waiting,
+                    "errors": summary["errors"],
+                }
+                if summary["errors"]:
+                    job.error = summary["errors"][0]["error"]
+        return {"imported": len(summary["datasets"]), "rows": summary["rows"]}
+
+    except file_source.FolderError as exc:
+        logger.error("Folder import failed: %s", exc)
+        with session_scope() as db:
+            connection = db.get(Connection, connection_id)
+            if connection:
+                connection.last_sync_status = SyncStatus.failed
+                connection.last_sync_error = str(exc)
+                connection.last_sync_at = utcnow()
+            job = db.get(Job, job_id)
+            if job:
+                _fail_job(db, job, str(exc))
+        return {"error": str(exc)}
+
+
 def _import_export_archive(
     *,
     connection_id: str,
@@ -488,7 +691,7 @@ def schedule_due_syncs() -> dict[str, Any]:
     moment has arrived - an elapsed interval, or a clock time in its own zone
     that has passed with nothing having run since.
     """
-    queued: list[str] = []
+    queued: list[tuple[str, SourceKind]] = []
     now = utcnow()
     with session_scope() as db:
         connections = db.scalars(
@@ -497,7 +700,13 @@ def schedule_due_syncs() -> dict[str, Any]:
             )
         ).all()
         for connection in connections:
-            if not connection.questionnaires:
+            # A server connection with nothing ticked has nothing to ask for.
+            # A folder connection does not choose questionnaires: what is in
+            # the folder is what there is.
+            if (
+                connection.source_kind != SourceKind.folder
+                and not connection.questionnaires
+            ):
                 continue
             if connection.last_sync_status == SyncStatus.running:
                 continue
@@ -521,14 +730,18 @@ def schedule_due_syncs() -> dict[str, Any]:
                     "interview_status": connection.interview_status,
                     "project_id": connection.project_id,
                     "mode": "replace",
+                    "source_kind": connection.source_kind.value,
                 },
             )
             db.add(job)
             db.flush()
-            queued.append(job.id)
+            queued.append((job.id, connection.source_kind))
 
-    for job_id in queued:
-        run_connection_sync.delay(job_id)
+    for job_id, kind in queued:
+        if kind == SourceKind.folder:
+            run_folder_import.delay(job_id)
+        else:
+            run_connection_sync.delay(job_id)
     if queued:
         logger.info("Queued %s scheduled sync job(s)", len(queued))
     return {"queued": len(queued)}

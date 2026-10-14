@@ -42,6 +42,11 @@ const ZONES: string[] = (() => {
 
 const BLANK = {
   name: '',
+  // A server, or a folder on the SurveyHQ host that exports are put in. The
+  // second is for the offices whose server administrator will not create an
+  // API user: somebody puts the export where this can read it.
+  source_kind: 'survey_solutions' as 'survey_solutions' | 'folder',
+  folder_path: '',
   base_url: '',
   workspace: 'primary',
   username: '',
@@ -132,7 +137,11 @@ export default function Connections() {
             <Card
               key={connection.id}
               title={connection.name}
-              subtitle={`${connection.base_url} · workspace "${connection.workspace}"`}
+              subtitle={
+                connection.source_kind === 'folder'
+                  ? `Folder · ${connection.folder_path}`
+                  : `${connection.base_url} · workspace "${connection.workspace}"`
+              }
               actions={
                 <>
                   <SyncBadge connection={connection} />
@@ -326,6 +335,8 @@ function ConnectionModal({
     ...(connection
       ? {
           name: connection.name,
+          source_kind: connection.source_kind ?? 'survey_solutions',
+          folder_path: connection.folder_path ?? '',
           base_url: connection.base_url,
           workspace: connection.workspace,
           username: connection.username,
@@ -344,6 +355,7 @@ function ConnectionModal({
       : {}),
   })
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null)
+  const isFolder = form.source_kind === 'folder'
 
   const update = (patch: Partial<typeof form>) => setForm({ ...form, ...patch })
 
@@ -373,7 +385,7 @@ function ConnectionModal({
     <Modal
       open
       onClose={onClose}
-      title={connection ? 'Edit connection' : 'Add Survey Solutions connection'}
+      title={connection ? 'Edit connection' : 'Add a connection'}
       wide
       footer={
         <>
@@ -416,28 +428,67 @@ function ConnectionModal({
             placeholder="National Household Survey"
           />
         </Field>
-        <Field label="Server URL" hint="The site root, e.g. https://demo.mysurvey.solutions">
-          <input
+        <Field
+          label="Where the data comes from"
+          hint="A folder is for a server you cannot be given an API user on."
+        >
+          <select
             className="input"
-            value={form.base_url}
-            onChange={(event) => update({ base_url: event.target.value })}
-            placeholder="https://your-server.mysurvey.solutions"
-          />
+            value={form.source_kind}
+            onChange={(event) =>
+              update({ source_kind: event.target.value as typeof form.source_kind })
+            }
+          >
+            <option value="survey_solutions">A Survey Solutions server</option>
+            <option value="folder">A folder on this server</option>
+          </select>
         </Field>
-        <Field label="Workspace" hint="Usually 'primary'">
-          <input
-            className="input"
-            value={form.workspace}
-            onChange={(event) => update({ workspace: event.target.value })}
-          />
-        </Field>
-        <Field label="API user name" hint="A headquarters or API user on that workspace">
-          <input
-            className="input"
-            value={form.username}
-            onChange={(event) => update({ username: event.target.value })}
-          />
-        </Field>
+
+        {isFolder ? (
+          <Field
+            label="Folder to read"
+            hint="On the SurveyHQ host, inside a folder the administrator allows. Exports put here are imported on the schedule below."
+          >
+            <input
+              className="input"
+              value={form.folder_path}
+              onChange={(event) => update({ folder_path: event.target.value })}
+              placeholder="/incoming"
+            />
+          </Field>
+        ) : (
+          <>
+            <Field
+              label="Server URL"
+              hint="The site root, e.g. https://demo.mysurvey.solutions"
+            >
+              <input
+                className="input"
+                value={form.base_url}
+                onChange={(event) => update({ base_url: event.target.value })}
+                placeholder="https://your-server.mysurvey.solutions"
+              />
+            </Field>
+            <Field label="Workspace" hint="Usually 'primary'">
+              <input
+                className="input"
+                value={form.workspace}
+                onChange={(event) => update({ workspace: event.target.value })}
+              />
+            </Field>
+            <Field
+              label="API user name"
+              hint="An API user or an administrator. An ordinary headquarters account cannot use the export API."
+            >
+              <input
+                className="input"
+                value={form.username}
+                onChange={(event) => update({ username: event.target.value })}
+              />
+            </Field>
+          </>
+        )}
+        {!isFolder && (
         <Field
           label="Password"
           hint={connection ? 'Leave blank to keep the stored password' : 'Encrypted at rest'}
@@ -449,6 +500,8 @@ function ConnectionModal({
             onChange={(event) => update({ password: event.target.value })}
           />
         </Field>
+        )}
+        {!isFolder && (
         <Field label="Export format">
           <select
             className="input"
@@ -464,13 +517,15 @@ function ConnectionModal({
             ))}
           </select>
         </Field>
+        )}
         <ProjectPicker
           value={form.project_id}
           onChange={(project_id) => update({ project_id })}
           label="Default project for imports"
-          hint="Where this server's data lands. A single import can be sent elsewhere."
+          hint="Where this connection's data lands. A single import can be sent elsewhere."
         />
 
+        {!isFolder && (
         <Field label="Interview status to import">
           <select
             className="input"
@@ -491,6 +546,7 @@ function ConnectionModal({
             ))}
           </select>
         </Field>
+        )}
         <Field label="Import automatically">
           <select
             className="input"
@@ -576,6 +632,7 @@ function ConnectionModal({
           say, so a connection could have automatic imports switched on and a
           schedule set and still never import anything: the scheduler skips a
           connection with nothing chosen, and said nothing about it. */}
+      {!isFolder && (
       <div className="border-t border-ink-200 pt-4">
         <Field
           label="Questionnaires to import automatically"
@@ -604,6 +661,7 @@ function ConnectionModal({
           </p>
         )}
       </div>
+      )}
 
       {/* items-start: a Toggle is an inline-flex label, so two of them in a
           space-y column sat on one line and overlapped each other's text. */}
@@ -619,11 +677,13 @@ function ConnectionModal({
               : 'Import automatically on the schedule above'
           }
         />
-        <Toggle
-          checked={form.verify_ssl}
-          onChange={(value) => update({ verify_ssl: value })}
-          label="Verify the server's TLS certificate (recommended)"
-        />
+        {!isFolder && (
+          <Toggle
+            checked={form.verify_ssl}
+            onChange={(value) => update({ verify_ssl: value })}
+            label="Verify the server's TLS certificate (recommended)"
+          />
+        )}
       </div>
     </Modal>
   )
@@ -632,6 +692,10 @@ function ConnectionModal({
 function ImportModal({ connection, onClose }: { connection: Connection; onClose: () => void }) {
   const toast = useToast()
   const queryClient = useQueryClient()
+  // A folder connection chooses nothing: what is in the folder is what there
+  // is. Asking it which questionnaires to pull would be asking a question
+  // only a server can answer, with a submit button that never enables.
+  const isFolder = connection.source_kind === 'folder'
   const [selected, setSelected] = useState<string[]>(connection.questionnaires)
   const [projectId, setProjectId] = useState(connection.project_id ?? '')
   const [mode, setMode] = useState<'replace' | 'append'>('replace')
@@ -642,12 +706,17 @@ function ImportModal({ connection, onClose }: { connection: Connection; onClose:
 
   const start = useMutation({
     mutationFn: () =>
-      api.post(`/connections/${connection.id}/sync`, {
-        questionnaires: selected,
-        project_id: projectId || null,
-        mode,
-        export_format: format,
-      }),
+      api.post(
+        `/connections/${connection.id}/sync`,
+        isFolder
+          ? { project_id: projectId || null, mode }
+          : {
+              questionnaires: selected,
+              project_id: projectId || null,
+              mode,
+              export_format: format,
+            },
+      ),
     onSuccess: () => {
       toast.push(
         'Import started. It runs in the background and can take a few minutes for large surveys.',
@@ -674,10 +743,10 @@ function ImportModal({ connection, onClose }: { connection: Connection; onClose:
           <button
             className="btn-primary"
             onClick={() => start.mutate()}
-            disabled={!selected.length || start.isPending}
+            disabled={(!isFolder && !selected.length) || start.isPending}
           >
             {start.isPending && <Spinner className="h-4 w-4 text-white" />}
-            Import {describeSelection(selected)}
+            {isFolder ? 'Import what is new' : `Import ${describeSelection(selected)}`}
           </button>
         </>
       }
@@ -701,6 +770,7 @@ function ImportModal({ connection, onClose }: { connection: Connection; onClose:
             <option value="append">Add these rows to them</option>
           </select>
         </Field>
+        {!isFolder && (
         <Field
           label="Ask the server for"
           hint="This import only. The connection keeps its own default for scheduled imports."
@@ -719,18 +789,30 @@ function ImportModal({ connection, onClose }: { connection: Connection; onClose:
             ))}
           </select>
         </Field>
+        )}
       </div>
 
-      <p className="mb-3 text-sm text-ink-500">
-        Each questionnaire's whole export is imported - one dataset per roster level, with
-        the paradata - and re-importing refreshes them in place, so saved charts and
-        indicators keep working.
-      </p>
-      <QuestionnairePicker
-        connectionId={connection.id}
-        value={selected}
-        onChange={setSelected}
-      />
+      {isFolder ? (
+        <p className="text-sm text-ink-500">
+          Every file in <code>{connection.folder_path}</code> that has not been imported
+          yet, and has stopped being written to, is read now - an export archive as one
+          dataset per roster level, a single data file as one dataset. Re-importing
+          refreshes them in place, so saved charts and indicators keep working.
+        </p>
+      ) : (
+        <>
+          <p className="mb-3 text-sm text-ink-500">
+            Each questionnaire's whole export is imported - one dataset per roster level,
+            with the paradata - and re-importing refreshes them in place, so saved charts
+            and indicators keep working.
+          </p>
+          <QuestionnairePicker
+            connectionId={connection.id}
+            value={selected}
+            onChange={setSelected}
+          />
+        </>
+      )}
     </Modal>
   )
 }
