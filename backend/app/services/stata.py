@@ -391,12 +391,28 @@ def _comment_at(line: str) -> int | None:
 # --- commands ---------------------------------------------------------------
 
 
+def _expression_kinds(ctx: DatasetContext) -> dict[str, str]:
+    """Each variable, as either a quantity or text.
+
+    The expression translator needs this to order missing values: Stata puts a
+    missing number above every number and a missing string, which is "", below
+    every string. Passing only the names would read a text column as a number
+    and sort its missing the wrong way round.
+    """
+    return {
+        name: ("text" if kind_of(info.storage_type) == "text" else "number")
+        for name, info in ctx.variables.items()
+    }
+
+
+
+
 def _generate(run: Run, rest: str) -> CommandResult:
     frame, work = run.data, run.work
     name, expression, condition = _assignment(rest)
     _check_new_name(frame, name)
     ctx = frame.context
-    value = translate(expression, set(ctx.variables), quote_ident)
+    value = translate(expression, _expression_kinds(ctx), quote_ident)
     where = _condition_sql(ctx, condition)
     # Outside the if, the new variable is missing - which is what Stata does.
     column = f"CASE WHEN {where} THEN {value} ELSE NULL END" if where else value
@@ -416,7 +432,7 @@ def _replace(run: Run, rest: str) -> CommandResult:
     ctx = frame.context
     if name not in ctx.variables:
         raise CommandError(f"'{name}' is not a variable in the data. Use gen to create it.")
-    value = translate(expression, set(ctx.variables), quote_ident)
+    value = translate(expression, _expression_kinds(ctx), quote_ident)
     where = _condition_sql(ctx, condition)
     column = f"CASE WHEN {where} THEN {value} ELSE {quote_ident(name)} END" if where else value
 
@@ -467,7 +483,7 @@ def _egen(run: Run, rest: str) -> CommandResult:
     elif function in EGEN_AGGREGATES:
         if not arguments:
             raise CommandError(f"egen {function}() needs an expression")
-        inner = translate(arguments, set(ctx.variables), quote_ident)
+        inner = translate(arguments, _expression_kinds(ctx), quote_ident)
         over = f" OVER (PARTITION BY {', '.join(quote_ident(v) for v in by)})" if by else " OVER ()"
         column = f"{EGEN_AGGREGATES[function]}({inner}){over}"
     else:
@@ -1390,7 +1406,7 @@ def _rowwise(ctx: DatasetContext, function: str, arguments: str) -> str:
 def _condition_sql(ctx: DatasetContext, condition: str) -> str:
     if not condition:
         return ""
-    return translate(condition, set(ctx.variables), quote_ident)
+    return translate(condition, _expression_kinds(ctx), quote_ident)
 
 
 def _count_matching(frame: Frame, where: str) -> int:

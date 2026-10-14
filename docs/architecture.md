@@ -183,15 +183,42 @@ table, so there is nothing here that wants to read two.
 ### Nothing reaches the database as text
 
 `stata_expr.py` is the whole of the safety argument. An expression is
-tokenised; every identifier has to be a variable of this dataset; only a listed
-set of functions is understood; and the SQL is built from the tokens rather
-than from the string. A command that cannot be parsed is a message about the
-piece that was not understood. The same parse is what makes a typo readable
-instead of a database error.
+tokenised and parsed; every identifier has to be a variable of this dataset;
+only a listed set of functions is understood; and the SQL is built from the
+parse rather than from the string. A command that cannot be parsed is a message
+about the piece that was not understood. The same parse is what makes a typo
+readable instead of a database error.
 
 That is why this needs no sandbox, no separate binary and no setting to turn
 on. There is no interpreter here: a command is translated to the same DuckDB
 SQL the rest of the platform runs, and nothing else can be expressed.
+
+### Why it parses rather than rewrites
+
+It would be shorter to translate an expression by substituting operator for
+operator, and that is what this did until missing values were looked at
+properly. Stata treats a missing number as larger than any number; SQL treats
+NULL as unknown and a condition reads unknown as no. The two disagree on nearly
+every comparison, and silently.
+
+The cost was not theoretical. `replace lfs = 3 if !inlist(lfs, 1, 2)` ends
+every recode cascade - "everything not yet classified" - and reached DuckDB as
+`NOT ("lfs" IN (1, 2))`, which is NULL for the rows it existed to catch. The
+command reported success and changed nothing.
+
+The rule depends on where in an expression you are, which is what a parse
+knows and a substitution cannot: missing orders high in a comparison, keeps
+propagating through arithmetic, and has to be visible as a NULL to
+`missing()`. So comparisons are emitted NULL-aware from one helper, and
+`inlist`, `inrange` and `!` are defined in terms of it rather than given rules
+of their own - which is also why `inlist(x, 1, .)` is true for a missing `x`
+without anybody writing that case down.
+
+Being faithful means inheriting the traps: after `gen adult = age >= 18`,
+somebody with no recorded age is an adult here exactly as in Stata. The
+alternative is a platform whose figures disagree with the do-file that produced
+them. `tests/test_stata_missing.py` holds the truth table, taken from Stata's
+rule rather than from this implementation, and runs each row against DuckDB.
 
 ### The record, and the replay
 

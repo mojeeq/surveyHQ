@@ -72,8 +72,11 @@ def test_gen_creates_a_variable_from_an_expression(client, auth_headers, workben
     # see - the preview hands back 0/1 either way - so it is pinned in
     # test_project_script_verbs, where summing it is the thing that breaks.
     #
-    # The missing age stays missing rather than becoming a zero.
-    assert values(client, auth_headers, workbench, "adult") == [0, 1, 1, 1, 0, None]
+    # The last row has no age, and is an adult. Stata counts missing as larger
+    # than any number, so `. >= 18` is true, and this is the figure a do-file
+    # would have produced. See test_stata_missing for the rule and the reason
+    # for following it rather than improving on it.
+    assert values(client, auth_headers, workbench, "adult") == [0, 1, 1, 1, 0, 1]
 
 
 def test_gen_with_an_if_leaves_the_other_rows_missing(client, auth_headers, workbench):
@@ -285,7 +288,9 @@ label values band bandlbl
         'label define bandlbl 1 "Child" 2 "Adult" 3 "Older"',
         "label values band bandlbl",
     ]
-    assert values(client, auth_headers, workbench, "band") == [1, 2, 2, 3, 1, None]
+    # The ageless row lands in the oldest band: `. >= 60` is true in Stata,
+    # missing being larger than any number, and the last rule wins.
+    assert values(client, auth_headers, workbench, "band") == [1, 2, 2, 3, 1, 3]
 
     dataset = client.get(f"/api/v1/datasets/{workbench}", headers=auth_headers).json()
     variable = next(v for v in dataset["variables"] if v["name"] == "band")
@@ -323,10 +328,13 @@ def test_a_long_line_can_be_continued(client, auth_headers, workbench):
     """/// joins a line to the next, so a long generate needs no scrollbar."""
     script = "gen wealthy = 1 if income > 250 ///\n    & age > 18"
     assert command(client, auth_headers, workbench, script).status_code == 200
-    # Only the row with both: income 500 belongs to a 12-year-old, and the
-    # 600 to a row with no age at all.
+    # Three rows, and two of them by Stata's missing rule rather than by their
+    # values: ages 17 and 25 earn too little, the 12-year-old on 500 is too
+    # young, and then the 63-year-old whose income was never recorded counts as
+    # earning more than 250, and the 600 whose age was never recorded counts as
+    # older than 18. Both are what the same `if` would pick up in Stata.
     assert values(client, auth_headers, workbench, "wealthy") == [
-        None, None, 1, None, None, None
+        None, None, 1, 1, None, 1
     ]
 
 
@@ -381,4 +389,5 @@ def test_a_variable_whose_name_holds_if(client, auth_headers, workbench):
         f"/api/v1/datasets/{workbench}/preview?limit=10", headers=auth_headers
     ).json()
     adult = rows["columns"].index("adult")
-    assert [r[adult] for r in rows["rows"]].count(1.0) == 3
+    # Four, not three: the row with no age satisfies `age >= 18` in Stata.
+    assert [r[adult] for r in rows["rows"]].count(1.0) == 4

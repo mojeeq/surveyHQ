@@ -11,42 +11,80 @@ import pytest
 
 from app.services.stata_expr import ExpressionError, translate
 
-COLUMNS = {"age", "sex", "income", "region", "name"}
+COLUMNS = {
+    "age": "number",
+    "sex": "number",
+    "income": "number",
+    "region": "number",
+    "name": "text",
+}
 
 
 def sql(expression: str) -> str:
     return translate(expression, COLUMNS, lambda n: f'"{n}"')
 
 
+def value(expression: str, **row: object):
+    """What the expression evaluates to over one row of given values.
+
+    The SQL these build is NULL-aware and so no longer a short string worth
+    pinning by eye - see test_stata_missing for why it has to be. What is worth
+    pinning is what it answers, so these run it.
+    """
+    import duckdb
+
+    names = list(COLUMNS)
+    con = duckdb.connect()
+    types = ", ".join(
+        f'"{n}" {"VARCHAR" if COLUMNS[n] == "text" else "DOUBLE"}' for n in names
+    )
+    con.execute(f"create table one({types})")
+    con.execute(
+        f"insert into one values ({', '.join('?' for _ in names)})",
+        [row.get(n) for n in names],
+    )
+    return con.execute(f"select ({sql(expression)}) from one").fetchone()[0]
+
+
 def test_arithmetic_and_variables():
-    assert sql("age + 1") == '"age"+1'
-    assert sql("income / 12") == '"income"/12'
+    assert value("age + 1", age=30) == 31
+    assert value("income / 12", income=120) == 10
 
 
 def test_stata_operators_become_sql_ones():
-    assert sql("age == 30") == '"age"=30'
-    assert sql("sex != 1") == '"sex"<>1'
-    assert sql("age > 18 & sex == 2") == '"age">18 AND "sex"=2'
-    assert sql("age < 18 | age > 65") == '"age"<18 OR "age">65'
+    assert value("age == 30", age=30) is True
+    assert value("age == 30", age=31) is False
+    assert value("sex != 1", sex=2) is True
+    assert value("age > 18 & sex == 2", age=20, sex=2) is True
+    assert value("age > 18 & sex == 2", age=20, sex=1) is False
+    assert value("age < 18 | age > 65", age=70) is True
+    assert value("age < 18 | age > 65", age=40) is False
 
 
 def test_missing_is_null():
     """A dot is Stata's missing, and `== .` is how it is tested."""
-    assert sql("income == .") == '"income" IS NULL'
-    assert sql("income != .") == '"income" IS NOT NULL'
+    assert sql("income == .") == '("income" IS NULL)'
     assert sql("missing(income)") == '("income" IS NULL)'
     assert sql("mi(income)") == '("income" IS NULL)'
+    assert value("income != .", income=None) is False
+    assert value("income != .", income=5) is True
 
 
 def test_the_helpers_people_actually_type():
-    assert sql("inlist(region, 1, 2, 3)") == '("region" IN (1, 2, 3))'
-    assert sql("inrange(age, 18, 65)") == '("age" BETWEEN 18 AND 65)'
-    assert sql("cond(age > 18, 1, 0)") == '(CASE WHEN "age">18 THEN 1 ELSE 0 END)'
+    assert value("inlist(region, 1, 2, 3)", region=2) is True
+    assert value("inlist(region, 1, 2, 3)", region=4) is False
+    assert value("inrange(age, 18, 65)", age=30) is True
+    assert value("inrange(age, 18, 65)", age=70) is False
+    assert value("cond(age > 18, 1, 0)", age=20) == 1
+    assert value("cond(age > 18, 1, 0)", age=10) == 0
 
 
 def test_string_literals_are_re_emitted_not_pasted():
     """A quote inside a literal must not be able to end it early."""
-    assert sql('name == "O\'Brien"') == '"name"=\'O\'\'Brien\''
+    built = sql('name == "O\'Brien"')
+    assert "'O''Brien'" in built
+    assert value('name == "O\'Brien"', name="O'Brien") is True
+    assert value('name == "O\'Brien"', name="Smith") is False
 
 
 def test_casts():

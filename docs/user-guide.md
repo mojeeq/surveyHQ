@@ -522,7 +522,59 @@ applied, exactly as a do-file behaves, and the log says what got through.
 A comparison is a number, as it is in Stata: `gen adult = age >= 18` gives 1
 and 0, not true and false, so `egen total = sum(adult)` and
 `collapse (sum) adult` are arithmetic and a chart of it is a chart of a count.
-A missing age stays missing rather than becoming a zero.
+
+#### Missing values follow Stata's rule, including where it bites
+
+Stata treats a missing number as **larger than any number**, and so does this.
+It is worth knowing because it is rarely what somebody means the first time:
+
+| Written | Where the value is missing | |
+|---|---|---|
+| `age > 65` | true | missing is larger than 65 |
+| `age >= 18` | true | so is every other threshold |
+| `age < 18` | false | |
+| `sex != 1` | true | |
+| `age == .` | true | how to ask the question |
+| `missing(age)` | true | the same question, spelt out |
+| `inlist(x, 1, 2)` | false | missing is not one of them |
+| `!inlist(x, 1, 2)` | **true** | which is what makes a cascade work |
+
+So after `gen adult = age >= 18`, somebody whose age was never recorded is an
+adult. Exclude them by saying so, which is the Stata habit too:
+
+    gen adult = age >= 18
+    replace adult = 0 if age == .
+
+This is deliberate. A figure produced here should be the figure the same
+do-file produces in Stata, so that somebody checking a published number against
+their own run finds it agrees. Following the rule only where it flatters us
+would mean the two quietly disagree, which is worse than a trap you know about.
+
+Arithmetic is untouched: `. + 1` is still missing, so a derived quantity built
+from a missing value stays missing rather than becoming a very large number
+that would be summed into somebody's total.
+
+Text is ordered the other way, as in Stata: a missing string is `""`, and `""`
+sorts below every other string.
+
+#### Recoding into categories
+
+The cascade that classifies people into a code set works as written, ending
+with the rule that catches everybody the earlier ones missed:
+
+    gen lfs = .
+    replace lfs = 1 if (main_activity == 1 | main_activity == 3) & wap == 1
+    replace lfs = 2 if inlist(reason_absent, 1, 2, 3, 4) & wap == 1
+    replace lfs = 3 if !inlist(lfs, 1, 2) & wap == 1
+    label define lfslbl 1 "Employed" 2 "Temporarily absent" 3 "Not employed"
+    label values lfs lfslbl
+    label variable lfs "Employment"
+
+Order is everything: each `replace` may overwrite what an earlier one set, and
+the last line reads the variable it is writing, which is why `!inlist` has to
+count a still-missing value as unclassified. Build the whole thing in the
+project script rather than the dataset command box if the data is re-imported,
+so it is replayed over the new export.
 
 #### Working across a project's datasets
 
