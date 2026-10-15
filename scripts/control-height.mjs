@@ -117,22 +117,38 @@ const CONTROL_CLASS = /\b(btn|btn-primary|btn-secondary|btn-danger|btn-ghost|btn
 const HEIGHT_UTILITY = /\b(min-h|h)-(\d+(\.\d+)?|px|full|\[[^\]]+\])/
 
 /**
- * The same file with its comments blanked out, character for character.
+ * One pass over a file, saying for every character whether it is code.
  *
- * This codebase explains itself at length, and an explanation that shows what
- * not to write - `className={tall ? 'btn h-9' : ''}` - is not a control with
- * a height on it. Read as one, it fails the build over a sentence.
+ * Two things in a .tsx file say `className=` without being a control:
  *
- * Spaces rather than deletion so that every offset after a comment still
- * lands where it did, which is what keeps the reported line numbers true.
- * Newlines are kept for the same reason.
+ *   // an explanation of what not to write:
+ *   //   className={tall ? 'btn h-9' : ''}
  *
- * Strings are tracked on the way through, so a `//` inside one is not the
- * start of a comment: `href="https://example.org"` would otherwise blank the
- * rest of the line, and with it any className after it on that line.
+ *   const examples = [{ line: "className={tall ? 'btn h-9' : ''}" }]
+ *
+ * This codebase does both. It explains itself at length, and it keeps code
+ * examples as strings in exactly that shape - ProjectScriptHelp is a list of
+ * `{ line, note }` objects. Read as attributes, either one fails the build
+ * over a sentence, which is the opposite of what a guard is for.
+ *
+ * Comments are blanked, character for character: spaces rather than
+ * deletion, so every offset after one still lands where it did, which keeps
+ * the reported line numbers true. Newlines are kept for the same reason.
+ *
+ * Strings are not blanked - the value of a real className is a string, and
+ * blanking it would hide the height this exists to find. They are marked
+ * instead, and a `className=` that *starts* inside one is not an attribute.
+ * The distinction is the whole trick: in `className="btn h-9"` the name is
+ * outside the quotes and the value inside, and in the example above the name
+ * is inside them.
+ *
+ * Tracking strings also keeps a `//` inside one from starting a comment:
+ * `href="https://example.org"` would otherwise blank the rest of its line,
+ * and with it any className after it.
  */
-function withoutComments(text) {
+function scan(text) {
   const out = [...text]
+  const quoted = new Uint8Array(text.length)
   let inside = ''
   let comment = ''
   for (let i = 0; i < text.length; i += 1) {
@@ -154,8 +170,13 @@ function withoutComments(text) {
       continue
     }
     if (inside) {
-      if (ch === '\\') i += 1
-      else if (ch === inside) inside = ''
+      quoted[i] = 1
+      if (ch === '\\') {
+        if (i + 1 < text.length) quoted[i + 1] = 1
+        i += 1
+      } else if (ch === inside) {
+        inside = ''
+      }
       continue
     }
     if (ch === '"' || ch === "'" || ch === '`') inside = ch
@@ -167,7 +188,7 @@ function withoutComments(text) {
       out[i] = ' '
     }
   }
-  return out.join('')
+  return { code: out.join(''), quoted }
 }
 
 /**
@@ -244,8 +265,11 @@ const walk = (dir) => {
 walk(SRC)
 
 for (const path of components) {
-  const text = withoutComments(readFileSync(path, 'utf8'))
+  const { code: text, quoted } = scan(readFileSync(path, 'utf8'))
   for (const match of text.matchAll(/className=/g)) {
+    // Inside a string literal, so it is an example of an attribute rather
+    // than one. A real className has its name outside the quotes.
+    if (quoted[match.index]) continue
     const attribute = classNameValue(text, match.index + 'className='.length)
     if (!CONTROL_CLASS.test(attribute) || !HEIGHT_UTILITY.test(attribute)) continue
     if (grows(text, match.index)) continue
