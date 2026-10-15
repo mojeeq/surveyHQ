@@ -196,6 +196,17 @@ function classesIn(node) {
     ) {
       parts.push(one.name.text)
     }
+    // A class name held in a variable: `const btn = 'btn'` passed to a
+    // helper as `cx(btn, 'h-9')`. Every identifier in a className
+    // expression is a candidate, because producing class names is the only
+    // thing the expression is for - the same reason an object key is one.
+    // Resolving them properly would mean type-checking the project from a
+    // lint script. The cost is a possible false alarm where a variable
+    // shares a name with a control class, which is a clear message and a
+    // rename, against a height that otherwise passes in silence.
+    if (ts.isIdentifier(one)) {
+      parts.push(one.text)
+    }
     one.forEachChild(walk)
   }
   walk(node)
@@ -242,7 +253,10 @@ for (const path of components) {
   for (const { text, line, opening } of classNames(source)) {
     if (!CONTROL_CLASS.test(text) || !HEIGHT_UTILITY.test(text)) continue
     if (grows(opening)) continue
-    const shown = text.replace(/\s+/g, ' ').slice(0, 76)
+    // The two that matched, rather than everything collected: an expression
+    // contributes its helper's name and its conditions too, and a report
+    // reading "cx btn e h-9 tall" buries the finding in them.
+    const shown = `${CONTROL_CLASS.exec(text)[0]} ${HEIGHT_UTILITY.exec(text)[0]}`
     problems.push(`${path.slice(SRC.length + 1)}:${line}  ${shown}`)
   }
 }
