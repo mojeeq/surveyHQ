@@ -169,10 +169,22 @@ export function controlKey(control: { dataset_id: string; variable: string }): s
   return `${control.dataset_id}::${control.variable}`
 }
 
-/** Variables worth offering as a filter: few enough values to pick from. */
+/**
+ * Variables worth offering as a filter: few enough values to pick from.
+ *
+ * The cardinality is the question, and asking for the importer's judgement
+ * instead was a proxy that stopped holding. A code with no names for its codes
+ * - a 1/2/3 region, a 1-to-5 agreement scale - reads as a quantity now rather
+ * than as a category, and requiring `categorical` here took every one of them
+ * out of the add-filter list on reimport, though three values fit a dropdown
+ * as well as they ever did.
+ *
+ * Dates stay out. Two hundred of them would make a list nobody can use, and a
+ * date wants a range rather than a set of ticks.
+ */
 export function filterableVariables(dataset: Dataset | undefined) {
   return (dataset?.variables ?? []).filter(
-    (v) => !v.is_hidden && v.var_type === 'categorical' && v.n_unique <= 200,
+    (v) => !v.is_hidden && v.var_type !== 'datetime' && v.n_unique <= 200,
   )
 }
 

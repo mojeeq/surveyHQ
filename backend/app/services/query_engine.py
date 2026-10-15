@@ -207,8 +207,15 @@ class SQLBuilder:
             if agg not in (Aggregation.count, Aggregation.share, Aggregation.sum, Aggregation.mean):
                 raise QueryError(f"Survey weights are not supported for {agg.value}")
             weight_info = self.ctx.require(measure.weight)
-            if not weight_info.is_numeric:
-                raise QueryError(f"Weight '{measure.weight}' must be a numeric variable")
+            # Stored as a number, rather than judged to be a quantity. A weight
+            # column is multiplied, so what it is stored as is the whole
+            # requirement - and the picker offers what can be measured, which
+            # asks the same question. Asking the analytical one here meant the
+            # list offered a column the query then refused.
+            if not weight_info.holds_numbers:
+                raise QueryError(
+                    f"Weight '{measure.weight}' must be stored as a number"
+                )
             weight_col = quote_ident(weight_info.name)
 
         if agg in (Aggregation.count, Aggregation.share):
@@ -224,8 +231,14 @@ class SQLBuilder:
         if agg == Aggregation.count_distinct:
             return f"COUNT(DISTINCT {col})"
 
-        if not info.is_numeric:
-            # Allow aggregating numeric-looking text columns rather than failing
+        if not info.holds_numbers:
+            # A column of numbers written as text, so that a mean of it is
+            # possible rather than an error. Only for text: a BIGINT or a
+            # DECIMAL carrying value labels is read as a code set and is not a
+            # quantity, but it is still stored as a number, and sending it
+            # through a double would round it. A sum of two BIGINTs either side
+            # of 2**53 comes back two short, and a sum of three DECIMAL(18,3)
+            # comes back 0.6000000000000001.
             col = f"try_cast({col} AS DOUBLE)"
 
         if agg == Aggregation.sum:
@@ -1287,7 +1300,10 @@ def execute_summary(
     for name in variables:
         info = ctx.require(name)
         col = quote_ident(info.name)
-        cast = col if info.is_numeric else f"try_cast({col} AS DOUBLE)"
+        # Stored as a number, not judged to be a quantity: the same reason the
+        # cast in measure_expr asks that question. A labelled BIGINT is a code
+        # set and still must not be summed through a double.
+        cast = col if info.holds_numbers else f"try_cast({col} AS DOUBLE)"
         sql = (
             f"SELECT COUNT({cast}), COUNT(*) - COUNT({cast}), AVG({cast}), "
             f"STDDEV_SAMP({cast}), MIN({cast}), QUANTILE_CONT({cast}, 0.25), "

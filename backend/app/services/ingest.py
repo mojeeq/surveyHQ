@@ -762,12 +762,19 @@ def classify(
         return "text"
     if is_numeric:
         if has_value_labels:
+            # Names for the codes is the one piece of real evidence that this
+            # is a code set rather than a quantity, and it comes from whoever
+            # designed the questionnaire rather than from a guess about shape.
             return "categorical"
-        # Small whole-number code sets behave like categories in practice.
-        # Judged on the values rather than the storage type: a column of 1/2
-        # codes with a missing value in it is float64 in pandas and DOUBLE in
-        # Parquet, and is still a code set.
-        if distinct <= 20 and non_null > 0 and is_integral:
+        # Without labels, only a two-value column is confidently a code: a tick
+        # or a yes-or-no, where the column's own name is the whole meaning.
+        #
+        # This used to catch anything with twenty or fewer whole numbers in it,
+        # which is household size, rooms, children, years of schooling, and age
+        # in a small sample. All of them came out as code sets, with no names
+        # for their codes, and the measure picker offered none of them: "No
+        # variable matches" on a dataset made of numbers.
+        if distinct <= 2 and non_null > 0 and is_integral:
             return "categorical"
         return "numeric"
     if distinct <= CATEGORICAL_MAX_UNIQUE and distinct / max(non_null, 1) < (

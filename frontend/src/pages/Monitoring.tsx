@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import ReactECharts from 'echarts-for-react'
+import { measurable } from '@/lib/measures'
 import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { useDialog } from '@/hooks/useDialog'
@@ -563,7 +564,9 @@ function IndicatorModal({
   })
 
   const variables = dataset.data?.variables ?? []
-  const numeric = variables.filter((v) => v.var_type === 'numeric')
+  // Anything stored as a number, not only what the importer judged to be
+  // a quantity: see lib/measures.
+  const numeric = measurable(variables)
   const groupable = variables.filter((v) => v.var_type === 'categorical' || v.n_unique <= 100)
   const measure = MEASURES.find((m) => m.value === kind)!
   const choices = measure.numericOnly ? numeric : variables

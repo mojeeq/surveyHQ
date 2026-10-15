@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { measurable } from "@/lib/measures";
 import { BREAKDOWN_ORDERS } from '@/lib/breakdown-order';
 
 import { useState } from "react";
@@ -302,9 +303,8 @@ export function AddWidgetModal({
   });
 
   const chosenIndicator = indicators.data?.find((i) => i.id === indicatorId);
-  const numericVariables = (chosenDataset.data?.variables ?? []).filter(
-    (v) => v.var_type === "numeric",
-  );
+  // Anything stored as a number: see lib/measures.
+  const numericVariables = measurable(chosenDataset.data?.variables ?? []);
 
   const canAdd =
     (kind === "chart" && chartId) ||
@@ -865,9 +865,7 @@ export function EditWidgetModal({
     onError: (error: Error) => toast.push(error.message, "error"),
   });
 
-  const numericVariables = (mapDataset.data?.variables ?? []).filter(
-    (v) => v.var_type === "numeric",
-  );
+  const numericVariables = measurable(mapDataset.data?.variables ?? []);
 
   return (
     <Modal

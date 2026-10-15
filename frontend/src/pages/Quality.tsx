@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { useSearchParams } from 'react-router-dom'
+import { measurable } from '@/lib/measures'
 import { api, downloadFile } from '@/lib/api'
 import ProjectFilter from '@/components/ProjectFilter'
 import { useAuth } from '@/hooks/useAuth'
@@ -554,7 +555,9 @@ function CheckModal({
     queryFn: () => api.get<Dataset>(`/datasets/${datasetId}`),
   })
   const variables = dataset.data?.variables ?? []
-  const numeric = variables.filter((v) => v.var_type === 'numeric')
+  // A range check needs a number, not a variable somebody called a
+  // quantity: see lib/measures.
+  const numeric = measurable(variables)
 
   const create = useMutation({
     mutationFn: () => {

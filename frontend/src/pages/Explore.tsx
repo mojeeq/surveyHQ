@@ -4,6 +4,7 @@ import { useEffect,useMemo,useState } from 'react'
 
 import { useSearchParams } from 'react-router-dom'
 
+import { measurable } from '@/lib/measures'
 import { api } from '@/lib/api'
 
 import { useAuth } from '@/hooks/useAuth'
@@ -103,7 +104,11 @@ export default function Explore() {
   // a thing people legitimately want to tabulate. The count travels with the
   // name instead, and the row limit still decides how much comes back.
   const groupable = useMemo(() => variables.filter((v) => !v.is_hidden), [variables])
-  const numeric = useMemo(() => variables.filter((v) => v.var_type === 'numeric'), [variables])
+  // Anything stored as a number, not only what the importer judged to be a
+  // quantity: it calls any whole-number column with few distinct values a code
+  // set, which made household size, rooms and years of schooling unmeasurable.
+  // See lib/measures.
+  const numeric = useMemo(() => measurable(variables), [variables])
 
   if (datasets.isLoading) return <Loading />
   if (!datasets.data?.items.length) {

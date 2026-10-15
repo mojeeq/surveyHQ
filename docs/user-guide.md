@@ -454,6 +454,34 @@ and says so rather than writing a file Excel would refuse to open.
 
 Downloading is a manager's action, and it is recorded in the audit log.
 
+### Which variables can be measured
+
+A mean, a sum or a median is offered for **anything stored as a number**,
+whatever the importer decided the variable was for.
+
+That decision is a guess, and it used to decide more than it should. Any whole
+number column with twenty or fewer distinct values was filed as a code set, so
+household size, rooms, children ever born and years of schooling were all
+unmeasurable, and the measure picker answered "No variable matches" on a
+dataset made of numbers.
+
+The guess now only decides the **order** things are offered in, and it leans on
+the one piece of real evidence available: whether somebody named the codes.
+
+| The variable | Read as | Because |
+|---|---|---|
+| Has value labels, e.g. 1 = Male, 2 = Female | A code set | The questionnaire says what the numbers mean |
+| Two values and no labels, e.g. 0 and 1 | A code set | A tick, where the column's name is the whole meaning |
+| Any other number | A quantity | Nothing says otherwise |
+
+Grouping has always accepted every variable, so nothing is lost by being
+generous here. Averaging a region code is still nobody's idea of an answer, but
+that is your call to make rather than the importer's to prevent.
+
+Variables keep whatever they were filed as when they were imported. To have an
+older dataset re-read under these rules, upload the export again: it fills the
+same dataset and the charts on it keep working.
+
 ### A password-protected export
 
 Statistics offices often send exports locked, because the files hold interviews
