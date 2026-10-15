@@ -117,6 +117,101 @@ const CONTROL_CLASS = /\b(btn|btn-primary|btn-secondary|btn-danger|btn-ghost|btn
 const HEIGHT_UTILITY = /\b(min-h|h)-(\d+(\.\d+)?|px|full|\[[^\]]+\])/
 
 /**
+ * The same file with its comments blanked out, character for character.
+ *
+ * This codebase explains itself at length, and an explanation that shows what
+ * not to write - `className={tall ? 'btn h-9' : ''}` - is not a control with
+ * a height on it. Read as one, it fails the build over a sentence.
+ *
+ * Spaces rather than deletion so that every offset after a comment still
+ * lands where it did, which is what keeps the reported line numbers true.
+ * Newlines are kept for the same reason.
+ *
+ * Strings are tracked on the way through, so a `//` inside one is not the
+ * start of a comment: `href="https://example.org"` would otherwise blank the
+ * rest of the line, and with it any className after it on that line.
+ */
+function withoutComments(text) {
+  const out = [...text]
+  let inside = ''
+  let comment = ''
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i]
+    const next = text[i + 1]
+    if (comment === 'line') {
+      if (ch === '\n') comment = ''
+      else out[i] = ' '
+      continue
+    }
+    if (comment === 'block') {
+      const ending = ch === '*' && next === '/'
+      if (ch !== '\n') out[i] = ' '
+      if (ending) {
+        out[i + 1] = ' '
+        i += 1
+        comment = ''
+      }
+      continue
+    }
+    if (inside) {
+      if (ch === '\\') i += 1
+      else if (ch === inside) inside = ''
+      continue
+    }
+    if (ch === '"' || ch === "'" || ch === '`') inside = ch
+    else if (ch === '/' && next === '/') {
+      comment = 'line'
+      out[i] = ' '
+    } else if (ch === '/' && next === '*') {
+      comment = 'block'
+      out[i] = ' '
+    }
+  }
+  return out.join('')
+}
+
+/**
+ * The whole value of a className attribute, whichever of the three shapes it
+ * takes: a plain string, a braced expression, or a template literal.
+ *
+ * Reading only as far as the first quote was not enough. `className={editing
+ * ? 'btn-primary' : 'btn-secondary'}` is written that way in DashboardView
+ * and all over the platform, and a height added to either branch of one would
+ * have gone straight past a guard that insisted on a quote right after the
+ * brace. The braces are balanced here instead, tracking the strings on the
+ * way so that a brace inside one does not end the attribute early.
+ */
+function classNameValue(text, from) {
+  let at = from
+  while (at < text.length && /\s/.test(text[at])) at += 1
+  const quote = text[at]
+  if (quote === '"' || quote === "'" || quote === '`') {
+    const end = text.indexOf(quote, at + 1)
+    return end < 0 ? '' : text.slice(at, end + 1)
+  }
+  if (quote !== '{') return ''
+
+  let depth = 0
+  let inside = ''
+  for (let i = at; i < text.length; i += 1) {
+    const ch = text[i]
+    if (inside) {
+      // A backslash escapes the next character, quote included.
+      if (ch === '\\') i += 1
+      else if (ch === inside) inside = ''
+      continue
+    }
+    if (ch === '"' || ch === "'" || ch === '`') inside = ch
+    else if (ch === '{') depth += 1
+    else if (ch === '}') {
+      depth -= 1
+      if (depth === 0) return text.slice(at, i + 1)
+    }
+  }
+  return ''
+}
+
+/**
  * The two controls that are meant to be taller than a row: a box typed into
  * over several lines, and a list box showing its options at once. Both are
  * several rows by definition, so a row's height is the wrong thing to hold
@@ -149,13 +244,14 @@ const walk = (dir) => {
 walk(SRC)
 
 for (const path of components) {
-  const text = readFileSync(path, 'utf8')
-  for (const match of text.matchAll(/className=\{?[`"'][^`"']*[`"']/g)) {
-    const attribute = match[0]
+  const text = withoutComments(readFileSync(path, 'utf8'))
+  for (const match of text.matchAll(/className=/g)) {
+    const attribute = classNameValue(text, match.index + 'className='.length)
     if (!CONTROL_CLASS.test(attribute) || !HEIGHT_UTILITY.test(attribute)) continue
     if (grows(text, match.index)) continue
     const line = text.slice(0, match.index).split('\n').length
-    problems.push(`${path.slice(SRC.length + 1)}:${line}  ${attribute.slice(0, 72)}`)
+    const shown = attribute.replace(/\s+/g, ' ').slice(0, 76)
+    problems.push(`${path.slice(SRC.length + 1)}:${line}  ${shown}`)
   }
 }
 
