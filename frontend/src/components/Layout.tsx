@@ -363,8 +363,14 @@ export default function Layout() {
           {expanded ? (
             <>
               <Brand />
+              {/* Sized from the shared control height rather than from its own
+                  padding, which came to 30 and made it the one control on
+                  every page that was not 32. Not `.icon-button`: that class
+                  carries the light surface's hover colours, and this stands on
+                  the dark rail, which paints its own. */}
               <button
-                className="ml-auto rounded-lg p-1.5 text-[var(--sb-dim)] transition-colors hover:bg-[var(--sb-hover)] hover:text-[var(--sb-ink)]"
+                className="ml-auto grid shrink-0 place-items-center rounded-lg text-[var(--sb-dim)] transition-colors hover:bg-[var(--sb-hover)] hover:text-[var(--sb-ink)]"
+                style={{ height: 'var(--control-height)', width: 'var(--control-height)' }}
                 onClick={() => setSidebarPinned(!sidebarPinned)}
                 aria-pressed={sidebarPinned}
                 aria-label={sidebarPinned ? 'Unpin the side pane' : 'Pin the side pane open'}

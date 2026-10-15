@@ -43,8 +43,11 @@ h4 {
   @apply mb-1 block text-[13px] font-semibold text-slate-700 dark:text-slate-300;
 }
 
+/* Appearance only, as with .btn above. This set min-h-10 and a 14px face, so
+   every field stood eight pixels taller than the button beside it and spoke a
+   size larger: the single most visible reason the proportions looked wrong. */
 .input {
-  @apply min-h-10 rounded-lg border-slate-300 bg-white px-3 py-2 text-[14px] text-slate-800
+  @apply rounded-lg border-slate-300 bg-white px-3 text-[13px] text-slate-800
          placeholder:text-slate-400 hover:border-slate-400 focus:border-brand-500 focus:ring-4
          focus:ring-brand-500/10 disabled:bg-slate-100 disabled:text-slate-500
          dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500
@@ -74,16 +77,18 @@ h4 {
  */
 .input.input-sm {
   @apply px-2 text-xs;
-  min-height: 1.75rem;
-  height: 1.75rem;
+  /* The same declared height as .btn-xs, which is the whole point of there
+     being a compact step: the two stand in the same filter bar. */
+  min-height: var(--control-height-sm);
+  height: var(--control-height-sm);
   padding-top: 0;
   padding-bottom: 0;
 }
 
 .input.input-xs {
   @apply px-2 text-xs;
-  min-height: 1.5rem;
-  height: 1.5rem;
+  min-height: var(--control-height-xs);
+  height: var(--control-height-xs);
   padding-top: 0;
   padding-bottom: 0;
 }
@@ -94,8 +99,17 @@ textarea.input.input-xs {
   height: auto;
 }
 
+/* Appearance only, deliberately.
+   
+   How tall a control is, how much padding it carries and how big its lettering
+   is are declared once in index.css against --control-height. This sheet used
+   to set those too - min-h-9 here, h-9 on .icon-button - and because it loads
+   second it quietly won, which is how the platform came to show three button
+   heights in a single header: 38 from one sheet, 36 from this one, 32 from a
+   modifier neither of them agreed about. Two stylesheets with an opinion about
+   the same geometry is not a style, it is a race. */
 .btn {
-  @apply min-h-9 rounded-lg px-3.5 py-2 text-[13px] font-semibold transition-all duration-150
+  @apply rounded-lg font-semibold transition-all duration-150
          focus:outline-none focus:ring-4 focus:ring-offset-0;
   background-image: none !important;
   text-shadow: none !important;
@@ -133,8 +147,10 @@ textarea.input.input-xs {
   box-shadow: none !important;
 }
 
+/* Geometry lives in index.css against --control-height; this sheet setting it
+   as well is what made a .btn-sm shorter than the .btn next to it. */
 .btn-sm {
-  @apply min-h-8 px-2.5 py-1.5 text-xs;
+  @apply px-2.5;
 }
 
 /*
@@ -152,11 +168,18 @@ textarea.input.input-xs {
  * it wins on order the way `.btn-sm` already does.
  */
 .btn-xs {
-  @apply min-h-7 px-2 py-0 text-xs;
+  @apply px-2 py-0 text-xs;
+  min-height: var(--control-height-sm);
+  height: var(--control-height-sm);
 }
 
+/* The same height as every other control: this lived in another stylesheet as
+   h-9, which is 36px, so the icons in the header stood taller than the buttons
+   beside them and shorter than the one above them. */
 .icon-button {
-  @apply inline-grid h-9 w-9 place-items-center rounded-lg border border-transparent text-slate-500
+  height: var(--control-height);
+  width: var(--control-height);
+  @apply inline-grid place-items-center rounded-lg border border-transparent text-slate-500
          transition-colors hover:bg-slate-100 hover:text-slate-950 focus:outline-none focus:ring-4
          focus:ring-brand-500/10 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white;
 }
