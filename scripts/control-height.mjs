@@ -22,12 +22,14 @@
  * can be set. The sign-in button carried `h-9` and stood 36 tall above two
  * 32-tall fields, on the first screen anyone sees, and no amount of declaring
  * in CSS would have reached it: a `min-height` is a floor, and a utility on
- * the element clears it.
+ * the element clears it. That half is parsed rather than scanned, for
+ * reasons written out above it.
  *
  * Run from `prelint`, so CI catches a new one. Not a vitest guard: vitest
  * returns an empty module for a CSS import, `?raw` included.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -116,121 +118,118 @@ for (const [selector, pattern] of [
 const CONTROL_CLASS = /\b(btn|btn-primary|btn-secondary|btn-danger|btn-ghost|btn-sm|btn-xs|input|icon-button)\b/
 const HEIGHT_UTILITY = /\b(min-h|h)-(\d+(\.\d+)?|px|full|\[[^\]]+\])/
 
-/**
- * The same file with its comments blanked out, character for character.
+/*
+ * Parsed rather than scanned, after three tries at reading .tsx as text.
  *
- * This codebase explains itself at length, and an explanation that shows what
- * not to write - `className={tall ? 'btn h-9' : ''}` - is not a control with
- * a height on it. Read as one, it fails the build over a sentence.
+ * Each try was wrong in a way the last one taught: a `//` inside a url
+ * blanked the rest of its line; an explanation of what *not* to write failed
+ * the build over a sentence; a code example held as a string did the same,
+ * which this codebase keeps by the dozen in ProjectScriptHelp. Marking
+ * strings fixed that one and bought the worst kind of mistake in exchange -
+ * `Cramér's V`, real text in CrosstabTable, opens a string that never
+ * closes, and a genuine `className="btn h-9"` after it was waved through.
+ * A guard that misses is worse than no guard, because it is trusted.
  *
- * Spaces rather than deletion so that every offset after a comment still
- * lands where it did, which is what keeps the reported line numbers true.
- * Newlines are kept for the same reason.
- *
- * Strings are tracked on the way through, so a `//` inside one is not the
- * start of a comment: `href="https://example.org"` would otherwise blank the
- * rest of the line, and with it any className after it on that line.
+ * All of it is the same mistake: a quote means one thing in JavaScript, a
+ * second in JSX text, and a third inside a template literal, and no amount of
+ * care about quotes tells them apart. TypeScript is already a dependency here
+ * and knows precisely, so it reads the file and this asks it for the
+ * className attributes. Nothing else in a file can be mistaken for one.
  */
-function withoutComments(text) {
-  const out = [...text]
-  let inside = ''
-  let comment = ''
-  for (let i = 0; i < text.length; i += 1) {
-    const ch = text[i]
-    const next = text[i + 1]
-    if (comment === 'line') {
-      if (ch === '\n') comment = ''
-      else out[i] = ' '
-      continue
-    }
-    if (comment === 'block') {
-      const ending = ch === '*' && next === '/'
-      if (ch !== '\n') out[i] = ' '
-      if (ending) {
-        out[i + 1] = ' '
-        i += 1
-        comment = ''
-      }
-      continue
-    }
-    if (inside) {
-      if (ch === '\\') i += 1
-      else if (ch === inside) inside = ''
-      continue
-    }
-    if (ch === '"' || ch === "'" || ch === '`') inside = ch
-    else if (ch === '/' && next === '/') {
-      comment = 'line'
-      out[i] = ' '
-    } else if (ch === '/' && next === '*') {
-      comment = 'block'
-      out[i] = ' '
-    }
-  }
-  return out.join('')
+const require = createRequire(join(SRC, '..', 'package.json'))
+const ts = require('typescript')
+
+/**
+ * The two controls meant to be taller than a row: a box typed into over
+ * several lines, and a list box showing its options at once. Both are several
+ * rows by definition, so a row's height is the wrong thing to hold them to.
+ */
+function grows(opening) {
+  // The attribute's grandparent is the opening tag itself - its parent is the
+  // attribute list - so this is handed the tag, not the element around it.
+  if (!opening || !opening.tagName) return false
+  const tag = opening.tagName.getText()
+  if (tag === 'textarea') return true
+  return (
+    tag === 'select' &&
+    opening.attributes.properties.some(
+      (one) => ts.isJsxAttribute(one) && one.name.getText() === 'multiple',
+    )
+  )
 }
 
 /**
- * The whole value of a className attribute, whichever of the three shapes it
- * takes: a plain string, a braced expression, or a template literal.
+ * The class names an attribute can put on an element.
  *
- * Reading only as far as the first quote was not enough. `className={editing
- * ? 'btn-primary' : 'btn-secondary'}` is written that way in DashboardView
- * and all over the platform, and a height added to either branch of one would
- * have gone straight past a guard that insisted on a quote right after the
- * brace. The braces are balanced here instead, tracking the strings on the
- * way so that a brace inside one does not end the attribute early.
+ * The literals inside it rather than its source text. A class name can only
+ * come from a string, so this is exact where reading the source is not:
+ * `className={/* Never add btn h-9 here. *\/ classes}` has that sentence in
+ * its text and neither class on the element. Comments are trivia and never a
+ * literal, so there is nothing to strip - they simply are not collected.
+ *
+ * Every shape the platform writes reduces to the same list: a plain string, a
+ * conditional with one on each side, a template literal with interpolations,
+ * a helper call with the class and the height in separate arguments.
  */
-function classNameValue(text, from) {
-  let at = from
-  while (at < text.length && /\s/.test(text[at])) at += 1
-  const quote = text[at]
-  if (quote === '"' || quote === "'" || quote === '`') {
-    const end = text.indexOf(quote, at + 1)
-    return end < 0 ? '' : text.slice(at, end + 1)
-  }
-  if (quote !== '{') return ''
-
-  let depth = 0
-  let inside = ''
-  for (let i = at; i < text.length; i += 1) {
-    const ch = text[i]
-    if (inside) {
-      // A backslash escapes the next character, quote included.
-      if (ch === '\\') i += 1
-      else if (ch === inside) inside = ''
-      continue
+function classesIn(node) {
+  const parts = []
+  const walk = (one) => {
+    if (
+      ts.isStringLiteral(one) ||
+      ts.isNoSubstitutionTemplateLiteral(one) ||
+      one.kind === ts.SyntaxKind.TemplateHead ||
+      one.kind === ts.SyntaxKind.TemplateMiddle ||
+      one.kind === ts.SyntaxKind.TemplateTail
+    ) {
+      parts.push(one.text)
     }
-    if (ch === '"' || ch === "'" || ch === '`') inside = ch
-    else if (ch === '{') depth += 1
-    else if (ch === '}') {
-      depth -= 1
-      if (depth === 0) return text.slice(at, i + 1)
+    // The key of a class map, which is a class name written as a name rather
+    // than as a string: `cx({ btn: enabled, 'h-9': tall })`. Nothing here
+    // uses a helper like that yet, and nothing stops the next person adding
+    // one - and this is the shape where missing it would be silent, since
+    // the quoted half of the pair is collected either way and the match
+    // needs both.
+    if (
+      (ts.isPropertyAssignment(one) || ts.isShorthandPropertyAssignment(one)) &&
+      one.name &&
+      (ts.isIdentifier(one.name) || ts.isStringLiteral(one.name))
+    ) {
+      parts.push(one.name.text)
     }
+    // A class name held in a variable: `const btn = 'btn'` passed to a
+    // helper as `cx(btn, 'h-9')`. Every identifier in a className
+    // expression is a candidate, because producing class names is the only
+    // thing the expression is for - the same reason an object key is one.
+    // Resolving them properly would mean type-checking the project from a
+    // lint script. The cost is a possible false alarm where a variable
+    // shares a name with a control class, which is a clear message and a
+    // rename, against a height that otherwise passes in silence.
+    if (ts.isIdentifier(one)) {
+      parts.push(one.text)
+    }
+    one.forEachChild(walk)
   }
-  return ''
+  walk(node)
+  // Deduped: a quoted key is collected twice, once as a literal and once as
+  // a name, which changes no match and reads badly in the report.
+  return [...new Set(parts)].join(' ')
 }
 
-/**
- * The two controls that are meant to be taller than a row: a box typed into
- * over several lines, and a list box showing its options at once. Both are
- * several rows by definition, so a row's height is the wrong thing to hold
- * them to.
- */
-
-/** The tag an attribute belongs to, found by walking back to its opening. */
-function openingTag(text, at) {
-  const start = text.lastIndexOf('<', at)
-  if (start < 0) return { name: '', attributes: '' }
-  const name = /^<([a-zA-Z][\w.]*)/.exec(text.slice(start, start + 24))?.[1] ?? ''
-  // Far enough to carry the rest of one element's attributes and no further.
-  return { name, attributes: text.slice(start, start + 400) }
-}
-
-const grows = (text, at) => {
-  const { name, attributes } = openingTag(text, at)
-  if (name === 'textarea') return true
-  return name === 'select' && /\bmultiple\b/.test(attributes)
+/** Every className in one file, with the line it is on and its element. */
+function classNames(source) {
+  const found = []
+  const walk = (node) => {
+    if (ts.isJsxAttribute(node) && node.name.getText() === 'className') {
+      found.push({
+        text: node.initializer ? classesIn(node.initializer) : '',
+        line: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
+        opening: node.parent.parent,
+      })
+    }
+    node.forEachChild(walk)
+  }
+  walk(source)
+  return found
 }
 
 const components = []
@@ -244,13 +243,20 @@ const walk = (dir) => {
 walk(SRC)
 
 for (const path of components) {
-  const text = withoutComments(readFileSync(path, 'utf8'))
-  for (const match of text.matchAll(/className=/g)) {
-    const attribute = classNameValue(text, match.index + 'className='.length)
-    if (!CONTROL_CLASS.test(attribute) || !HEIGHT_UTILITY.test(attribute)) continue
-    if (grows(text, match.index)) continue
-    const line = text.slice(0, match.index).split('\n').length
-    const shown = attribute.replace(/\s+/g, ' ').slice(0, 76)
+  const source = ts.createSourceFile(
+    path,
+    readFileSync(path, 'utf8'),
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  )
+  for (const { text, line, opening } of classNames(source)) {
+    if (!CONTROL_CLASS.test(text) || !HEIGHT_UTILITY.test(text)) continue
+    if (grows(opening)) continue
+    // The two that matched, rather than everything collected: an expression
+    // contributes its helper's name and its conditions too, and a report
+    // reading "cx btn e h-9 tall" buries the finding in them.
+    const shown = `${CONTROL_CLASS.exec(text)[0]} ${HEIGHT_UTILITY.exec(text)[0]}`
     problems.push(`${path.slice(SRC.length + 1)}:${line}  ${shown}`)
   }
 }
