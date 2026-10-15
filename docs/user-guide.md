@@ -454,6 +454,31 @@ and says so rather than writing a file Excel would refuse to open.
 
 Downloading is a manager's action, and it is recorded in the audit log.
 
+### Making a copy of a dashboard
+
+**Duplicate** on a board makes a second board like it, with a link of its own,
+so the copy can be rearranged without touching the one people are already
+looking at. Useful for trying a layout, for building next quarter's board from
+this quarter's, or for giving a region its own version of a national board.
+
+Everything that makes the board look like itself comes across: its pages, its
+groups, its appearance and theme, its filters and drilldown, and every widget
+where it was.
+
+Two things stay behind, on purpose. The copy is **not** published under the
+original's public link: that link has been handed to people, and the first
+change to the copy would silently change what they see, so the copy starts
+private and gets its own link when you share it. The snapshot schedule stays
+behind too, since two boards writing the same series of copies is nobody's
+intention.
+
+The charts themselves are shared rather than copied. A chart belongs to the
+library, not to one board, so both boards draw the same numbers. Moving,
+resizing or retitling a widget on the copy touches only the copy; editing the
+chart behind it changes it on both, which is what "the same chart" means
+everywhere else here. Use **Keep a copy** instead if what you want is the board
+frozen as it stands today rather than a second board to work on.
+
 ### Deleting a dataset, and getting it back
 
 Deleting one erases its data and frees the disk. What happens to the dataset
