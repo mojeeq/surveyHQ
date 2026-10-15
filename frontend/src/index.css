@@ -3,6 +3,19 @@
 @tailwind utilities;
 
 @layer base {
+  :root {
+    /* The height of anything you can click or type into. Thirty-two is what
+       most of the platform already was, and it is what the fields compute to,
+       so this is less a new decision than the one already implied. */
+    --control-height: 32px;
+    /* The compact step, for a filter bar or a toolbar inside a widget. Also
+       declared, because the reason there was a compact step at all is that a
+       button and the field beside it had worked out to heights four pixels
+       apart, and the dashboard shifted down whenever a Clear button appeared. */
+    --control-height-sm: 28px;
+    /* And the inline step, for a field inside a table row. */
+    --control-height-xs: 24px;
+  }
   html {
     -webkit-font-smoothing: antialiased;
   }
@@ -320,8 +333,16 @@
   .label {
     @apply block text-xs font-medium text-ink-600 mb-1 dark:text-dark-600;
   }
+  /* No vertical padding, deliberately: the height is the declared one above
+     and the browser centres a field's own text inside it. With py-1.5 here the
+     padding and the line box added up to 34 and the min-height never came into
+     it, so every search box stood two pixels taller than the button beside it
+     - which is the whole complaint, just small enough to be felt rather than
+     seen. A box that is typed into rather than picked from keeps its padding
+     below. */
   .input {
-    @apply w-full rounded-control border border-ink-300 bg-white px-3 py-1.5 text-[13px] text-ink-700
+    min-height: var(--control-height);
+    @apply w-full rounded-control border border-ink-300 bg-white px-3 text-[13px] text-ink-700
            placeholder:text-ink-400 focus:border-brand-500 focus:outline-none
            focus:ring-2 focus:ring-brand-500/20 disabled:bg-ink-50 disabled:text-ink-500
            dark:bg-dark-50 dark:border-dark-300 dark:text-dark-700 dark:placeholder:text-dark-400
@@ -333,10 +354,30 @@
   .dark .input {
     box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
   }
+  /* The one control that is meant to grow. It takes its padding back, since
+     text starting hard against the top edge of a multi-line box reads as a
+     rendering fault, and it is free to be taller than a row. */
+  textarea.input {
+    @apply py-1.5;
+    height: auto;
+  }
+  /* One control height, declared rather than computed.
+     
+     Buttons, icon buttons and the fields beside them sit in the same rows, and
+     their heights used to be whatever a line box happened to work out to: a
+     .btn came to 38px, an .icon-button to 36 because it was written in another
+     stylesheet as h-9, and a .btn-sm to 32. Three heights in one header, none
+     of them chosen, and no way to line a button up with the field next to it.
+     
+     So the height is set here, once, and the text inside a control no longer
+     decides how tall it is. A denser button is narrower and smaller in its
+     lettering; it is not shorter, because a row of controls that do not share
+     a baseline is the thing that reads as unfinished. */
   .btn {
     @apply inline-flex items-center justify-center gap-2 rounded-control px-3.5 py-1.5 text-[13px]
-           font-normal transition-colors disabled:opacity-50 disabled:cursor-not-allowed
+           font-normal leading-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed
            focus:outline-none focus:ring-2 focus:ring-offset-1;
+    min-height: var(--control-height);
   }
   /* Aero's gloss, in one place.
      
@@ -408,8 +449,14 @@
     @apply btn text-ink-600 hover:bg-ink-50 hover:text-brand-600 focus:ring-ink-300
            dark:text-dark-600 dark:hover:bg-dark-200 dark:hover:text-brand-400 dark:focus:ring-dark-400;
   }
+  /* Denser, not shorter and not quieter: the same height and the same lettering
+     as any other button, with tighter sides, for a toolbar inside a card where
+     a row of full-width buttons would shout. A label a pixel smaller than the
+     one in the next card along is the sort of difference nobody can name and
+     everybody can see. */
   .btn-sm {
-    @apply px-2.5 py-1.5 text-xs;
+    @apply px-2.5 py-1 text-[13px];
+    min-height: var(--control-height);
   }
   .table-base {
     @apply w-full text-sm border-collapse;
