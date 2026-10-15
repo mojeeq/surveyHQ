@@ -17,6 +17,7 @@ import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
 import FilterBuilder, { emptyFilter } from '@/components/FilterBuilder'
+import { measurable } from '@/lib/measures'
 import { api } from '@/lib/api'
 import { formatNumber, formatValue } from '@/lib/format'
 import type { Aggregation, FormulaPart, Variable } from '@/lib/types'
@@ -143,7 +144,9 @@ export function FormulaBuilder({
   const change = (index: number, patch: Partial<FormulaPart>) =>
     onParts(parts.map((part, at) => (at === index ? { ...part, ...patch } : part)))
 
-  const numeric = variables.filter((one) => one.var_type === 'numeric')
+  // Anything stored as a number: see lib/measures for why the importer's
+  // judgement must not decide what can be measured.
+  const numeric = measurable(variables)
 
   return (
     <div className="space-y-3">
