@@ -274,6 +274,22 @@ def dependents_of(db: Session, dataset: Dataset) -> dict[str, int]:
     )
     if joins:
         found["relationships"] = int(joins)
+
+    # A freshness widget watches several datasets and keeps their ids in its
+    # config rather than in the column above, so counting the column alone said
+    # a dataset nobody else used was free to delete, and the widget it was the
+    # whole subject of lost its line without a word. Read in Python because the
+    # column is JSON and the two databases disagree about how to search one;
+    # a board holds tens of widgets, not millions.
+    inside = 0
+    for widget in db.scalars(select(models.Widget)):
+        if widget.dataset_id == dataset.id:
+            continue  # already counted by the column
+        held = (widget.config or {}).get("dataset_ids") or []
+        if isinstance(held, list) and dataset.id in held:
+            inside += 1
+    if inside:
+        found["dashboard widgets"] = found.get("dashboard widgets", 0) + inside
     return found
 
 
@@ -326,6 +342,45 @@ def empty_dataset(db: Session, dataset: Dataset) -> int:
     meta.pop("retained_versions", None)
     dataset.meta = meta
     return freed
+
+
+def find_emptied_slot(
+    db: Session, *, name: str, filename: str, project_id: str | None
+) -> Dataset | None:
+    """The emptied dataset this upload should fill, if there is one.
+
+    Deleting a dataset that has charts on it leaves the dataset standing and
+    empty, so that uploading the export again fills it and the charts keep
+    working. An archive finds its way back by the member name it was imported
+    under. A plain file - one `.dta`, `.sav`, `.csv` or `.xlsx` - has no member
+    name, so without this it created a new dataset with a new id, the charts
+    stayed attached to the empty one, and the promise made when it was deleted
+    was not kept.
+
+    Matched narrowly, because filling the wrong slot would put one survey's
+    rows under another's charts: the slot has to be empty, in the same project,
+    and either carry the name this upload would use or name this very file as
+    where it came from. A dataset that still holds data is never matched -
+    replacing live data is what the replace endpoint is for, and doing it from
+    an upload nobody marked as a replacement would be a destruction nobody
+    asked for.
+    """
+    candidates = db.scalars(
+        select(Dataset).where(
+            Dataset.project_id.is_(None)
+            if project_id is None
+            else Dataset.project_id == project_id
+        )
+    ).all()
+    matched = [
+        one
+        for one in candidates
+        if dataset_is_empty(one) and (one.name == name or one.source_ref == filename)
+    ]
+    # The most recently touched, for the unlikely case of two empty slots that
+    # both answer to this file.
+    matched.sort(key=lambda one: one.updated_at or one.created_at, reverse=True)
+    return matched[0] if matched else None
 
 
 def dataset_is_empty(dataset: Dataset) -> bool:
