@@ -388,6 +388,12 @@ def assign_dataset(
         raise HTTPException(status_code=404, detail="Dataset not found")
     _check_move(db, user, dataset.project_id, payload.project_id)
     dataset.project_id = payload.project_id
+    # Moving a script's output into another project is what lets that script
+    # go on rebuilding it there, and that is a permission rather than a
+    # detail. Recorded here, where somebody with the manager role on both
+    # sides is granting it, instead of inferred later from what a script
+    # happens to have written.
+    project_script.note_move(db, dataset, payload.project_id)
     db.commit()
     record(
         db,

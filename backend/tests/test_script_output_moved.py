@@ -32,7 +32,7 @@ import pytest
 from sqlalchemy import select
 
 from app.models import Dataset
-from app.services import stata
+from app.services import project_script, stata
 from tests.test_api_analytics import _stata_bytes, _zip_bytes
 
 PEOPLE = pd.DataFrame({"pid": [1.0, 2.0, 3.0], "age": [20.0, 40.0, 9.0]})
@@ -66,14 +66,15 @@ def chain(client, auth_headers, request, db_session) -> dict:
 
 
 def build(db_session, chain: dict, text: str):
-    """Run the source project's script the way the endpoint does, carrying
-    what the last run built so a re-run may rebuild it."""
-    return stata.run_project_script(
-        db_session,
-        chain["source"],
-        text,
-        owns=set(chain.get("owns") or ()),
-    )
+    """Run the source project's script through the service the endpoint uses.
+
+    Not `stata.run_project_script` directly: this is the layer that records
+    what the run read and saved against the project's script row, and the
+    permission to rebuild a moved output is granted from that record at the
+    moment of the move. A test that skipped it would move a dataset nothing
+    had claimed and never exercise the grant at all.
+    """
+    return project_script.run(db_session, chain["source"], text)
 
 
 def move(chain: dict, dataset_id: str) -> None:
@@ -115,7 +116,6 @@ def test_a_moved_output_is_rebuilt_rather_than_duplicated(db_session, chain):
     move(chain, built)
     db_session.expire_all()
 
-    chain["owns"] = {built}
     again = build(db_session, chain, SCRIPT + "\n")
     db_session.flush()
 
@@ -138,7 +138,6 @@ def test_the_reader_sees_what_the_rebuild_wrote(db_session, chain):
     move(chain, built)
     db_session.expire_all()
 
-    chain["owns"] = {built}
     build(db_session, chain, SCRIPT.replace("save as", 'gen round = 2\nsave as'))
     db_session.flush()
     db_session.expire_all()
@@ -159,7 +158,6 @@ def test_the_log_says_where_the_write_landed(db_session, chain):
     move(chain, built)
     db_session.expire_all()
 
-    chain["owns"] = {built}
     again = build(db_session, chain, SCRIPT)
     assert "which now lives in Reader" in again.results[-1].message
 
@@ -167,14 +165,17 @@ def test_the_log_says_where_the_write_landed(db_session, chain):
 # --- what it still refuses ---------------------------------------------------
 
 
-def test_a_script_cannot_reach_a_dataset_it_did_not_build(db_session, chain):
-    """`owns` is the whole permission, and it is only what the last run
-    built. Moving does not widen it.
+def test_a_move_nobody_agreed_to_is_refused(db_session, chain):
+    """Authorship is not authorisation.
 
-    With nothing claimed - a script that has not run before, or one rewritten
-    since - the moved dataset is left alone and a new one is made in the
-    script's own project. That is the old behaviour, kept for the case it was
-    right for: this is not the script that built the moved copy.
+    `owns` is read off what a past run saved. Nobody agreed to it, and the
+    source project's manager need never have had any rights over the project
+    the output now sits in - so on its own it would let them write there by
+    running their own script. The permission is the move, which needs the
+    manager role on both sides, and is recorded on the dataset at the time.
+
+    Here the grant is cleared, standing for a dataset that reached the other
+    project some other way, or one whose move was undone.
     """
     first = build(db_session, chain, SCRIPT)
     db_session.commit()
@@ -182,19 +183,42 @@ def test_a_script_cannot_reach_a_dataset_it_did_not_build(db_session, chain):
     move(chain, built)
     db_session.expire_all()
 
+    moved = db_session.get(Dataset, built)
+    meta = dict(moved.meta or {})
+    meta.pop(project_script.REBUILT_BY, None)
+    moved.meta = meta
+    db_session.commit()
     before = db_session.get(Dataset, built).updated_at
 
-    chain["owns"] = set()
-    again = build(db_session, chain, SCRIPT)
+    with pytest.raises(stata.CommandError) as raised:
+        build(db_session, chain, SCRIPT)
+    assert "has not agreed" in str(raised.value)
+
+    # And nothing was written to it.
+    db_session.rollback()
+    db_session.expire_all()
+    assert db_session.get(Dataset, built).updated_at == before
+
+
+def test_an_archived_destination_is_refused(db_session, chain):
+    """An archived project keeps its dataset rows and loses their data.
+    Rebuilding into one would leave it holding live data again, which is the
+    half-unarchived state every other path refuses to create."""
+    from app.models import Project
+
+    first = build(db_session, chain, SCRIPT)
     db_session.commit()
+    built = first.saved[-1].dataset_id
+    move(chain, built)
     db_session.expire_all()
 
-    assert again.saved[-1].created is True, "a new dataset, not a takeover"
-    assert again.saved[-1].dataset_id != built
-    made = db_session.get(Dataset, again.saved[-1].dataset_id)
-    assert made.project_id == chain["source"]
-    # And the one it does not own was not touched.
-    assert db_session.get(Dataset, built).updated_at == before
+    reader = db_session.get(Project, chain["reader"])
+    reader.status = "archived"
+    db_session.commit()
+
+    with pytest.raises(stata.CommandError) as raised:
+        build(db_session, chain, SCRIPT)
+    assert "archived" in str(raised.value)
 
 
 def test_nothing_changes_when_the_output_never_moved(db_session, chain):
@@ -203,7 +227,6 @@ def test_nothing_changes_when_the_output_never_moved(db_session, chain):
     db_session.commit()
     built = first.saved[-1].dataset_id
 
-    chain["owns"] = {built}
     again = build(db_session, chain, SCRIPT)
     db_session.flush()
 

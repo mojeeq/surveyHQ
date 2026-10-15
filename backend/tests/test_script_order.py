@@ -136,6 +136,26 @@ def test_a_step_counts_the_longest_wait_not_the_shortest(db_session, workshop):
 # --- what it refuses to invent -----------------------------------------------
 
 
+def test_a_reader_waits_for_every_writer_not_the_first(db_session, workshop):
+    """One writer per dataset looked like a rule and is not.
+
+    `save as` refuses a dataset another script owns, which is where that idea
+    came from. But `save, replace` writes back over whatever the script
+    opened and claims nothing, so a second project's script can write a
+    dataset the first still lists from the run that made it. Keeping only the
+    first writer put the reader after one and before the other - the stale
+    read this page exists to prevent, arrived at by following it.
+    """
+    maker = script(db_session, workshop, "Maker", ["raw"], ["shared"])
+    amender = script(db_session, workshop, "Amender", ["shared"], ["shared"])
+    reader = script(db_session, workshop, "Reader", ["shared"], [])
+
+    places = order(db_session, [reader, amender, maker])
+
+    assert places["Reader"].waits_for == ["Amender", "Maker"]
+    assert places["Reader"].step > max(places["Maker"].step, places["Amender"].step)
+
+
 def test_a_ring_is_reported_rather_than_ordered(db_session, workshop):
     """Each reads what the other writes. There is no order, and the page says
     so rather than picking one and being wrong about it."""
