@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
+import { filterableVariables } from '@/components/DashboardFilters'
 import { holdsNumbers, measurable, storedAsNumber } from '@/lib/measures'
-import type { Variable } from '@/lib/types'
+import type { Dataset, Variable } from '@/lib/types'
 
 const variable = (over: Partial<Variable> = {}): Variable =>
   ({
@@ -109,5 +110,55 @@ describe('measurable', () => {
     const list = [variable({ name: 'note', var_type: 'text', storage_type: 'VARCHAR' })]
 
     expect(measurable(list)).toEqual([])
+  })
+})
+
+describe('filterableVariables', () => {
+  // The dashboard's add-filter list asked for the importer's judgement, which
+  // was a proxy for "few enough values to pick from" and stopped holding the
+  // moment an unlabelled 1/2/3 code started reading as a quantity. On reimport
+  // every one of them left the list, though three values fit a dropdown as
+  // well as they ever did.
+  const dataset = (variables: Partial<Variable>[]) =>
+    ({ variables: variables.map((one) => variable(one)) }) as Dataset
+
+  it('offers a code with no names for its codes', () => {
+    const list = filterableVariables(
+      dataset([{ name: 'region', var_type: 'numeric', storage_type: 'BIGINT', n_unique: 3 }]),
+    )
+    expect(list.map((one) => one.name)).toEqual(['region'])
+  })
+
+  it('still offers a named code set', () => {
+    const list = filterableVariables(
+      dataset([{ name: 'sex', var_type: 'categorical', n_unique: 2 }]),
+    )
+    expect(list.map((one) => one.name)).toEqual(['sex'])
+  })
+
+  it('leaves out what will not fit in a list', () => {
+    // An identifier with a value per row, which is what the cap is for.
+    const list = filterableVariables(
+      dataset([{ name: 'interview__key', var_type: 'text', n_unique: 20000 }]),
+    )
+    expect(list).toEqual([])
+  })
+
+  it('leaves out dates, which want a range rather than ticks', () => {
+    const list = filterableVariables(
+      dataset([{ name: 'visited_at', var_type: 'datetime', n_unique: 40 }]),
+    )
+    expect(list).toEqual([])
+  })
+
+  it('leaves out hidden variables', () => {
+    const list = filterableVariables(
+      dataset([{ name: 'gone', var_type: 'categorical', n_unique: 3, is_hidden: true }]),
+    )
+    expect(list).toEqual([])
+  })
+
+  it('is empty rather than wrong without a dataset', () => {
+    expect(filterableVariables(undefined)).toEqual([])
   })
 })
