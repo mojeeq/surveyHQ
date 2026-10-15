@@ -158,14 +158,44 @@ function grows(opening) {
   )
 }
 
+/**
+ * The class names an attribute can put on an element.
+ *
+ * The literals inside it rather than its source text. A class name can only
+ * come from a string, so this is exact where reading the source is not:
+ * `className={/* Never add btn h-9 here. *\/ classes}` has that sentence in
+ * its text and neither class on the element. Comments are trivia and never a
+ * literal, so there is nothing to strip - they simply are not collected.
+ *
+ * Every shape the platform writes reduces to the same list: a plain string, a
+ * conditional with one on each side, a template literal with interpolations,
+ * a helper call with the class and the height in separate arguments.
+ */
+function classesIn(node) {
+  const parts = []
+  const walk = (one) => {
+    if (
+      ts.isStringLiteral(one) ||
+      ts.isNoSubstitutionTemplateLiteral(one) ||
+      one.kind === ts.SyntaxKind.TemplateHead ||
+      one.kind === ts.SyntaxKind.TemplateMiddle ||
+      one.kind === ts.SyntaxKind.TemplateTail
+    ) {
+      parts.push(one.text)
+    }
+    one.forEachChild(walk)
+  }
+  walk(node)
+  return parts.join(' ')
+}
+
 /** Every className in one file, with the line it is on and its element. */
 function classNames(source) {
   const found = []
   const walk = (node) => {
     if (ts.isJsxAttribute(node) && node.name.getText() === 'className') {
-      const value = node.initializer
       found.push({
-        text: value ? value.getText() : '',
+        text: node.initializer ? classesIn(node.initializer) : '',
         line: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
         opening: node.parent.parent,
       })
