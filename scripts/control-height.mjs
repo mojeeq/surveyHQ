@@ -22,12 +22,14 @@
  * can be set. The sign-in button carried `h-9` and stood 36 tall above two
  * 32-tall fields, on the first screen anyone sees, and no amount of declaring
  * in CSS would have reached it: a `min-height` is a floor, and a utility on
- * the element clears it.
+ * the element clears it. That half is parsed rather than scanned, for
+ * reasons written out above it.
  *
  * Run from `prelint`, so CI catches a new one. Not a vitest guard: vitest
  * returns an empty module for a CSS import, `?raw` included.
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs'
+import { createRequire } from 'node:module'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -116,142 +118,62 @@ for (const [selector, pattern] of [
 const CONTROL_CLASS = /\b(btn|btn-primary|btn-secondary|btn-danger|btn-ghost|btn-sm|btn-xs|input|icon-button)\b/
 const HEIGHT_UTILITY = /\b(min-h|h)-(\d+(\.\d+)?|px|full|\[[^\]]+\])/
 
-/**
- * One pass over a file, saying for every character whether it is code.
+/*
+ * Parsed rather than scanned, after three tries at reading .tsx as text.
  *
- * Two things in a .tsx file say `className=` without being a control:
+ * Each try was wrong in a way the last one taught: a `//` inside a url
+ * blanked the rest of its line; an explanation of what *not* to write failed
+ * the build over a sentence; a code example held as a string did the same,
+ * which this codebase keeps by the dozen in ProjectScriptHelp. Marking
+ * strings fixed that one and bought the worst kind of mistake in exchange -
+ * `Cramér's V`, real text in CrosstabTable, opens a string that never
+ * closes, and a genuine `className="btn h-9"` after it was waved through.
+ * A guard that misses is worse than no guard, because it is trusted.
  *
- *   // an explanation of what not to write:
- *   //   className={tall ? 'btn h-9' : ''}
- *
- *   const examples = [{ line: "className={tall ? 'btn h-9' : ''}" }]
- *
- * This codebase does both. It explains itself at length, and it keeps code
- * examples as strings in exactly that shape - ProjectScriptHelp is a list of
- * `{ line, note }` objects. Read as attributes, either one fails the build
- * over a sentence, which is the opposite of what a guard is for.
- *
- * Comments are blanked, character for character: spaces rather than
- * deletion, so every offset after one still lands where it did, which keeps
- * the reported line numbers true. Newlines are kept for the same reason.
- *
- * Strings are not blanked - the value of a real className is a string, and
- * blanking it would hide the height this exists to find. They are marked
- * instead, and a `className=` that *starts* inside one is not an attribute.
- * The distinction is the whole trick: in `className="btn h-9"` the name is
- * outside the quotes and the value inside, and in the example above the name
- * is inside them.
- *
- * Tracking strings also keeps a `//` inside one from starting a comment:
- * `href="https://example.org"` would otherwise blank the rest of its line,
- * and with it any className after it.
+ * All of it is the same mistake: a quote means one thing in JavaScript, a
+ * second in JSX text, and a third inside a template literal, and no amount of
+ * care about quotes tells them apart. TypeScript is already a dependency here
+ * and knows precisely, so it reads the file and this asks it for the
+ * className attributes. Nothing else in a file can be mistaken for one.
  */
-function scan(text) {
-  const out = [...text]
-  const quoted = new Uint8Array(text.length)
-  let inside = ''
-  let comment = ''
-  for (let i = 0; i < text.length; i += 1) {
-    const ch = text[i]
-    const next = text[i + 1]
-    if (comment === 'line') {
-      if (ch === '\n') comment = ''
-      else out[i] = ' '
-      continue
-    }
-    if (comment === 'block') {
-      const ending = ch === '*' && next === '/'
-      if (ch !== '\n') out[i] = ' '
-      if (ending) {
-        out[i + 1] = ' '
-        i += 1
-        comment = ''
-      }
-      continue
-    }
-    if (inside) {
-      quoted[i] = 1
-      if (ch === '\\') {
-        if (i + 1 < text.length) quoted[i + 1] = 1
-        i += 1
-      } else if (ch === inside) {
-        inside = ''
-      }
-      continue
-    }
-    if (ch === '"' || ch === "'" || ch === '`') inside = ch
-    else if (ch === '/' && next === '/') {
-      comment = 'line'
-      out[i] = ' '
-    } else if (ch === '/' && next === '*') {
-      comment = 'block'
-      out[i] = ' '
-    }
-  }
-  return { code: out.join(''), quoted }
-}
+const require = createRequire(join(SRC, '..', 'package.json'))
+const ts = require('typescript')
 
 /**
- * The whole value of a className attribute, whichever of the three shapes it
- * takes: a plain string, a braced expression, or a template literal.
- *
- * Reading only as far as the first quote was not enough. `className={editing
- * ? 'btn-primary' : 'btn-secondary'}` is written that way in DashboardView
- * and all over the platform, and a height added to either branch of one would
- * have gone straight past a guard that insisted on a quote right after the
- * brace. The braces are balanced here instead, tracking the strings on the
- * way so that a brace inside one does not end the attribute early.
+ * The two controls meant to be taller than a row: a box typed into over
+ * several lines, and a list box showing its options at once. Both are several
+ * rows by definition, so a row's height is the wrong thing to hold them to.
  */
-function classNameValue(text, from) {
-  let at = from
-  while (at < text.length && /\s/.test(text[at])) at += 1
-  const quote = text[at]
-  if (quote === '"' || quote === "'" || quote === '`') {
-    const end = text.indexOf(quote, at + 1)
-    return end < 0 ? '' : text.slice(at, end + 1)
-  }
-  if (quote !== '{') return ''
-
-  let depth = 0
-  let inside = ''
-  for (let i = at; i < text.length; i += 1) {
-    const ch = text[i]
-    if (inside) {
-      // A backslash escapes the next character, quote included.
-      if (ch === '\\') i += 1
-      else if (ch === inside) inside = ''
-      continue
-    }
-    if (ch === '"' || ch === "'" || ch === '`') inside = ch
-    else if (ch === '{') depth += 1
-    else if (ch === '}') {
-      depth -= 1
-      if (depth === 0) return text.slice(at, i + 1)
-    }
-  }
-  return ''
+function grows(opening) {
+  // The attribute's grandparent is the opening tag itself - its parent is the
+  // attribute list - so this is handed the tag, not the element around it.
+  if (!opening || !opening.tagName) return false
+  const tag = opening.tagName.getText()
+  if (tag === 'textarea') return true
+  return (
+    tag === 'select' &&
+    opening.attributes.properties.some(
+      (one) => ts.isJsxAttribute(one) && one.name.getText() === 'multiple',
+    )
+  )
 }
 
-/**
- * The two controls that are meant to be taller than a row: a box typed into
- * over several lines, and a list box showing its options at once. Both are
- * several rows by definition, so a row's height is the wrong thing to hold
- * them to.
- */
-
-/** The tag an attribute belongs to, found by walking back to its opening. */
-function openingTag(text, at) {
-  const start = text.lastIndexOf('<', at)
-  if (start < 0) return { name: '', attributes: '' }
-  const name = /^<([a-zA-Z][\w.]*)/.exec(text.slice(start, start + 24))?.[1] ?? ''
-  // Far enough to carry the rest of one element's attributes and no further.
-  return { name, attributes: text.slice(start, start + 400) }
-}
-
-const grows = (text, at) => {
-  const { name, attributes } = openingTag(text, at)
-  if (name === 'textarea') return true
-  return name === 'select' && /\bmultiple\b/.test(attributes)
+/** Every className in one file, with the line it is on and its element. */
+function classNames(source) {
+  const found = []
+  const walk = (node) => {
+    if (ts.isJsxAttribute(node) && node.name.getText() === 'className') {
+      const value = node.initializer
+      found.push({
+        text: value ? value.getText() : '',
+        line: source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1,
+        opening: node.parent.parent,
+      })
+    }
+    node.forEachChild(walk)
+  }
+  walk(source)
+  return found
 }
 
 const components = []
@@ -265,16 +187,17 @@ const walk = (dir) => {
 walk(SRC)
 
 for (const path of components) {
-  const { code: text, quoted } = scan(readFileSync(path, 'utf8'))
-  for (const match of text.matchAll(/className=/g)) {
-    // Inside a string literal, so it is an example of an attribute rather
-    // than one. A real className has its name outside the quotes.
-    if (quoted[match.index]) continue
-    const attribute = classNameValue(text, match.index + 'className='.length)
-    if (!CONTROL_CLASS.test(attribute) || !HEIGHT_UTILITY.test(attribute)) continue
-    if (grows(text, match.index)) continue
-    const line = text.slice(0, match.index).split('\n').length
-    const shown = attribute.replace(/\s+/g, ' ').slice(0, 76)
+  const source = ts.createSourceFile(
+    path,
+    readFileSync(path, 'utf8'),
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TSX,
+  )
+  for (const { text, line, opening } of classNames(source)) {
+    if (!CONTROL_CLASS.test(text) || !HEIGHT_UTILITY.test(text)) continue
+    if (grows(opening)) continue
+    const shown = text.replace(/\s+/g, ' ').slice(0, 76)
     problems.push(`${path.slice(SRC.length + 1)}:${line}  ${shown}`)
   }
 }
