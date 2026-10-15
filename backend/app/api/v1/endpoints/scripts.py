@@ -19,7 +19,7 @@ from sqlalchemy import select
 from app.api.deps import CurrentUser, DbSession
 from app.models import Dataset, ProjectScript
 from app.schemas.script import ScriptPlace, ScriptsOverview
-from app.services import project_script
+from app.services import project_script, stata
 from app.services.projects import visible_projects
 
 router = APIRouter()
@@ -76,11 +76,13 @@ def _dataset_names(db: DbSession, places: list[project_script.Place]) -> dict[st
 
 
 def _lines_in(text: str) -> int:
-    """Commands, not lines in the box: blank lines and comments are neither."""
-    return len(
-        [
-            line
-            for line in text.splitlines()
-            if line.strip() and not line.strip().startswith("*")
-        ]
-    )
+    """Commands, not lines in the box.
+
+    The engine's own splitter rather than a count of non-blank lines: it is
+    the one that decides what a command is, and it disagrees with counting
+    in both directions. A `//` line is a comment and not a command, and a
+    line ending `///` is joined to the next, so one command written over
+    four lines is one command. A second opinion about that here would show a
+    number the log never agrees with.
+    """
+    return len(stata.commands(text))
