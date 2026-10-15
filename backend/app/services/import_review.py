@@ -9,6 +9,7 @@ from app.models import Dataset, DatasetSource, Indicator, JobStatus, Role
 from app.services.dataset_versions import as_ingest, describe
 from app.services.datasets import _apply_ingest, create_dataset_record
 from app.services.ingest import IngestError
+from app.services.project_script import without_grant
 from app.services.projects import can_edit
 
 
@@ -70,7 +71,20 @@ def prepare(db, datasets, before):
                 "source_ref": dataset.source_ref,
                 "project_id": dataset.project_id,
                 "tags": dataset.tags,
-                "meta": {k: v for k, v in (dataset.meta or {}).items() if k != "retained_versions"},
+                # Without the rebuild grant: these candidates are parked in
+                # the job's parameters, which `/system/jobs` hands back, so a
+                # manager of this project would otherwise read the ids of the
+                # projects claiming the dataset - ones they may not reach.
+                #
+                # Dropping it also stops a stale grant coming back. Accepting
+                # merges this over what the dataset holds, so a review
+                # prepared before the grant was released would otherwise
+                # restore it, reviving a permission somebody had given up.
+                "meta": {
+                    k: v
+                    for k, v in without_grant(dataset.meta).items()
+                    if k != "retained_versions"
+                },
             }
         )
     return candidates, changes

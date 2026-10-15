@@ -80,9 +80,9 @@ class DatasetOut(BaseModel):
         project routes answer 404 rather than 403 for exactly that reason,
         so that the list cannot be enumerated.
         """
-        from app.services.project_script import REBUILT_BY
+        from app.services.project_script import without_grant
 
-        return {key: one for key, one in (value or {}).items() if key != REBUILT_BY}
+        return without_grant(value)
     version: int = 1
     refreshed_at: dt.datetime | None = None
     created_at: dt.datetime
