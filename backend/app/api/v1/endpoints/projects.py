@@ -561,7 +561,9 @@ def write_script(
     end of the day should survive being closed, and running it then would
     build half of something.
     """
-    _visible_project(project_id, db, user)
+    # Same as running it: seeing a project is not grounds for rewriting the
+    # recipe its data is built from.
+    _editable_project(project_id, db, user, Role.manager)
     script = project_script.script_for(db, project_id)
     script.text = payload.text
     script.updated_by = user.id
@@ -580,7 +582,12 @@ def run_script(
     not unwound, so a script fixed at line nine does not redo lines one to
     eight.
     """
-    project = _visible_project(project_id, db, user)
+    # The manager role on this project, not merely the global one. A global
+    # manager who is only a viewer here could otherwise run the script, which
+    # writes the project's datasets - and, now that a script may rebuild an
+    # output that moved, writes into the project it moved to as well. Being
+    # able to see a project has never been grounds for rewriting its data.
+    project = _editable_project(project_id, db, user, Role.manager)
     try:
         archiving.refuse_if_archived(project, "running its script")
     except ValueError as exc:

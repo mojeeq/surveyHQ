@@ -296,3 +296,71 @@ def test_releasing_a_dataset_to_the_shared_area_drops_the_grant(
     with pytest.raises(stata.CommandError) as raised:
         build(db_session, chain, SCRIPT)
     assert "has not agreed" in str(raised.value)
+
+
+def test_seeing_a_project_is_not_grounds_for_running_its_script(
+    client, auth_headers, db_session, chain
+):
+    """A global manager who is only a viewer here could run the script, which
+    writes this project's datasets - and now, through a grant, writes into the
+    project an output moved to. The role that matters is the one held over
+    this project."""
+    from app.core.security import hash_password
+    from app.models import ProjectMember, Role, User
+
+    viewer = User(
+        email="viewer-on-source@example.org",
+        full_name="Viewer",
+        hashed_password=hash_password("Fieldwork-2026-local"),
+        role=Role.manager,
+        must_change_password=False,
+    )
+    db_session.add(viewer)
+    db_session.flush()
+    db_session.add(
+        ProjectMember(project_id=chain["source"], user_id=viewer.id, role=Role.viewer)
+    )
+    db_session.commit()
+
+    signed_in = client.post(
+        "/api/v1/auth/login",
+        json={"email": viewer.email, "password": "Fieldwork-2026-local"},
+    )
+    assert signed_in.status_code == 200, signed_in.text
+    headers = {"Authorization": f"Bearer {signed_in.json()['access_token']}"}
+
+    refused = client.post(
+        f"/api/v1/projects/{chain['source']}/script/run",
+        headers=headers,
+        json={"text": SCRIPT},
+    )
+    assert refused.status_code == 403, refused.text
+
+    # And the same for saving the recipe.
+    kept = client.put(
+        f"/api/v1/projects/{chain['source']}/script",
+        headers=headers,
+        json={"text": SCRIPT},
+    )
+    assert kept.status_code == 403, kept.text
+
+
+def test_the_grant_is_not_handed_to_everybody_who_can_see_the_dataset(
+    client, auth_headers, db_session, chain
+):
+    """The grant names projects by id. Anybody able to see the project the
+    dataset moved to would otherwise be handed ids for projects they cannot
+    reach - which the project routes answer 404 rather than 403 to prevent."""
+    first = build(db_session, chain, SCRIPT)
+    db_session.commit()
+    built = first.saved[-1].dataset_id
+    move(chain, built)
+    db_session.expire_all()
+
+    # It is recorded...
+    assert (db_session.get(Dataset, built).meta or {}).get(project_script.REBUILT_BY)
+
+    # ...and not sent out.
+    answered = client.get(f"/api/v1/datasets/{built}", headers=auth_headers)
+    assert answered.status_code == 200, answered.text
+    assert project_script.REBUILT_BY not in (answered.json().get("meta") or {})
