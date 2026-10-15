@@ -155,8 +155,8 @@ def test_importing_an_archive_holds_one_member_at_a_time(tmp_path, client, db_se
     seen: list = []
     real_extract = archives.extract_members
 
-    def remembering_extract(path, destination):
-        members = real_extract(path, destination)
+    def remembering_extract(path, destination, password=None):
+        members = real_extract(path, destination, password)
         seen.extend(members)
         return members
 

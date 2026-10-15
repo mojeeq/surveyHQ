@@ -18,6 +18,7 @@ VN_LF2024.dta, and those two do belong appended together.
 from __future__ import annotations
 
 import zipfile
+import zlib
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -241,13 +242,34 @@ def _safe_members(archive: zipfile.ZipFile) -> list[zipfile.ZipInfo]:
     return members
 
 
-def extract_members(archive_path: Path, destination: Path) -> list[ExtractedMember]:
+#: WinZip AES, which stores 99 where the compression method goes. Python's
+#: zipfile cannot read it at all, so it is worth telling apart from the legacy
+#: encryption it can read, or the message is "wrong password" for an archive
+#: whose password was right.
+AES_COMPRESSION = 99
+
+
+def _encrypted(info: zipfile.ZipInfo) -> bool:
+    """Whether this member is encrypted, which bit one of its flags says."""
+    return bool(info.flag_bits & 0x1)
+
+
+def extract_members(
+    archive_path: Path, destination: Path, password: str | None = None
+) -> list[ExtractedMember]:
     """Unpack an archive and read every data file inside it.
 
     A bare data file is an archive of one member, and is read as one. Nothing
     arrives that way through an upload - the browser sends what it was given -
     but a folder somebody drops a `.dta` into is exactly that case, and the
     alternative is copying the file into a zip to take it straight out again.
+
+    A password-protected archive used to reach here and raise zipfile's own
+    RuntimeError, which is not an IngestError and so was not caught by anything
+    that reports an import failure: the upload answered with a server error and
+    the worker logged a traceback, for a file that is merely locked. Locked
+    archives are now recognised and said out loud, and opened when the password
+    is given.
     """
     if archive_path.suffix.lower() != ".zip":
         if archive_path.suffix.lower() not in SUPPORTED_EXTENSIONS:
@@ -268,6 +290,21 @@ def extract_members(archive_path: Path, destination: Path) -> list[ExtractedMemb
     extracted: list[ExtractedMember] = []
     with archive:
         members = _safe_members(archive)
+        locked = [one for one in members if _encrypted(one)]
+        if locked:
+            if any(one.compress_type == AES_COMPRESSION for one in locked):
+                raise IngestError(
+                    f"'{archive_path.name}' is protected with AES encryption, "
+                    "which this cannot open even with the password. Save it "
+                    "again using the zip program's standard protection, or "
+                    "without a password, and upload it again."
+                )
+            if not password:
+                raise IngestError(
+                    f"'{archive_path.name}' is password protected. Upload it "
+                    "again with the password, or save it without one."
+                )
+            archive.setpassword(password.encode())
         if not members:
             raise IngestError(
                 "The archive contains no data files. Expected one or more of: "
@@ -282,7 +319,26 @@ def extract_members(archive_path: Path, destination: Path) -> list[ExtractedMemb
         for info in members:
             name = Path(info.filename).name
             target = destination / name
-            remaining -= _copy_member(archive, info, target, remaining)
+            try:
+                remaining -= _copy_member(archive, info, target, remaining)
+            except (RuntimeError, zlib.error, zipfile.BadZipFile) as exc:
+                # A wrong password shows up two ways. zipfile says "Bad
+                # password for file" when the check byte catches it, and when
+                # that byte passes by chance - one time in 256 - the bytes go
+                # to the decompressor and zlib rejects them instead. Neither is
+                # an IngestError, so both escaped as a server error for an
+                # archive that only wanted its password typed again.
+                if not locked and isinstance(exc, RuntimeError):
+                    raise
+                if locked:
+                    raise IngestError(
+                        f"The password did not open '{archive_path.name}'. "
+                        "Check it and try again."
+                    ) from None
+                raise IngestError(
+                    f"'{info.filename}' could not be read out of "
+                    f"'{archive_path.name}': the archive looks damaged."
+                ) from None
             extracted.append(ExtractedMember(name=name, path=target))
 
     # No "none of these could be read" check here any more: nothing is read at

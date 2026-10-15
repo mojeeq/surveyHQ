@@ -811,6 +811,7 @@ def run_upload_import(self: Any, job_id: str) -> dict[str, Any]:
         created_by = job.created_by
 
     upload_paths = [Path(str(one)) for one in (params.get("upload_paths") or [])]
+    password = params.get("password") or None
     filenames = [str(one) for one in (params.get("filenames") or [])]
     if not filenames:
         filenames = [path.name for path in upload_paths]
@@ -849,6 +850,7 @@ def run_upload_import(self: Any, job_id: str) -> dict[str, Any]:
                         # replaced dataset are run again over the new data.
                         # Not while reviewing: nothing has been published yet.
                         after_replace=None if review else stata.replay,
+                        password=password,
                     )
                     outcome = merge_imports(outcome, step)
                 rebuilt = [] if review else rebuild_dependents(db, outcome.replaced_ids)
