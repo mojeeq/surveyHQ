@@ -183,10 +183,25 @@ function classesIn(node) {
     ) {
       parts.push(one.text)
     }
+    // The key of a class map, which is a class name written as a name rather
+    // than as a string: `cx({ btn: enabled, 'h-9': tall })`. Nothing here
+    // uses a helper like that yet, and nothing stops the next person adding
+    // one - and this is the shape where missing it would be silent, since
+    // the quoted half of the pair is collected either way and the match
+    // needs both.
+    if (
+      (ts.isPropertyAssignment(one) || ts.isShorthandPropertyAssignment(one)) &&
+      one.name &&
+      (ts.isIdentifier(one.name) || ts.isStringLiteral(one.name))
+    ) {
+      parts.push(one.name.text)
+    }
     one.forEachChild(walk)
   }
   walk(node)
-  return parts.join(' ')
+  // Deduped: a quoted key is collected twice, once as a literal and once as
+  // a name, which changes no match and reads badly in the report.
+  return [...new Set(parts)].join(' ')
 }
 
 /** Every className in one file, with the line it is on and its element. */
