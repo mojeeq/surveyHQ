@@ -154,10 +154,15 @@ export default function Datasets() {
   ).length
 
   const remove = useMutation({
-    mutationFn: (id: string) => api.delete(`/datasets/${id}`),
-    onSuccess: () => {
-      toast.push('Dataset deleted', 'success')
+    mutationFn: (id: string) => api.delete<{ detail: string }>(`/datasets/${id}`),
+    onSuccess: (result) => {
+      // The server's own words, because the two outcomes differ: a dataset
+      // nobody built on is gone, and one with charts on it is still on the
+      // page, empty and waiting. Saying "deleted" to the second told somebody
+      // the opposite of what happened and hid how to get it back.
+      toast.push(result.detail, 'success')
       queryClient.invalidateQueries({ queryKey: ['datasets'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
     },
     onError: (error: Error) => toast.push(error.message, 'error'),
   })
@@ -620,6 +625,8 @@ function UploadModal({
   const [description, setDescription] = useState('')
   const [tags, setTags] = useState('')
   const [combineAll, setCombineAll] = useState(false)
+  // Never stored: it opens this file and belongs to it, not to the dataset.
+  const [password, setPassword] = useState('')
   const [projectId, setProjectId] = useState(initialProject)
   const [mode, setMode] = useState<'replace' | 'append'>('replace')
   const [isZip, setIsZip] = useState(false)
@@ -697,6 +704,7 @@ function UploadModal({
     form.append('project_id', projectId)
     form.append('mode', mode)
     form.append('review', 'true')
+    if (password) form.append('password', password)
     try {
       let body = await api.upload<Dataset | ArchiveImport | Job | Review>(
         '/datasets/upload',
@@ -981,6 +989,23 @@ function UploadModal({
                 roster level rather than several rounds. Only files sharing a column set
                 are appended.
               </span>
+            </span>
+          </label>
+
+          <label className="mt-3 block text-sm text-brand-900">
+            Password, if the archive has one
+            <input
+              type="password"
+              className="input mt-1 w-full"
+              value={password}
+              autoComplete="off"
+              placeholder="Leave empty unless it is locked"
+              onChange={(event) => setPassword(event.target.value)}
+            />
+            <span className="mt-1 block text-xs text-brand-700">
+              Used to open this file and not kept afterwards. An archive locked
+              with AES cannot be opened here at all: save it again with the zip
+              program's standard protection, or without a password.
             </span>
           </label>
         </div>

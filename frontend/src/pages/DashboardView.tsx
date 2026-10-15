@@ -8,7 +8,7 @@ useQueryClient,
 import { useCallback,useEffect,useMemo,useRef,useState } from 'react'
 
 
-import { useParams } from 'react-router-dom'
+import { useNavigate, useParams } from 'react-router-dom'
 
 import GridLayout,{ type Layout } from 'react-grid-layout'
 
@@ -98,6 +98,7 @@ PageHeader
 
 export default function DashboardView({ publicToken }: { publicToken?: string }) {
   const { id = '' } = useParams()
+  const navigate = useNavigate()
   const { can } = useAuth()
   const toast = useToast()
   const ask = useDialog()
@@ -268,6 +269,19 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
     onSuccess: () => {
       toast.push('Layout saved', 'success')
       queryClient.invalidateQueries({ queryKey: ['dashboard', id] })
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  const duplicate = useMutation({
+    mutationFn: () => api.post<Dashboard>(`/dashboards/${id}/duplicate`),
+    onSuccess: (made) => {
+      queryClient.invalidateQueries({ queryKey: ['dashboards'] })
+      toast.push(`Copied to "${made.name}"`, 'success')
+      // Straight onto the copy, because the reason for making one is to start
+      // changing it, and leaving somebody on the original is an invitation to
+      // edit the wrong board.
+      navigate(`/dashboards/${made.id}`)
     },
     onError: (error: Error) => toast.push(error.message, 'error'),
   })
@@ -796,6 +810,14 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
                   </button>
                   <button className="btn-secondary" onClick={() => setKeeping(true)}>
                     Keep a copy
+                  </button>
+                  <button
+                    className="btn-secondary"
+                    disabled={duplicate.isPending}
+                    title="A second board like this one, to change without touching this one"
+                    onClick={() => duplicate.mutate()}
+                  >
+                    {duplicate.isPending ? 'Duplicating...' : 'Duplicate'}
                   </button>
                 </>
               )}

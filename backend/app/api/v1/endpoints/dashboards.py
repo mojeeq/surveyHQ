@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Annotated, Any
@@ -695,6 +696,85 @@ def create_dashboard(
     db.commit()
     db.refresh(dashboard)
     return DashboardDetail.model_validate(dashboard)
+
+
+@router.post("/{dashboard_id}/duplicate", response_model=DashboardDetail, status_code=201)
+def duplicate_dashboard(
+    dashboard_id: str, db: DbSession, user: RequireAnalyst
+) -> DashboardDetail:
+    """Copy a board, so the copy can be changed without touching the original.
+
+    Everything that makes the board what it looks like comes across: its pages,
+    its groups, its appearance and theme, its filters and drilldown, and every
+    widget with its place, its size, its page and the group it sits in.
+
+    What does not come across is anything that identifies the board rather than
+    describes it. The copy is private until somebody shares it, with a link of
+    its own: carrying the public token over would put the copy behind a link
+    already handed to people who were sent the original, and the first edit to
+    the copy would silently change what they see. The snapshot schedule stays
+    behind for the same reason, as two boards writing the same series of copies
+    is nobody's intention.
+
+    The charts are shared, not copied. A chart belongs to the library rather
+    than to a board, and a copy made for rearranging widgets wants the same
+    numbers as the original. Editing a widget's own settings only touches this
+    board's widget; editing the chart behind it changes both, which is what
+    "the same chart" means everywhere else in the platform.
+    """
+    original = _get_dashboard(dashboard_id, db, user)
+    if original.project_id and not can_edit(db, user, original.project_id, Role.analyst):
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+
+    name = f"{original.name} (copy)"
+    copy = Dashboard(
+        name=name,
+        slug=_unique_slug(db, name),
+        description=original.description,
+        project_id=original.project_id,
+        filters=deepcopy(original.filters),
+        pages=deepcopy(original.pages),
+        groups=deepcopy(original.groups),
+        appearance=deepcopy(original.appearance),
+        drilldown=deepcopy(original.drilldown),
+        theme=original.theme,
+        refresh_interval_seconds=original.refresh_interval_seconds,
+        created_by=user.id,
+    )
+    db.add(copy)
+    db.flush()
+
+    for widget in sorted(original.widgets, key=lambda one: (one.page, one.position)):
+        db.add(
+            Widget(
+                dashboard_id=copy.id,
+                title=widget.title,
+                widget_type=widget.widget_type,
+                chart_id=widget.chart_id,
+                indicator_id=widget.indicator_id,
+                dataset_id=widget.dataset_id,
+                # Deep copies: a widget's config and layout are JSON, and
+                # sharing the object would make a change to one board's widget
+                # show up on the other's.
+                config=deepcopy(widget.config or {}),
+                layout=deepcopy(widget.layout or {}),
+                position=widget.position,
+                page=widget.page,
+                group_id=widget.group_id,
+            )
+        )
+
+    record(
+        db,
+        user=user,
+        action="duplicate_dashboard",
+        entity_type="dashboard",
+        entity_id=copy.id,
+        detail={"from": dashboard_id, "name": name},
+    )
+    db.commit()
+    db.refresh(copy)
+    return DashboardDetail.model_validate(copy)
 
 
 @router.get("/{dashboard_id}", response_model=DashboardDetail)

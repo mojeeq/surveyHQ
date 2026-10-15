@@ -69,6 +69,7 @@ from app.services.datasets import (
     dependents_of,
     describe_dependents,
     empty_dataset,
+    find_emptied_slot,
     load_archive_as_datasets,
     load_file_into_dataset,
     merge_imports,
@@ -146,6 +147,7 @@ def _queue_import(
     labels: list[str],
     version_column: str,
     review: bool = False,
+    password: str | None = None,
 ) -> Job:
     """Hand a large upload to the worker and answer with the job watching it."""
     dataset = datasets[0] if datasets else None
@@ -170,6 +172,8 @@ def _queue_import(
             "version_column": version_column,
             "bytes": written,
             "review": review,
+            # Carried for this job only; the row is pruned with the rest.
+            "password": password,
         },
         created_by=user.id,
     )
@@ -234,6 +238,9 @@ async def upload_dataset(
     labels: Annotated[str, Form()] = "",
     version_column: Annotated[str, Form()] = "",
     review: Annotated[bool, Form()] = False,
+    # A locked export is opened with this and it is never stored: it belongs to
+    # the file, not to the dataset, and the next export may have another.
+    password: Annotated[str, Form()] = "",
 ) -> DatasetDetail | ArchiveImportOut | JobOut:
     """Upload a data file, or an export archive, and ingest it immediately.
 
@@ -375,25 +382,20 @@ async def upload_dataset(
     # are different tables, so appending them would be nonsense and a single
     # record would describe only the first.
     chosen_tags = [t.strip() for t in tags.split(",") if t.strip()]
-    datasets: list[Dataset] = (
-        []
-        if archive
-        else [
-            create_dataset_record(
-                db,
-                # Several files are refused a name above, so this is either
-                # the one file's chosen name or the file's own stem.
-                name=name.strip() or Path(one).stem,
-                description=description,
-                source=DatasetSource.upload,
-                source_ref=one,
-                tags=chosen_tags,
-                created_by=user.id,
-                project_id=project_id or None,
-            )
-            for one in names
-        ]
-    )
+    datasets: list[Dataset] = [] if archive else [
+        _record_for(
+            db,
+            # Several files are refused a name above, so this is either the
+            # one file's chosen name or the file's own stem.
+            name=name.strip() or Path(one).stem,
+            filename=one,
+            description=description,
+            tags=chosen_tags,
+            user_id=user.id,
+            project_id=project_id or None,
+        )
+        for one in names
+    ]
     dataset = datasets[0] if datasets else None
 
     saved: list[Path] = []
@@ -442,6 +444,7 @@ async def upload_dataset(
             labels=stamps,
             version_column=stamp_column,
             review=review,
+            password=password or None,
         )
 
     try:
@@ -466,6 +469,7 @@ async def upload_dataset(
                     # replacement drops them and everything built on them. The
                     # recorded commands are run again on the new data.
                     after_replace=stata.replay,
+                    password=password or None,
                 )
                 outcome = merge_imports(outcome, step)
         else:
@@ -655,6 +659,47 @@ def delete_datasets(payload: BulkDeleteRequest, db: DbSession, user: RequireMana
             "uploaded again"
         )
     return Message(detail=". ".join(said) + "." if said else "Nothing to delete")
+
+
+def _record_for(
+    db: DbSession,
+    *,
+    name: str,
+    filename: str,
+    description: str,
+    tags: list[str],
+    user_id: str,
+    project_id: str | None,
+) -> Dataset:
+    """The dataset this uploaded file belongs in: an empty one, or a new one.
+
+    A dataset deleted while charts stood on it is left empty rather than
+    removed, so that uploading the export again fills it and the charts go on
+    working. An archive member finds its way back by the name it was imported
+    under; a plain file has no such name, so it is matched here or it would
+    create a second dataset and leave the charts attached to the first.
+    """
+    waiting = find_emptied_slot(db, name=name, filename=filename, project_id=project_id)
+    if waiting is not None:
+        # Whatever the upload says about itself is worth keeping - a file
+        # renamed between rounds, a description written on the way back in -
+        # but the id, and so everything built on it, does not move.
+        waiting.source_ref = filename
+        if description:
+            waiting.description = description
+        if tags:
+            waiting.tags = tags
+        return waiting
+    return create_dataset_record(
+        db,
+        name=name,
+        description=description,
+        source=DatasetSource.upload,
+        source_ref=filename,
+        tags=tags,
+        created_by=user_id,
+        project_id=project_id,
+    )
 
 
 def _remove_or_empty(db: DbSession, dataset: Dataset) -> tuple[str, dict[str, int]]:
