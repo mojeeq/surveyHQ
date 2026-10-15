@@ -626,6 +626,35 @@ A comparison is a number, as it is in Stata: `gen adult = age >= 18` gives 1
 and 0, not true and false, so `egen total = sum(adult)` and
 `collapse (sum) adult` are arithmetic and a chart of it is a chart of a count.
 
+#### Seeing every script at once
+
+A script belongs to a project and is edited on that project's Command tab.
+An office runs several projects, and the scripts are not independent of each
+other: one writes a cleaned person file, that file is moved to the project
+that reports on it, and a second script reads it. Run them the other way
+round and the second builds on last week's data, silently, because nothing
+fails.
+
+Nothing on any single project's page can show that, because the relationship
+is between projects. **Scripts**, under Data, shows all of them: what each one
+reads and writes, when it last ran, whether that run failed, and the order
+they have to run in.
+
+The order is read off what each run actually opened and saved - the same
+record the automatic re-run uses - rather than out of the script text, which
+would mean resolving names the way `use` does and would count a line that
+never ran. A script nobody has run yet has nothing recorded, so it sits in
+step 1 with everything else that waits on nothing.
+
+Step 1 is not "first". Every script in step 1 can be run at once, or in any
+order; a script moves to step 2 only when it reads something a step 1 script
+writes, and its card names which one. Two scripts that each read what the
+other writes have no order at all, and the page says so rather than inventing
+one.
+
+The page is read-only. Running a script is still done from the project that
+owns it, where the editor and the log are.
+
 #### Naming a condition you use more than once
 
 A long recode says the same thing over and over. The employment cascade below

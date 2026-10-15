@@ -31,7 +31,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.logging import get_logger
-from app.models import Dataset, DatasetSource
+from app.models import Dataset, DatasetSource, Project
 from app.services.datasets import (
     _apply_ingest,
     create_dataset_record,
@@ -396,6 +396,18 @@ class ScriptError(CommandError):
         # stands on, which is what decides whether a later import re-runs it.
         self.read: list[str] = []
         self.saved: list[Saved] = []
+
+
+def commands(text: str) -> list[str]:
+    """The commands in a script, as the runner will see them.
+
+    The public name for the splitter below, so that anything counting or
+    listing a script's commands uses the one definition of what a command is.
+    A second opinion shows a number the run log never agrees with: a `//`
+    line counted as a command, and one command written over four lines with
+    `///` counted as four.
+    """
+    return _lines(text)
 
 
 def _lines(text: str) -> list[str]:
@@ -837,7 +849,7 @@ def _save_as(run: Run, frame: Frame, name: str, replacing: bool = False) -> Comm
     """
     if run.project_id is None:
         raise CommandError("save as needs a project to save into")
-    existing = _lookup(run, name)
+    existing = _lookup(run, name) or _owned_elsewhere(run, name)
     if existing is not None:
         if not (replacing or existing.id in run.owns):
             raise CommandError(
@@ -851,9 +863,17 @@ def _save_as(run: Run, frame: Frame, name: str, replacing: bool = False) -> Comm
         )
         frame.origin = existing.id
         frame.name = existing.name
+        where = ""
+        if existing.project_id != run.project_id:
+            # Said out loud. A script writing into another project is right
+            # here - it built this dataset and somebody moved it there to be
+            # read - but it is not what the line appears to say, and a log
+            # that does not mention it leaves the reader to find out later.
+            moved_to = run.db.get(Project, existing.project_id)
+            where = f", which now lives in {moved_to.name}" if moved_to else ""
         return CommandResult(
             command="",
-            message=f"Saved {frame.rows:,} row(s) over {name}",
+            message=f"Saved {frame.rows:,} row(s) over {name}{where}",
             data_changed=True,
         )
 
@@ -916,6 +936,37 @@ def _find_dataset(run: Run, name: str) -> Dataset:
             )
         raise CommandError(f"This project has no dataset called '{name}'")
     return found
+
+
+def _owned_elsewhere(run: Run, name: str) -> Dataset | None:
+    """A dataset this script built that now lives in another project.
+
+    A script writes into its own project and reads from it, so the only way
+    one project's script feeds another's is for somebody to move the output
+    across afterwards - which is the documented way to build a cleaned file
+    in one project and report on it in the next.
+
+    Without this, the move quietly broke the arrangement. `save as
+    clean_people` looked for the name among its own project's datasets, found
+    nothing where there had been something, and made a *second* clean_people
+    back where the script lives. The reader went on reading the copy that
+    moved, which nothing updated again: a script reporting success on every
+    line and a table that stopped changing.
+
+    What may be written is unchanged - only what the last run built, which is
+    what `owns` holds and what the message below says out loud. A dataset this
+    script did not build is still refused wherever it lives.
+    """
+    if not run.owns:
+        return None
+    wanted = name.strip().lower()
+    datasets = (
+        run.db.execute(select(Dataset).where(Dataset.id.in_(run.owns))).scalars().all()
+    )
+    for dataset in datasets:
+        if dataset.name.lower() == wanted or (dataset.slug or "").lower() == wanted:
+            return dataset
+    return None
 
 
 def _lookup(run: Run, name: str) -> Dataset | None:

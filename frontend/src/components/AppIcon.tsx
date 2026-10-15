@@ -21,6 +21,7 @@ export type AppIconName =
   | 'projects'
   | 'datasets'
   | 'connections'
+  | 'scripts'
   | 'explore'
   | 'dashboards'
   | 'monitoring'
@@ -68,6 +69,21 @@ function glyph(name: AppIconName, fill: string, shadow: string) {
           <rect x="5" y="14.9" width="4" height="3.1" rx="0.8" />
           <rect x="10" y="14.9" width="4" height="3.1" rx="0.8" />
           <rect x="15" y="14.9" width="4" height="3.1" rx="0.8" />
+        </g>
+      )
+    case 'scripts':
+      // A sheet with lines of command on it, the last one indented: a do-file
+      // read top to bottom, which is what a script is and what makes its
+      // order a thing worth showing.
+      return (
+        <g fill={fill}>
+          <rect x="5.2" y="4.2" width="13.6" height="15.6" rx="1.6" />
+          <g fill={shadow}>
+            <rect x="7.4" y="7.2" width="9.2" height="1.5" rx="0.75" />
+            <rect x="7.4" y="10.4" width="7" height="1.5" rx="0.75" />
+            <rect x="9.6" y="13.6" width="7" height="1.5" rx="0.75" />
+            <rect x="9.6" y="16.4" width="4.6" height="1.5" rx="0.75" />
+          </g>
         </g>
       )
     case 'connections':

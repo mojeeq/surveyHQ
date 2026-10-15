@@ -18,6 +18,7 @@ describe('the page list', () => {
       '/projects',
       '/datasets',
       '/connections',
+      '/scripts',
       '/explore',
       '/dashboards',
       '/monitoring',

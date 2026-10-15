@@ -19,6 +19,7 @@ const ProjectDetail = lazy(() => import('@/pages/ProjectDetail'))
 const Datasets = lazy(PAGES['/datasets'])
 const DatasetDetail = lazy(() => import('@/pages/DatasetDetail'))
 const Connections = lazy(PAGES['/connections'])
+const Scripts = lazy(PAGES['/scripts'])
 const Explore = lazy(PAGES['/explore'])
 const Dashboards = lazy(PAGES['/dashboards'])
 const DashboardView = lazy(() => import('@/pages/DashboardView'))
@@ -109,6 +110,7 @@ export default function App() {
           <Route path="datasets" element={<Datasets />} />
           <Route path="datasets/:id" element={<DatasetDetail />} />
           <Route path="connections" element={<Connections />} />
+          <Route path="scripts" element={<Scripts />} />
           <Route path="explore" element={<Explore />} />
           <Route path="dashboards" element={<Dashboards />} />
           <Route path="dashboards/:id" element={<DashboardView />} />
