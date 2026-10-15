@@ -320,9 +320,14 @@ def claimed_by(db: Session, dataset_id: str) -> list[str]:
 
     Every one, not the first that comes back. One writer per dataset looked
     like a rule and is not - `save, replace` writes back over whatever the
-    script opened and claims nothing - so a query for one claimant returns
-    whichever row the database happens to yield first. That would authorise
-    one writer, refuse the others, and change its mind between runs.
+    script opened, and claims it the same as `save as` does - so a query for
+    one claimant returns whichever row the database happens to yield first.
+    That would authorise one writer, refuse the others, and change its mind
+    between runs.
+
+    It also means a claim can land on a dataset that arrived in an archive,
+    rather than only on one a script created. That is how the grant reaches
+    an import review: an archive gets uploaded over again.
     """
     from app.models import ProjectScript as Script
 
@@ -377,6 +382,19 @@ def release(db: Session, dataset) -> None:
     meta = dict(dataset.meta or {})
     if meta.pop(REBUILT_BY, None) is not None:
         dataset.meta = meta
+
+
+def without_grant(meta: dict | None) -> dict:
+    """`meta` as it may leave the server, or be copied into anything that does.
+
+    The grant is authorization state living in a bag that several things hand
+    out or copy wholesale, so it is removed here rather than at each of them.
+    Two have been found so far - the dataset the API answers with, and the
+    candidates an import review parks in a job's parameters - and the second
+    was found after the first was filtered, which is the argument for one
+    function rather than a filter per exit.
+    """
+    return {key: one for key, one in (meta or {}).items() if key != REBUILT_BY}
 
 
 def may_rebuild(dataset, project_id: str | None) -> bool:

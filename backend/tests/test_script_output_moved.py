@@ -364,3 +364,116 @@ def test_the_grant_is_not_handed_to_everybody_who_can_see_the_dataset(
     answered = client.get(f"/api/v1/datasets/{built}", headers=auth_headers)
     assert answered.status_code == 200, answered.text
     assert project_script.REBUILT_BY not in (answered.json().get("meta") or {})
+
+
+# --- the grant is authorisation, so it does not travel in a job's parameters -
+
+
+# A script that writes back over the dataset it opened claims that dataset,
+# the same as one that creates it. So the grant can land on a dataset that
+# arrived in an archive - and an archive is re-uploaded over, which is the
+# door this section is about.
+OVER_ARCHIVE = "use chain_raw\ngen adult = 1 if age >= 18\nsave, replace"
+
+
+def _claimed_and_moved(db_session, chain) -> str:
+    """An archive member, claimed by the source script, now in the reader."""
+    build(db_session, chain, OVER_ARCHIVE)
+    db_session.commit()
+    raw = db_session.scalar(
+        select(Dataset).where(
+            Dataset.name == "chain_raw", Dataset.project_id == chain["source"]
+        )
+    )
+    assert "archive_member" in (raw.meta or {}), "the re-upload below needs this to match"
+    move(chain, raw.id)
+    db_session.expire_all()
+    assert (db_session.get(Dataset, raw.id).meta or {}).get(project_script.REBUILT_BY)
+    return raw.id
+
+
+def _reviewed_reupload(chain, frame: pd.DataFrame):
+    """Send the archive again over the reader project, stopping for review."""
+    from types import SimpleNamespace
+
+    import pytest as _pytest
+
+    from app.workers.tasks import run_upload_import
+
+    patch = _pytest.MonkeyPatch()
+    try:
+        patch.setattr(
+            run_upload_import, "delay", lambda *args: SimpleNamespace(id="queued-test")
+        )
+        queued = chain["client"].post(
+            "/api/v1/datasets/upload",
+            headers=chain["headers"],
+            files={
+                "file": (
+                    "chain.zip",
+                    _zip_bytes({"chain_raw.dta": _stata_bytes(frame)}),
+                    "application/zip",
+                )
+            },
+            data={"review": "true", "project_id": chain["reader"]},
+        )
+    finally:
+        patch.undo()
+    assert queued.status_code == 201, queued.text
+    job_id = queued.json()["id"]
+    assert run_upload_import.run(job_id).get("review")
+    return job_id
+
+
+def test_the_grant_does_not_travel_in_an_import_review(client, auth_headers, db_session, chain):
+    """Filtering the dataset the API answers with was not enough.
+
+    An import review copies the dataset's `meta` into the job's parameters,
+    and `/system/jobs` hands those back to whoever started the job. The same
+    list of project ids, by a second door - which is the argument for taking
+    the grant out at one place rather than at each exit as it is found.
+    """
+    built = _claimed_and_moved(db_session, chain)
+    job = _reviewed_reupload(chain, PEOPLE)
+
+    answered = client.get(f"/api/v1/system/jobs/{job}", headers=auth_headers)
+    assert answered.status_code == 200, answered.text
+    params = answered.json()["params"]
+    staged = [one for one in params["candidates"] if one["id"] == built]
+    assert staged, "the moved dataset was not staged, so nothing here is proved"
+    assert project_script.REBUILT_BY not in str(params), params
+
+    # Hidden on the way out, not dropped from the row.
+    db_session.expire_all()
+    assert (db_session.get(Dataset, built).meta or {}).get(project_script.REBUILT_BY)
+
+
+def test_accepting_a_review_leaves_a_live_grant_alone(client, auth_headers, db_session, chain):
+    """Candidate meta is merged over what the dataset holds, so leaving the
+    grant out of the candidate must not take it off the dataset."""
+    built = _claimed_and_moved(db_session, chain)
+    job = _reviewed_reupload(chain, PEOPLE)
+
+    accepted = client.post(f"/api/v1/datasets/reviews/{job}/accept", headers=auth_headers)
+    assert accepted.status_code == 200, accepted.text
+    db_session.expire_all()
+    assert (db_session.get(Dataset, built).meta or {}).get(project_script.REBUILT_BY)
+
+
+def test_accepting_an_old_review_does_not_revive_a_released_grant(
+    client, auth_headers, db_session, chain
+):
+    """A review prepared while the grant stood, accepted after it was given
+    up, must not put it back. Deleting the project that held the script
+    releases the grant; a snapshot taken before that should not restore it."""
+    built = _claimed_and_moved(db_session, chain)
+    job = _reviewed_reupload(chain, PEOPLE)
+
+    project_script.release(db_session, db_session.get(Dataset, built))
+    db_session.commit()
+    assert not (db_session.get(Dataset, built).meta or {}).get(project_script.REBUILT_BY)
+
+    accepted = client.post(f"/api/v1/datasets/reviews/{job}/accept", headers=auth_headers)
+    assert accepted.status_code == 200, accepted.text
+    db_session.expire_all()
+    assert not (db_session.get(Dataset, built).meta or {}).get(project_script.REBUILT_BY)
