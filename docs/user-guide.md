@@ -454,6 +454,19 @@ and says so rather than writing a file Excel would refuse to open.
 
 Downloading is a manager's action, and it is recorded in the audit log.
 
+### A password-protected export
+
+Statistics offices often send exports locked, because the files hold interviews
+with named people in them. Type the password into **Password, if the archive
+has one** on the upload. It opens that file and is not stored: it belongs to
+the archive rather than to the dataset, and next month's export may have a
+different one.
+
+An archive locked with **AES** cannot be opened here at all, whatever password
+is given, and the upload says so rather than blaming the password. Save it
+again with the zip program's standard protection, or without one, and upload
+that.
+
 ### Deleting a dataset, and getting it back
 
 Deleting one erases its data and frees the disk. What happens to the dataset

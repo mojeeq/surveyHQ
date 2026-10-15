@@ -342,7 +342,11 @@ def dataset_is_queryable(dataset: Dataset) -> bool:
 
 
 def append_file_into_dataset(
-    db: Session, dataset: Dataset, file_path: Path, source_name: str | None = None
+    db: Session,
+    dataset: Dataset,
+    file_path: Path,
+    source_name: str | None = None,
+    password: str | None = None,
 ) -> Dataset:
     """Append another file's rows onto a dataset that already holds data.
 
@@ -363,7 +367,7 @@ def append_file_into_dataset(
     if is_archive(file_path):
         workdir = Path(tempfile.mkdtemp(prefix="surveyhq-append-"))
         try:
-            members = extract_members(file_path, workdir)
+            members = extract_members(file_path, workdir, password)
             incoming = combine(group_by_schema(members)[0])
             frame, variable_labels, value_labels = (
                 incoming.frame,
@@ -619,6 +623,7 @@ def load_archive_as_datasets(
     mode: str = "replace",
     after_replace: Callable[[Session, Dataset], list[str]] | None = None,
     stamp: tuple[str, str] | None = None,
+    password: str | None = None,
 ) -> ArchiveImport:
     """Import an archive as one dataset per member file.
 
@@ -648,7 +653,7 @@ def load_archive_as_datasets(
     workdir = Path(tempfile.mkdtemp(prefix="surveyhq-archive-"))
     outcome = ArchiveImport()
     try:
-        members = extract_members(archive_path, workdir)
+        members = extract_members(archive_path, workdir, password)
 
         if combine_all:
             result = combine(members)

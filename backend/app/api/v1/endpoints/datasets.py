@@ -146,6 +146,7 @@ def _queue_import(
     labels: list[str],
     version_column: str,
     review: bool = False,
+    password: str | None = None,
 ) -> Job:
     """Hand a large upload to the worker and answer with the job watching it."""
     dataset = datasets[0] if datasets else None
@@ -170,6 +171,8 @@ def _queue_import(
             "version_column": version_column,
             "bytes": written,
             "review": review,
+            # Carried for this job only; the row is pruned with the rest.
+            "password": password,
         },
         created_by=user.id,
     )
@@ -234,6 +237,9 @@ async def upload_dataset(
     labels: Annotated[str, Form()] = "",
     version_column: Annotated[str, Form()] = "",
     review: Annotated[bool, Form()] = False,
+    # A locked export is opened with this and it is never stored: it belongs to
+    # the file, not to the dataset, and the next export may have another.
+    password: Annotated[str, Form()] = "",
 ) -> DatasetDetail | ArchiveImportOut | JobOut:
     """Upload a data file, or an export archive, and ingest it immediately.
 
@@ -442,6 +448,7 @@ async def upload_dataset(
             labels=stamps,
             version_column=stamp_column,
             review=review,
+            password=password or None,
         )
 
     try:
@@ -466,6 +473,7 @@ async def upload_dataset(
                     # replacement drops them and everything built on them. The
                     # recorded commands are run again on the new data.
                     after_replace=stata.replay,
+                    password=password or None,
                 )
                 outcome = merge_imports(outcome, step)
         else:
