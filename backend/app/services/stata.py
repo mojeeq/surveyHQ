@@ -175,9 +175,19 @@ def apply(run: Run, text: str) -> CommandResult:
     # expand the name being defined rather than the text it stands for.
     if verb.lower().rstrip(",") not in ("local", "global"):
         try:
-            command = expand_macros(command, run.locals, run.globals)
+            # Stripped again: a macro that stands for nothing is a legitimate
+            # thing to define - it is how a condition is switched off without
+            # deleting the lines using it - and `prefix' at the front of a
+            # command then leaves a leading space, which the partition below
+            # reads as an empty verb.
+            command = expand_macros(command, run.locals, run.globals).strip()
         except MacroError as exc:
             raise CommandError(str(exc)) from exc
+        if not command:
+            raise CommandError(
+                "That command is nothing but macros, and all of them stand "
+                "for nothing, so there is no command left to run."
+            )
         verb, _, rest = command.partition(" ")
     # `save as x` and `save, replace` are both the save verb; Stata spells the
     # first with a word and the second with an option, and the partition above
@@ -1688,9 +1698,15 @@ def replay(db: Session, dataset: Dataset) -> list[str]:
     this platform exists to make routine.
     """
     problems: list[str] = []
+    # One set of macros for the whole replay, as a script has. The recorded
+    # commands are the expanded ones, so most of them need no macro at all -
+    # but a definition written in terms of another was recorded as typed, and
+    # replaying it without what came before fails on a name it cannot find.
+    named: dict[str, str] = {}
+    wider: dict[str, str] = {}
     for text in entries(dataset):
         try:
-            run(db, dataset, text, record_it=False)
+            run(db, dataset, text, record_it=False, locals_=named, globals_=wider)
         except Exception as exc:  # noqa: BLE001 - a replay must never fail an
             # import that has already happened.
             logger.exception("Replaying a recorded command failed")

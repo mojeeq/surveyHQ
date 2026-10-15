@@ -244,3 +244,50 @@ def test_a_definition_with_nothing_in_it_is_refused(people, db_session):
     with pytest.raises(stata.CommandError) as raised:
         stata.run_script(db_session, people, "local")
     assert "name" in str(raised.value)
+
+
+# --- after the command box's commands are replayed ---------------------------
+
+
+def test_a_macro_written_from_another_survives_a_replay(people, db_session):
+    """A newer export replaces the data and every recorded command runs again.
+
+    The recorded commands are the expanded ones, so almost none of them needs
+    a macro - but a definition written in terms of another was recorded as
+    typed, and replaying it on its own failed on a name nothing had defined.
+    Each replayed command gets its own Run, the same way the script does, so
+    the macros have to be held by the replay.
+    """
+    stata.run_script(
+        db_session,
+        people,
+        "local wap ilo_wap == 1\nlocal both `wap'\ngen a = 1 if `both'",
+    )
+    db_session.flush()
+    db_session.refresh(people)
+
+    problems = stata.replay(db_session, people)
+
+    # Asserted on the macro rather than on the list being empty: this replays
+    # over data that still holds what the first run created, so `gen a`
+    # reports the name is taken. That is the replay working - after a real
+    # export the variable is gone - and not what this test is about.
+    assert not [one for one in problems if "macro" in one], problems
+
+
+def test_a_macro_standing_for_nothing_can_still_be_written(people, db_session):
+    """An empty definition is how a condition gets switched off without
+    deleting the lines that use it. Expansion then leaves a leading space,
+    which was read as an empty verb and refused a command that was fine."""
+    results = stata.run_script(
+        db_session, people, "local prefix\n`prefix' gen x = 1"
+    )
+    assert results[-1].command == "gen x = 1"
+
+
+def test_a_command_that_is_only_an_empty_macro_says_so(people, db_session):
+    """Rather than "'' is not a command this understands", which names
+    nothing and points at nothing."""
+    with pytest.raises(stata.CommandError) as raised:
+        stata.run_script(db_session, people, "local nothing\n`nothing'")
+    assert "nothing but macros" in str(raised.value)
