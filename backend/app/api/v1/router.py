@@ -15,6 +15,7 @@ from app.api.v1.endpoints import (
     public,
     quality_reports,
     relationships,
+    scripts,
     system,
     users,
 )
@@ -23,6 +24,7 @@ api_router = APIRouter()
 api_router.include_router(auth.router, prefix="/auth", tags=["auth"])
 api_router.include_router(users.router, prefix="/users", tags=["users"])
 api_router.include_router(projects.router, prefix="/projects", tags=["projects"])
+api_router.include_router(scripts.router, prefix="/scripts", tags=["projects"])
 api_router.include_router(datasets.router, prefix="/datasets", tags=["datasets"])
 api_router.include_router(
     relationships.router, prefix="/relationships", tags=["relationships"]

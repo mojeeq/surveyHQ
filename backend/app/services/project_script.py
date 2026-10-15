@@ -188,3 +188,119 @@ def _project_name(db: Session, project_id: str) -> str:
     project = db.get(Project, project_id)
     return f"'{project.name}'" if project is not None else "this project"
 
+
+def _names_of(db: Session, project_ids: list[str]) -> dict[str, str]:
+    """Every project's name in one query rather than one query per script."""
+    from app.models import Project
+
+    if not project_ids:
+        return {}
+    rows = db.execute(
+        select(Project.id, Project.name).where(Project.id.in_(set(project_ids)))
+    ).all()
+    return {row[0]: row[1] for row in rows}
+
+
+
+@dataclass
+class Place:
+    """One script's place in the order the scripts run in.
+
+    `step` is how many scripts have to have run before this one can: every
+    script at step 0 can run at once, every script at step 1 waits on one of
+    those, and so on. A number rather than a position in a list, because the
+    order is not a queue. Three scripts that read nothing another script wrote
+    are not first, second and third - they are all first, and saying so is the
+    difference between a list somebody can act on and a list they have to work
+    out for themselves.
+
+    `waits_for` names the scripts immediately above it, which is what makes a
+    step legible: step 2 means nothing without knowing who step 2 waited for.
+    """
+
+    project_id: str
+    project_name: str
+    reads: list[str] = field(default_factory=list)
+    writes: list[str] = field(default_factory=list)
+    step: int = 0
+    waits_for: list[str] = field(default_factory=list)
+    # Set when the script is in a ring: it reads something another script
+    # writes, which reads something this one writes. Then there is no order,
+    # and saying so is the only honest answer.
+    in_a_cycle: bool = False
+
+
+def running_order(db: Session, scripts: list[ProjectScript]) -> list[Place]:
+    """What order these scripts have to run in, from what they last touched.
+
+    A script that writes a dataset another script reads has to run first, or
+    the second one builds on last week's data. Nobody writes that order down,
+    and with a script per project it is not visible from any one of them -
+    which is the whole reason for reading it off the record of what each run
+    actually opened and saved.
+
+    Derived from `reads` and `writes` rather than from the script text, for
+    the same reason the re-run chain is: the text would have to be resolved
+    the way `use` does, and would count a line that never ran.
+
+    A script that has never run has nothing recorded, so it has no edges and
+    sits at step 0 with everything else that waits on nobody. That is honest -
+    it is a draft, and nothing is known about what it will touch.
+    """
+    names = _names_of(db, [script.project_id for script in scripts])
+    places = {
+        script.project_id: Place(
+            project_id=script.project_id,
+            # The plain name. `_project_name` above quotes it, because it is
+            # written into a sentence; here it is a heading on a page.
+            project_name=names.get(script.project_id, "Unnamed project"),
+            reads=list(script.reads or []),
+            writes=list(script.writes or []),
+        )
+        for script in scripts
+    }
+
+    # Which script writes each dataset. Two scripts writing one dataset is not
+    # something the platform allows - a save refuses a dataset another script
+    # owns - but the map is built the same way regardless, taking the first.
+    written_by: dict[str, str] = {}
+    for script in scripts:
+        for dataset_id in script.writes or []:
+            written_by.setdefault(dataset_id, script.project_id)
+
+    # waiting[a] is every script a has to wait for.
+    waiting: dict[str, set[str]] = {one: set() for one in places}
+    for script in scripts:
+        for dataset_id in script.reads or []:
+            writer = written_by.get(dataset_id)
+            if writer is not None and writer != script.project_id:
+                waiting[script.project_id].add(writer)
+
+    for project_id, above in waiting.items():
+        places[project_id].waits_for = sorted(
+            places[one].project_name for one in above
+        )
+
+    # Kahn's algorithm, in rounds rather than one at a time: a round is a step,
+    # which is what makes "these four can run together" readable off the page.
+    left = dict(waiting)
+    step = 0
+    while left:
+        ready = sorted(
+            (one for one, above in left.items() if not above & left.keys()),
+            key=lambda one: places[one].project_name.lower(),
+        )
+        if not ready:
+            # Everything still here is in a ring, or waits on one.
+            for one in left:
+                places[one].in_a_cycle = True
+            break
+        for one in ready:
+            places[one].step = step
+            del left[one]
+        step += 1
+
+    return sorted(
+        places.values(),
+        key=lambda place: (place.in_a_cycle, place.step, place.project_name.lower()),
+    )

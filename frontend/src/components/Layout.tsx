@@ -45,6 +45,7 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: '/datasets', label: 'Datasets', icon: 'datasets' },
       { to: '/connections', label: 'Connections', icon: 'connections' },
+      { to: '/scripts', label: 'Scripts', icon: 'scripts' },
     ],
   },
   {

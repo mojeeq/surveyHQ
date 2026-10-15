@@ -14,6 +14,7 @@ export const PAGES = {
   '/projects': () => import('@/pages/Projects'),
   '/datasets': () => import('@/pages/Datasets'),
   '/connections': () => import('@/pages/Connections'),
+  '/scripts': () => import('@/pages/Scripts'),
   '/explore': () => import('@/pages/Explore'),
   '/dashboards': () => import('@/pages/Dashboards'),
   '/monitoring': () => import('@/pages/Monitoring'),
