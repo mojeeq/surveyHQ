@@ -235,3 +235,64 @@ def test_nothing_changes_when_the_output_never_moved(db_session, chain):
     assert rows[0].project_id == chain["source"]
     assert again.saved[-1].dataset_id == built
     assert "which now lives in" not in again.results[-1].message
+
+
+def test_every_writer_is_granted_not_whichever_came_back_first(db_session, chain):
+    """One writer per dataset is not a rule, so one claimant is not an answer.
+
+    `save, replace` writes back over whatever the script opened and claims
+    nothing, so two projects' scripts can both hold the same id. Reading one
+    claimant out of an unordered query authorises whichever row the database
+    yielded, refuses the rest, and can change its mind between runs.
+    """
+    from app.models import Project, ProjectScript
+
+    first = build(db_session, chain, SCRIPT)
+    db_session.commit()
+    built = first.saved[-1].dataset_id
+
+    # A second project whose script also wrote it, as `save, replace` allows.
+    other = Project(name="Amender", slug="amender-grant")
+    db_session.add(other)
+    db_session.flush()
+    db_session.add(ProjectScript(project_id=other.id, text="use x", reads=[], writes=[built]))
+    db_session.commit()
+
+    move(chain, built)
+    db_session.expire_all()
+
+    granted = (db_session.get(Dataset, built).meta or {}).get(
+        project_script.REBUILT_BY
+    )
+    assert sorted(granted) == sorted([chain["source"], other.id])
+    # And the order is settled rather than whatever came back.
+    assert granted == sorted(granted)
+
+
+def test_releasing_a_dataset_to_the_shared_area_drops_the_grant(
+    client, auth_headers, db_session, chain
+):
+    """Deleting a project without its contents lets its datasets go to the
+    shared area. Nobody chose that destination, so nobody granted anything -
+    and a grant surviving it would outlive the project it was about."""
+    first = build(db_session, chain, SCRIPT)
+    db_session.commit()
+    built = first.saved[-1].dataset_id
+    move(chain, built)
+    db_session.expire_all()
+    assert (db_session.get(Dataset, built).meta or {}).get(project_script.REBUILT_BY)
+
+    gone = client.delete(
+        f"/api/v1/projects/{chain['reader']}", headers=auth_headers
+    )
+    assert gone.status_code < 300, gone.text
+    db_session.expire_all()
+
+    released = db_session.get(Dataset, built)
+    assert released.project_id is None
+    assert not (released.meta or {}).get(project_script.REBUILT_BY)
+
+    # And the script that built it can no longer write there.
+    with pytest.raises(stata.CommandError) as raised:
+        build(db_session, chain, SCRIPT)
+    assert "has not agreed" in str(raised.value)

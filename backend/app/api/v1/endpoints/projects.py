@@ -290,6 +290,16 @@ def delete_project(
     # foreign key, so the constraint would not fire and the rows would be left
     # pointing at a project that no longer exists - visible to nobody but an
     # administrator. Doing it explicitly works the same either way.
+    # A grant goes with the project it was granted over. Releasing a dataset
+    # into the shared area is not a move anybody chose a destination for, so
+    # nothing has been agreed and a grant left over from the move that put it
+    # here would let the script that built it keep writing to a dataset now
+    # sitting in the open.
+    for dataset in db.scalars(
+        select(Dataset).where(Dataset.project_id == project_id)
+    ).all():
+        project_script.release(db, dataset)
+    db.flush()
     for model in (Dataset, Dashboard, DatasetRelationship, Connection):
         db.execute(update(model).where(model.project_id == project_id).values(project_id=None))
     db.delete(project)

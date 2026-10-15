@@ -315,14 +315,24 @@ def running_order(db: Session, scripts: list[ProjectScript]) -> list[Place]:
 REBUILT_BY = "rebuilt_by_project"
 
 
-def claimed_by(db: Session, dataset_id: str) -> str | None:
-    """The project whose script last claimed to build this dataset."""
+def claimed_by(db: Session, dataset_id: str) -> list[str]:
+    """Every project whose script claims to have built this dataset.
+
+    Every one, not the first that comes back. One writer per dataset looked
+    like a rule and is not - `save, replace` writes back over whatever the
+    script opened and claims nothing - so a query for one claimant returns
+    whichever row the database happens to yield first. That would authorise
+    one writer, refuse the others, and change its mind between runs.
+    """
     from app.models import ProjectScript as Script
 
-    for script in db.scalars(select(Script)).all():
-        if dataset_id in (script.writes or []):
-            return script.project_id
-    return None
+    return sorted(
+        {
+            script.project_id
+            for script in db.scalars(select(Script)).all()
+            if dataset_id in (script.writes or [])
+        }
+    )
 
 
 def note_move(db: Session, dataset, moved_to: str | None) -> None:
@@ -347,16 +357,30 @@ def note_move(db: Session, dataset, moved_to: str | None) -> None:
     home clears it.
     """
     meta = dict(dataset.meta or {})
-    claimant = claimed_by(db, dataset.id)
-    if claimant is not None and claimant != moved_to:
-        meta[REBUILT_BY] = claimant
+    claimants = [one for one in claimed_by(db, dataset.id) if one != moved_to]
+    if claimants:
+        meta[REBUILT_BY] = claimants
     else:
         meta.pop(REBUILT_BY, None)
     dataset.meta = meta
+
+
+def release(db: Session, dataset) -> None:
+    """Drop the grant when a dataset is let go rather than moved.
+
+    Deleting a project without its contents releases its datasets to the
+    shared area. Nobody chose a destination there, so nobody granted anything,
+    and a grant left over from the move that put the dataset in that project
+    would outlive the project it was about - letting the script that built it
+    go on writing to a dataset now sitting in the open.
+    """
+    meta = dict(dataset.meta or {})
+    if meta.pop(REBUILT_BY, None) is not None:
+        dataset.meta = meta
 
 
 def may_rebuild(dataset, project_id: str | None) -> bool:
     """Whether this project's script may write over a dataset that has moved."""
     if project_id is None:
         return False
-    return (dataset.meta or {}).get(REBUILT_BY) == project_id
+    return project_id in ((dataset.meta or {}).get(REBUILT_BY) or [])
