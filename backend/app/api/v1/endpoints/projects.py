@@ -290,6 +290,16 @@ def delete_project(
     # foreign key, so the constraint would not fire and the rows would be left
     # pointing at a project that no longer exists - visible to nobody but an
     # administrator. Doing it explicitly works the same either way.
+    # A grant goes with the project it was granted over. Releasing a dataset
+    # into the shared area is not a move anybody chose a destination for, so
+    # nothing has been agreed and a grant left over from the move that put it
+    # here would let the script that built it keep writing to a dataset now
+    # sitting in the open.
+    for dataset in db.scalars(
+        select(Dataset).where(Dataset.project_id == project_id)
+    ).all():
+        project_script.release(db, dataset)
+    db.flush()
     for model in (Dataset, Dashboard, DatasetRelationship, Connection):
         db.execute(update(model).where(model.project_id == project_id).values(project_id=None))
     db.delete(project)
@@ -388,6 +398,12 @@ def assign_dataset(
         raise HTTPException(status_code=404, detail="Dataset not found")
     _check_move(db, user, dataset.project_id, payload.project_id)
     dataset.project_id = payload.project_id
+    # Moving a script's output into another project is what lets that script
+    # go on rebuilding it there, and that is a permission rather than a
+    # detail. Recorded here, where somebody with the manager role on both
+    # sides is granting it, instead of inferred later from what a script
+    # happens to have written.
+    project_script.note_move(db, dataset, payload.project_id)
     db.commit()
     record(
         db,
@@ -545,7 +561,9 @@ def write_script(
     end of the day should survive being closed, and running it then would
     build half of something.
     """
-    _visible_project(project_id, db, user)
+    # Same as running it: seeing a project is not grounds for rewriting the
+    # recipe its data is built from.
+    _editable_project(project_id, db, user, Role.manager)
     script = project_script.script_for(db, project_id)
     script.text = payload.text
     script.updated_by = user.id
@@ -564,7 +582,12 @@ def run_script(
     not unwound, so a script fixed at line nine does not redo lines one to
     eight.
     """
-    project = _visible_project(project_id, db, user)
+    # The manager role on this project, not merely the global one. A global
+    # manager who is only a viewer here could otherwise run the script, which
+    # writes the project's datasets - and, now that a script may rebuild an
+    # output that moved, writes into the project it moved to as well. Being
+    # able to see a project has never been grounds for rewriting its data.
+    project = _editable_project(project_id, db, user, Role.manager)
     try:
         archiving.refuse_if_archived(project, "running its script")
     except ValueError as exc:

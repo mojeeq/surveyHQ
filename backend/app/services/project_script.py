@@ -260,21 +260,27 @@ def running_order(db: Session, scripts: list[ProjectScript]) -> list[Place]:
         for script in scripts
     }
 
-    # Which script writes each dataset. Two scripts writing one dataset is not
-    # something the platform allows - a save refuses a dataset another script
-    # owns - but the map is built the same way regardless, taking the first.
-    written_by: dict[str, str] = {}
+    # Which scripts write each dataset - all of them, not the first.
+    #
+    # `save as` refuses a dataset another script owns, which made one writer
+    # per dataset look like a rule. It is not: `save, replace` writes back
+    # over whatever the script opened, with no claim of ownership, so a second
+    # project's script can `use` a dataset and write it while the first still
+    # lists the same id from the run that made it. Keeping only the first
+    # writer put the reader after one of them and before the other, which is
+    # the stale read this page exists to prevent - arrived at by following it.
+    written_by: dict[str, set[str]] = {}
     for script in scripts:
         for dataset_id in script.writes or []:
-            written_by.setdefault(dataset_id, script.project_id)
+            written_by.setdefault(dataset_id, set()).add(script.project_id)
 
     # waiting[a] is every script a has to wait for.
     waiting: dict[str, set[str]] = {one: set() for one in places}
     for script in scripts:
         for dataset_id in script.reads or []:
-            writer = written_by.get(dataset_id)
-            if writer is not None and writer != script.project_id:
-                waiting[script.project_id].add(writer)
+            for writer in written_by.get(dataset_id, ()):
+                if writer != script.project_id:
+                    waiting[script.project_id].add(writer)
 
     for project_id, above in waiting.items():
         places[project_id].waits_for = sorted(
@@ -304,3 +310,77 @@ def running_order(db: Session, scripts: list[ProjectScript]) -> list[Place]:
         places.values(),
         key=lambda place: (place.in_a_cycle, place.step, place.project_name.lower()),
     )
+
+# Where a moved output records the script that may keep rebuilding it.
+REBUILT_BY = "rebuilt_by_project"
+
+
+def claimed_by(db: Session, dataset_id: str) -> list[str]:
+    """Every project whose script claims to have built this dataset.
+
+    Every one, not the first that comes back. One writer per dataset looked
+    like a rule and is not - `save, replace` writes back over whatever the
+    script opened and claims nothing - so a query for one claimant returns
+    whichever row the database happens to yield first. That would authorise
+    one writer, refuse the others, and change its mind between runs.
+    """
+    from app.models import ProjectScript as Script
+
+    return sorted(
+        {
+            script.project_id
+            for script in db.scalars(select(Script)).all()
+            if dataset_id in (script.writes or [])
+        }
+    )
+
+
+def note_move(db: Session, dataset, moved_to: str | None) -> None:
+    """Record, at the moment of the move, that a script may still rebuild it.
+
+    A script writes into its own project and reads from its own project, so
+    the only way one project's script feeds another's is for somebody to move
+    the output across. The script has to go on rebuilding it or the reader is
+    left with whatever it held the day it moved - and letting it do that is a
+    permission, not a detail.
+
+    Recorded here because this is where the permission is actually granted.
+    Moving needs the manager role on both projects, so whoever does it is
+    entitled to say that this project's script may write into that one. Read
+    off `writes` afterwards instead, the way this started, and the permission
+    would be inferred from history by somebody who never agreed to it: the
+    source project's manager need never have had any rights over the
+    destination, and would still be writing into it.
+
+    The grant travels with the dataset and is rewritten on every move, so
+    moving it again re-asks the question of whoever moves it, and moving it
+    home clears it.
+    """
+    meta = dict(dataset.meta or {})
+    claimants = [one for one in claimed_by(db, dataset.id) if one != moved_to]
+    if claimants:
+        meta[REBUILT_BY] = claimants
+    else:
+        meta.pop(REBUILT_BY, None)
+    dataset.meta = meta
+
+
+def release(db: Session, dataset) -> None:
+    """Drop the grant when a dataset is let go rather than moved.
+
+    Deleting a project without its contents releases its datasets to the
+    shared area. Nobody chose a destination there, so nobody granted anything,
+    and a grant left over from the move that put the dataset in that project
+    would outlive the project it was about - letting the script that built it
+    go on writing to a dataset now sitting in the open.
+    """
+    meta = dict(dataset.meta or {})
+    if meta.pop(REBUILT_BY, None) is not None:
+        dataset.meta = meta
+
+
+def may_rebuild(dataset, project_id: str | None) -> bool:
+    """Whether this project's script may write over a dataset that has moved."""
+    if project_id is None:
+        return False
+    return project_id in ((dataset.meta or {}).get(REBUILT_BY) or [])

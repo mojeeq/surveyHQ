@@ -3,7 +3,7 @@ from __future__ import annotations
 import datetime as dt
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.models.dataset import DatasetSource, DatasetStatus, VariableType
 
@@ -67,6 +67,22 @@ class DatasetOut(BaseModel):
     # Non-empty when this dataset was built from others and can be rebuilt.
     derivation: dict[str, Any] = Field(default_factory=dict)
     meta: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("meta", mode="after")
+    @classmethod
+    def _without_internal_keys(cls, value: dict[str, Any]) -> dict[str, Any]:
+        """Keep the rebuild grant out of what everybody who can see the
+        dataset is handed.
+
+        The grant names the projects whose scripts may still rebuild this
+        dataset, by id. Anybody able to see the project it now sits in would
+        otherwise be handed the ids of projects they cannot reach - and the
+        project routes answer 404 rather than 403 for exactly that reason,
+        so that the list cannot be enumerated.
+        """
+        from app.services.project_script import REBUILT_BY
+
+        return {key: one for key, one in (value or {}).items() if key != REBUILT_BY}
     version: int = 1
     refreshed_at: dt.datetime | None = None
     created_at: dt.datetime

@@ -953,10 +953,19 @@ def _owned_elsewhere(run: Run, name: str) -> Dataset | None:
     moved, which nothing updated again: a script reporting success on every
     line and a table that stopped changing.
 
-    What may be written is unchanged - only what the last run built, which is
-    what `owns` holds and what the message below says out loud. A dataset this
-    script did not build is still refused wherever it lives.
+    Two things have to be true, not one. `owns` says this script built it,
+    which is authorship and nothing more - it is read off what a past run
+    saved and nobody agreed to it. The permission is the move: moving a
+    dataset needs the manager role on both projects, so whoever moved it is
+    entitled to say that this project's script may write into that one, and
+    that is recorded on the dataset at the time. Without the second half, a
+    manager of the source project who has no rights at all over the
+    destination could overwrite a dataset there by running their own script.
     """
+    # Imported here rather than at the top: project_script imports this
+    # module, so naming it up there is a cycle.
+    from app.services import archive, project_script
+
     if not run.owns:
         return None
     wanted = name.strip().lower()
@@ -964,8 +973,27 @@ def _owned_elsewhere(run: Run, name: str) -> Dataset | None:
         run.db.execute(select(Dataset).where(Dataset.id.in_(run.owns))).scalars().all()
     )
     for dataset in datasets:
-        if dataset.name.lower() == wanted or (dataset.slug or "").lower() == wanted:
+        if dataset.name.lower() != wanted and (dataset.slug or "").lower() != wanted:
+            continue
+        if dataset.project_id == run.project_id:
             return dataset
+        if not project_script.may_rebuild(dataset, run.project_id):
+            raise CommandError(
+                f"'{name}' was built by this script and now lives in another "
+                "project, which has not agreed to this script writing there. "
+                "Move it across again to say so, or save under another name."
+            )
+        destination = run.db.get(Project, dataset.project_id)
+        if archive.is_archived(destination):
+            # An archived project keeps its dataset rows and loses their data.
+            # Writing here would leave it holding live data again, which is
+            # the half-unarchived state every other path refuses to create.
+            raise CommandError(
+                f"'{name}' now lives in '{destination.name}', which is "
+                "archived, so there is nowhere to write it. Unarchive that "
+                "project first."
+            )
+        return dataset
     return None
 
 
