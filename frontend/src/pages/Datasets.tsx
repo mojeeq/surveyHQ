@@ -154,10 +154,15 @@ export default function Datasets() {
   ).length
 
   const remove = useMutation({
-    mutationFn: (id: string) => api.delete(`/datasets/${id}`),
-    onSuccess: () => {
-      toast.push('Dataset deleted', 'success')
+    mutationFn: (id: string) => api.delete<{ detail: string }>(`/datasets/${id}`),
+    onSuccess: (result) => {
+      // The server's own words, because the two outcomes differ: a dataset
+      // nobody built on is gone, and one with charts on it is still on the
+      // page, empty and waiting. Saying "deleted" to the second told somebody
+      // the opposite of what happened and hid how to get it back.
+      toast.push(result.detail, 'success')
       queryClient.invalidateQueries({ queryKey: ['datasets'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
     },
     onError: (error: Error) => toast.push(error.message, 'error'),
   })

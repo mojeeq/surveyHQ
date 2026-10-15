@@ -220,3 +220,114 @@ def test_clearing_a_whole_project_keeps_the_slots_that_are_built_on(
 
     assert db_session.get(Dataset, built["dataset_id"]) is not None
     assert db_session.get(Chart, built["chart_id"]) is not None
+
+
+# --- A plain file, not an archive --------------------------------------------
+
+
+def raw_upload(client, auth_headers, project_id: str, name: str = "persons.dta") -> str:
+    sent = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": (name, _stata_bytes(FRAME), "application/octet-stream")},
+        data={"project_id": project_id},
+    )
+    assert sent.status_code == 201, sent.text
+    body = sent.json()
+    return (body["datasets"][0]["id"] if "datasets" in body else body["id"])
+
+
+@pytest.fixture
+def built_from_a_plain_file(client, auth_headers, project) -> dict:
+    dataset_id = raw_upload(client, auth_headers, project)
+    chart = client.post(
+        "/api/v1/dashboards/charts",
+        headers=auth_headers,
+        json={
+            "name": "Wage by region",
+            "dataset_id": dataset_id,
+            "chart_type": "bar",
+            "spec": {
+                "query": {
+                    "dimensions": [{"variable": "region"}],
+                    "measures": [{"agg": "sum", "variable": "wage", "alias": "total"}],
+                }
+            },
+        },
+    )
+    assert chart.status_code == 201, chart.text
+    return {"project": project, "dataset_id": dataset_id, "chart_id": chart.json()["id"]}
+
+
+def test_a_plain_file_fills_the_slot_it_was_deleted_from(
+    built_from_a_plain_file, client, auth_headers, db_session
+):
+    """The archive route found its way back by member name. A lone .dta had no
+    member name, so it used to make a second dataset and leave the chart on the
+    empty one - which is the promise the delete message makes, broken."""
+    first = built_from_a_plain_file["dataset_id"]
+    client.delete(f"/api/v1/datasets/{first}", headers=auth_headers)
+    db_session.expire_all()
+
+    again = raw_upload(client, auth_headers, built_from_a_plain_file["project"])
+    assert again == first, "the re-upload made a new dataset instead of filling the slot"
+    db_session.expire_all()
+
+    refilled = db_session.get(Dataset, first)
+    assert refilled.status == DatasetStatus.ready
+    assert refilled.row_count == 4
+
+    drawn = client.post(
+        f"/api/v1/dashboards/charts/{built_from_a_plain_file['chart_id']}/data",
+        headers=auth_headers,
+        json={},
+    )
+    assert drawn.status_code == 200, drawn.text
+
+
+def test_a_plain_upload_never_lands_on_a_dataset_that_still_has_data(
+    built_from_a_plain_file, client, auth_headers, db_session
+):
+    """Only an empty slot is filled. Replacing live data from an ordinary
+    upload would be a destruction nobody asked for, and there is a replace
+    endpoint for when it is meant."""
+    first = built_from_a_plain_file["dataset_id"]
+
+    second = raw_upload(client, auth_headers, built_from_a_plain_file["project"])
+
+    assert second != first
+    db_session.expire_all()
+    assert db_session.get(Dataset, first).status == DatasetStatus.ready
+
+
+# --- Widgets that keep their datasets in config ------------------------------
+
+
+def test_a_freshness_widget_counts_as_something_built_on_it(
+    client, auth_headers, project, db_session
+):
+    """It watches several datasets and names them in its config rather than in
+    the column, so counting the column alone called this dataset unused and
+    deleted it, and the widget it was the whole subject of went quiet."""
+    dataset_id = upload(client, auth_headers, project)
+    board = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Freshness"}
+    ).json()
+    made = client.post(
+        f"/api/v1/dashboards/{board['id']}/widgets",
+        headers=auth_headers,
+        json={
+            "title": "Is the data current",
+            "widget_type": "freshness",
+            "dataset_id": None,
+            "config": {"dataset_ids": [dataset_id]},
+        },
+    )
+    assert made.status_code == 201, made.text
+
+    said = client.delete(f"/api/v1/datasets/{dataset_id}", headers=auth_headers)
+    assert said.status_code == 200
+    assert "emptied" in said.json()["detail"], said.json()
+    db_session.expire_all()
+
+    assert db_session.get(Dataset, dataset_id) is not None
