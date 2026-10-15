@@ -117,6 +117,60 @@ const CONTROL_CLASS = /\b(btn|btn-primary|btn-secondary|btn-danger|btn-ghost|btn
 const HEIGHT_UTILITY = /\b(min-h|h)-(\d+(\.\d+)?|px|full|\[[^\]]+\])/
 
 /**
+ * The same file with its comments blanked out, character for character.
+ *
+ * This codebase explains itself at length, and an explanation that shows what
+ * not to write - `className={tall ? 'btn h-9' : ''}` - is not a control with
+ * a height on it. Read as one, it fails the build over a sentence.
+ *
+ * Spaces rather than deletion so that every offset after a comment still
+ * lands where it did, which is what keeps the reported line numbers true.
+ * Newlines are kept for the same reason.
+ *
+ * Strings are tracked on the way through, so a `//` inside one is not the
+ * start of a comment: `href="https://example.org"` would otherwise blank the
+ * rest of the line, and with it any className after it on that line.
+ */
+function withoutComments(text) {
+  const out = [...text]
+  let inside = ''
+  let comment = ''
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i]
+    const next = text[i + 1]
+    if (comment === 'line') {
+      if (ch === '\n') comment = ''
+      else out[i] = ' '
+      continue
+    }
+    if (comment === 'block') {
+      const ending = ch === '*' && next === '/'
+      if (ch !== '\n') out[i] = ' '
+      if (ending) {
+        out[i + 1] = ' '
+        i += 1
+        comment = ''
+      }
+      continue
+    }
+    if (inside) {
+      if (ch === '\\') i += 1
+      else if (ch === inside) inside = ''
+      continue
+    }
+    if (ch === '"' || ch === "'" || ch === '`') inside = ch
+    else if (ch === '/' && next === '/') {
+      comment = 'line'
+      out[i] = ' '
+    } else if (ch === '/' && next === '*') {
+      comment = 'block'
+      out[i] = ' '
+    }
+  }
+  return out.join('')
+}
+
+/**
  * The whole value of a className attribute, whichever of the three shapes it
  * takes: a plain string, a braced expression, or a template literal.
  *
@@ -190,7 +244,7 @@ const walk = (dir) => {
 walk(SRC)
 
 for (const path of components) {
-  const text = readFileSync(path, 'utf8')
+  const text = withoutComments(readFileSync(path, 'utf8'))
   for (const match of text.matchAll(/className=/g)) {
     const attribute = classNameValue(text, match.index + 'className='.length)
     if (!CONTROL_CLASS.test(attribute) || !HEIGHT_UTILITY.test(attribute)) continue
