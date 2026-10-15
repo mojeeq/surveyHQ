@@ -46,11 +46,25 @@ def test_an_alias_is_not_offered_twice():
 
 
 def test_the_refusal_names_the_commands(db_session):
-    """The message somebody actually reads, not just the helper behind it."""
+    """The message somebody actually reads, not just the helper behind it.
+
+    A real Run rather than None: macro references are expanded before the
+    verb is looked up, because a macro may hold the verb itself, and the
+    expander reads the run's two dictionaries to do it.
+    """
     with pytest.raises(CommandError) as raised:
-        stata.apply(None, "recode sex (1 = 2)")  # type: ignore[arg-type]
+        stata.apply(stata.Run(db=db_session), "recode sex (1 = 2)")
 
     said = str(raised.value)
     assert "'recode' is not a command" in said
-    for name in ("collapse", "contract", "merge", "append", "gen", "egen"):
+    for name in ("collapse", "contract", "merge", "append", "gen", "egen", "local"):
         assert name in said, f"the refusal does not mention '{name}': {said}"
+
+
+def test_a_macro_can_hold_the_command_itself(db_session):
+    """Which is why expansion comes before the verb is looked up."""
+    run = stata.Run(db=db_session)
+    stata.apply(run, "local verb recode")
+    with pytest.raises(CommandError) as raised:
+        stata.apply(run, "`verb' sex (1 = 2)")
+    assert "'recode' is not a command" in str(raised.value)
