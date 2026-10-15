@@ -209,7 +209,7 @@ export default function Login() {
             )}
           </div>
 
-          <button className="btn-primary mt-5 h-9 w-full" disabled={busy}>
+          <button className="btn-primary mt-5 w-full" disabled={busy}>
             {busy && <Spinner className="h-4 w-4 text-white" />}
             {showing === 'signup' ? 'Create account' : 'Sign in'}
           </button>

@@ -18,10 +18,16 @@
  * sheets to that, because the next person to add a size class in the second
  * one will not see any of the above.
  *
+ * The markup is read too, because a stylesheet is not the only place a height
+ * can be set. The sign-in button carried `h-9` and stood 36 tall above two
+ * 32-tall fields, on the first screen anyone sees, and no amount of declaring
+ * in CSS would have reached it: a `min-height` is a floor, and a utility on
+ * the element clears it.
+ *
  * Run from `prelint`, so CI catches a new one. Not a vitest guard: vitest
  * returns an empty module for a CSS import, `?raw` included.
  */
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -105,14 +111,68 @@ for (const [selector, pattern] of [
   }
 }
 
+// A height written onto the element instead, which no amount of declaring in
+// a stylesheet can reach.
+const CONTROL_CLASS = /\b(btn|btn-primary|btn-secondary|btn-danger|btn-ghost|btn-sm|btn-xs|input|icon-button)\b/
+const HEIGHT_UTILITY = /\b(min-h|h)-(\d+(\.\d+)?|px|full|\[[^\]]+\])/
+
+/**
+ * The two controls that are meant to be taller than a row: a box typed into
+ * over several lines, and a list box showing its options at once. Both are
+ * several rows by definition, so a row's height is the wrong thing to hold
+ * them to.
+ */
+
+/** The tag an attribute belongs to, found by walking back to its opening. */
+function openingTag(text, at) {
+  const start = text.lastIndexOf('<', at)
+  if (start < 0) return { name: '', attributes: '' }
+  const name = /^<([a-zA-Z][\w.]*)/.exec(text.slice(start, start + 24))?.[1] ?? ''
+  // Far enough to carry the rest of one element's attributes and no further.
+  return { name, attributes: text.slice(start, start + 400) }
+}
+
+const grows = (text, at) => {
+  const { name, attributes } = openingTag(text, at)
+  if (name === 'textarea') return true
+  return name === 'select' && /\bmultiple\b/.test(attributes)
+}
+
+const components = []
+const walk = (dir) => {
+  for (const entry of readdirSync(dir)) {
+    const path = join(dir, entry)
+    if (statSync(path).isDirectory()) walk(path)
+    else if (/\.tsx$/.test(path)) components.push(path)
+  }
+}
+walk(SRC)
+
+for (const path of components) {
+  const text = readFileSync(path, 'utf8')
+  for (const match of text.matchAll(/className=\{?[`"'][^`"']*[`"']/g)) {
+    const attribute = match[0]
+    if (!CONTROL_CLASS.test(attribute) || !HEIGHT_UTILITY.test(attribute)) continue
+    if (grows(text, match.index)) continue
+    const line = text.slice(0, match.index).split('\n').length
+    problems.push(`${path.slice(SRC.length + 1)}:${line}  ${attribute.slice(0, 72)}`)
+  }
+}
+
 if (problems.length) {
   console.error('\nA control height is set somewhere other than index.css:\n')
   for (const problem of problems) console.error('  ' + problem)
   console.error(
     '\n  Heights belong to index.css, against --control-height and its smaller\n' +
       '  steps. Two stylesheets with an opinion about the same geometry is not a\n' +
-      '  style, it is a race, and the header grows three button sizes.\n',
+      '  style, it is a race, and the header grows three button sizes. A height\n' +
+      '  on the element itself clears the declared one just as thoroughly: drop\n' +
+      '  the utility, or add a step if the size is one the platform needs.\n' +
+      '  A textarea and a list box are already free to grow.\n',
   )
   process.exit(1)
 }
-console.log(`control height: one owner, steps ${tall}/${short}/${tiny}px`)
+console.log(
+  `control height: one owner, steps ${tall}/${short}/${tiny}px, ` +
+    `${components.length} components checked`,
+)
