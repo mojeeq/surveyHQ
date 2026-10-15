@@ -155,7 +155,15 @@ def points(
     if function and measure_variable:
         if measure_variable not in ctx.variables:
             raise QueryError(f"'{measure_variable}' is not a variable in this dataset")
-        value = f"{function}(try_cast({quote_ident(measure_variable)} AS DOUBLE))"
+        info = ctx.require(measure_variable)
+        column = quote_ident(info.name)
+        # The cast is for a column of numbers written as text, where it is the
+        # only way to get a sum at all. A stored number was never that case,
+        # and sending one through a double rounds it: a sum of two BIGINTs
+        # either side of 2**53 comes back two short, and a DECIMAL(18,3) grows
+        # a floating tail. A map compiles its own SQL, so the same question
+        # SQLBuilder asks has to be asked again here.
+        value = f"{function}({column if info.holds_numbers else f'try_cast({column} AS DOUBLE)'})"
     else:
         # No variable to aggregate is not an error: how many interviews are at
         # this spot is the question a map is usually asked first.

@@ -620,6 +620,7 @@ applied, exactly as a do-file behaves, and the log says what got through.
 | `label define` / `label values` | A value set, and the variable that uses it. |
 | `rename` | A new name, carried to everything built on the old one. |
 | `drop` / `keep` | Variables, or rows with `if`. |
+| `local` / `global` | Name a piece of script text and use it by name. |
 
 A comparison is a number, as it is in Stata: `gen adult = age >= 18` gives 1
 and 0, not true and false, so `egen total = sum(adult)` and
@@ -653,6 +654,51 @@ one.
 
 The page is read-only. Running a script is still done from the project that
 owns it, where the editor and the log are.
+
+#### Naming a condition you use more than once
+
+A long recode says the same thing over and over. The employment cascade below
+tests `ilo_wap == 1` on every rule, and the employment condition itself runs to
+a line and a half that appears in the generate and in two of the replaces.
+Change who counts as of working age and you have to find every copy, which is
+how a cascade comes to disagree with itself: one rule updated, the rest not,
+and the totals still adding up.
+
+So name it once:
+
+```
+local wap       ilo_wap == 1
+local working   main_activity == 1 | main_activity == 3 | inc_2nd_activity == 1
+local helping   additional_work == 1 | help_family == 1
+local employed  `working' | `helping'
+
+gen ilo_lfs_emp = .
+replace ilo_lfs_emp = 1 if (`employed') & `wap'
+replace ilo_lfs_emp = 3 if !inlist(ilo_lfs_emp, 1, 2) & `wap'
+```
+
+A local is written back as `` `name' `` and a global as `$name` or `${name}`.
+The name is replaced by its text before the command is parsed, which is the
+whole mechanism - so a macro can hold a condition, half of one, a variable
+list, an operator or the command itself. A macro written in terms of others
+takes their text as it stands at that moment, so the order you define them in
+is the order they read in.
+
+Both kinds last for the run. A definition touches no data, so it can be
+written above the `use` that opens the file, which is where the conditions of
+a script usually belong.
+
+Two things differ from Stata, both on purpose:
+
+- **An undefined name is refused**, by name, with the defined ones listed.
+  Stata puts nothing there and carries on, so a mistyped `` `poor' `` turns
+  `keep if `poor'` into `keep if` - every row kept, every line reporting
+  success, and the wrong answer published. There is no session here to type
+  `macro list` into, so the run stops and says which name it did not know.
+- **`local x = age > 15` names the expression** rather than its value. Stata
+  evaluates that against the first observation and stores a 0 or a 1, which
+  turns a condition into a constant. The run log says which of the two it did,
+  so there is nothing to discover later.
 
 #### Missing values follow Stata's rule, including where it bites
 

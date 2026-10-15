@@ -57,6 +57,9 @@ from app.services.stata_frame import (
     variables_of,
     write,
 )
+from app.services.stata_macros import MacroError
+from app.services.stata_macros import define as define_macro
+from app.services.stata_macros import expand as expand_macros
 
 logger = get_logger(__name__)
 
@@ -121,7 +124,9 @@ class Run:
     """
 
     db: Session
-    work: Workspace
+    # None only while a macro is being defined, which is the one thing a
+    # command can do with no data and nowhere to put any.
+    work: Workspace | None = None
     frame: Frame | None = None
     project_id: str | None = None
     saved: list[Saved] = field(default_factory=list)
@@ -135,6 +140,13 @@ class Run:
     # have to resolve names the way `use` does, and would count a line that
     # never ran because the one above it failed.
     read: list[str] = field(default_factory=list)
+    # Named pieces of script text, by namespace. Both last for the run: a run
+    # is the whole session here, so Stata's distinction between a local that
+    # ends with the do-file and a global that outlives it has nothing to
+    # separate. The two names stay apart because scripts are written with
+    # both, and a local and a global of one name are two macros in Stata.
+    locals: dict[str, str] = field(default_factory=dict)
+    globals: dict[str, str] = field(default_factory=dict)
 
     @property
     def data(self) -> Frame:
@@ -158,6 +170,25 @@ def apply(run: Run, text: str) -> CommandResult:
         raise CommandError("Type a command, for example: gen adult = age >= 18")
 
     verb, _, rest = command.partition(" ")
+    # Macro references are replaced before the command is parsed, which is all
+    # a macro is - but not in the line that defines one, or `local a `b'` would
+    # expand the name being defined rather than the text it stands for.
+    if verb.lower().rstrip(",") not in ("local", "global"):
+        try:
+            # Stripped again: a macro that stands for nothing is a legitimate
+            # thing to define - it is how a condition is switched off without
+            # deleting the lines using it - and `prefix' at the front of a
+            # command then leaves a leading space, which the partition below
+            # reads as an empty verb.
+            command = expand_macros(command, run.locals, run.globals).strip()
+        except MacroError as exc:
+            raise CommandError(str(exc)) from exc
+        if not command:
+            raise CommandError(
+                "That command is nothing but macros, and all of them stand "
+                "for nothing, so there is no command left to run."
+            )
+        verb, _, rest = command.partition(" ")
     # `save as x` and `save, replace` are both the save verb; Stata spells the
     # first with a word and the second with an option, and the partition above
     # would hand "save," on as the verb.
@@ -175,13 +206,31 @@ def apply(run: Run, text: str) -> CommandResult:
     return result
 
 
-def run(db: Session, dataset: Dataset, text: str, record_it: bool = True) -> CommandResult:
+# The commands that define a macro rather than doing anything to the data.
+# They are the only ones that can run with no data in memory at all, which is
+# what lets a script name its conditions above the `use` that opens the file.
+NAMING_VERBS = {"local", "global"}
+
+
+def run(
+    db: Session,
+    dataset: Dataset,
+    text: str,
+    record_it: bool = True,
+    locals_: dict[str, str] | None = None,
+    globals_: dict[str, str] | None = None,
+) -> CommandResult:
     """Run one command against a dataset, and remember it if it changed anything.
 
     The engine works on a copy in a scratch workspace, so this loads one,
     applies the command and writes the result back - which is the in-place
     behaviour the dataset command box has always had, now expressed in terms
     of the same frame a project script uses.
+
+    The two macro dictionaries are passed in rather than made here, because a
+    macro has to outlive the command that defined it and every command gets
+    its own Run. A caller with no interest in macros passes neither and gets a
+    pair that lives for the one command.
     """
     # The variable rows are deleted and rebuilt by every command that changes
     # the data, so a second command in the same transaction would otherwise be
@@ -189,14 +238,31 @@ def run(db: Session, dataset: Dataset, text: str, record_it: bool = True) -> Com
     db.flush()
     db.refresh(dataset)
 
-    if not dataset_is_queryable(dataset):
-        raise CommandError(f"'{dataset.name}' has no data to work on yet")
+    named = dict(locals_ if locals_ is not None else {})
+    wider = dict(globals_ if globals_ is not None else {})
 
-    with Workspace() as work:
-        frame = load(work, dataset)
-        frame.label_books = dict((dataset.meta or {}).get("label_books") or {})
-        result = apply(Run(db=db, work=work, frame=frame), text)
-        _store(db, dataset, frame)
+    # A macro definition touches no data, so it neither loads the dataset nor
+    # writes it back. Loading would refuse on a dataset still waiting for its
+    # file, and writing would copy the whole parquet to say nothing changed.
+    if text.strip().split(" ")[0].lower().rstrip(",") in NAMING_VERBS:
+        result = apply(Run(db=db, work=None, locals=named, globals=wider), text)
+    else:
+        if not dataset_is_queryable(dataset):
+            raise CommandError(f"'{dataset.name}' has no data to work on yet")
+        with Workspace() as work:
+            frame = load(work, dataset)
+            frame.label_books = dict((dataset.meta or {}).get("label_books") or {})
+            result = apply(
+                Run(db=db, work=work, frame=frame, locals=named, globals=wider), text
+            )
+            _store(db, dataset, frame)
+
+    # Back into the caller's dictionaries, so the next command in the same
+    # script can use what this one named.
+    if locals_ is not None:
+        locals_.update(named)
+    if globals_ is not None:
+        globals_.update(wider)
 
     if record_it:
         _remember(dataset, result.command)
@@ -301,9 +367,14 @@ def run_script(db: Session, dataset: Dataset, text: str) -> list[CommandResult]:
     What ran stays run, which is also what Stata does.
     """
     results: list[CommandResult] = []
+    # One set of macros for the whole script, as the project runner has. Every
+    # line here gets its own Run, so without this a name defined on one line
+    # would be gone by the next.
+    named: dict[str, str] = {}
+    wider: dict[str, str] = {}
     for number, line in enumerate(_lines(text), start=1):
         try:
-            results.append(run(db, dataset, line))
+            results.append(run(db, dataset, line, locals_=named, globals_=wider))
         except (CommandError, ExpressionError) as exc:
             raise ScriptError(number, line, str(exc), results) from exc
     if not results:
@@ -426,6 +497,53 @@ def _expression_kinds(frame: Frame) -> dict[str, str]:
     return kinds
 
 
+
+
+def _local(run: Run, rest: str) -> CommandResult:
+    """local <name> <text> - name a piece of script text for this run."""
+    return _macro(run, rest, run.locals, "local", "`", "'")
+
+
+def _global(run: Run, rest: str) -> CommandResult:
+    """global <name> <text> - the same, in the namespace written as $name."""
+    return _macro(run, rest, run.globals, "global", "$", "")
+
+
+def _macro(
+    run: Run,
+    rest: str,
+    among: dict[str, str],
+    kind: str,
+    open_: str,
+    close: str,
+) -> CommandResult:
+    """Define one macro.
+
+    Nothing is evaluated and nothing touches the data, so this is the one
+    command that can run before a `use`. That matters: the conditions a script
+    names are usually written at the top, above the first dataset it opens.
+    """
+    try:
+        name, body, evaluated = define_macro(rest)
+    except MacroError as exc:
+        raise CommandError(str(exc)) from exc
+
+    # A macro may be written in terms of ones already defined, and it is the
+    # text at the time of definition that is stored - as in Stata, where a
+    # later change to the inner macro does not reach back into this one.
+    try:
+        body = expand_macros(body, run.locals, run.globals)
+    except MacroError as exc:
+        raise CommandError(str(exc)) from exc
+
+    among[name] = body
+    shown = body if body else "nothing"
+    message = f"{open_}{name}{close} stands for {shown}"
+    if evaluated:
+        # Stata would read observation 1 here and store a 0 or a 1, which is
+        # how a condition becomes a constant without anybody noticing.
+        message += " - the expression itself, not its value on the first row"
+    return CommandResult(command="", message=message)
 
 
 def _generate(run: Run, rest: str) -> CommandResult:
@@ -1365,6 +1483,8 @@ def verbs() -> dict[str, Any]:
         "rename": _rename, "ren": _rename,
         "drop": _drop,
         "keep": _keep,
+        "local": _local,
+        "global": _global,
     }
 
 
@@ -1629,9 +1749,15 @@ def replay(db: Session, dataset: Dataset) -> list[str]:
     this platform exists to make routine.
     """
     problems: list[str] = []
+    # One set of macros for the whole replay, as a script has. The recorded
+    # commands are the expanded ones, so most of them need no macro at all -
+    # but a definition written in terms of another was recorded as typed, and
+    # replaying it without what came before fails on a name it cannot find.
+    named: dict[str, str] = {}
+    wider: dict[str, str] = {}
     for text in entries(dataset):
         try:
-            run(db, dataset, text, record_it=False)
+            run(db, dataset, text, record_it=False, locals_=named, globals_=wider)
         except Exception as exc:  # noqa: BLE001 - a replay must never fail an
             # import that has already happened.
             logger.exception("Replaying a recorded command failed")
