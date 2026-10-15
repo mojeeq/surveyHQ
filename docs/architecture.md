@@ -516,6 +516,7 @@ backend/app/
                 preparing it
                   stata.py            the command engine for a project script
                   stata_expr.py       its expression language
+                  stata_macros.py     names for pieces of script text
                   stata_frame.py      the frame a script works on
                   project_script.py   where a project's script lives, and
                                       when it runs again

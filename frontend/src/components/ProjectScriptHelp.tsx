@@ -53,6 +53,17 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    title: 'Naming a condition',
+    blurb:
+      'A long recode says the same thing over and over, and changing it means finding every copy - which is how a cascade comes to disagree with itself. Name it once and the name is replaced by its text before the command is parsed, so a macro can hold a condition, a variable list, an operator or the command itself. A mistyped name is refused rather than quietly standing for nothing, which is what Stata does and how a do-file returns a wrong answer with no error in it.',
+    examples: [
+      { line: 'local wap ilo_wap == 1', note: 'Name a piece of script text for this run' },
+      { line: 'replace emp = 3 if !inlist(emp, 1, 2) & `wap\'', note: 'Use it by name, written back with a backtick and an apostrophe' },
+      { line: 'local employed `working\' | `helping\'', note: 'A macro written in terms of ones already defined' },
+      { line: 'global round 2026', note: 'The other namespace, used as $round or ${round}' },
+    ],
+  },
+  {
     title: 'Names and labels',
     blurb: 'These change what charts and dropdowns read, not the data underneath.',
     examples: [
