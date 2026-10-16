@@ -44,6 +44,23 @@ export type CrossFilter = {
   value: string;
   label: string;
   from: string;
+  /** How the clicked mark is matched.
+   *
+   *  Normally a value of a variable, so "eq". A "tick all that apply" option
+   *  is not that: each option is a column of its own, and the bar counts the
+   *  rows that ticked it, so the filter asks the same question of the same
+   *  column rather than comparing it to a value. Equality cannot do it - an
+   *  export writes 1 and 0, a CSV round trip "1" and "0", some tools Yes and
+   *  No, and a column holding a mixture matched either nothing or only part
+   *  of what its own bar had counted.
+   */
+  operator?: "eq" | "selected";
+  /** What the chip calls the clicked mark, where `value` is not worth showing.
+   *
+   *  A ticked option has no value to print: the answer is the column. The chip
+   *  names the option instead, which is what the reader clicked.
+   */
+  valueLabel?: string;
 };
 
 /** Fold a click-to-filter selection into the page's own filters. */
@@ -56,13 +73,24 @@ export function withCrossFilter(
     ...group,
     conditions: [
       ...group.conditions,
-      // The clicked text is the label shown on the axis, not the stored code.
-      {
-        variable: picked.variable,
-        operator: "eq",
-        value: picked.value,
-        use_label: true,
-      },
+      picked.operator === "selected"
+        ? // The option's own column, asked the question its bar was counted
+          // with. No value and no label translation: ticked or not is the
+          // whole of it.
+          {
+            variable: picked.variable,
+            operator: "selected" as const,
+            value: null,
+            use_label: false,
+          }
+        : // The clicked text is the label shown on the axis, not the stored
+          // code.
+          {
+            variable: picked.variable,
+            operator: "eq" as const,
+            value: picked.value,
+            use_label: true,
+          },
     ],
   };
 }
@@ -220,6 +248,57 @@ export function clickedVariable(
   payload: { grouped_on?: string[] } | undefined,
 ): string {
   return payload?.grouped_on?.[0] ?? "";
+}
+
+/** What a click on `category` stands for, or null where it stands for nothing.
+ *
+ *  The one place that decides whether a chart is clickable and what the click
+ *  means, so the two cannot drift: a chart was once given a handler on one
+ *  rule and asked to produce a filter on another, and the mismatch showed up
+ *  as a bar that quietly did nothing.
+ *
+ *  A KPI or a table of measures has no category behind the mark and returns
+ *  null - clicking it would filter by nothing.
+ */
+export function clickTarget(
+  payload: { grouped_on?: string[]; option_columns?: Record<string, string> } | undefined,
+  category: string,
+):
+  | { variable: string; value: string; how?: { operator: "selected"; valueLabel: string } }
+  | null {
+  const column = ticked(payload)?.[category];
+  if (column) {
+    return {
+      variable: column,
+      value: category,
+      how: { operator: "selected", valueLabel: category },
+    };
+  }
+  const variable = clickedVariable(payload);
+  return variable ? { variable, value: category } : null;
+}
+
+/** Whether any click on this widget could mean something. */
+export function isClickable(
+  payload: { grouped_on?: string[]; option_columns?: Record<string, string> } | undefined,
+): boolean {
+  return Boolean(clickedVariable(payload) || ticked(payload));
+}
+
+/** The option columns of a "tick all that apply" chart, by the name on the bar.
+ *
+ *  Such a chart is grouped on nothing - each of its categories is a column of
+ *  the file - so `grouped_on` is empty and this is what a click reads instead.
+ *  Keyed by label because the label is what a click carries, and the only
+ *  thing that survives the chart's own sorting and top-N.
+ */
+export function ticked(
+  payload:
+    | { grouped_on?: string[]; option_columns?: Record<string, string> }
+    | undefined,
+): Record<string, string> | undefined {
+  const map = payload?.option_columns;
+  return map && Object.keys(map).length ? map : undefined;
 }
 
 /**

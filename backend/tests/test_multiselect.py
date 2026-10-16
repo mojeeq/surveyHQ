@@ -185,8 +185,10 @@ def test_it_renders_as_a_dashboard_widget(client, auth_headers, multi):
     payload = next(iter(rendered.json()["widgets"].values()))
     assert payload["type"] == "chart"
     assert {row[0]: row[1] for row in payload["result"]["rows"]}["Option 3"] == 4
-    # No variable behind the categories, so nothing for a click to filter by.
+    # Not grouped on a variable: each category is a column of its own. The map
+    # beside it is what a click reads instead.
     assert payload["grouped_on"] == []
+    assert payload["option_columns"]["Option 3"] == "water__3"
 
 
 def test_a_dashboard_filter_reaches_it(client, auth_headers, multi):
@@ -436,3 +438,176 @@ def test_options_labelled_only_with_the_question_are_not_all_drawn_alike(
         json={"columns": ["fuel__1", "fuel__2", "fuel__3"]},
     ).json()
     assert set(counts(result)) == {"Wood", "Gas", "Electricity"}
+
+
+# --- clicking a bar --------------------------------------------------------
+#
+# A bar on one of these charts used to do nothing. Every other chart on a
+# dashboard filters the page when a mark is clicked; this one was left out
+# because its categories are columns rather than values of a variable, and
+# there was no obvious filter a click could stand for. There is one: the
+# households that ticked this box. What it may not be is a plain equality.
+
+
+@pytest.fixture
+def mixed(client, auth_headers) -> str:
+    """The same question written the three ways an export can write it.
+
+    A real file is not tidy: Survey Solutions writes 1 and 0, a CSV round trip
+    can turn those into "1" and "0", and some tools write Yes and No. The
+    tabulation counts all three, so a filter made by clicking its bar has to
+    count all three as well.
+    """
+    body = (
+        "interview__key,pick__1,pick__2,province\n"
+        "h1,1,1,North\n"       # number
+        'h2,"1","1",North\n'   # text
+        "h3,Yes,Yes,South\n"   # word
+        "h4,0,No,South\n"      # not chosen, two ways
+        "h5,,,South\n"         # never asked
+    )
+    response = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("mixed.csv", body.encode(), "text/csv")},
+    )
+    assert response.status_code in (200, 201), response.text
+    payload = response.json()
+    return (payload["datasets"][0] if "datasets" in payload else payload)["id"]
+
+
+def _rows(client, headers, dataset_id, conditions):
+    """How many rows survive a filter, counted the way a widget would."""
+    response = client.post(
+        "/api/v1/analytics/query",
+        headers=headers,
+        json={
+            "dataset_id": dataset_id,
+            "spec": {
+                "dimensions": [],
+                "measures": [{"agg": "count"}],
+                "filters": {"op": "and", "conditions": conditions, "groups": []},
+            },
+        },
+    )
+    assert response.status_code == 200, response.text
+    rows = response.json()["rows"]
+    return int(rows[0][0]) if rows else 0
+
+
+def test_filtering_by_an_option_keeps_exactly_what_its_bar_counted(
+    client, auth_headers, mixed
+):
+    """The fault this exists for, and why equality could not do it.
+
+    `= 1` against a column DuckDB read as text matches nothing at all, and
+    `= '1'` matches only the rows that happen to be written that way - so a
+    page filtered by clicking a bar would have disagreed with the bar, and
+    said nothing about it.
+    """
+    bar = {
+        row[0]: row[1]
+        for row in client.post(
+            f"{BASE}/{mixed}/multiselect",
+            headers=auth_headers,
+            json={"columns": ["pick__1", "pick__2"]},
+        ).json()["rows"]
+    }
+    assert bar["Option 1"] == 3
+
+    ticked = _rows(
+        client, auth_headers, mixed, [{"variable": "pick__1", "operator": "selected"}]
+    )
+    assert ticked == bar["Option 1"]
+
+    # What it replaces, kept here so the reason stays visible. Against a column
+    # holding a mixture, equality either refuses the comparison outright or
+    # counts only the rows written one particular way. Neither is the bar.
+    assert _failed(
+        client, auth_headers, mixed,
+        [{"variable": "pick__1", "operator": "eq", "value": 1}],
+    )
+    assert _rows(
+        client, auth_headers, mixed,
+        [{"variable": "pick__1", "operator": "eq", "value": "1"}],
+    ) == 2
+
+
+def _failed(client, headers, dataset_id, conditions) -> bool:
+    """Whether the engine refused the comparison rather than answering it."""
+    response = client.post(
+        "/api/v1/analytics/query",
+        headers=headers,
+        json={
+            "dataset_id": dataset_id,
+            "spec": {
+                "dimensions": [],
+                "measures": [{"agg": "count"}],
+                "filters": {"op": "and", "conditions": conditions, "groups": []},
+            },
+        },
+    )
+    return response.status_code == 400
+
+
+def test_not_ticked_is_the_rest_of_the_rows(client, auth_headers, mixed):
+    """Including the household that was never asked.
+
+    A checkbox has a definite answer for somebody who was not asked: they did
+    not tick it. Leaving that row out of both halves would lose it from a
+    pair of filters that ought to cover the file.
+    """
+    chose = _rows(
+        client, auth_headers, mixed, [{"variable": "pick__2", "operator": "selected"}]
+    )
+    did_not = _rows(
+        client, auth_headers, mixed,
+        [{"variable": "pick__2", "operator": "not_selected"}],
+    )
+    assert chose == 3
+    assert chose + did_not == 5
+
+
+def test_two_options_with_the_same_words_are_told_apart(client, auth_headers):
+    """A click carries the label, so two bars may not share one.
+
+    Two "Other" boxes in one question is ordinary, and it takes a third option
+    to reach: with only the two, the words they share become the question's own
+    name and both fall back to being numbered, which is distinct already.
+    Three, and "Water: " is the shared part, leaving two bars reading "Other".
+
+    Left that way, the map from a clicked bar back to its column would hold one
+    of them and quietly filter by the other box.
+    """
+    body = (
+        "interview__key,water__1,water__2,water__3\n"
+        "h1,1,0,0\n"
+        "h2,0,1,1\n"
+    )
+    dataset = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("same.csv", body.encode(), "text/csv")},
+    ).json()
+    dataset_id = (dataset["datasets"][0] if "datasets" in dataset else dataset)["id"]
+    for column, label in (
+        ("water__1", "Water: Piped"),
+        ("water__2", "Water: Other"),
+        ("water__3", "Water: Other"),
+    ):
+        patched = client.patch(
+            f"/api/v1/datasets/{dataset_id}/variables/{column}",
+            headers=auth_headers,
+            json={"label": label},
+        )
+        assert patched.status_code == 200, patched.text
+    result = client.post(
+        f"{BASE}/{dataset_id}/multiselect",
+        headers=auth_headers,
+        json={"columns": ["water__1", "water__2", "water__3"]},
+    )
+    assert result.status_code == 200, result.text
+    labels = [row[0] for row in result.json()["rows"]]
+    assert "Piped" in labels, labels
+    others = [label for label in labels if label.startswith("Other")]
+    assert len(others) == 2 and len(set(others)) == 2, labels

@@ -2745,16 +2745,28 @@ def _render_widget(
                 "result": crosstab.model_dump(mode="json"),
             }
         if _is_multiselect(chart.spec or {}):
+            saved = (chart.spec or {}).get("multiselect") or {}
+            ticked = list(saved.get("columns") or [])
             return {
                 "type": "chart",
                 "chart_type": chart.chart_type.value,
                 "name": chart.name,
                 "filters_ignored": ignored,
                 "display": (chart.spec or {}).get("options") or {},
-                # Nothing to click through to: the categories are columns of
-                # the file, not values of one variable, so there is no filter a
-                # click could stand for.
+                # Not grouped on a variable: every category here is a column of
+                # its own. So nothing goes in `grouped_on`, and the map below
+                # is what a click reads instead.
                 "grouped_on": [],
+                # Which column each bar stands for, by the name written on it.
+                # A click carries the label - the only thing a reader points at,
+                # and the only thing that survives the chart's own sorting and
+                # top-N - so the label is the key. Ticking an option is a
+                # filter like any other ("the households that chose this"), it
+                # just names a column rather than a value.
+                "option_columns": {
+                    label: column
+                    for column, label in multiselect.labelled_options(ctx, ticked)
+                },
                 "result": _multiselect_result(ctx, chart.spec or {}, filters).model_dump(
                     mode="json"
                 ),

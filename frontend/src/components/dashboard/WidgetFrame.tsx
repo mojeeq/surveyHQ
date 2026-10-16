@@ -18,7 +18,7 @@ import ChartCard from "@/components/ChartCard";
 
 import CrosstabTable from "@/components/CrosstabTable";
 
-import { clickedVariable } from "@/components/dashboard/filters";
+import { clickTarget, isClickable } from "@/components/dashboard/filters";
 import {
   styleOf,
   titleStyle,
@@ -88,8 +88,17 @@ export function WidgetFrame({
   onMove: (page: number) => void;
   onEdit: () => void;
   onRemove: () => void;
-  /** A mark was clicked: filter the rest of the page by what it stands for. */
-  onSelect?: (variable: string, value: string) => void;
+  /** A mark was clicked: filter the rest of the page by what it stands for.
+   *
+   *  `how` is passed only where the mark is not a value of a variable - a
+   *  ticked option is a column of its own - so every other caller is
+   *  unchanged.
+   */
+  onSelect?: (
+    variable: string,
+    value: string,
+    how?: { operator: "selected"; valueLabel: string },
+  ) => void;
   /** The level this widget is drawn at, when the board has drilled past the
    *  one its title names. "Interviews by province" showing districts is not
    *  wrong, but it does need to say so. */
@@ -219,11 +228,13 @@ export function WidgetFrame({
           : { showValues: style.show_values }),
       }}
       onSelect={
-        // Only where a click means something: a chart grouped on a
-        // variable. A KPI or a table of measures has no category behind
-        // the mark, so clicking it would filter by nothing.
-        onSelect && clickedVariable(payload)
-          ? (category) => onSelect(clickedVariable(payload), category)
+        // Whether a click means anything here, and what it means, are the
+        // same question and are answered in one place.
+        onSelect && isClickable(payload)
+          ? (category) => {
+              const target = clickTarget(payload, category);
+              if (target) onSelect(target.variable, target.value, target.how);
+            }
           : undefined
       }
     />

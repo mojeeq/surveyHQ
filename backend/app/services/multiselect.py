@@ -28,6 +28,7 @@ from app.services.query_engine import (
     _quote_path,
     quote_ident,
     run_sql,
+    ticked_sql,
 )
 
 # The suffix Survey Solutions puts on each option of a multiple-select. Two
@@ -61,7 +62,8 @@ def groups(ctx: DatasetContext) -> list[dict[str, Any]]:
         # left to the chart: the person ticking hhld_goods__8 out of nineteen
         # boxes is choosing an option, and needs to see which one.
         options = [
-            {"column": name, "label": option_label(ctx, name, label)} for name in columns
+            {"column": name, "label": shown}
+            for name, shown in labelled_options(ctx, columns)
         ]
         listed.append(
             {
@@ -152,18 +154,41 @@ def option_label(ctx: DatasetContext, column: str, stem_label: str) -> str:
     return f"Option {match.group('option')}" if match else column
 
 
+def labelled_options(ctx: DatasetContext, columns: list[str]) -> list[tuple[str, str]]:
+    """Each option column paired with the name its bar carries, no two alike.
+
+    One function because three things have to agree about these names: the
+    tick-list offered when building the chart, the labels drawn on the bars,
+    and the map that turns a clicked bar back into the column to filter on.
+    That last one is why they are made unique here. Two options can easily
+    carry the same words - two "Other" boxes in one question - and a reader
+    looking at two identical bars cannot tell them apart either, so the option
+    number is added to both rather than to neither.
+    """
+    stem = OPTION.match(columns[0]) if columns else None
+    stem_label = _stem_label(ctx, stem.group("stem"), columns) if stem else ""
+    plain = [(name, option_label(ctx, name, stem_label)) for name in columns]
+    seen: dict[str, int] = {}
+    for _, label in plain:
+        seen[label] = seen.get(label, 0) + 1
+    out = []
+    for name, label in plain:
+        if seen[label] > 1:
+            match = OPTION.match(name)
+            label = f"{label} (option {match.group('option')})" if match else f"{label} ({name})"
+        out.append((name, label))
+    return out
+
+
 def _chosen(column: str) -> str:
     """The SQL for "this option was ticked".
 
-    An export writes 1 and 0; a CSV round trip can turn those into "1" and "0",
-    and some tools write Yes and No. All three mean the same thing and a chart
-    that silently counted none of them would be worse than an error.
+    Shared with the `selected` filter operator, so that filtering by an option
+    keeps exactly the rows its own bar counted. Clicking a bar is how that
+    filter gets made, and the two drifting apart is not something a reader
+    could see.
     """
-    quoted = quote_ident(column)
-    return (
-        f"(try_cast({quoted} AS DOUBLE) = 1 OR "
-        f"lower(trim(cast({quoted} AS VARCHAR))) IN ('yes', 'true'))"
-    )
+    return ticked_sql(quote_ident(column))
 
 
 def _answered(columns: list[str]) -> str:
@@ -217,15 +242,11 @@ def tabulate(
     total = int(row.get("total_rows") or 0)
     answered = int(row.get("answered") or 0)
     base = answered if percent_of == "respondents" else total
-    stem_label = _stem_label(ctx, OPTION.match(chosen[0]).group("stem"), chosen) if OPTION.match(
-        chosen[0]
-    ) else ""
-
     out: list[list[Any]] = []
-    for index, name in enumerate(chosen):
+    for index, (_, label) in enumerate(labelled_options(ctx, chosen)):
         count = int(row.get(f"c{index}") or 0)
         share = round(100 * count / base, 1) if base else 0.0
-        out.append([option_label(ctx, name, stem_label), count, share])
+        out.append([label, count, share])
 
     if sort == "value_desc":
         out.sort(key=lambda entry: entry[1], reverse=True)

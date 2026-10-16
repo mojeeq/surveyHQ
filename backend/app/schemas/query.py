@@ -51,6 +51,12 @@ class FilterOperator(str, enum.Enum):
     between = "between"
     is_null = "is_null"
     is_not_null = "is_not_null"
+    # A "tick all that apply" option: the column was ticked, or was not. These
+    # take no value - the column *is* the answer - and they match on the same
+    # test the multiple-select tabulation counts with, so a filter made by
+    # clicking a bar agrees with the bar it was clicked on.
+    selected = "selected"
+    not_selected = "not_selected"
 
 
 class Dimension(BaseModel):
