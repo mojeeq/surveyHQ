@@ -611,3 +611,59 @@ def test_two_options_with_the_same_words_are_told_apart(client, auth_headers):
     assert "Piped" in labels, labels
     others = [label for label in labels if label.startswith("Other")]
     assert len(others) == 2 and len(set(others)) == 2, labels
+
+
+def test_a_shared_link_lets_a_click_on_an_option_through(client, auth_headers, multi):
+    """A shared board bounds filters to what it shows, and these count.
+
+    An anonymous visitor's filter is held to the variables the dashboard puts
+    on screen, so that a link cannot be turned into a way of asking the file
+    questions it never offered to answer. A multiple-select chart has no
+    grouping variable, so its option columns were not in that allowance and a
+    click on one was dropped on the way in: the chip moved and every widget
+    stayed exactly as it was.
+
+    They belong in it for the same reason the axes do. Each option is drawn as
+    a bar with its name beside it, so filtering by one tells the visitor
+    nothing the page was not already showing them.
+    """
+    chart = client.post(
+        "/api/v1/dashboards/charts",
+        headers=auth_headers,
+        json={
+            "name": "Water sources",
+            "dataset_id": multi,
+            "chart_type": "bar",
+            "spec": {"multiselect": {"columns": ["water__1", "water__2"]}},
+        },
+    ).json()
+    dashboard = client.post(
+        "/api/v1/dashboards", headers=auth_headers, json={"name": "Shared water"}
+    ).json()
+    client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/widgets",
+        headers=auth_headers,
+        json={"title": "Water", "widget_type": "chart", "chart_id": chart["id"]},
+    )
+    token = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/share-links",
+        headers=auth_headers,
+        json={"label": "read only"},
+    ).json()["token"]
+
+    def shared(conditions):
+        response = client.post(
+            f"/api/v1/public/dashboards/{token}/data",
+            json={"op": "and", "conditions": conditions, "groups": []},
+        )
+        assert response.status_code == 200, response.text
+        payload = next(iter(response.json()["widgets"].values()))
+        return payload["result"]["total_rows_scanned"]
+
+    # Three of the six households ticked a piped-water supply.
+    assert shared([{"variable": "water__1", "operator": "selected"}]) == 3
+
+    # And the allowance still holds: a column no widget shows is dropped, so
+    # the board answers as though nothing had been asked.
+    everybody = shared([])
+    assert shared([{"variable": "interview__key", "operator": "eq", "value": "h1"}]) == everybody

@@ -20,6 +20,24 @@ function categoryAt(result: QueryResult, index: number): string {
   return value === null || value === undefined ? '' : String(value)
 }
 
+/** Whether `category` is a bar the chart invented rather than one of the rows.
+ *
+ *  A top-N display folds everything past the cut into a single "Other (5)",
+ *  which stands for several categories and is not any of them. Filtering by it
+ *  as though it were one asks for rows whose value is literally "Other (5)" -
+ *  there are none, so every widget on the page empties at once and nothing
+ *  says why. A click on it is better ignored than answered wrongly.
+ *
+ *  Checked against the rows rather than by the shape of the name alone, so a
+ *  real category that happens to be called "Other (5)" still filters.
+ */
+export function isFoldedBar(result: QueryResult, category: string): boolean {
+  if (!/^Other \(\d+\)$/.test(category)) return false
+  const at = result.columns.findIndex((column) => column.type === 'dimension')
+  if (at < 0) return false
+  return !result.rows.some((row) => String(row[at] ?? '') === category)
+}
+
 export default function ChartCard({
   result,
   chartType,
@@ -353,7 +371,7 @@ export default function ChartCard({
                     params?.name ||
                     byIndex ||
                     (Array.isArray(params?.value) ? '' : String(params?.value ?? ''))
-                  if (category) onSelect(category)
+                  if (category && !isFoldedBar(result, category)) onSelect(category)
                 },
                 // On a pie the legend is where the category names are: the
                 // slices themselves carry only a value and a percentage, so

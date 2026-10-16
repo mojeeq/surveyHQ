@@ -370,6 +370,16 @@ def visible_variables(db: DbSession, dashboard: Dashboard) -> set[str]:
                     str(crosstab.get(key) or "")
                     for key in ("row_variable", "column_variable")
                 )
+            elif _is_multiselect(spec):
+                # The option columns, which this chart has instead of a
+                # grouping variable. They belong here for the reason above:
+                # each one is drawn as a bar with its name beside it, so
+                # filtering by one tells a visitor nothing the page was not
+                # already showing them. Left out, a click on a shared link
+                # moved the chip and nothing else - the filter naming a column
+                # no widget appeared to show was dropped on the way in.
+                ticked = (spec.get("multiselect") or {}).get("columns") or []
+                names.update(str(name) for name in ticked)
             else:
                 names.update(_spec_variables(spec))
             continue
