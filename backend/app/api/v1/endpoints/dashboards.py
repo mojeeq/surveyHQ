@@ -75,9 +75,11 @@ from app.schemas.analytics import (
 from app.schemas.common import Message
 from app.schemas.monitoring import JobOut
 from app.schemas.query import (
+    Condition,
     CrosstabRequest,
     CrosstabResult,
     FilterGroup,
+    FilterOperator,
     QueryResult,
     QuerySpec,
 )
@@ -335,7 +337,34 @@ def _spec_variables(raw: dict[str, Any]) -> set[str]:
     return {dimension.variable for dimension in spec.dimensions if dimension.variable}
 
 
-def visible_variables(db: DbSession, dashboard: Dashboard) -> set[str]:
+@dataclass(frozen=True)
+class Allowance:
+    """What a filter arriving from outside a dashboard may name, and how.
+
+    Two sets rather than one because a variable's axis and an option's bar
+    show different amounts. An axis shows every category the variable takes,
+    so any comparison against it asks about something already on the page. A
+    tick-all-that-apply bar shows one thing - how many chose this option - and
+    says nothing about who was never asked, or who wrote No rather than 0. So
+    an option column is admitted for the condition a click actually makes and
+    for no other.
+    """
+
+    #: Variables the page draws an axis for: any operator.
+    anything: frozenset[str]
+    #: Option columns of a tick-all-that-apply chart: `selected` only.
+    ticked_only: frozenset[str]
+
+    def admits(self, condition: Condition) -> bool:
+        if condition.variable in self.anything:
+            return True
+        return (
+            condition.variable in self.ticked_only
+            and condition.operator == FilterOperator.selected
+        )
+
+
+def visible_variables(db: DbSession, dashboard: Dashboard) -> Allowance:
     """Every variable this dashboard puts on screen.
 
     Used to bound what a filter arriving from outside may name. A dashboard's
@@ -357,6 +386,7 @@ def visible_variables(db: DbSession, dashboard: Dashboard) -> set[str]:
         for control in (dashboard.filters or [])
         if isinstance(control, dict)
     }
+    ticked: set[str] = set()
     for widget in dashboard.widgets:
         config = widget.config or {}
         if widget.chart_id:
@@ -372,14 +402,16 @@ def visible_variables(db: DbSession, dashboard: Dashboard) -> set[str]:
                 )
             elif _is_multiselect(spec):
                 # The option columns, which this chart has instead of a
-                # grouping variable. They belong here for the reason above:
-                # each one is drawn as a bar with its name beside it, so
-                # filtering by one tells a visitor nothing the page was not
-                # already showing them. Left out, a click on a shared link
-                # moved the chip and nothing else - the filter naming a column
-                # no widget appeared to show was dropped on the way in.
-                ticked = (spec.get("multiselect") or {}).get("columns") or []
-                names.update(str(name) for name in ticked)
+                # grouping variable, and which go in the narrower set. Each is
+                # drawn as a bar with its name beside it, so "the ones who
+                # chose this" asks about what the page already shows - but
+                # only that. Admitted for every operator instead, a visitor
+                # could ask for the respondents never asked the question, or
+                # the ones whose No was written as a word rather than a zero,
+                # and read another widget's numbers for them.
+                ticked.update(
+                    str(name) for name in (spec.get("multiselect") or {}).get("columns") or []
+                )
             else:
                 names.update(_spec_variables(spec))
             continue
@@ -396,20 +428,23 @@ def visible_variables(db: DbSession, dashboard: Dashboard) -> set[str]:
             continue
         names.update(_spec_variables(config))
     names.discard("")
-    return names
+    ticked.discard("")
+    # A column with an axis of its own needs no narrowing: whatever put it in
+    # `names` already shows every value it takes.
+    return Allowance(anything=frozenset(names), ticked_only=frozenset(ticked - names))
 
 
 def restrict_to_visible(
-    filters: FilterGroup | None, allowed: set[str]
+    filters: FilterGroup | None, allowed: Allowance
 ) -> FilterGroup | None:
-    """Drop every condition naming something the dashboard does not show."""
+    """Drop every condition the dashboard does not already answer on screen."""
     if filters is None or filters.is_empty():
         return filters
 
     def prune(group: FilterGroup) -> FilterGroup:
         return FilterGroup(
             op=group.op,
-            conditions=[c for c in group.conditions if c.variable in allowed],
+            conditions=[c for c in group.conditions if allowed.admits(c)],
             groups=[prune(g) for g in group.groups],
         )
 

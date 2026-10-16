@@ -667,3 +667,30 @@ def test_a_shared_link_lets_a_click_on_an_option_through(client, auth_headers, m
     # the board answers as though nothing had been asked.
     everybody = shared([])
     assert shared([{"variable": "interview__key", "operator": "eq", "value": "h1"}]) == everybody
+
+    # An option column is admitted for the condition a click actually makes
+    # and for no other. Its bar shows how many chose the option and nothing
+    # about who was never asked, or whose No was written as a word rather
+    # than a zero - so those slices are not the board's to answer either.
+    for refused in (
+        {"variable": "water__1", "operator": "is_null"},
+        {"variable": "water__1", "operator": "not_selected"},
+        {"variable": "water__1", "operator": "eq", "value": "0"},
+        {"variable": "water__1", "operator": "ne", "value": "1"},
+    ):
+        assert shared([refused]) == everybody, refused
+
+    # Signed in, the same questions are ordinary: the allowance is about what
+    # a link hands an anonymous visitor, not about what the data can be asked.
+    signed_in = client.post(
+        f"/api/v1/dashboards/{dashboard['id']}/data",
+        headers=auth_headers,
+        json={
+            "op": "and",
+            "conditions": [{"variable": "water__1", "operator": "not_selected"}],
+            "groups": [],
+        },
+    )
+    assert signed_in.status_code == 200, signed_in.text
+    payload = next(iter(signed_in.json()["widgets"].values()))
+    assert payload["result"]["total_rows_scanned"] == 3
