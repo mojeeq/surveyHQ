@@ -14,6 +14,10 @@ const OPERATORS: { value: FilterOperator; label: string; noValue?: boolean }[] =
   { value: 'between', label: 'between' },
   { value: 'is_null', label: 'is missing', noValue: true },
   { value: 'is_not_null', label: 'is present', noValue: true },
+  // A "tick all that apply" option. Like the two above, the column is the
+  // answer, so there is no value to type.
+  { value: 'selected', label: 'was ticked', noValue: true },
+  { value: 'not_selected', label: 'was not ticked', noValue: true },
 ]
 
 /**

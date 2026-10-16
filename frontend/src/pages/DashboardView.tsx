@@ -933,10 +933,24 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
               Filtered by a click
             </p>
             <p className="mt-0.5 truncate text-sm text-ink-800 dark:text-dark-700">
-              {picked.variable} is{' '}
-              <strong className="font-semibold text-brand-700 dark:text-brand-300">
-                {picked.value}
-              </strong>
+              {picked.operator === 'selected' ? (
+                /* A ticked option has no value to read out: the answer is the
+                   column. So the chip names the option and says it was
+                   ticked, rather than printing "toilet__2 is 1". */
+                <>
+                  <strong className="font-semibold text-brand-700 dark:text-brand-300">
+                    {picked.valueLabel || picked.variable}
+                  </strong>{' '}
+                  was ticked
+                </>
+              ) : (
+                <>
+                  {picked.variable} is{' '}
+                  <strong className="font-semibold text-brand-700 dark:text-brand-300">
+                    {picked.value}
+                  </strong>
+                </>
+              )}
               <span className="ml-2 text-xs text-ink-500 dark:text-dark-500">
                 - every widget on this page except &ldquo;{picked.label}&rdquo;
               </span>
@@ -1127,11 +1141,16 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
                   })
                   if (sure) removeWidget.mutate(widget.id)
                 }}
-                onSelect={(variable, value) => {
+                onSelect={(variable, value, how) => {
                   // A click on the level the board is currently showing goes
                   // one step deeper, taking every chart with it. A click on
                   // anything else filters the page the way it always has.
-                  if (canDescend(hierarchy, path, variable)) {
+                  //
+                  // A ticked option is never a level: a hierarchy is nested
+                  // places, and an option column is one box on a form. Asked
+                  // first so a column that happened to share a level's name
+                  // could not send the board down a level it is not showing.
+                  if (!how && canDescend(hierarchy, path, variable)) {
                     setPicked(null)
                     setPath((current) => [
                       ...current,
@@ -1144,7 +1163,13 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
                     // where the hand goes before it finds the chip.
                     current && current.variable === variable && current.value === value
                       ? null
-                      : { variable, value, label: widget.title || variable, from: widget.id },
+                      : {
+                          variable,
+                          value,
+                          label: widget.title || variable,
+                          from: widget.id,
+                          ...(how ?? {}),
+                        },
                   )
                 }}
               />

@@ -160,6 +160,30 @@ quote_ident = columnar.quote_ident
 _quote_path = columnar.quote_path
 
 
+def ticked_sql(quoted_column: str) -> str:
+    """The SQL for "this tick-all-that-apply option was chosen".
+
+    One definition, because two things have to agree about it: the tabulation
+    that counts a multiple-select question's bars, and the filter made by
+    clicking one of those bars. They disagreed when the filter was a plain
+    equality - an export writes 1 and 0, a CSV round trip can turn those into
+    "1" and "0", and some tools write Yes and No, so on a column holding a
+    mixture `= 1` matched no rows at all and `= '1'` matched only some of what
+    its own bar had counted.
+
+    Total rather than three-valued: a row where the question was never asked
+    reads as not chosen instead of as unknown. A checkbox has a definite
+    answer for somebody who was not asked - they did not tick it - and an
+    UNKNOWN here would survive the `NOT (...)` that a data-quality check wraps
+    the filter tree in, leaving such rows reported by neither "matches" nor
+    "does not match".
+    """
+    return (
+        f"COALESCE(try_cast({quoted_column} AS DOUBLE) = 1 OR "
+        f"lower(trim(cast({quoted_column} AS VARCHAR))) IN ('yes', 'true'), FALSE)"
+    )
+
+
 class SQLBuilder:
     """Turns a spec into (sql, params)."""
 
@@ -314,6 +338,14 @@ class SQLBuilder:
             return f"{col} IS NULL"
         if op == FilterOperator.is_not_null:
             return f"{col} IS NOT NULL"
+
+        # A tick-all-that-apply option. No value to compare against and no
+        # label to translate: the column is the answer, so these are placed
+        # above the label translation rather than beside the comparisons.
+        if op == FilterOperator.selected:
+            return ticked_sql(col)
+        if op == FilterOperator.not_selected:
+            return f"NOT {ticked_sql(col)}"
 
         if op in (FilterOperator.in_, FilterOperator.not_in):
             values = value if isinstance(value, list) else [value]

@@ -224,6 +224,9 @@ export type FilterOperator =
   | 'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte' | 'in' | 'not_in'
   | 'contains' | 'not_contains' | 'starts_with' | 'ends_with'
   | 'between' | 'is_null' | 'is_not_null'
+  // A tick-all-that-apply option: the column was ticked, or was not. Neither
+  // takes a value - the column is the answer.
+  | 'selected' | 'not_selected'
 
 export interface Condition {
   variable: string
