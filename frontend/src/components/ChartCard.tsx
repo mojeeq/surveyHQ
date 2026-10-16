@@ -331,6 +331,15 @@ export default function ChartCard({
     )
   }
 
+  // One guard for every gesture that names a category: a click on a mark, and
+  // a click on a pie's legend. They were two call sites with one rule between
+  // them, which is how the legend kept filtering by a bar the chart invented.
+  const report = (category: string) => {
+    if (!category || !onSelect) return
+    if (isFoldedBar(result, category)) return
+    onSelect(category)
+  }
+
   return (
     <div ref={container} className={`flex flex-col ${fill ? 'h-full min-h-0' : ''}`}>
       {showToggle && <ViewToggle view={view} onChange={setView} />}
@@ -371,7 +380,7 @@ export default function ChartCard({
                     params?.name ||
                     byIndex ||
                     (Array.isArray(params?.value) ? '' : String(params?.value ?? ''))
-                  if (category && !isFoldedBar(result, category)) onSelect(category)
+                  report(category)
                 },
                 // On a pie the legend is where the category names are: the
                 // slices themselves carry only a value and a percentage, so
@@ -396,7 +405,11 @@ export default function ChartCard({
                           type: 'legendSelect',
                           name: params.name,
                         })
-                        onSelect(params.name)
+                        // Through the same guard as a click on a slice. A
+                        // pie's legend carries the categories, the fold
+                        // among them, and guarding only the slice left the
+                        // one gesture that names a category unguarded.
+                        report(params.name)
                       },
                     }
                   : {}),
