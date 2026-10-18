@@ -28,6 +28,12 @@ class ScriptPlace(BaseModel):
     lines: int = 0
     last_run_at: dt.datetime | None = None
     last_error: str = ""
+    # Whether this reader may change this script, which is not the same as
+    # being able to see it: the page lists every project somebody can view,
+    # and most of those they cannot edit. Said here so the page can offer the
+    # way in only where there is one, rather than showing everybody a button
+    # that quietly puts them back on the project.
+    can_edit: bool = False
 
 
 class ScriptsOverview(BaseModel):

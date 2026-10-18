@@ -35,6 +35,9 @@ interface ScriptPlace {
   lines: number
   last_run_at: string | null
   last_error: string
+  /** Whether this reader may change this script, which is not the same as
+   *  being able to see it. The page lists every project somebody can view. */
+  can_edit: boolean
 }
 
 export default function Scripts() {
@@ -139,9 +142,13 @@ function ScriptCard({ place }: { place: ScriptPlace }) {
         <div className="flex items-start justify-between gap-2">
           {/* Straight to the script, not to the project. A page that lists
               every script and sends you to a project page, open on Data, to
-              find a tab called Command is a list you cannot act on. */}
+              find a tab called Command is a list you cannot act on.
+
+              For a reader who may not change it, the project: the script tab
+              is not offered to them, and a link that lands them somewhere
+              other than where it said is the fault this page had already. */}
           <Link
-            to={`/projects/${place.project_id}?tab=script`}
+            to={`/projects/${place.project_id}${place.can_edit ? '?tab=script' : ''}`}
             className="text-[14px] font-semibold text-brand-600 hover:underline dark:text-brand-400"
           >
             {place.project_name}
@@ -180,15 +187,23 @@ function ScriptCard({ place }: { place: ScriptPlace }) {
             card's button sits on the same line however much its reads and
             writes ran to. Said out loud as well as on the title: "open the
             project" is what the heading already meant, and is what sent
-            people looking for a tab called Command. */}
-        <div className="mt-auto flex justify-end pt-1">
-          <Link
-            to={`/projects/${place.project_id}?tab=script`}
-            className="btn-secondary btn-sm"
-          >
-            Edit script
-          </Link>
-        </div>
+            people looking for a tab called Command.
+
+            Only where there is an editor to open. Running a script writes the
+            project's datasets, so it takes the manager role over that project
+            - while the page lists every project a reader can see. Shown to
+            everybody, the button would put most of them back on the project
+            with nothing said, which is the fault this page had already. */}
+        {place.can_edit && (
+          <div className="mt-auto flex justify-end pt-1">
+            <Link
+              to={`/projects/${place.project_id}?tab=script`}
+              className="btn-secondary btn-sm"
+            >
+              Edit script
+            </Link>
+          </div>
+        )}
       </div>
     </Card>
   )
