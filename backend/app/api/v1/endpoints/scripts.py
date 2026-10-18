@@ -7,8 +7,10 @@ that another reads to build an indicator table. Nothing on any single
 project's page can show that, because the relationship is between projects.
 
 So there is one page that shows all of them, with the order read off what
-each run actually opened and saved. Read-only: running them is still done
-from the project that owns the script, where the log and the editor are.
+each run actually opened and saved. Running them is still done from the
+project that owns the script, where the log and the editor are, and the page
+links straight there - for the readers who may, which is why each entry says
+whether this one can.
 """
 
 from __future__ import annotations
@@ -17,10 +19,10 @@ from fastapi import APIRouter
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DbSession
-from app.models import Dataset, ProjectScript
+from app.models import Dataset, ProjectScript, Role
 from app.schemas.script import ScriptPlace, ScriptsOverview
 from app.services import project_script, stata
-from app.services.projects import visible_projects
+from app.services.projects import can_edit, visible_projects
 
 router = APIRouter()
 
@@ -29,6 +31,14 @@ router = APIRouter()
 def overview(db: DbSession, user: CurrentUser) -> ScriptsOverview:
     """Every script this user can see, in the order they have to run."""
     allowed = {project.id for project in visible_projects(db, user)}
+    # Seeing a script and being able to change it are different questions, and
+    # the page asks both: it offers an editor, and the editor is the project's,
+    # which takes the manager role over that project.
+    editable = {
+        project_id
+        for project_id in allowed
+        if can_edit(db, user, project_id, Role.manager)
+    }
     # A row is made for a project the first time anybody opens its script tab,
     # so most of them are empty and are not scripts. One that has run is,
     # whatever it holds now: running is deliberately separate from saving -
@@ -58,6 +68,7 @@ def overview(db: DbSession, user: CurrentUser) -> ScriptsOverview:
                 lines=_lines_in(by_project[place.project_id].text),
                 last_run_at=by_project[place.project_id].last_run_at,
                 last_error=by_project[place.project_id].last_error,
+                can_edit=place.project_id in editable,
             )
             for place in places
         ]

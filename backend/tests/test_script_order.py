@@ -273,3 +273,74 @@ def test_the_overview_keeps_a_script_that_ran_without_being_saved(
     answered = client.get("/api/v1/scripts", headers=auth_headers)
     names = [place["project_name"] for place in answered.json()["places"]]
     assert "Tried not kept" in names
+
+
+def test_the_overview_says_who_may_change_each_script(client, auth_headers, db_session):
+    """Seeing a script and being able to change it are different questions.
+
+    The page lists every project the reader can see, and offers a way into the
+    editor. Running a script writes the project's datasets, so that editor
+    takes the manager role over that project - which most readers of most of
+    these projects do not have.
+
+    Offered to everybody, the button put them back on the project with nothing
+    said, which is the fault the page had before it had any button at all. So
+    each entry says whether this reader may, and the page offers the way in
+    only where there is one.
+    """
+    from app.core.security import hash_password
+    from app.models import ProjectMember, Role, User
+
+    seen = Project(name="Script they may read", slug="script-they-may-read")
+    mine = Project(name="Script they may change", slug="script-they-may-change")
+    db_session.add_all([seen, mine])
+    db_session.flush()
+    for project in (seen, mine):
+        db_session.add(
+            ProjectScript(
+                project_id=project.id,
+                text="use people",
+                last_run_at=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
+            )
+        )
+    # A manager on the platform: a membership can never exceed the user's own
+    # role, so an analyst cannot be a project's manager however they are
+    # enrolled, and the pair below would both come back False.
+    reader = User(
+        email="reader@example.org",
+        username="reader",
+        full_name="A Reader",
+        hashed_password=hash_password("Fieldwork-2026-reader"),
+        role=Role.manager,
+    )
+    db_session.add(reader)
+    db_session.flush()
+    db_session.add_all(
+        [
+            ProjectMember(project_id=seen.id, user_id=reader.id, role=Role.viewer),
+            ProjectMember(project_id=mine.id, user_id=reader.id, role=Role.manager),
+        ]
+    )
+    db_session.commit()
+
+    token = client.post(
+        "/api/v1/auth/login",
+        json={"email": "reader@example.org", "password": "Fieldwork-2026-reader"},
+    ).json()["access_token"]
+    answered = client.get(
+        "/api/v1/scripts", headers={"Authorization": f"Bearer {token}"}
+    )
+    assert answered.status_code == 200, answered.text
+    by_name = {place["project_name"]: place for place in answered.json()["places"]}
+
+    # Both are listed: the page is about the order, and a script they cannot
+    # change is still one their own has to run after. The global role is the
+    # same for both, so what separates them is the membership - which is the
+    # question the page was not asking.
+    assert by_name["Script they may read"]["can_edit"] is False
+    assert by_name["Script they may change"]["can_edit"] is True
+
+    # And an administrator may change either.
+    everything = client.get("/api/v1/scripts", headers=auth_headers).json()["places"]
+    for place in everything:
+        assert place["can_edit"] is True, place["project_name"]
