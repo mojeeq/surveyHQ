@@ -19,8 +19,9 @@
  */
 import { useMemo } from 'react'
 import { Link } from 'react-router-dom'
-import { useQuery } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { useToast } from '@/hooks/useToast'
 import { relativeTime } from '@/lib/format'
 import { Badge, Card, EmptyState, ErrorNote, Loading, PageHeader } from '@/components/ui'
 
@@ -41,12 +42,31 @@ interface ScriptPlace {
   /** Whether this reader may change this script, which is not the same as
    *  being able to see it. The page lists every project somebody can view. */
   can_edit: boolean
+  /** Where this sits among the scripts it shares a step with. */
+  rank: number
 }
 
 export default function Scripts() {
+  const queryClient = useQueryClient()
+  const toast = useToast()
   const scripts = useQuery({
     queryKey: ['scripts'],
     queryFn: () => api.get<{ places: ScriptPlace[] }>('/scripts'),
+  })
+
+  /** Put one step in a new order.
+   *
+   *  The whole step goes, not the one that moved: a rank is a position among
+   *  these, and sending one would leave the rest where nobody put them.
+   */
+  const reorder = useMutation({
+    mutationFn: (project_ids: string[]) =>
+      api.put<{ places: ScriptPlace[] }>('/scripts/order', { project_ids }),
+    onSuccess: (result) => queryClient.setQueryData(['scripts'], result),
+    // The server refuses a move across a step and says which dependency
+    // fixes it. That is the useful half of this feature, so it is shown
+    // rather than swallowed.
+    onError: (error: Error) => toast.push(error.message, 'error'),
   })
 
   const places = scripts.data?.places ?? []
@@ -108,8 +128,27 @@ export default function Scripts() {
                 </span>
               </h2>
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                {group.map((place) => (
-                  <ScriptCard key={place.project_id} place={place} />
+                {group.map((place, index) => (
+                  <ScriptCard
+                    key={place.project_id}
+                    place={place}
+                    // Only where there is somewhere to go and the reader may
+                    // move both ends: swapping moves two scripts, not one.
+                    onMove={
+                      group.length > 1 && group.every((one) => one.can_edit)
+                        ? (by) => {
+                            const next = [...group]
+                            const to = index + by
+                            if (to < 0 || to >= next.length) return
+                            ;[next[index], next[to]] = [next[to], next[index]]
+                            reorder.mutate(next.map((one) => one.project_id))
+                          }
+                        : undefined
+                    }
+                    first={index === 0}
+                    last={index === group.length - 1}
+                    busy={reorder.isPending}
+                  />
                 ))}
               </div>
             </section>
@@ -136,7 +175,22 @@ export default function Scripts() {
   )
 }
 
-function ScriptCard({ place }: { place: ScriptPlace }) {
+function ScriptCard({
+  place,
+  onMove,
+  first,
+  last,
+  busy,
+}: {
+  place: ScriptPlace
+  /** Move this script earlier (-1) or later (+1) among its step. Absent
+   *  where the step holds one script, or where the reader may not change
+   *  every script in it. */
+  onMove?: (by: -1 | 1) => void
+  first?: boolean
+  last?: boolean
+  busy?: boolean
+}) {
   return (
     // Full height so the cards in a row match and their buttons line up: the
     // Card's own body is the thing that has to stretch, not just the section.
@@ -200,7 +254,32 @@ function ScriptCard({ place }: { place: ScriptPlace }) {
             everybody, the button would put most of them back on the project
             with nothing said, which is the fault this page had already. */}
         {place.can_edit && (
-          <div className="mt-auto flex justify-end pt-1">
+          <div className="mt-auto flex items-center justify-end gap-1 pt-1">
+            {onMove && (
+              // Buttons rather than dragging: they work from a keyboard, say
+              // what they do, and a step is a handful of cards rather than a
+              // long list to haul something up.
+              <>
+                <button
+                  className="btn-ghost btn-sm px-2"
+                  aria-label={`Run ${place.project_name} earlier`}
+                  title="Run earlier in this step"
+                  disabled={first || busy}
+                  onClick={() => onMove(-1)}
+                >
+                  ↑
+                </button>
+                <button
+                  className="btn-ghost btn-sm mr-auto px-2"
+                  aria-label={`Run ${place.project_name} later`}
+                  title="Run later in this step"
+                  disabled={last || busy}
+                  onClick={() => onMove(1)}
+                >
+                  ↓
+                </button>
+              </>
+            )}
             <Link
               to={`/projects/${place.project_id}?tab=script`}
               className="btn-secondary btn-sm"

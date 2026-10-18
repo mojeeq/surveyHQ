@@ -29,6 +29,9 @@ class ScriptPlace(BaseModel):
     # saved: a run that was never kept is still a script of some length, and
     # saying "run without being saved" for it read as "there is nothing here".
     lines: int = 0
+    # Where this sits among the scripts it shares a step with, so the page can
+    # send the step back in order when somebody moves one.
+    rank: int = 0
     # Whether what `lines` counted is the saved script. False means it is the
     # last run, which the card says and the editor opens on.
     saved: bool = True
@@ -44,3 +47,14 @@ class ScriptPlace(BaseModel):
 
 class ScriptsOverview(BaseModel):
     places: list[ScriptPlace] = Field(default_factory=list)
+
+
+class ScriptOrderIn(BaseModel):
+    """The order somebody wants for scripts that share a step.
+
+    The whole step, in the order it should read. A partial list would leave
+    the rest somewhere undefined, and the page always has the whole step in
+    front of it when somebody moves a card.
+    """
+
+    project_ids: list[str] = Field(default_factory=list)
