@@ -425,6 +425,14 @@ def _ordered(client, headers) -> list[str]:
     return [place["project_name"] for place in answered.json()["places"]]
 
 
+def _ordered_ids(client, headers) -> list[str]:
+    """By id rather than by name: these tests run beside others that make
+    projects of their own, and a name is not unique across them."""
+    answered = client.get("/api/v1/scripts", headers=headers)
+    assert answered.status_code == 200, answered.text
+    return [place["project_id"] for place in answered.json()["places"]]
+
+
 def _step_holding(client, headers, project_id) -> list[str]:
     """Every project in the step this one is in, in the order shown.
 
@@ -477,8 +485,8 @@ def test_a_step_can_be_put_in_the_order_somebody_wants(
     client, auth_headers, db_session, two_free
 ):
     """The fault this exists for: alphabetical, and no way to say otherwise."""
-    names = _ordered(client, auth_headers)
-    assert names.index("Alpha free") < names.index("Beta free")
+    order = _ordered_ids(client, auth_headers)
+    assert order.index(two_free["first"]) < order.index(two_free["second"])
 
     step = _step_holding(client, auth_headers, two_free["first"])
     moved = client.put(
@@ -490,8 +498,8 @@ def test_a_step_can_be_put_in_the_order_somebody_wants(
     )
     assert moved.status_code == 200, moved.text
 
-    names = _ordered(client, auth_headers)
-    assert names.index("Beta free") < names.index("Alpha free")
+    order = _ordered_ids(client, auth_headers)
+    assert order.index(two_free["second"]) < order.index(two_free["first"])
 
 
 def test_the_chosen_order_survives_a_reload(
@@ -507,8 +515,8 @@ def test_the_chosen_order_survives_a_reload(
         },
     )
     db_session.expire_all()
-    names = _ordered(client, auth_headers)
-    assert names.index("Beta free") < names.index("Alpha free")
+    order = _ordered_ids(client, auth_headers)
+    assert order.index(two_free["second"]) < order.index(two_free["first"])
 
 
 def test_a_script_cannot_be_moved_past_what_it_waits_for(
@@ -614,3 +622,60 @@ def test_reordering_needs_the_manager_role_on_every_script_moved(
     )
     assert refused.status_code == 403, refused.text
     assert "Beta free" in refused.json()["detail"]
+
+
+def test_a_ring_elsewhere_does_not_block_reordering_a_step(
+    client, auth_headers, db_session, two_free
+):
+    """A ring sits at step 0 and is marked as having no order, and the page
+    draws it in a section of its own. The check for "the whole step" counted
+    it anyway, so one tangled pair anywhere made every step-0 group
+    unreorderable - refused with "Give the whole step" over a list that was
+    the whole step.
+    """
+    from app.models import Dataset
+
+    left = Project(name="Ring left", slug="ring-left")
+    right = Project(name="Ring right", slug="ring-right")
+    db_session.add_all([left, right])
+    db_session.flush()
+    theirs = Dataset(name="ring_a", slug="ring-a", project_id=left.id)
+    mine = Dataset(name="ring_b", slug="ring-b", project_id=right.id)
+    db_session.add_all([theirs, mine])
+    db_session.flush()
+    # Each reads what the other writes.
+    db_session.add_all(
+        [
+            ProjectScript(
+                project_id=left.id,
+                text="use ring_b\nsave as ring_a",
+                reads=[mine.id],
+                writes=[theirs.id],
+                last_run_at=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
+            ),
+            ProjectScript(
+                project_id=right.id,
+                text="use ring_a\nsave as ring_b",
+                reads=[theirs.id],
+                writes=[mine.id],
+                last_run_at=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    places = client.get("/api/v1/scripts", headers=auth_headers).json()["places"]
+    tangled = [one["project_name"] for one in places if one["in_a_cycle"]]
+    assert "Ring left" in tangled, "the ring has to be a ring for this to prove anything"
+
+    step = _step_holding(client, auth_headers, two_free["first"])
+    moved = client.put(
+        "/api/v1/scripts/order",
+        headers=auth_headers,
+        json={
+            "project_ids": _swapped(step, two_free["first"], two_free["second"])
+        },
+    )
+    assert moved.status_code == 200, moved.text
+    order = _ordered_ids(client, auth_headers)
+    assert order.index(two_free["second"]) < order.index(two_free["first"])

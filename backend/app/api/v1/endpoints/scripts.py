@@ -108,8 +108,16 @@ def set_order(
         )
 
     # The whole step, so that nothing is left at a rank somebody did not mean.
+    # A ring is not part of it: those scripts have no order, sit at step 0 for
+    # want of anywhere else, and the page draws them in a section of their own.
+    # Counted here, one tangled pair anywhere made every step-0 group
+    # unreorderable - refused for not being the whole step by a list that was.
     step = next(iter(steps))
-    whole = {one for one, place in places.items() if place.step == step}
+    whole = {
+        one
+        for one, place in places.items()
+        if place.step == step and not place.in_a_cycle
+    }
     if whole != set(wanted):
         raise HTTPException(
             status_code=422,
