@@ -68,11 +68,15 @@ export function ProjectScript({ projectId }: { projectId: string }) {
 
   useEffect(() => {
     if (script.data === undefined) return
-    // Nothing saved, but something ran: open on what ran. The alternative is
-    // a blank box on a project whose data was plainly built by something,
-    // which is what it did before - and the commands were not gone, only
-    // unasked for.
-    const opening = script.data.text || script.data.unsaved_run
+    // The saved script when there is one. Nothing saved but something ran:
+    // open on what ran, since the alternative is a blank box on a project
+    // whose data was plainly built by something.
+    //
+    // Where both exist they are different things - one somebody kept, one
+    // somebody tried - and the box opens on the kept one. The other is a
+    // click away rather than lost, which is the whole point of recording it:
+    // opening on it would let an experiment quietly replace the script.
+    const opening = script.data.text.trim() ? script.data.text : script.data.unsaved_run
     setText(opening)
     // Still measured against what is saved, so an unsaved run opens dirty and
     // the Save button is live: it is a draft recovered, not a saved script.
@@ -129,7 +133,16 @@ export function ProjectScript({ projectId }: { projectId: string }) {
   // than against the answer alone, so the note goes the moment it is typed
   // over or saved rather than lingering over somebody else's work.
   const recovered =
-    !script.data?.text && !!script.data?.unsaved_run && text === script.data.unsaved_run
+    !script.data?.text.trim() &&
+    !!script.data?.unsaved_run &&
+    text === script.data.unsaved_run
+  // A saved script and a different run behind it. Not shown while the box
+  // already holds that run - then it has been restored and the notice above
+  // is the one that applies.
+  const alsoRan =
+    !!script.data?.text.trim() &&
+    !!script.data?.unsaved_run &&
+    text !== script.data.unsaved_run
 
   return (
     <div className="mt-4 grid gap-4 lg:grid-cols-[3fr_2fr]">
@@ -137,6 +150,22 @@ export function ProjectScript({ projectId }: { projectId: string }) {
         title="Script"
         subtitle="Read the project's datasets, put them together, write new ones"
       >
+        {alsoRan && (
+          // The run is kept but is not the script, so it is offered rather
+          // than opened on. Without this it was recorded and unreachable,
+          // which is a worse answer than not recording it.
+          <div className="mb-2 flex flex-wrap items-center gap-2 rounded-control bg-ink-50 px-2.5 py-1.5 text-xs text-ink-700 dark:bg-dark-100 dark:text-dark-700">
+            <span>
+              The last run here was not this script. It is kept, unsaved.
+            </span>
+            <button
+              className="btn-ghost btn-sm"
+              onClick={() => setText(script.data?.unsaved_run ?? '')}
+            >
+              Put it in the box
+            </button>
+          </div>
+        )}
         {recovered && (
           // Said before the box rather than after it. Somebody who ran a
           // script without saving it comes back to what looks like their
