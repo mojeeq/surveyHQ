@@ -97,6 +97,12 @@ class ScriptRunIn(BaseModel):
 
 class ScriptOut(BaseModel):
     text: str = ""
+    # What the last run ran, when that is not what is saved above. Running and
+    # saving are separate on purpose, so a script can be tried without being
+    # kept - and a script tried and never kept used to leave the editor blank
+    # afterwards, with the commands that built the data gone. Empty when the
+    # saved text is what ran, so the page only mentions it when it differs.
+    unsaved_run: str = ""
     # What the last run touched, by name rather than by id: whoever reads this
     # is looking at a page, not a database.
     reads: list[str] = Field(default_factory=list)

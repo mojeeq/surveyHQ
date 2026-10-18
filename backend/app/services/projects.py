@@ -79,18 +79,30 @@ def scope_for(db: Session, user: User) -> ProjectScope:
     )
 
 
-def effective_role(db: Session, user: User, project_id: str | None) -> Role | None:
+def effective_role(
+    db: Session,
+    user: User,
+    project_id: str | None,
+    *,
+    held: dict[str, Role] | None = None,
+) -> Role | None:
     """The role this user holds over a resource in `project_id`.
 
     None means no access at all, which callers should turn into a 404 rather
     than a 403: telling someone a project exists but is not theirs leaks the
     project list.
+
+    `held` is this user's memberships, for a caller asking about several
+    projects at once. Read from the database otherwise, which is a query per
+    question - fine for the one project a request is about, and one query per
+    project for a page that asks about all of them. Passing it in keeps the
+    rule here rather than copying the comparison to the caller.
     """
     if user.role is Role.admin:
         return Role.admin
     if project_id is None:
         return user.role if not user.restricted_to_projects else None
-    membership = memberships(db, user).get(project_id)
+    membership = (memberships(db, user) if held is None else held).get(project_id)
     if membership is None:
         return None
     # The lower of the two: membership can never exceed the user's own role.
@@ -101,8 +113,15 @@ def can_view(db: Session, user: User, project_id: str | None) -> bool:
     return effective_role(db, user, project_id) is not None
 
 
-def can_edit(db: Session, user: User, project_id: str | None, minimum: Role) -> bool:
-    role = effective_role(db, user, project_id)
+def can_edit(
+    db: Session,
+    user: User,
+    project_id: str | None,
+    minimum: Role,
+    *,
+    held: dict[str, Role] | None = None,
+) -> bool:
+    role = effective_role(db, user, project_id, held=held)
     return role is not None and ROLE_RANK[role] >= ROLE_RANK[minimum]
 
 

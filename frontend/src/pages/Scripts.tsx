@@ -33,6 +33,9 @@ interface ScriptPlace {
   reads: string[]
   writes: string[]
   lines: number
+  /** Whether `lines` counted the saved script. False means it counted the
+   *  last run, which was never kept. */
+  saved: boolean
   last_run_at: string | null
   last_error: string
   /** Whether this reader may change this script, which is not the same as
@@ -178,7 +181,9 @@ function ScriptCard({ place }: { place: ScriptPlace }) {
 
         <p className="text-xs text-ink-500 dark:text-dark-500">
           {place.lines > 0
-            ? `${place.lines} command${place.lines === 1 ? '' : 's'}`
+            ? `${place.lines} command${place.lines === 1 ? '' : 's'}${
+                place.saved ? '' : ', not saved'
+              }`
             : 'Run without being saved'}
           {place.last_run_at && ` · last run ${relativeTime(place.last_run_at)}`}
         </p>
