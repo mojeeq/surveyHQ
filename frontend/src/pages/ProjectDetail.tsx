@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ProjectScript } from '@/components/ProjectScript'
 import { api } from '@/lib/api'
 import { useDialog } from '@/hooks/useDialog'
@@ -31,6 +31,23 @@ import {
   Tabs,
 } from '@/components/ui'
 
+export type TabId = 'data' | 'model' | 'script' | 'members'
+const TAB_IDS: TabId[] = ['data', 'model', 'script', 'members']
+
+/** Which tab a link is asking for, and which one may actually be drawn.
+ *
+ *  Anyone can put anything in the address, so an unknown name opens the
+ *  project rather than a blank panel. The script is only offered to somebody
+ *  who may change the data - running it does - so a link asking for it gives
+ *  a reader the project instead of a tab that is not in the row above it.
+ *  The server refuses the save and the run as well; this is so that nothing
+ *  invites them to try.
+ */
+export function tabFromUrl(asked: string | null, canManage: boolean): TabId {
+  const wanted = TAB_IDS.includes(asked as TabId) ? (asked as TabId) : 'data'
+  return wanted === 'script' && !canManage ? 'data' : wanted
+}
+
 const PROJECT_ROLES: { value: Role; label: string; description: string }[] = [
   { value: 'viewer', label: 'Viewer', description: 'Read this project’s dashboards and data' },
   { value: 'analyst', label: 'Analyst', description: 'Build charts and dashboards here' },
@@ -45,7 +62,19 @@ export default function ProjectDetail() {
   const [deleting, setDeleting] = useState(false)
   const [archiving, setArchiving] = useState(false)
   const [confirmName, setConfirmName] = useState('')
-  const [tab, setTab] = useState<'data' | 'model' | 'script' | 'members'>('data')
+  // The tab lives in the address rather than in this component, so a project's
+  // script has a link of its own. The Scripts page lists every project's script
+  // and had nowhere to send you: its cards pointed at the project, which opens
+  // on Data, leaving the reader to find a tab called Command. It also means a
+  // refresh, the back button and a pasted link all keep the tab you were on,
+  // which none of them did.
+  const [params, setParams] = useSearchParams()
+  const asked = params.get('tab')
+  const setTab = (next: TabId) => {
+    // Replace rather than push: flipping between tabs is not a journey to
+    // retrace, and the back button should leave the project, not walk the tabs.
+    setParams(next === 'data' ? {} : { tab: next }, { replace: true })
+  }
 
   const project = useQuery({
     queryKey: ['project', id],
@@ -67,6 +96,8 @@ export default function ProjectDetail() {
   // "manager" here is the role on this project, which is already capped by the
   // user's own role on the server, so this is the only check the UI needs.
   const canManage = project.data?.your_role === 'manager' || project.data?.your_role === 'admin'
+
+  const shown = tabFromUrl(asked, canManage)
 
   const archived = project.data?.status === 'archived'
 
@@ -308,11 +339,11 @@ export default function ProjectDetail() {
           ...(canManage ? [{ id: 'script' as const, label: 'Command' }] : []),
           { id: 'members', label: 'Members', count: project.data.member_count },
         ]}
-        active={tab}
-        onChange={(next) => setTab(next as 'data' | 'model' | 'script' | 'members')}
+        active={shown}
+        onChange={(next) => setTab(next as TabId)}
       />
 
-      {tab === 'data' ? (
+      {shown === 'data' ? (
         <div className="mt-4 grid gap-4 lg:grid-cols-2">
           <Card title="Datasets" subtitle="Available as a source for anything in this project">
             {datasets.isLoading ? (
@@ -375,7 +406,7 @@ export default function ProjectDetail() {
             )}
           </Card>
         </div>
-      ) : tab === 'model' ? (
+      ) : shown === 'model' ? (
         <RelationshipsTab
           projectId={id}
           projectName={project.data.name}
@@ -383,7 +414,7 @@ export default function ProjectDetail() {
           relationships={relationships.data ?? []}
           canManage={canManage}
         />
-      ) : tab === 'script' ? (
+      ) : shown === 'script' ? (
         <ProjectScript projectId={id} />
       ) : (
         <Members projectId={id} members={project.data.members ?? []} canManage={canManage} />

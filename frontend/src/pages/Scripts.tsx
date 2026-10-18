@@ -75,7 +75,7 @@ export default function Scripts() {
           <EmptyState
             icon="▤"
             title="No scripts yet"
-            description="A project's script is written on its Command tab. Once one has run, it appears here with what it reads and writes."
+            description="A project's script is written on its Command tab. Once one has run, it appears here with what it reads and writes, and a way straight back to it."
           />
         </Card>
       ) : (
@@ -132,11 +132,16 @@ export default function Scripts() {
 
 function ScriptCard({ place }: { place: ScriptPlace }) {
   return (
-    <Card>
-      <div className="space-y-3 p-4">
+    // Full height so the cards in a row match and their buttons line up: the
+    // Card's own body is the thing that has to stretch, not just the section.
+    <Card className="flex h-full flex-col" bodyClassName="flex-1">
+      <div className="flex h-full flex-col space-y-3 p-4">
         <div className="flex items-start justify-between gap-2">
+          {/* Straight to the script, not to the project. A page that lists
+              every script and sends you to a project page, open on Data, to
+              find a tab called Command is a list you cannot act on. */}
           <Link
-            to={`/projects/${place.project_id}`}
+            to={`/projects/${place.project_id}?tab=script`}
             className="text-[14px] font-semibold text-brand-600 hover:underline dark:text-brand-400"
           >
             {place.project_name}
@@ -170,6 +175,20 @@ function ScriptCard({ place }: { place: ScriptPlace }) {
             : 'Run without being saved'}
           {place.last_run_at && ` · last run ${relativeTime(place.last_run_at)}`}
         </p>
+
+        {/* On its own line at the foot of the card, pushed down so that every
+            card's button sits on the same line however much its reads and
+            writes ran to. Said out loud as well as on the title: "open the
+            project" is what the heading already meant, and is what sent
+            people looking for a tab called Command. */}
+        <div className="mt-auto flex justify-end pt-1">
+          <Link
+            to={`/projects/${place.project_id}?tab=script`}
+            className="btn-secondary btn-sm"
+          >
+            Edit script
+          </Link>
+        </div>
       </div>
     </Card>
   )
