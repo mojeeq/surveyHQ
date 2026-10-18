@@ -72,14 +72,14 @@ def run(db: Session, project_id: str, text: str | None = None) -> stata.ScriptOu
         )
     except ScriptError as exc:
         _remember(db, script, read=exc.read, written=[s.dataset_id for s in exc.saved],
-                  error=str(exc))
+                  error=str(exc), ran=source)
         raise
     except CommandError as exc:
         # An empty script, or one whose first word is not a command. Nothing
         # was read, so nothing recorded but the complaint.
-        _remember(db, script, read=[], written=[], error=str(exc))
+        _remember(db, script, read=[], written=[], error=str(exc), ran=source)
         raise
-    _remember(db, script, read=outcome.read, written=outcome.written, error="")
+    _remember(db, script, read=outcome.read, written=outcome.written, error="", ran=source)
     return outcome
 
 
@@ -90,11 +90,15 @@ def _remember(
     read: list[str],
     written: list[str],
     error: str,
+    ran: str,
 ) -> None:
     script.reads = list(dict.fromkeys(read))
     script.writes = list(dict.fromkeys(written))
     script.last_run_at = utcnow()
     script.last_error = error
+    # Kept on a failed run too. That is the one you most want back: the editor
+    # would otherwise open blank on the script that just went wrong.
+    script.last_run_text = ran
     db.flush()
 
 

@@ -19,6 +19,7 @@ from app.models import (
     Indicator,
     Project,
     ProjectMember,
+    ProjectScript,
     QualityRule,
     Role,
     SavedQuery,
@@ -571,6 +572,49 @@ def write_script(
     return _script_out(db, script)
 
 
+@router.delete("/{project_id}/script", response_model=Message)
+def delete_script(project_id: str, db: DbSession, user: RequireManager) -> Message:
+    """Throw the script away, and what its last run recorded with it.
+
+    Clearing the box and saving was the nearest thing to this and is not the
+    same: the row stays, with what the last run read, wrote and ran still on
+    it, so the project keeps its place on the Scripts page and the editor
+    offers the old run back. Somebody wanting the script gone had no way to
+    say so.
+
+    The data is not touched. A script is a recipe, and deleting the recipe
+    does not unmake what it cooked - the datasets it wrote stay exactly as
+    they are, in the project, and nothing it built is rebuilt or removed.
+
+    What does go is the claim: a project whose script no longer exists has
+    not built anything, so moving one of those datasets elsewhere records no
+    permission for this project to go on rewriting it, and a re-run chain
+    standing on this project stops standing on it. That is the honest reading
+    of deleting the recipe, and it is why this takes the manager role over
+    the project, the same as writing it.
+    """
+    _editable_project(project_id, db, user, Role.manager)
+    script = db.scalars(
+        select(ProjectScript).where(ProjectScript.project_id == project_id)
+    ).first()
+    if script is None:
+        # Nothing to delete reads the same as having deleted it. A row is made
+        # the first time anybody opens the tab, so its absence is ordinary.
+        return Message(detail="There was no script to delete")
+    db.delete(script)
+    record(
+        db,
+        user=user,
+        action="delete_project_script",
+        entity_type="project",
+        entity_id=project_id,
+    )
+    db.commit()
+    return Message(
+        detail="Script deleted. The datasets it wrote are untouched."
+    )
+
+
 @router.post("/{project_id}/script/run", response_model=dict)
 def run_script(
     project_id: str, payload: ScriptRunIn, db: DbSession, user: RequireManager
@@ -633,8 +677,13 @@ def _script_out(db: DbSession, script) -> ScriptOut:
         found = [db.get(Dataset, one) for one in ids or []]
         return [one.name for one in found if one is not None]
 
+    ran = script.last_run_text or ""
     return ScriptOut(
         text=script.text,
+        # Only when it is news. A run of the saved script makes the two the
+        # same, and offering to restore what is already there would be noise
+        # on every project that works the ordinary way.
+        unsaved_run="" if ran.strip() == script.text.strip() else ran,
         reads=named(script.reads),
         writes=named(script.writes),
         last_run_at=script.last_run_at,

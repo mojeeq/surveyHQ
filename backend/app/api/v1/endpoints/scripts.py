@@ -73,7 +73,11 @@ def overview(db: DbSession, user: CurrentUser) -> ScriptsOverview:
                 in_a_cycle=place.in_a_cycle,
                 reads=[names[one] for one in place.reads if one in names],
                 writes=[names[one] for one in place.writes if one in names],
-                lines=_lines_in(by_project[place.project_id].text),
+                lines=_lines_in(
+                    by_project[place.project_id].text
+                    or by_project[place.project_id].last_run_text
+                ),
+                saved=bool(by_project[place.project_id].text.strip()),
                 last_run_at=by_project[place.project_id].last_run_at,
                 last_error=by_project[place.project_id].last_error,
                 can_edit=place.project_id in editable,
