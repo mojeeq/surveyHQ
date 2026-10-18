@@ -94,6 +94,12 @@ class ProjectScript(UUIDMixin, TimestampMixin, Base):
         ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
     )
     text: Mapped[str] = mapped_column(Text, default="")
+    # What the last run actually ran, which is not always what is saved above:
+    # running and saving are separate on purpose, so a script can be tried
+    # without being kept. Recorded so that a run leaves more behind than the
+    # fact that it ran - the editor opens on this when nothing is saved, and
+    # the overview counts it rather than showing a script of no length.
+    last_run_text: Mapped[str] = mapped_column(Text, default="", server_default="")
     updated_by: Mapped[str | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )

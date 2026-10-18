@@ -17,10 +17,16 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { Card, Loading, Spinner } from '@/components/ui'
 import { ScriptHelp } from '@/components/ProjectScriptHelp'
 import { api } from '@/lib/api'
+import { useDialog } from '@/hooks/useDialog'
+import { useToast } from '@/hooks/useToast'
 import { insertLine } from '@/lib/script-insert'
 
 interface Script {
   text: string
+  /** What the last run ran, when that is not what is saved. Running and
+   *  saving are separate on purpose, so a script can be tried without being
+   *  kept - and the editor used to open blank afterwards. */
+  unsaved_run: string
   reads: string[]
   writes: string[]
   last_run_at: string | null
@@ -34,6 +40,8 @@ interface RunResult {
 
 export function ProjectScript({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient()
+  const ask = useDialog()
+  const toast = useToast()
   const [text, setText] = useState('')
   // What the editor held when it was last saved, so "unsaved changes" is a
   // comparison rather than a flag somebody has to remember to clear.
@@ -60,7 +68,14 @@ export function ProjectScript({ projectId }: { projectId: string }) {
 
   useEffect(() => {
     if (script.data === undefined) return
-    setText(script.data.text)
+    // Nothing saved, but something ran: open on what ran. The alternative is
+    // a blank box on a project whose data was plainly built by something,
+    // which is what it did before - and the commands were not gone, only
+    // unasked for.
+    const opening = script.data.text || script.data.unsaved_run
+    setText(opening)
+    // Still measured against what is saved, so an unsaved run opens dirty and
+    // the Save button is live: it is a draft recovered, not a saved script.
     setSaved(script.data.text)
   }, [script.data])
 
@@ -90,11 +105,31 @@ export function ProjectScript({ projectId }: { projectId: string }) {
       setLog([{ command: '', message: error.message, ok: false }]),
   })
 
+  const drop = useMutation({
+    mutationFn: () => api.delete<{ detail: string }>(`/projects/${projectId}/script`),
+    onSuccess: (result) => {
+      setText('')
+      setSaved('')
+      setLog([])
+      queryClient.invalidateQueries({ queryKey: ['project-script', projectId] })
+      // The overview lists this project because it has a script; it does not
+      // any more.
+      queryClient.invalidateQueries({ queryKey: ['scripts'] })
+      toast.push(result.detail, 'success')
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
   if (script.isLoading) return <Loading />
 
   const dirty = text !== saved
   const busy = run.isPending || keep.isPending
   const last = script.data?.last_run_at
+  // Nothing saved, and the box holds what ran. Checked against the box rather
+  // than against the answer alone, so the note goes the moment it is typed
+  // over or saved rather than lingering over somebody else's work.
+  const recovered =
+    !script.data?.text && !!script.data?.unsaved_run && text === script.data.unsaved_run
 
   return (
     <div className="mt-4 grid gap-4 lg:grid-cols-[3fr_2fr]">
@@ -102,6 +137,16 @@ export function ProjectScript({ projectId }: { projectId: string }) {
         title="Script"
         subtitle="Read the project's datasets, put them together, write new ones"
       >
+        {recovered && (
+          // Said before the box rather than after it. Somebody who ran a
+          // script without saving it comes back to what looks like their
+          // script, and the one thing they need to know is that nothing has
+          // kept it yet.
+          <p className="mb-2 rounded-control bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
+            This is the script that last ran here. It was never saved, so it is
+            in the box rather than kept - Save keeps it.
+          </p>
+        )}
         <textarea
           ref={box}
           className="input min-h-[280px] font-mono text-sm"
@@ -149,6 +194,30 @@ export function ProjectScript({ projectId }: { projectId: string }) {
             <span className="text-xs text-amber-700 dark:text-amber-300">
               Unsaved changes. Running uses what is in the box.
             </span>
+          )}
+          {/* Pushed to the far end, away from Run and Save. It is the one
+              control here that cannot be undone by typing again. */}
+          {(script.data?.text || script.data?.unsaved_run) && (
+            <button
+              className="btn-ghost btn-sm ml-auto text-red-700 dark:text-red-300"
+              disabled={busy || drop.isPending}
+              onClick={async () => {
+                const sure = await ask.confirm({
+                  title: 'Delete this script?',
+                  message:
+                    'The script goes, along with what its last run read and wrote. ' +
+                    'The datasets it built stay exactly as they are - deleting the ' +
+                    'recipe does not unmake what it cooked. This project then drops ' +
+                    'off the Scripts page until something is written here again.',
+                  confirmLabel: 'Delete script',
+                  tone: 'danger',
+                })
+                if (sure) drop.mutate()
+              }}
+            >
+              {drop.isPending && <Spinner className="h-4 w-4" />}
+              Delete script
+            </button>
           )}
         </div>
 

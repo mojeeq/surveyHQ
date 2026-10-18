@@ -25,7 +25,13 @@ class ScriptPlace(BaseModel):
     # By name rather than by id: whoever reads this is looking at a page.
     reads: list[str] = Field(default_factory=list)
     writes: list[str] = Field(default_factory=list)
+    # Counted from the saved script, or from what last ran where nothing is
+    # saved: a run that was never kept is still a script of some length, and
+    # saying "run without being saved" for it read as "there is nothing here".
     lines: int = 0
+    # Whether what `lines` counted is the saved script. False means it is the
+    # last run, which the card says and the editor opens on.
+    saved: bool = True
     last_run_at: dt.datetime | None = None
     last_error: str = ""
     # Whether this reader may change this script, which is not the same as

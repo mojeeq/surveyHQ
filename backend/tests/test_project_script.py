@@ -317,3 +317,214 @@ def test_a_tagged_missing_survives_every_command_that_touches_the_data(
     assert sorted(
         tag for tag in pd.read_parquet(made.storage_path)["wage__mv"] if tag
     ) == [".a", ".b"]
+
+
+# --- a run leaves its text behind -------------------------------------------
+#
+# Running and saving are separate on purpose: a script is tried before it is
+# kept, so a run that fails does not have to be undone by hand. The cost was
+# that a script run and never saved left nothing behind but the fact that it
+# ran - the editor opened blank, and the commands that built the data were
+# gone. They are kept now, beside the saved text rather than instead of it.
+
+
+def _script_as_seen(client, headers, project_id) -> dict:
+    answered = client.get(f"/api/v1/projects/{project_id}/script", headers=headers)
+    assert answered.status_code == 200, answered.text
+    return answered.json()
+
+
+def test_a_run_that_was_never_saved_is_still_there_afterwards(
+    client, auth_headers, db_session, project
+):
+    """The fault this exists for: the editor opened on nothing."""
+    from app.services import project_script
+
+    project_script.run(db_session, project["id"], "use members\ngen adult = age >= 18")
+    db_session.commit()
+
+    seen = _script_as_seen(client, auth_headers, project["id"])
+    assert seen["text"] == "", "nothing was saved, and running must not save"
+    assert seen["unsaved_run"] == "use members\ngen adult = age >= 18"
+
+
+def test_a_run_of_the_saved_script_is_not_reported_as_unsaved(
+    client, auth_headers, db_session, project
+):
+    """Otherwise every project that works the ordinary way carries a notice
+    offering to restore what is already in front of it."""
+    from app.services import project_script
+
+    kept = client.put(
+        f"/api/v1/projects/{project['id']}/script",
+        headers=auth_headers,
+        json={"text": "use members"},
+    )
+    assert kept.status_code == 200, kept.text
+    db_session.expire_all()
+    project_script.run(db_session, project["id"])
+    db_session.commit()
+
+    seen = _script_as_seen(client, auth_headers, project["id"])
+    assert seen["text"] == "use members"
+    assert seen["unsaved_run"] == ""
+
+
+def test_a_run_that_failed_is_kept_too(client, auth_headers, db_session, project):
+    """That is the one you most want back. The editor would otherwise open
+    blank on the script that had just gone wrong."""
+    from app.services import project_script
+
+    with pytest.raises((ScriptError, CommandError)):
+        project_script.run(
+            db_session, project["id"], "use members\ngen adult = nonsense(age)"
+        )
+    db_session.commit()
+
+    seen = _script_as_seen(client, auth_headers, project["id"])
+    assert seen["text"] == ""
+    assert "nonsense" in seen["unsaved_run"]
+
+
+def test_saving_what_was_recovered_ends_the_notice(
+    client, auth_headers, db_session, project
+):
+    """Save keeps it, and the two agree from then on."""
+    from app.services import project_script
+
+    project_script.run(db_session, project["id"], "use members")
+    db_session.commit()
+    recovered = _script_as_seen(client, auth_headers, project["id"])["unsaved_run"]
+
+    kept = client.put(
+        f"/api/v1/projects/{project['id']}/script",
+        headers=auth_headers,
+        json={"text": recovered},
+    )
+    assert kept.status_code == 200, kept.text
+
+    seen = _script_as_seen(client, auth_headers, project["id"])
+    assert seen["text"] == "use members"
+    assert seen["unsaved_run"] == ""
+
+
+# --- deleting a script ------------------------------------------------------
+#
+# Clearing the box and saving was the nearest thing and is not the same: the
+# row stays, with what the last run read, wrote and ran still on it, so the
+# project keeps its place on the Scripts page and the editor offers the old
+# run back. There was no way to say "this script should not exist".
+
+
+def test_deleting_a_script_leaves_the_data_it_built(
+    client, auth_headers, db_session, project
+):
+    """A script is a recipe. Deleting the recipe does not unmake the dinner."""
+    from app.services import project_script
+
+    project_script.run(
+        db_session, project["id"], 'use members\ngen adult = age >= 18\nsave as "adults"'
+    )
+    db_session.commit()
+    built = dataset_named(db_session, project, "adults")
+    assert built is not None, "the script has to have built something to prove this"
+    rows = built.row_count
+
+    gone = client.delete(
+        f"/api/v1/projects/{project['id']}/script", headers=auth_headers
+    )
+    assert gone.status_code == 200, gone.text
+
+    db_session.expire_all()
+    after = dataset_named(db_session, project, "adults")
+    assert after is not None, "deleting the script must not delete what it wrote"
+    assert after.row_count == rows
+
+
+def test_a_deleted_script_takes_its_last_run_with_it(
+    client, auth_headers, db_session, project
+):
+    """Including the text the editor would otherwise offer back, which is the
+    difference between deleting it and clearing the box."""
+    from app.services import project_script
+
+    project_script.run(db_session, project["id"], "use members")
+    db_session.commit()
+    assert _script_as_seen(client, auth_headers, project["id"])["unsaved_run"]
+
+    client.delete(f"/api/v1/projects/{project['id']}/script", headers=auth_headers)
+
+    seen = _script_as_seen(client, auth_headers, project["id"])
+    assert seen["text"] == ""
+    assert seen["unsaved_run"] == ""
+    assert seen["reads"] == []
+    assert seen["writes"] == []
+    assert seen["last_run_at"] is None
+
+
+def test_a_deleted_script_drops_off_the_overview(
+    client, auth_headers, db_session, project
+):
+    """Which is what somebody deleting it is asking for."""
+    from app.services import project_script
+
+    project_script.run(db_session, project["id"], "use members")
+    db_session.commit()
+
+    def listed() -> bool:
+        places = client.get("/api/v1/scripts", headers=auth_headers).json()["places"]
+        return any(place["project_id"] == project["id"] for place in places)
+
+    assert listed(), "it has run, so it belongs on the page until it is deleted"
+    client.delete(f"/api/v1/projects/{project['id']}/script", headers=auth_headers)
+    assert not listed()
+
+
+def test_deleting_a_script_that_is_not_there_is_not_an_error(
+    client, auth_headers, project
+):
+    """A row is made the first time anybody opens the tab, so its absence is
+    ordinary, and "already gone" is the state being asked for."""
+    first = client.delete(
+        f"/api/v1/projects/{project['id']}/script", headers=auth_headers
+    )
+    second = client.delete(
+        f"/api/v1/projects/{project['id']}/script", headers=auth_headers
+    )
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+
+
+def test_deleting_a_script_needs_the_manager_role_over_the_project(
+    client, auth_headers, db_session, project
+):
+    """The same as writing it. Seeing a project has never been grounds for
+    throwing away the recipe its data is built from."""
+    from app.core.security import hash_password
+    from app.models import ProjectMember, Role, User
+
+    onlooker = User(
+        email="onlooker@example.org",
+        username="onlooker",
+        full_name="An Onlooker",
+        hashed_password=hash_password("Fieldwork-2026-look"),
+        role=Role.manager,
+    )
+    db_session.add(onlooker)
+    db_session.flush()
+    db_session.add(
+        ProjectMember(
+            project_id=project["id"], user_id=onlooker.id, role=Role.viewer
+        )
+    )
+    db_session.commit()
+
+    token = client.post(
+        "/api/v1/auth/login",
+        json={"email": "onlooker@example.org", "password": "Fieldwork-2026-look"},
+    ).json()["access_token"]
+    refused = client.delete(
+        f"/api/v1/projects/{project['id']}/script",
+        headers={"Authorization": f"Bearer {token}"},
+    )
+    assert refused.status_code in (403, 404), refused.text
