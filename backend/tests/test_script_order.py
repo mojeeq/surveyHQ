@@ -409,3 +409,273 @@ def test_the_overview_reads_memberships_once(client, auth_headers, db_session):
     # One to work out what they can see, one to work out what they may change.
     # Not one per project, which is what this is here to stop coming back.
     assert len(seen) <= 2, f"{len(seen)} membership queries for 8 projects"
+
+
+# --- choosing the order within a step ---------------------------------------
+#
+# Which script runs before which comes from what they read and write, and that
+# part is nobody's to rearrange. Within a step nothing waits on anything, and
+# the order there was alphabetical - no order at all for somebody who knows
+# which one they do first on a Monday.
+
+
+def _ordered(client, headers) -> list[str]:
+    answered = client.get("/api/v1/scripts", headers=headers)
+    assert answered.status_code == 200, answered.text
+    return [place["project_name"] for place in answered.json()["places"]]
+
+
+def _ordered_ids(client, headers) -> list[str]:
+    """By id rather than by name: these tests run beside others that make
+    projects of their own, and a name is not unique across them."""
+    answered = client.get("/api/v1/scripts", headers=headers)
+    assert answered.status_code == 200, answered.text
+    return [place["project_id"] for place in answered.json()["places"]]
+
+
+def _step_holding(client, headers, project_id) -> list[str]:
+    """Every project in the step this one is in, in the order shown.
+
+    Read from the page rather than assumed: other scripts share these steps,
+    and the endpoint wants the whole step - which is what the page has in
+    front of it when somebody moves a card.
+    """
+    places = client.get("/api/v1/scripts", headers=headers).json()["places"]
+    mine = next(place for place in places if place["project_id"] == project_id)
+    return [
+        place["project_id"]
+        for place in places
+        if place["step"] == mine["step"] and not place["in_a_cycle"]
+    ]
+
+
+def _swapped(order: list[str], first: str, second: str) -> list[str]:
+    """The same step with those two exchanged."""
+    out = list(order)
+    a, b = out.index(first), out.index(second)
+    out[a], out[b] = out[b], out[a]
+    return out
+
+
+@pytest.fixture
+def two_free(db_session, request) -> dict:
+    """Two scripts in one step: neither reads what the other writes.
+
+    Named per test: the slug is unique across the database, and these run
+    more than once.
+    """
+    tag = request.node.name[-12:].replace("_", "-")
+    first = Project(name="Alpha free", slug=f"alpha-free-{tag}")
+    second = Project(name="Beta free", slug=f"beta-free-{tag}")
+    db_session.add_all([first, second])
+    db_session.flush()
+    for project in (first, second):
+        db_session.add(
+            ProjectScript(
+                project_id=project.id,
+                text="use people",
+                last_run_at=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
+            )
+        )
+    db_session.commit()
+    return {"first": first.id, "second": second.id}
+
+
+def test_a_step_can_be_put_in_the_order_somebody_wants(
+    client, auth_headers, db_session, two_free
+):
+    """The fault this exists for: alphabetical, and no way to say otherwise."""
+    order = _ordered_ids(client, auth_headers)
+    assert order.index(two_free["first"]) < order.index(two_free["second"])
+
+    step = _step_holding(client, auth_headers, two_free["first"])
+    moved = client.put(
+        "/api/v1/scripts/order",
+        headers=auth_headers,
+        json={
+            "project_ids": _swapped(step, two_free["first"], two_free["second"])
+        },
+    )
+    assert moved.status_code == 200, moved.text
+
+    order = _ordered_ids(client, auth_headers)
+    assert order.index(two_free["second"]) < order.index(two_free["first"])
+
+
+def test_the_chosen_order_survives_a_reload(
+    client, auth_headers, db_session, two_free
+):
+    """Kept against the script rather than in the page."""
+    step = _step_holding(client, auth_headers, two_free["first"])
+    client.put(
+        "/api/v1/scripts/order",
+        headers=auth_headers,
+        json={
+            "project_ids": _swapped(step, two_free["first"], two_free["second"])
+        },
+    )
+    db_session.expire_all()
+    order = _ordered_ids(client, auth_headers)
+    assert order.index(two_free["second"]) < order.index(two_free["first"])
+
+
+def test_a_script_cannot_be_moved_past_what_it_waits_for(
+    client, auth_headers, db_session
+):
+    """The half of the order that is not anybody's to choose.
+
+    One writes the file the other reads, so the second cannot go first, and a
+    rank that said otherwise would be stored and then silently ignored by the
+    sort. Refused instead, naming what fixes them.
+    """
+    from app.models import Dataset
+
+    writer = Project(name="Writes it", slug="writes-it")
+    reader = Project(name="Reads it", slug="reads-it")
+    db_session.add_all([writer, reader])
+    db_session.flush()
+    shared = Dataset(name="handover", slug="handover", project_id=writer.id)
+    db_session.add(shared)
+    db_session.flush()
+    db_session.add_all(
+        [
+            ProjectScript(
+                project_id=writer.id,
+                text="save as handover",
+                writes=[shared.id],
+                last_run_at=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
+            ),
+            ProjectScript(
+                project_id=reader.id,
+                text="use handover",
+                reads=[shared.id],
+                last_run_at=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    refused = client.put(
+        "/api/v1/scripts/order",
+        headers=auth_headers,
+        json={"project_ids": [reader.id, writer.id]},
+    )
+    assert refused.status_code == 422, refused.text
+    said = refused.json()["detail"]
+    assert "Reads it" in said and "Writes it" in said, said
+    # And the order is unchanged: nothing was half applied.
+    names = _ordered(client, auth_headers)
+    assert names.index("Writes it") < names.index("Reads it")
+
+
+def test_part_of_a_step_is_refused(client, auth_headers, db_session, two_free):
+    """Half a step leaves the rest at a rank nobody chose."""
+    refused = client.put(
+        "/api/v1/scripts/order",
+        headers=auth_headers,
+        json={"project_ids": [two_free["first"]]},
+    )
+    assert refused.status_code == 422, refused.text
+
+
+def test_reordering_needs_the_manager_role_on_every_script_moved(
+    client, auth_headers, db_session, two_free
+):
+    """Moving one script past another changes where both of them run."""
+    from app.core.security import hash_password
+    from app.models import ProjectMember, Role, User
+
+    half = User(
+        email="half@example.org",
+        username="half",
+        full_name="Half A Manager",
+        hashed_password=hash_password("Fieldwork-2026-half"),
+        role=Role.manager,
+    )
+    db_session.add(half)
+    db_session.flush()
+    db_session.add_all(
+        [
+            ProjectMember(
+                project_id=two_free["first"], user_id=half.id, role=Role.manager
+            ),
+            ProjectMember(
+                project_id=two_free["second"], user_id=half.id, role=Role.viewer
+            ),
+        ]
+    )
+    db_session.commit()
+
+    token = client.post(
+        "/api/v1/auth/login",
+        json={"email": "half@example.org", "password": "Fieldwork-2026-half"},
+    ).json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    # Their own view of the step: they see only the two they belong to.
+    step = _step_holding(client, headers, two_free["first"])
+    refused = client.put(
+        "/api/v1/scripts/order",
+        headers=headers,
+        json={
+            "project_ids": _swapped(step, two_free["first"], two_free["second"])
+        },
+    )
+    assert refused.status_code == 403, refused.text
+    assert "Beta free" in refused.json()["detail"]
+
+
+def test_a_ring_elsewhere_does_not_block_reordering_a_step(
+    client, auth_headers, db_session, two_free
+):
+    """A ring sits at step 0 and is marked as having no order, and the page
+    draws it in a section of its own. The check for "the whole step" counted
+    it anyway, so one tangled pair anywhere made every step-0 group
+    unreorderable - refused with "Give the whole step" over a list that was
+    the whole step.
+    """
+    from app.models import Dataset
+
+    left = Project(name="Ring left", slug="ring-left")
+    right = Project(name="Ring right", slug="ring-right")
+    db_session.add_all([left, right])
+    db_session.flush()
+    theirs = Dataset(name="ring_a", slug="ring-a", project_id=left.id)
+    mine = Dataset(name="ring_b", slug="ring-b", project_id=right.id)
+    db_session.add_all([theirs, mine])
+    db_session.flush()
+    # Each reads what the other writes.
+    db_session.add_all(
+        [
+            ProjectScript(
+                project_id=left.id,
+                text="use ring_b\nsave as ring_a",
+                reads=[mine.id],
+                writes=[theirs.id],
+                last_run_at=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
+            ),
+            ProjectScript(
+                project_id=right.id,
+                text="use ring_a\nsave as ring_b",
+                reads=[theirs.id],
+                writes=[mine.id],
+                last_run_at=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
+            ),
+        ]
+    )
+    db_session.commit()
+
+    places = client.get("/api/v1/scripts", headers=auth_headers).json()["places"]
+    tangled = [one["project_name"] for one in places if one["in_a_cycle"]]
+    assert "Ring left" in tangled, "the ring has to be a ring for this to prove anything"
+
+    step = _step_holding(client, auth_headers, two_free["first"])
+    moved = client.put(
+        "/api/v1/scripts/order",
+        headers=auth_headers,
+        json={
+            "project_ids": _swapped(step, two_free["first"], two_free["second"])
+        },
+    )
+    assert moved.status_code == 200, moved.text
+    order = _ordered_ids(client, auth_headers)
+    assert order.index(two_free["second"]) < order.index(two_free["first"])
