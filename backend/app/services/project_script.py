@@ -227,6 +227,9 @@ class Place:
     reads: list[str] = field(default_factory=list)
     writes: list[str] = field(default_factory=list)
     step: int = 0
+    # Where somebody put this script among the ones it shares a step with.
+    # A tie-break and nothing more: the step comes from the data.
+    rank: int = 0
     waits_for: list[str] = field(default_factory=list)
     # Set when the script is in a ring: it reads something another script
     # writes, which reads something this one writes. Then there is no order,
@@ -260,6 +263,7 @@ def running_order(db: Session, scripts: list[ProjectScript]) -> list[Place]:
             project_name=names.get(script.project_id, "Unnamed project"),
             reads=list(script.reads or []),
             writes=list(script.writes or []),
+            rank=script.run_rank or 0,
         )
         for script in scripts
     }
@@ -298,7 +302,7 @@ def running_order(db: Session, scripts: list[ProjectScript]) -> list[Place]:
     while left:
         ready = sorted(
             (one for one, above in left.items() if not above & left.keys()),
-            key=lambda one: places[one].project_name.lower(),
+            key=lambda one: (places[one].rank, places[one].project_name.lower()),
         )
         if not ready:
             # Everything still here is in a ring, or waits on one.
@@ -310,9 +314,17 @@ def running_order(db: Session, scripts: list[ProjectScript]) -> list[Place]:
             del left[one]
         step += 1
 
+    # Within a step, the order somebody chose, then the name for anything they
+    # have not touched. Across steps the data decides and a rank cannot reach:
+    # the step is settled above, before any of this is read.
     return sorted(
         places.values(),
-        key=lambda place: (place.in_a_cycle, place.step, place.project_name.lower()),
+        key=lambda place: (
+            place.in_a_cycle,
+            place.step,
+            place.rank,
+            place.project_name.lower(),
+        ),
     )
 
 # Where a moved output records the script that may keep rebuilding it.

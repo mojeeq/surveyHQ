@@ -15,33 +15,128 @@ whether this one can.
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from sqlalchemy import select
 
 from app.api.deps import CurrentUser, DbSession
 from app.models import Dataset, ProjectScript, Role
-from app.schemas.script import ScriptPlace, ScriptsOverview
+from app.schemas.script import ScriptOrderIn, ScriptPlace, ScriptsOverview
 from app.services import project_script, stata
+from app.services.project_script import running_order
 from app.services.projects import can_edit, memberships, visible_projects
 
 router = APIRouter()
 
 
-@router.get("", response_model=ScriptsOverview)
-def overview(db: DbSession, user: CurrentUser) -> ScriptsOverview:
-    """Every script this user can see, in the order they have to run."""
+def _scripts_for(db: DbSession, user: CurrentUser) -> list[ProjectScript]:
+    """The rows this reader can see that are actually scripts.
+
+    A row is made for a project the first time anybody opens its script tab,
+    so most of them are empty and are not scripts. One that has run is,
+    whatever it holds now: running is deliberately separate from saving - a
+    script is tried before it is kept - so text can be empty while the reads
+    and writes of a real run are recorded against it.
+
+    One definition because two things ask: the page, and the reorder that
+    wants to know what a step contains. Asked separately they disagreed - the
+    reorder counted the empty rows, so "the whole step" meant more scripts
+    than the page had ever shown, and every reordering was refused.
+    """
     allowed = {project.id for project in visible_projects(db, user)}
-    # A row is made for a project the first time anybody opens its script tab,
-    # so most of them are empty and are not scripts. One that has run is,
-    # whatever it holds now: running is deliberately separate from saving -
-    # a script is tried before it is kept - so text can be empty while the
-    # reads and writes of a real run are recorded against it.
-    scripts = [
+    return [
         script
         for script in db.scalars(select(ProjectScript)).all()
         if script.project_id in allowed
         and (script.text.strip() or script.last_run_at is not None)
     ]
+
+
+@router.put("/order", response_model=ScriptsOverview)
+def set_order(
+    payload: ScriptOrderIn, db: DbSession, user: CurrentUser
+) -> ScriptsOverview:
+    """Put the scripts of one step in the order somebody wants them run.
+
+    Only within a step. Which script has to run before which comes from what
+    they read and write - one writes the file another reads, so the second
+    cannot go first and no preference changes that. Inside a step nothing
+    waits on anything, the page says as much, and the order there was
+    alphabetical: no order at all for somebody who knows which one they do
+    first on a Monday.
+
+    So a list spanning two steps is refused, naming what it is that fixes
+    them, rather than accepted and quietly ignored - which is what storing a
+    rank the sort could not honour would amount to.
+    """
+    wanted = list(dict.fromkeys(payload.project_ids))
+    if len(wanted) < 2:
+        raise HTTPException(
+            status_code=422, detail="Give the whole step, in the order you want it"
+        )
+
+    scripts = {script.project_id: script for script in _scripts_for(db, user)}
+    missing = [one for one in wanted if one not in scripts]
+    if missing:
+        # 404 rather than 403, as everywhere else: a project someone cannot
+        # see should not be confirmed to exist by the error.
+        raise HTTPException(status_code=404, detail="No such script")
+
+    places = {
+        place.project_id: place
+        for place in running_order(db, list(scripts.values()))
+    }
+    steps = {places[one].step for one in wanted}
+    tangled = [one for one in wanted if places[one].in_a_cycle]
+    if tangled:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"'{places[tangled[0]].project_name}' is in a ring with another "
+                "script - each reads what the other writes, so there is no order "
+                "to choose."
+            ),
+        )
+    if len(steps) > 1:
+        later = max(wanted, key=lambda one: places[one].step)
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"'{places[later].project_name}' waits for "
+                f"{', '.join(places[later].waits_for)}, so it cannot be moved "
+                "among these. Only scripts in the same step can be reordered."
+            ),
+        )
+
+    # The whole step, so that nothing is left at a rank somebody did not mean.
+    step = next(iter(steps))
+    whole = {one for one, place in places.items() if place.step == step}
+    if whole != set(wanted):
+        raise HTTPException(
+            status_code=422,
+            detail="Give the whole step, in the order you want it",
+        )
+
+    held = {} if user.role is Role.admin else memberships(db, user)
+    for project_id in wanted:
+        if not can_edit(db, user, project_id, Role.manager, held=held):
+            raise HTTPException(
+                status_code=403,
+                detail=(
+                    f"Changing the order needs the manager role on "
+                    f"'{places[project_id].project_name}'."
+                ),
+            )
+
+    for rank, project_id in enumerate(wanted):
+        scripts[project_id].run_rank = rank
+    db.commit()
+    return overview(db, user)
+
+
+@router.get("", response_model=ScriptsOverview)
+def overview(db: DbSession, user: CurrentUser) -> ScriptsOverview:
+    """Every script this user can see, in the order they have to run."""
+    scripts = _scripts_for(db, user)
 
     # Seeing a script and being able to change it are different questions, and
     # the page asks both: it offers an editor, and the editor is the project's,
@@ -81,6 +176,7 @@ def overview(db: DbSession, user: CurrentUser) -> ScriptsOverview:
                 last_run_at=by_project[place.project_id].last_run_at,
                 last_error=by_project[place.project_id].last_error,
                 can_edit=place.project_id in editable,
+                rank=place.rank,
             )
             for place in places
         ]

@@ -21,6 +21,7 @@ from sqlalchemy import (
     DateTime,
     Enum,
     ForeignKey,
+    Integer,
     String,
     Text,
     UniqueConstraint,
@@ -100,6 +101,10 @@ class ProjectScript(UUIDMixin, TimestampMixin, Base):
     # fact that it ran - the editor opens on this when nothing is saved, and
     # the overview counts it rather than showing a script of no length.
     last_run_text: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # Where somebody put this script among the ones it shares a step with.
+    # Only a tie-break: the steps themselves come from what the scripts read
+    # and write, and no rank moves a script past something it waits for.
+    run_rank: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     updated_by: Mapped[str | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
