@@ -344,3 +344,68 @@ def test_the_overview_says_who_may_change_each_script(client, auth_headers, db_s
     everything = client.get("/api/v1/scripts", headers=auth_headers).json()["places"]
     for place in everything:
         assert place["can_edit"] is True, place["project_name"]
+
+
+def test_the_overview_reads_memberships_once(client, auth_headers, db_session):
+    """However many projects a reader can see.
+
+    Whether somebody may change a script is a question about their membership
+    of that project, and the function that answers it reads their memberships
+    from the database each time it is asked. Asked once per project, opening
+    this page cost a query per project the reader could see - including the
+    ones with no script on the page at all.
+
+    Counted rather than reasoned about: the queries are the thing that grows,
+    so the test watches for them.
+    """
+    from sqlalchemy import event
+
+    from app.api.v1.endpoints import scripts as endpoint
+    from app.core.security import hash_password
+    from app.models import ProjectMember, Role, User
+
+    reader = User(
+        email="counts@example.org",
+        username="counts",
+        full_name="Many Projects",
+        hashed_password=hash_password("Fieldwork-2026-counts"),
+        role=Role.manager,
+    )
+    db_session.add(reader)
+    db_session.flush()
+    for index in range(8):
+        project = Project(name=f"Counted {index}", slug=f"counted-{index}")
+        db_session.add(project)
+        db_session.flush()
+        db_session.add_all(
+            [
+                ProjectScript(
+                    project_id=project.id,
+                    text="use people",
+                    last_run_at=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
+                ),
+                ProjectMember(
+                    project_id=project.id, user_id=reader.id, role=Role.manager
+                ),
+            ]
+        )
+    db_session.commit()
+
+    seen: list[str] = []
+
+    def watch(conn, cursor, statement, parameters, context, executemany):
+        if "project_members" in statement:
+            seen.append(statement)
+
+    engine = db_session.get_bind()
+    event.listen(engine, "before_cursor_execute", watch)
+    try:
+        answered = endpoint.overview(db_session, reader)
+    finally:
+        event.remove(engine, "before_cursor_execute", watch)
+
+    assert len(answered.places) >= 8
+    assert all(place.can_edit for place in answered.places)
+    # One to work out what they can see, one to work out what they may change.
+    # Not one per project, which is what this is here to stop coming back.
+    assert len(seen) <= 2, f"{len(seen)} membership queries for 8 projects"
