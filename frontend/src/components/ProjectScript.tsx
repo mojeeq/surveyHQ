@@ -93,15 +93,27 @@ export function fillWith(
   if (where.filled !== where.project) return openingText(answer)
   // Theirs: what is in the box is not what the editor put there.
   if (where.inBox !== where.shown) return null
-  // Untouched, and nothing has been saved since the box was filled. Leave it
-  // be rather than writing the saved text over it: on a project with nothing
-  // saved and a run on record that would empty the box every refetch, and
-  // after somebody cleared the box and saved it, falling back to the run
-  // would hand them back the thing they had just finished replacing.
-  if (answer.text === where.saved) return null
-  // Untouched, and somebody has saved since. Follow it - plainly, so that
-  // Save afterwards cannot quietly overwrite their work.
-  return answer.text
+  // Untouched, and the box is showing what was saved, and that has not
+  // changed. Nothing to say.
+  //
+  // This is narrow on purpose. It used to be `answer.text === saved` alone,
+  // which also covered the box showing a recorded run - and so an untouched
+  // box on a project with nothing saved never saw a newer run at all, since
+  // the saved text is empty either way. Whoever ran something next went
+  // unnoticed, and neither notice offered the newer run, because one wants a
+  // saved script and the other wants the run already in the box.
+  //
+  // What it is actually for is the deliberate clear: somebody emptied the box
+  // and saved it, and falling back to the run would hand back the thing they
+  // had just replaced with nothing. That is this case and only this one - the
+  // box showing the saved text, which is empty, and the answer agreeing.
+  if (where.shown === where.saved && answer.text === where.saved) return null
+  // Untouched, and the answer says something else. Follow what the project
+  // opens on rather than the saved text alone: with nothing saved that is the
+  // recorded run, which is what an untouched box was already showing, and
+  // following only the saved text would blank it.
+  const fresh = openingText(answer)
+  return fresh === where.shown ? null : fresh
 }
 
 /** A project with no script, as the server describes one: `script_for`
