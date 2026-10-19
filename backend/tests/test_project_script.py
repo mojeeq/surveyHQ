@@ -640,5 +640,10 @@ def test_a_run_that_never_started_keeps_the_last_real_run_s_dependencies(
     assert list(after.reads) == reads, "the scripts standing on this data are found by reads"
     assert list(after.writes) == writes, "and `save as` keeps its own output by writes"
     assert after.last_run_at == ran_at, "nothing ran, so nothing is a newer run"
+    # Nor is the last run relabelled. `last_error` is how the overview decides
+    # to put "Last run failed" on a card and how the project page captions the
+    # run time, so writing the refusal there hung a failure on a run that
+    # succeeded, under that run's own timestamp.
+    assert after.last_error == "", "the run that did happen did not fail"
     # And the draft is still kept, which is what the commit was for.
     assert "half written" in after.last_run_text
