@@ -48,10 +48,34 @@ const lines = source.split('\n')
  *  everything below would pass while `busy` left it out and Save stayed
  *  pressable through it - which is exactly the race that got in last time.
  */
+const DECLARED = /const (\w+) = useMutation(?:<[^>]*>)?\s*\(\s*\{/
 const MUTATIONS = lines.flatMap((line) => {
-  const declared = /const (\w+) = useMutation\(\{/.exec(line)
+  const declared = DECLARED.exec(line)
   return declared ? [declared[1]] : []
 })
+
+/** Every call, so a declaration written in a shape the line above does not
+ *  read cannot simply go unseen.
+ *
+ *  Widening that pattern to cover more shapes would be chasing: the next one
+ *  is whatever nobody thought of, and the cost of missing it is this guard
+ *  quietly not covering a mutation while printing that all is well. So the
+ *  calls are counted instead, and one that was not claimed by name is a
+ *  failure asking for the guard to be taught the shape - noisy where silence
+ *  would be wrong.
+ */
+const unclaimed = lines.filter(
+  (line) => /(?<![.\w])useMutation\s*[<(]/.test(line) && !DECLARED.test(line),
+)
+if (unclaimed.length) {
+  console.error('\nProjectScript declares a mutation in a shape this guard cannot read:\n')
+  for (const line of unclaimed) console.error('  ' + line.trim())
+  console.error('\n  It reads `const <name> = useMutation({`, with an optional type')
+  console.error('  argument. Anything else leaves the mutation out of both the callback')
+  console.error('  scan and the `busy` check, so teach this the shape rather than')
+  console.error('  letting it pass over one.\n')
+  process.exit(1)
+}
 
 /** The ones that have to be there. Not a list of what matters - that is what
  *  the discovery above is for - but a floor under it: a regex that stopped
@@ -69,7 +93,13 @@ if (absent.length) {
 
 const found = []
 for (const name of MUTATIONS) {
-  const start = lines.findIndex((line) => line.includes(`const ${name} = useMutation({`))
+  // The same pattern discovery used, so a shape it reads is a shape this
+  // finds. Matching a narrower one here would fail on a declaration that was
+  // found a moment ago, and say it does not exist.
+  const start = lines.findIndex((line) => {
+    const declared = DECLARED.exec(line)
+    return declared !== null && declared[1] === name
+  })
   if (start < 0) {
     console.error(`\nProjectScript has no \`${name}\` mutation; this guard needs rewriting.\n`)
     process.exit(1)
