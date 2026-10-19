@@ -62,11 +62,26 @@ export function openingText(script: { text: string; unsaved_run: string }): stri
  *  Save afterwards writes over their work without either of them seeing it.
  *
  *  So the box belongs to the person from the moment they change it, and until
- *  then it is only a view of what is saved and may follow it.
+ *  then it is only a view of what is saved and follows a newer one.
+ *
+ *  "From the moment they change it" has to be measured against what was last
+ *  put in the box, not against what is saved. A project with nothing saved
+ *  and a run on record opens on the run, so the box differs from the saved
+ *  text immediately, with nobody having touched anything - and reading that
+ *  as an edit left the box ignoring every later answer, which is the bug this
+ *  is the second attempt at.
  */
 export function fillWith(
   answer: { text: string; unsaved_run: string },
-  where: { filled: string | null; project: string; inBox: string; saved: string },
+  where: {
+    filled: string | null
+    project: string
+    inBox: string
+    /** What the editor last put in the box itself. */
+    shown: string
+    /** The saved text as the editor last knew it. */
+    saved: string
+  },
 ): string | null {
   // Opening on a project. Falling back to the last run matters here: a blank
   // box on a project whose data was plainly built by something is the
@@ -76,13 +91,17 @@ export function fillWith(
   // would otherwise be measured against the previous project's saved text,
   // and a draft left in one project would turn up in the next one's editor.
   if (where.filled !== where.project) return openingText(answer)
-  // Open already, and nobody has changed it. Just what is saved - not
-  // `openingText`, whose fall back to the last run is a courtesy owed to an
-  // opening box and nothing else. Owed to an open one it would mean that
-  // clearing the box and saving it put the old run straight back in.
-  if (where.inBox === where.saved) return answer.text
-  // Theirs.
-  return null
+  // Theirs: what is in the box is not what the editor put there.
+  if (where.inBox !== where.shown) return null
+  // Untouched, and nothing has been saved since the box was filled. Leave it
+  // be rather than writing the saved text over it: on a project with nothing
+  // saved and a run on record that would empty the box every refetch, and
+  // after somebody cleared the box and saved it, falling back to the run
+  // would hand them back the thing they had just finished replacing.
+  if (answer.text === where.saved) return null
+  // Untouched, and somebody has saved since. Follow it - plainly, so that
+  // Save afterwards cannot quietly overwrite their work.
+  return answer.text
 }
 
 /** A project with no script, as the server describes one: `script_for`
@@ -138,6 +157,10 @@ export function ProjectScript({ projectId }: { projectId: string }) {
    *  the text is only replaced while nobody has changed it.
    */
   const filledFor = useRef<string | null>(null)
+  /** What the editor last put in the box, which is how a change made by the
+   *  person is told apart from a box the editor filled. Not state: nothing is
+   *  drawn from it, and it must be read inside the effect that sets it. */
+  const shown = useRef('')
 
   useEffect(() => {
     if (script.data === undefined) return
@@ -145,10 +168,12 @@ export function ProjectScript({ projectId }: { projectId: string }) {
       filled: filledFor.current,
       project: projectId,
       inBox: text,
+      shown: shown.current,
       saved,
     })
     if (fill === null) return
     filledFor.current = projectId
+    shown.current = fill
     setText(fill)
     // Always measured against what is saved, so a recovered run opens dirty
     // and the Save button is live: it is a draft got back, not a saved
@@ -163,6 +188,11 @@ export function ProjectScript({ projectId }: { projectId: string }) {
     mutationFn: (next: string) =>
       api.put<Script>(`/projects/${projectId}/script`, { text: next }),
     onSuccess: (result) => {
+      // What was kept, which is the box again rather than a draft: `shown`
+      // moves with it, so an answer arriving later may follow. Taken from
+      // the answer rather than from the box in case the two differ.
+      setText(result.text)
+      shown.current = result.text
       setSaved(result.text)
       queryClient.setQueryData(['project-script', projectId], result)
     },
@@ -199,6 +229,7 @@ export function ProjectScript({ projectId }: { projectId: string }) {
     mutationFn: () => api.delete<{ detail: string }>(`/projects/${projectId}/script`),
     onSuccess: (result) => {
       setText('')
+      shown.current = ''
       setSaved('')
       setLog([])
       // Say what is now true rather than only marking the answer stale. The

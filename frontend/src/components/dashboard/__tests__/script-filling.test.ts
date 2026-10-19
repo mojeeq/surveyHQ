@@ -10,28 +10,45 @@
  *
  * Both have happened. The rule that holds both ends: the box is the person's
  * from the moment they change it, and until then it is a view of what is
- * saved that a newer answer may follow.
+ * saved that follows a newer one.
  *
- * Opening and following are not the same rule, which is the third thing that
- * went wrong here. An opening box falls back to the last run so that a
- * project whose data was plainly built by something does not open blank. An
- * open one must not, or clearing the box and saving it puts the run back.
+ * Two things make that harder than it sounds, and both have been got wrong.
+ *
+ * "From the moment they change it" has to be measured against what the editor
+ * last put in the box, not against what is saved. A project with nothing
+ * saved and a run on record opens on the run, so the box differs from the
+ * saved text with nobody having touched anything.
+ *
+ * And opening is not following. An opening box falls back to the last run so
+ * that a project whose data was plainly built by something does not open
+ * blank; an open one must not, or clearing the box and saving it hands the
+ * run back.
  */
 import { describe, expect, it } from "vitest";
 
 import { fillWith } from "../../ProjectScript";
 
-/** Already open on p1, and these are the parts that vary. */
-const open = (inBox: string, saved: string) => ({
+/** Open on p1, with the box as the editor left it: untouched. */
+const untouched = (shown: string, saved: string) => ({
+  filled: "p1",
+  project: "p1",
+  inBox: shown,
+  shown,
+  saved,
+});
+
+/** Open on p1, with something else in the box: the person typed. */
+const typed = (inBox: string, shown: string, saved: string) => ({
   filled: "p1",
   project: "p1",
   inBox,
+  shown,
   saved,
 });
 
 describe("what fills the editor's box", () => {
   describe("opening on a project", () => {
-    const opening = { filled: null, project: "p1", inBox: "", saved: "" };
+    const opening = { filled: null, project: "p1", inBox: "", shown: "", saved: "" };
 
     it("is the saved script", () => {
       expect(fillWith({ text: "use people", unsaved_run: "" }, opening)).toBe("use people");
@@ -48,30 +65,48 @@ describe("what fills the editor's box", () => {
       expect(
         fillWith(
           { text: "p2's script", unsaved_run: "" },
-          { filled: "p1", project: "p2", inBox: "half a draft", saved: "" },
+          { filled: "p1", project: "p2", inBox: "half a draft", shown: "", saved: "" },
         ),
       ).toBe("p2's script");
     });
   });
 
-  describe("an open box nobody has changed", () => {
+  describe("an untouched box", () => {
     it("follows a script saved somewhere else", () => {
-      // The finding: a colleague saved while the tab was shut, and the stale
-      // cached answer was treated as the last word.
-      expect(fillWith({ text: "theirs", unsaved_run: "" }, open("mine", "mine"))).toBe(
+      // A colleague saved while the tab was shut, and the stale cached answer
+      // was being treated as the last word.
+      expect(fillWith({ text: "theirs", unsaved_run: "" }, untouched("mine", "mine"))).toBe(
         "theirs",
       );
     });
 
-    it("does not take the last run back off the server", () => {
-      // Somebody cleared the box and saved it. The box is empty and matches
-      // what is saved, so it follows - and following `openingText` here would
-      // hand back the run they had just finished replacing with nothing.
-      expect(fillWith({ text: "", unsaved_run: "what ran" }, open("", ""))).toBe("");
+    it("follows one even while it holds a run nobody has touched", () => {
+      // Nothing saved, a run on record, so the box opened on the run and
+      // differs from the saved text with nobody having touched it. Reading
+      // that as an edit left the box ignoring this answer and Save then
+      // overwrote the colleague - the whole point of the rule, lost to the
+      // one case that looks like a draft and is not.
+      expect(fillWith({ text: "theirs", unsaved_run: "what ran" }, untouched("what ran", ""))).toBe(
+        "theirs",
+      );
     });
 
-    it("empties when the script was deleted", () => {
-      expect(fillWith({ text: "", unsaved_run: "" }, open("gone", "gone"))).toBe("");
+    it("is left alone when nothing has been saved since", () => {
+      // The plain refetch on that same project. Writing the saved text over
+      // the box would empty it every time the query came back.
+      expect(fillWith({ text: "", unsaved_run: "what ran" }, untouched("what ran", ""))).toBe(null);
+    });
+
+    it("does not take the last run back after it was cleared and saved", () => {
+      // Saved empty on purpose. Following would be harmless; falling back to
+      // the run would hand back the thing just replaced with nothing.
+      expect(fillWith({ text: "", unsaved_run: "what ran" }, untouched("", ""))).toBe(null);
+    });
+
+    it("is left alone when the answer says what the box already shows", () => {
+      expect(fillWith({ text: "use people", unsaved_run: "" }, untouched("use people", "use people"))).toBe(
+        null,
+      );
     });
   });
 
@@ -79,23 +114,30 @@ describe("what fills the editor's box", () => {
     it("is left alone mid-draft", () => {
       // The failed-run case: the run refetches for the newer complaint, and
       // the draft being corrected has to survive it.
-      expect(fillWith({ text: "use people", unsaved_run: "" }, open("use peopl", "use people"))).toBe(
-        null,
-      );
-    });
-
-    it("is left alone when it holds a run got back", () => {
-      // Nothing saved, something ran: the box opened on the run and so is
-      // dirty. Untouched by the person, but not a view of anything saved, and
-      // following would empty the box that was just filled on purpose.
-      expect(fillWith({ text: "", unsaved_run: "what ran" }, open("what ran", ""))).toBe(null);
+      expect(
+        fillWith({ text: "use people", unsaved_run: "" }, typed("use peopl", "use people", "use people")),
+      ).toBe(null);
     });
 
     it("is left alone when they cleared it and have not saved", () => {
       // Selecting all and deleting is a change, and Save is live for it.
-      expect(fillWith({ text: "use people", unsaved_run: "" }, open("", "use people"))).toBe(
+      expect(fillWith({ text: "use people", unsaved_run: "" }, typed("", "use people", "use people"))).toBe(
         null,
       );
+    });
+
+    it("is left alone when they asked for the recorded run back", () => {
+      // "Put it in the box" is the person acting, not the editor filling.
+      expect(
+        fillWith({ text: "kept", unsaved_run: "tried" }, typed("tried", "kept", "kept")),
+      ).toBe(null);
+    });
+
+    it("is left alone even when somebody else has saved since", () => {
+      // Their draft outranks a newer script, because losing a draft is silent
+      // and losing the race on Save is not. The lost update that leaves is a
+      // version on the record and a refusal on PUT, not a textarea rule.
+      expect(fillWith({ text: "theirs", unsaved_run: "" }, typed("mine", "was", "was"))).toBe(null);
     });
   });
 });
