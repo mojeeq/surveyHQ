@@ -39,9 +39,33 @@ const FILE = fileURLToPath(
 const source = readFileSync(FILE, 'utf8')
 const lines = source.split('\n')
 
-/** The mutations whose callbacks must not write the box. None of them may:
- *  an exemption here is the race the guard exists to stop, wearing a badge. */
-const MUTATIONS = ['keep', 'run', 'drop']
+/** Every mutation the component declares, read out of the file rather than
+ *  listed here. None of their callbacks may write the box: an exemption is the
+ *  race this exists to stop, wearing a badge.
+ *
+ *  Found rather than written down, because a list kept by hand is the bug it
+ *  is meant to catch. A fourth mutation added without a line added here, and
+ *  everything below would pass while `busy` left it out and Save stayed
+ *  pressable through it - which is exactly the race that got in last time.
+ */
+const MUTATIONS = lines.flatMap((line) => {
+  const declared = /const (\w+) = useMutation\(\{/.exec(line)
+  return declared ? [declared[1]] : []
+})
+
+/** The ones that have to be there. Not a list of what matters - that is what
+ *  the discovery above is for - but a floor under it: a regex that stopped
+ *  matching would hand every check below an empty list to pass vacuously,
+ *  which is the same failure one level up. */
+const FLOOR = ['keep', 'run', 'drop']
+const absent = FLOOR.filter((name) => !MUTATIONS.includes(name))
+if (absent.length) {
+  console.error('\nProjectScript declares no mutation called ' + absent.join(' or ') + '.\n')
+  console.error('  Either they were renamed, or the shape this guard reads them by has')
+  console.error('  changed and it is now finding: ' + (MUTATIONS.join(', ') || '(nothing)'))
+  console.error('  Rewrite the guard rather than leaving it matching nothing.\n')
+  process.exit(1)
+}
 
 const found = []
 for (const name of MUTATIONS) {
