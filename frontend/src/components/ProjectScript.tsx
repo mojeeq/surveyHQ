@@ -180,19 +180,25 @@ export function ProjectScript({ projectId }: { projectId: string }) {
     // script.
     setSaved(script.data.text)
     // `text` and `saved` are read above, so they belong here. The effect runs
-    // again when they change and stops at `mayFill`, which is the point: the
-    // first keystroke is what hands the box over.
+    // again when they change and stops at `fillWith`, which is the point:
+    // the first keystroke is what hands the box over.
   }, [script.data, projectId, text, saved])
 
   const keep = useMutation({
     mutationFn: (next: string) =>
       api.put<Script>(`/projects/${projectId}/script`, { text: next }),
-    onSuccess: (result) => {
-      // What was kept, which is the box again rather than a draft: `shown`
-      // moves with it, so an answer arriving later may follow. Taken from
-      // the answer rather than from the box in case the two differ.
-      setText(result.text)
-      shown.current = result.text
+    onSuccess: (result, sent) => {
+      // Saving does not write the box. The box stays editable while the PUT
+      // is in flight, so anything written back here lands on top of whatever
+      // was typed in the meantime and those keystrokes are gone.
+      //
+      // What moves is the marker, to the text that was sent. If the box still
+      // holds it, nobody typed during the save and it may follow a newer
+      // answer; if they did, the box differs from the marker and is theirs,
+      // which is exactly right. `sent` rather than `result.text` for the same
+      // reason: the marker records what was in the box, and a server that
+      // tidies what it stores has not changed that.
+      shown.current = sent
       setSaved(result.text)
       queryClient.setQueryData(['project-script', projectId], result)
     },
