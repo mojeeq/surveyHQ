@@ -260,32 +260,65 @@ if (missing.length) {
   process.exit(1)
 }
 
-// The run the editor knows has to move wherever the shown text moves.
+// The saved text and the run the editor knows move together.
 //
-// They are the two halves of "has anything happened since the editor settled
-// on an answer", and `fillWith` reads both. Moving one without the other
-// makes the pair say something neither half meant: leave the run behind and
-// every later answer looks new, so an untouched box is rewritten on every
-// refetch; move it without the text and a change goes unnoticed.
+// They are the two halves of the answer, and `fillWith` compares both to
+// decide whether anything has happened since the editor settled on one.
+// Moving one without the other makes the pair say something neither half
+// meant: leave the run behind and every later answer looks new, so an
+// untouched box is rewritten on every refetch; move the run without the saved
+// text and a change goes unnoticed.
 //
-// No test can see this. `fillWith` is given the pair and cannot tell whether
-// the component kept it honest - mutating either assignment away leaves all
-// of them passing, which is the whole reason this check exists.
-const moved = []
+// Checked both ways round. One direction is not the invariant - dropping the
+// saved text while keeping the run passes a forward-only check and leaves
+// exactly the half-pair this is here to stop.
+//
+// No test can see any of it. `fillWith` is handed the pair and cannot tell
+// whether the component kept it honest; mutating either assignment away
+// leaves every test passing.
+const halves = [/(?<![.\w])setSaved\s*\(/, /(?<![.\w])knownRun\.current\s*=/]
+const lonely = []
 for (let i = 0; i < lines.length; i += 1) {
-  if (!/(?<![.\w])shown\.current\s*=/.test(lines[i])) continue
-  const near = lines.slice(i, i + 4).join('\n')
-  if (!/(?<![.\w])knownRun\.current\s*=/.test(near)) {
-    moved.push(`${i + 1}  ${lines[i].trim()}`)
+  for (const [which, half] of halves.entries()) {
+    if (!half.test(lines[i])) continue
+    const other = halves[1 - which]
+    const near = lines.slice(Math.max(0, i - 4), i + 5).join('\n')
+    if (!other.test(near)) lonely.push(`${i + 1}  ${lines[i].trim()}`)
   }
 }
-if (moved.length) {
-  console.error('\nThe shown text moves without the run the editor knows:\n')
-  for (const hit of moved) console.error('  ProjectScript.tsx:' + hit)
-  console.error('\n  Set `knownRun.current` beside it. The two are one fact in two')
-  console.error('  halves, and `fillWith` compares both to decide whether anything has')
-  console.error('  happened; half of it moving says something neither half meant.\n')
+if (lonely.length) {
+  console.error('\nOne half of the answer moves without the other:\n')
+  for (const hit of lonely) console.error('  ProjectScript.tsx:' + hit)
+  console.error('\n  `setSaved` and `knownRun.current` go together. They are the two')
+  console.error('  halves of the answer that `fillWith` compares to decide whether')
+  console.error('  anything has happened, and half of it moving says something')
+  console.error('  neither half meant.\n')
   process.exit(1)
+}
+
+// And the effect settles both before it decides not to write the box.
+//
+// `fillWith` returning null means "leave the box", which is not the same as
+// "nothing happened" - an answer can move from a recorded run to a saved
+// script of the same text, where there is nothing to write and everything to
+// record. Reading the one as the other left the saved text empty against a
+// server holding a script, so Save claimed unsaved changes on a box that
+// matched it, and clearing the box turned Save off on a project that still
+// had one.
+const decides = lines.findIndex((line) => /if \(fill === null\) return/.test(line))
+if (decides < 0) {
+  console.error('\nThe fill effect no longer bails on a null fill; this guard needs rewriting.\n')
+  process.exit(1)
+}
+const beforeDeciding = lines.slice(0, decides).join('\n')
+for (const half of halves) {
+  if (!half.test(beforeDeciding)) {
+    console.error('\nThe fill effect decides not to write the box before settling the answer:\n')
+    console.error('  ProjectScript.tsx:' + (decides + 1) + '  ' + lines[decides].trim())
+    console.error('\n  Set the saved text and the run from the answer above this line. A')
+    console.error('  null fill means the box needs no write, not that nothing happened.\n')
+    process.exit(1)
+  }
 }
 
 // And the one place that may fill it has to still ask.
