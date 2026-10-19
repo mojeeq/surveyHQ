@@ -234,9 +234,10 @@ export function ProjectScript({ projectId }: { projectId: string }) {
   const drop = useMutation({
     mutationFn: () => api.delete<{ detail: string }>(`/projects/${projectId}/script`),
     onSuccess: (result) => {
-      setText('')
-      shown.current = ''
-      setSaved('')
+      // The box was emptied when they asked, not here. By the time this
+      // arrives they may have started typing the script that replaces the
+      // one they just got rid of, which is the obvious next thing to do, and
+      // erasing that is the loss this whole arrangement is against.
       setLog([])
       // Say what is now true rather than only marking the answer stale. The
       // box is empty and so counts as unchanged, which means a refetch that
@@ -370,7 +371,17 @@ export function ProjectScript({ projectId }: { projectId: string }) {
                   confirmLabel: 'Delete script',
                   tone: 'danger',
                 })
-                if (sure) drop.mutate()
+                if (!sure) return
+                // Emptying the box is part of what they asked for, so it
+                // happens with the request rather than when the answer gets
+                // back. Saying nothing is saved any more is what brings the
+                // script back by itself if the delete fails: the query still
+                // holds it, so it no longer matches `saved` and the box,
+                // untouched, follows it. See `fillWith`.
+                setText('')
+                shown.current = ''
+                setSaved('')
+                drop.mutate()
               }}
             >
               {drop.isPending && <Spinner className="h-4 w-4" />}

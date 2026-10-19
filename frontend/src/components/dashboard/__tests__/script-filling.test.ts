@@ -103,6 +103,16 @@ describe("what fills the editor's box", () => {
       expect(fillWith({ text: "", unsaved_run: "what ran" }, untouched("", ""))).toBe(null);
     });
 
+    it("brings the script back when a delete failed", () => {
+      // Asking for a delete empties the box and says nothing is saved, both
+      // with the request. If the DELETE then fails the query still holds the
+      // script, so it no longer matches the saved text and the box, which
+      // nobody has touched, follows it back. No rollback to write.
+      expect(fillWith({ text: "the old script", unsaved_run: "" }, untouched("", ""))).toBe(
+        "the old script",
+      );
+    });
+
     it("is left alone when the answer says what the box already shows", () => {
       expect(fillWith({ text: "use people", unsaved_run: "" }, untouched("use people", "use people"))).toBe(
         null,

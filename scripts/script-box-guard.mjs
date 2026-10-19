@@ -17,8 +17,15 @@
  * callback is not the person.
  *
  * A mutation records what happened by moving `shown` and `saved`, never by
- * writing the box. Clearing it after a delete is the exception, because there
- * is no longer anything to show and nothing of theirs to lose.
+ * writing the box - the delete included. Emptying the box after a delete is
+ * the person's own action and happens where they ask for it, with the
+ * request, because by the time the answer gets back they may have started
+ * typing the script that replaces the one they removed.
+ *
+ * What this does not catch: a callback that writes the box through a helper
+ * rather than calling `setText` itself. Following that would want the call
+ * graph, which is more than this is worth; it is named here so the next
+ * person knows the edge rather than trusting a clean run too far.
  *
  * Run from `prelint`, so CI catches the next one.
  */
@@ -32,16 +39,12 @@ const FILE = fileURLToPath(
 const source = readFileSync(FILE, 'utf8')
 const lines = source.split('\n')
 
-/** The mutations whose callbacks must not write the box, and the one write
- *  each is allowed. `drop` empties it: nothing is left to show. */
-const ALLOWED = new Map([
-  ['keep', []],
-  ['run', []],
-  ['drop', ["setText('')"]],
-])
+/** The mutations whose callbacks must not write the box. None of them may:
+ *  an exemption here is the race the guard exists to stop, wearing a badge. */
+const MUTATIONS = ['keep', 'run', 'drop']
 
 const found = []
-for (const [name, allowed] of ALLOWED) {
+for (const name of MUTATIONS) {
   const start = lines.findIndex((line) => line.includes(`const ${name} = useMutation({`))
   if (start < 0) {
     console.error(`\nProjectScript has no \`${name}\` mutation; this guard needs rewriting.\n`)
@@ -59,7 +62,6 @@ for (const [name, allowed] of ALLOWED) {
   for (let i = start; i < end; i += 1) {
     const line = lines[i].trim()
     if (!/(?<![.\w])setText\s*\(/.test(line)) continue
-    if (allowed.some((ok) => line.includes(ok))) continue
     found.push(`${i + 1}  ${line}  (in \`${name}\`)`)
   }
 }
