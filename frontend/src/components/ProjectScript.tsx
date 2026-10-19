@@ -62,11 +62,28 @@ export function openingText(script: { text: string; unsaved_run: string }): stri
  *  Save afterwards writes over their work without either of them seeing it.
  *
  *  So the box belongs to the person from the moment they change it, and until
- *  then it is only a view of what is saved and may follow it.
+ *  then it is only a view of what is saved and follows a newer one.
+ *
+ *  "From the moment they change it" has to be measured against what was last
+ *  put in the box, not against what is saved. A project with nothing saved
+ *  and a run on record opens on the run, so the box differs from the saved
+ *  text immediately, with nobody having touched anything - and reading that
+ *  as an edit left the box ignoring every later answer, which is the bug this
+ *  is the second attempt at.
  */
 export function fillWith(
   answer: { text: string; unsaved_run: string },
-  where: { filled: string | null; project: string; inBox: string; saved: string },
+  where: {
+    filled: string | null
+    project: string
+    inBox: string
+    /** What the editor last put in the box itself. */
+    shown: string
+    /** The saved text as the editor last knew it. */
+    saved: string
+    /** The recorded run as the editor last knew it. */
+    knownRun: string
+  },
 ): string | null {
   // Opening on a project. Falling back to the last run matters here: a blank
   // box on a project whose data was plainly built by something is the
@@ -76,25 +93,43 @@ export function fillWith(
   // would otherwise be measured against the previous project's saved text,
   // and a draft left in one project would turn up in the next one's editor.
   if (where.filled !== where.project) return openingText(answer)
-  // Open already, and nobody has changed it. Just what is saved - not
-  // `openingText`, whose fall back to the last run is a courtesy owed to an
-  // opening box and nothing else. Owed to an open one it would mean that
-  // clearing the box and saving it put the old run straight back in.
-  if (where.inBox === where.saved) return answer.text
-  // Theirs.
-  return null
+  // Theirs: what is in the box is not what the editor put there.
+  if (where.inBox !== where.shown) return null
+  // Untouched, and the answer is the one the editor last settled on. Nothing
+  // has happened, so there is nothing to show.
+  //
+  // Both halves of the answer, which took three goes to see. Comparing only
+  // the saved text was standing in for this, and it is a poor stand-in,
+  // because the saved text is empty in two quite different situations - a
+  // project nobody has saved anything in, and a box somebody cleared and
+  // saved on purpose - and in both of them the thing that moves is the run.
+  // So a run by anybody was read as "nothing has happened": the box stayed as
+  // it was and neither notice offered the new run, the amber one wanting the
+  // run already in the box and the offer wanting a saved script.
+  //
+  // The deliberate clear, which is what that stand-in was protecting, is
+  // covered by this as it stands: the answer still carries the run that was
+  // on record when they saved, so it has not changed and the run is not
+  // handed back. A new one is a new thing to say.
+  if (answer.text === where.saved && answer.unsaved_run === where.knownRun) return null
+  // Untouched, and the answer has moved. Follow what the project opens on
+  // rather than the saved text alone: with nothing saved that is the recorded
+  // run, and following only the saved text would blank a box that is showing
+  // one.
+  const fresh = openingText(answer)
+  return fresh === where.shown ? null : fresh
 }
 
 /** A project with no script, as the server describes one: `script_for`
  *  makes an empty one rather than answering 404. */
-const EMPTY_SCRIPT: Script = {
+const EMPTY_SCRIPT: Script = Object.freeze({
   text: '',
   unsaved_run: '',
   reads: [],
   writes: [],
   last_run_at: null,
   last_error: '',
-}
+})
 
 interface RunResult {
   log: { command: string; message: string }[]
@@ -138,6 +173,18 @@ export function ProjectScript({ projectId }: { projectId: string }) {
    *  the text is only replaced while nobody has changed it.
    */
   const filledFor = useRef<string | null>(null)
+  /** What is in the box, readable from a callback that runs long after the
+   *  render it was started from. Assigned here rather than in an effect so it
+   *  cannot lag behind by a tick, and never read while rendering. */
+  const live = useRef('')
+  /** What the editor last put in the box, which is how a change made by the
+   *  person is told apart from a box the editor filled. Not state: nothing is
+   *  drawn from it, and it must be read inside the effect that sets it. */
+  const shown = useRef('')
+  /** The recorded run in the answer the editor last settled on, which is the
+   *  other half of "has anything happened". It moves wherever `shown` moves,
+   *  and `fillWith` reads both. */
+  const knownRun = useRef('')
 
   useEffect(() => {
     if (script.data === undefined) return
@@ -145,24 +192,40 @@ export function ProjectScript({ projectId }: { projectId: string }) {
       filled: filledFor.current,
       project: projectId,
       inBox: text,
+      shown: shown.current,
       saved,
+      knownRun: knownRun.current,
     })
     if (fill === null) return
     filledFor.current = projectId
+    shown.current = fill
+    knownRun.current = script.data.unsaved_run
     setText(fill)
     // Always measured against what is saved, so a recovered run opens dirty
     // and the Save button is live: it is a draft got back, not a saved
     // script.
     setSaved(script.data.text)
     // `text` and `saved` are read above, so they belong here. The effect runs
-    // again when they change and stops at `mayFill`, which is the point: the
-    // first keystroke is what hands the box over.
+    // again when they change and stops at `fillWith`, which is the point:
+    // the first keystroke is what hands the box over.
   }, [script.data, projectId, text, saved])
 
   const keep = useMutation({
     mutationFn: (next: string) =>
       api.put<Script>(`/projects/${projectId}/script`, { text: next }),
-    onSuccess: (result) => {
+    onSuccess: (result, sent) => {
+      // Saving does not write the box. The box stays editable while the PUT
+      // is in flight, so anything written back here lands on top of whatever
+      // was typed in the meantime and those keystrokes are gone.
+      //
+      // What moves is the marker, to the text that was sent. If the box still
+      // holds it, nobody typed during the save and it may follow a newer
+      // answer; if they did, the box differs from the marker and is theirs,
+      // which is exactly right. `sent` rather than `result.text` for the same
+      // reason: the marker records what was in the box, and a server that
+      // tidies what it stores has not changed that.
+      shown.current = sent
+      knownRun.current = result.unsaved_run
       setSaved(result.text)
       queryClient.setQueryData(['project-script', projectId], result)
     },
@@ -196,30 +259,85 @@ export function ProjectScript({ projectId }: { projectId: string }) {
   })
 
   const drop = useMutation({
-    mutationFn: () => api.delete<{ detail: string }>(`/projects/${projectId}/script`),
+    // What the answer said before the delete, so a delete that fails can put
+    // it back.
+    mutationFn: (_before: Script | undefined) =>
+      api.delete<{ detail: string }>(`/projects/${projectId}/script`),
     onSuccess: (result) => {
-      setText('')
-      setSaved('')
+      // The box was emptied when they asked, and so was the cached answer.
+      // Nothing here touches either: by the time this arrives they may have
+      // started typing the script that replaces the one they got rid of,
+      // which is the obvious next thing to do, and erasing that is the loss
+      // this whole arrangement is against.
       setLog([])
-      // Say what is now true rather than only marking the answer stale. The
-      // box is empty and so counts as unchanged, which means a refetch that
-      // has not landed yet would fill it from the answer cached from before
-      // the delete - putting the script back in the box it was just removed
-      // from, until the real answer arrives and empties it again.
-      queryClient.setQueryData(['project-script', projectId], EMPTY_SCRIPT)
       queryClient.invalidateQueries({ queryKey: ['project-script', projectId] })
       // The overview lists this project because it has a script; it does not
       // any more.
       queryClient.invalidateQueries({ queryKey: ['scripts'] })
       toast.push(result.detail, 'success')
     },
-    onError: (error: Error) => toast.push(error.message, 'error'),
+    onError: (error: Error, before) => {
+      if (before) {
+        // Put the answer back, and let the ordinary rule do the rest: the box
+        // is empty and nobody has touched it, so it follows the script back.
+        // If they did start typing, the box is theirs and keeps what they
+        // wrote. Either way nothing here writes the box.
+        queryClient.setQueryData(['project-script', projectId], before)
+        // And the saved text with it. `saved` means what the server holds,
+        // and the server still holds this one. Left empty it is a lie that
+        // reads two ways: `dirty` measures a draft against nothing, and
+        // `fillWith` sees a script that has been there all along as newly
+        // saved. Setting it here does not disturb a draft, because the box
+        // is not read.
+        setSaved(before.text)
+        // Nothing happened, so the editor should show what this project
+        // opens on - which is not always the saved text. With nothing saved
+        // and a run on record it is the run, and following cannot reach
+        // that: `fillWith` compares the saved text and would leave the box
+        // empty with no notice and no offer, the run invisible until a
+        // reload. Marking the project unfilled sends the next pass down the
+        // opening branch, which is exactly "what this project opens on".
+        //
+        // Only when nobody has typed. The opening branch does not ask, so on
+        // a box somebody has started a replacement in it would overwrite
+        // them, and that is the loss all of this is against.
+        if (live.current === shown.current) filledFor.current = null
+        // And then go and find out. Cancelling the read that was on its way
+        // back rolls the query to where it was before that read, so what was
+        // snapshotted above is the answer from before it - and putting that
+        // back is putting back something known to be behind. A script a
+        // colleague saved, a newer run, a newer complaint: all of it would
+        // stay hidden until something else happened to ask.
+        //
+        // Restoring first and asking second is the point of a rollback: the
+        // editor shows what it had rather than nothing, and the truth
+        // arrives a moment later through the ordinary rule.
+        queryClient.invalidateQueries({ queryKey: ['project-script', projectId] })
+      }
+      toast.push(error.message, 'error')
+    },
   })
+
+  // Above the early return, so a render that bails out early cannot leave
+  // this behind holding something the box no longer contains.
+  live.current = text
 
   if (script.isLoading) return <Loading />
 
   const dirty = text !== saved
-  const busy = run.isPending || keep.isPending
+  // Every request that changes the script, so nothing that would make another
+  // one can be pressed while one is out.
+  //
+  // The delete was missing here, and only the Delete button made up for it at
+  // its own call site - which is the shape of the bug: one caller patched
+  // instead of the definition. Save stayed live through a delete, so typing a
+  // replacement and saving it sent a PUT that raced the DELETE. Where the PUT
+  // landed first, the DELETE then removed the script that had just been
+  // saved, and the refetch emptied the box - after Save had said it worked.
+  //
+  // This is about the buttons, not the box. Typing stays free the whole time;
+  // what waits is firing a second request on top of the first.
+  const busy = run.isPending || keep.isPending || drop.isPending
   const last = script.data?.last_run_at
   // Nothing saved, and the box holds what ran. Checked against the box rather
   // than against the answer alone, so the note goes the moment it is typed
@@ -321,7 +439,7 @@ export function ProjectScript({ projectId }: { projectId: string }) {
           {(script.data?.text || script.data?.unsaved_run) && (
             <button
               className="btn-ghost btn-sm ml-auto text-red-700 dark:text-red-300"
-              disabled={busy || drop.isPending}
+              disabled={busy}
               onClick={async () => {
                 const sure = await ask.confirm({
                   title: 'Delete this script?',
@@ -333,7 +451,38 @@ export function ProjectScript({ projectId }: { projectId: string }) {
                   confirmLabel: 'Delete script',
                   tone: 'danger',
                 })
-                if (sure) drop.mutate()
+                if (!sure) return
+                // Emptying the box is part of what they asked for, so it
+                // happens with the request rather than when the answer gets
+                // back.
+                //
+                // The cached answer has to be emptied in the same breath. Left
+                // holding the script it no longer matches the saved text, so
+                // the box - empty and untouched - follows it straight back,
+                // and the clear is undone before the request has even
+                // returned. On a slow delete the box then shows the script
+                // that is being deleted, and anything typed into it is typed
+                // onto the end of that.
+                //
+                // Keeping what the answer said is what lets a delete that
+                // fails put it back. See `fillWith` and the mutation's
+                // `onError`.
+                // A read already on its way back has to be stopped first. One
+                // started by a window regaining focus, or by the last run,
+                // lands after the line below and puts the pre-delete script
+                // back into the answer - and then the empty, untouched box
+                // follows it, which is the same bug through a second door.
+                await queryClient.cancelQueries({
+                  queryKey: ['project-script', projectId],
+                })
+                const before = queryClient.getQueryData<Script>(['project-script', projectId])
+                setText('')
+                shown.current = ''
+                // The cached answer is about to say there is no run either.
+                knownRun.current = ''
+                setSaved('')
+                queryClient.setQueryData(['project-script', projectId], EMPTY_SCRIPT)
+                drop.mutate(before)
               }}
             >
               {drop.isPending && <Spinner className="h-4 w-4" />}
