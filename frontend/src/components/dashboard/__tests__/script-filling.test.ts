@@ -104,13 +104,26 @@ describe("what fills the editor's box", () => {
     });
 
     it("brings the script back when a delete failed", () => {
-      // Asking for a delete empties the box and says nothing is saved, both
-      // with the request. If the DELETE then fails the query still holds the
-      // script, so it no longer matches the saved text and the box, which
-      // nobody has touched, follows it back. No rollback to write.
+      // Asking for a delete empties the box, the saved text and the cached
+      // answer, all three with the request. A delete that fails puts the
+      // answer back, and then this is what returns the script to an untouched
+      // box - no rollback of its own to write.
+      //
+      // Which makes the cached answer load-bearing in the other direction
+      // too: leave it holding the script while the delete is in flight and
+      // this same line fires immediately, undoing the clear and showing the
+      // script being deleted for as long as the request takes. `fillWith`
+      // cannot tell those two apart - only what the cache holds can - so it
+      // is `script-box-guard.mjs` that keeps the emptying beside the request.
       expect(fillWith({ text: "the old script", unsaved_run: "" }, untouched("", ""))).toBe(
         "the old script",
       );
+    });
+
+    it("stays empty while a delete is in flight", () => {
+      // The cached answer was emptied with the request, so there is nothing
+      // newer than the empty saved text and nothing refills the box.
+      expect(fillWith({ text: "", unsaved_run: "" }, untouched("", ""))).toBe(null);
     });
 
     it("is left alone when the answer says what the box already shows", () => {

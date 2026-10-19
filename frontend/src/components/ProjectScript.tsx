@@ -232,26 +232,31 @@ export function ProjectScript({ projectId }: { projectId: string }) {
   })
 
   const drop = useMutation({
-    mutationFn: () => api.delete<{ detail: string }>(`/projects/${projectId}/script`),
+    // What the answer said before the delete, so a delete that fails can put
+    // it back.
+    mutationFn: (_before: Script | undefined) =>
+      api.delete<{ detail: string }>(`/projects/${projectId}/script`),
     onSuccess: (result) => {
-      // The box was emptied when they asked, not here. By the time this
-      // arrives they may have started typing the script that replaces the
-      // one they just got rid of, which is the obvious next thing to do, and
-      // erasing that is the loss this whole arrangement is against.
+      // The box was emptied when they asked, and so was the cached answer.
+      // Nothing here touches either: by the time this arrives they may have
+      // started typing the script that replaces the one they got rid of,
+      // which is the obvious next thing to do, and erasing that is the loss
+      // this whole arrangement is against.
       setLog([])
-      // Say what is now true rather than only marking the answer stale. The
-      // box is empty and so counts as unchanged, which means a refetch that
-      // has not landed yet would fill it from the answer cached from before
-      // the delete - putting the script back in the box it was just removed
-      // from, until the real answer arrives and empties it again.
-      queryClient.setQueryData(['project-script', projectId], EMPTY_SCRIPT)
       queryClient.invalidateQueries({ queryKey: ['project-script', projectId] })
       // The overview lists this project because it has a script; it does not
       // any more.
       queryClient.invalidateQueries({ queryKey: ['scripts'] })
       toast.push(result.detail, 'success')
     },
-    onError: (error: Error) => toast.push(error.message, 'error'),
+    onError: (error: Error, before) => {
+      // Put the answer back, and let the ordinary rule do the rest: the box
+      // is empty and nobody has touched it, so it follows the script back.
+      // If they did start typing, the box is theirs and keeps what they
+      // wrote. Either way nothing here writes the box.
+      if (before) queryClient.setQueryData(['project-script', projectId], before)
+      toast.push(error.message, 'error')
+    },
   })
 
   if (script.isLoading) return <Loading />
@@ -374,14 +379,25 @@ export function ProjectScript({ projectId }: { projectId: string }) {
                 if (!sure) return
                 // Emptying the box is part of what they asked for, so it
                 // happens with the request rather than when the answer gets
-                // back. Saying nothing is saved any more is what brings the
-                // script back by itself if the delete fails: the query still
-                // holds it, so it no longer matches `saved` and the box,
-                // untouched, follows it. See `fillWith`.
+                // back.
+                //
+                // The cached answer has to be emptied in the same breath. Left
+                // holding the script it no longer matches the saved text, so
+                // the box - empty and untouched - follows it straight back,
+                // and the clear is undone before the request has even
+                // returned. On a slow delete the box then shows the script
+                // that is being deleted, and anything typed into it is typed
+                // onto the end of that.
+                //
+                // Keeping what the answer said is what lets a delete that
+                // fails put it back. See `fillWith` and the mutation's
+                // `onError`.
+                const before = queryClient.getQueryData<Script>(['project-script', projectId])
                 setText('')
                 shown.current = ''
                 setSaved('')
-                drop.mutate()
+                queryClient.setQueryData(['project-script', projectId], EMPTY_SCRIPT)
+                drop.mutate(before)
               }}
             >
               {drop.isPending && <Spinner className="h-4 w-4" />}

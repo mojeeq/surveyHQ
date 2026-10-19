@@ -76,6 +76,28 @@ if (found.length) {
   process.exit(1)
 }
 
+// Asking for a delete has to empty the cached answer along with the box.
+//
+// Left holding the script, the answer no longer matches the saved text, so
+// the box - empty and nobody having touched it - follows it straight back and
+// the clear is undone before the request has returned. On a slow delete the
+// box then shows the script being deleted and anything typed goes onto the
+// end of it. The two writes are one act and the guard keeps them together.
+const asked = lines.findIndex((line) => /drop\.mutate\(/.test(line))
+if (asked < 0) {
+  console.error('\nProjectScript never asks for a delete; this guard needs rewriting.\n')
+  process.exit(1)
+}
+const withRequest = lines.slice(Math.max(0, asked - 14), asked + 1).join('\n')
+if (!/setQueryData\(\['project-script', projectId\], EMPTY_SCRIPT\)/.test(withRequest)) {
+  console.error('\nA delete empties the box without emptying the cached answer:\n')
+  console.error('  ProjectScript.tsx:' + (asked + 1) + '  ' + lines[asked].trim())
+  console.error('\n  Set the cached answer to EMPTY_SCRIPT with the request. Left holding')
+  console.error('  the script it no longer matches the saved text, so the untouched box')
+  console.error('  follows it back and the clear is undone before the answer returns.\n')
+  process.exit(1)
+}
+
 // And the one place that may fill it has to still ask.
 if (!/const fill = fillWith\(script\.data, \{/.test(source)) {
   console.error('\nProjectScript no longer fills the box through fillWith; this guard needs rewriting.\n')
