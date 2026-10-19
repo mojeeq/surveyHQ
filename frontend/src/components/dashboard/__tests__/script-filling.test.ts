@@ -212,6 +212,19 @@ describe("what fills the editor's box", () => {
       expect(fillWith({ text: "", unsaved_run: "" }, untouched("", ""))).toBe(null);
     });
 
+    it("needs no write when a colleague saves exactly the run on show", () => {
+      // The answer moves a long way - from a run with nothing saved to a
+      // saved script and no run - and the text to show is the same either
+      // way, so there is nothing to put in the box.
+      //
+      // Which is all this function says. It does not say nothing happened,
+      // and the editor must still settle the saved text and the run, or Save
+      // goes on claiming unsaved changes for a box that matches the server
+      // and then switches off entirely when the box is cleared. That part is
+      // the effect's and `script-box-guard.mjs` holds it.
+      expect(fillWith({ text: "A", unsaved_run: "" }, untouched("A", "", "A"))).toBe(null);
+    });
+
     it("is left alone when the answer says what the box already shows", () => {
       expect(fillWith({ text: "use people", unsaved_run: "" }, untouched("use people", "use people"))).toBe(
         null,
