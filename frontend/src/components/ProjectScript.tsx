@@ -33,6 +33,25 @@ interface Script {
   last_error: string
 }
 
+/** What the editor opens on for a project.
+ *
+ *  The saved script when there is one. Nothing saved but something ran: what
+ *  ran, since the alternative is a blank box on a project whose data was
+ *  plainly built by something.
+ *
+ *  Where both exist they are different things - one somebody kept, one
+ *  somebody tried - and the box opens on the kept one, with the other a click
+ *  away. Opening on the run instead would let an experiment quietly take the
+ *  place of the script, and Run would then run the experiment.
+ *
+ *  Out here, and tested, because this choice has been wrong twice: once
+ *  preferring the saved text so hard that a recorded run was unreachable, and
+ *  once treating a box of spaces as a script.
+ */
+export function openingText(script: { text: string; unsaved_run: string }): string {
+  return script.text.trim() ? script.text : script.unsaved_run
+}
+
 interface RunResult {
   log: { command: string; message: string }[]
   saved: { id: string; name: string; created: boolean; rows: number }[]
@@ -66,8 +85,23 @@ export function ProjectScript({ projectId }: { projectId: string }) {
     queryFn: () => api.get<Script>(`/projects/${projectId}/script`),
   })
 
+  /** The project whose script is in the box, so it is filled once and then
+   *  left alone.
+   *
+   *  The box is the person's, not the query's. Anything that refetches while
+   *  they are typing - a failed run asking for the newer error, a window
+   *  regaining focus - used to refill it from the answer, which threw away
+   *  exactly the draft they were in the middle of correcting. Reads, writes
+   *  and the last error come from the query and are redrawn freely; the text
+   *  is seeded when the editor opens on a project and after that only by
+   *  somebody typing, saving, deleting, or asking for the run back.
+   */
+  const filledFor = useRef<string | null>(null)
+
   useEffect(() => {
     if (script.data === undefined) return
+    if (filledFor.current === projectId) return
+    filledFor.current = projectId
     // The saved script when there is one. Nothing saved but something ran:
     // open on what ran, since the alternative is a blank box on a project
     // whose data was plainly built by something.
@@ -76,12 +110,11 @@ export function ProjectScript({ projectId }: { projectId: string }) {
     // somebody tried - and the box opens on the kept one. The other is a
     // click away rather than lost, which is the whole point of recording it:
     // opening on it would let an experiment quietly replace the script.
-    const opening = script.data.text.trim() ? script.data.text : script.data.unsaved_run
-    setText(opening)
+    setText(openingText(script.data))
     // Still measured against what is saved, so an unsaved run opens dirty and
     // the Save button is live: it is a draft recovered, not a saved script.
     setSaved(script.data.text)
-  }, [script.data])
+  }, [script.data, projectId])
 
   const keep = useMutation({
     mutationFn: (next: string) =>
@@ -105,8 +138,18 @@ export function ProjectScript({ projectId }: { projectId: string }) {
       queryClient.invalidateQueries({ queryKey: ['project-script', projectId] })
       queryClient.invalidateQueries({ queryKey: ['datasets'] })
     },
-    onError: (error: Error) =>
-      setLog([{ command: '', message: error.message, ok: false }]),
+    onError: (error: Error) => {
+      setLog([{ command: '', message: error.message, ok: false }])
+      // A run that failed still changed something here: the complaint, and
+      // the text that was tried. Left alone, the cached answer from before
+      // the run stays fresh for half a minute, so leaving this tab and
+      // coming back inside that window resets the box to what was saved and
+      // loses the draft the server had just kept.
+      queryClient.invalidateQueries({ queryKey: ['project-script', projectId] })
+      // A script that stopped partway saved what it got to, which is the
+      // whole reason the run is not unwound.
+      queryClient.invalidateQueries({ queryKey: ['datasets'] })
+    },
   })
 
   const drop = useMutation({

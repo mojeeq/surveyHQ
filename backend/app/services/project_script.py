@@ -74,13 +74,35 @@ def run(db: Session, project_id: str, text: str | None = None) -> stata.ScriptOu
         _remember(db, script, read=exc.read, written=[s.dataset_id for s in exc.saved],
                   error=str(exc), ran=source)
         raise
-    except CommandError as exc:
+    except CommandError:
         # An empty script, or one whose first word is not a command. Nothing
-        # was read, so nothing recorded but the complaint.
-        _remember(db, script, read=[], written=[], error=str(exc), ran=source)
+        # ran, so the only thing written down is the text somebody typed -
+        # and nothing already there is forgotten or relabelled.
+        _remember_attempt(db, script, ran=source)
         raise
     _remember(db, script, read=outcome.read, written=outcome.written, error="", ran=source)
     return outcome
+
+
+def _remember_attempt(db: Session, script: ProjectScript, *, ran: str) -> None:
+    """A run that never started: keep what was typed, forget nothing else.
+
+    `reads` and `writes` are what the last run actually touched. They are how
+    a newer export finds the scripts standing on it, and how a script keeps
+    the right to rewrite the output it made. A script with no command in it
+    touched nothing - and writing that down as "touched nothing" would throw
+    away the real run's record, unhooking the script from its data so that a
+    fresh export no longer re-runs it and its outputs go quietly stale. That
+    is the one thing this whole subsystem exists to prevent.
+
+    `last_run_at` and `last_error` stay where they were for the same reason:
+    they describe the last run, and nothing here is a run. Writing the refusal
+    into `last_error` put "There is nothing to run" under the old run's time
+    on the project page, and hung "Last run failed" on the overview card of a
+    run that had succeeded. Whoever typed it is told by the refusal itself.
+    """
+    script.last_run_text = ran
+    db.flush()
 
 
 def _remember(
