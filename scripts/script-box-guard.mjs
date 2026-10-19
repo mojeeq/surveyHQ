@@ -176,6 +176,30 @@ if (!reopens) {
   process.exit(1)
 }
 
+// Nothing that fires one of these requests may be pressable while another is
+// out, so `busy` has to name every one of them.
+//
+// The delete was missing from it, and the Delete button made up for the gap at
+// its own call site, which hid it: Save stayed live through a delete, so a
+// replacement typed and saved sent a PUT racing the DELETE - and where the PUT
+// landed first the DELETE removed the script that had just been saved, after
+// Save had said it worked. A mutation added later is the same bug again, so
+// the list is checked rather than kept in step by hand.
+const busy = lines.findIndex((line) => /const busy =/.test(line))
+if (busy < 0) {
+  console.error('\nProjectScript has no `busy`; this guard needs rewriting.\n')
+  process.exit(1)
+}
+const missing = MUTATIONS.filter((name) => !lines[busy].includes(`${name}.isPending`))
+if (missing.length) {
+  console.error('\n`busy` does not name every request that changes the script:\n')
+  console.error('  ProjectScript.tsx:' + (busy + 1) + '  ' + lines[busy].trim())
+  console.error('\n  Missing: ' + missing.map((name) => `${name}.isPending`).join(', '))
+  console.error('  Save and Run stay pressable while that request is out, so a second')
+  console.error('  one races it. Add it here rather than at a button, which hides the gap.\n')
+  process.exit(1)
+}
+
 // And the one place that may fill it has to still ask.
 if (!/const fill = fillWith\(script\.data, \{/.test(source)) {
   console.error('\nProjectScript no longer fills the box through fillWith; this guard needs rewriting.\n')

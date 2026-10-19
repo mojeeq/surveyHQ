@@ -291,7 +291,19 @@ export function ProjectScript({ projectId }: { projectId: string }) {
   if (script.isLoading) return <Loading />
 
   const dirty = text !== saved
-  const busy = run.isPending || keep.isPending
+  // Every request that changes the script, so nothing that would make another
+  // one can be pressed while one is out.
+  //
+  // The delete was missing here, and only the Delete button made up for it at
+  // its own call site - which is the shape of the bug: one caller patched
+  // instead of the definition. Save stayed live through a delete, so typing a
+  // replacement and saving it sent a PUT that raced the DELETE. Where the PUT
+  // landed first, the DELETE then removed the script that had just been
+  // saved, and the refetch emptied the box - after Save had said it worked.
+  //
+  // This is about the buttons, not the box. Typing stays free the whole time;
+  // what waits is firing a second request on top of the first.
+  const busy = run.isPending || keep.isPending || drop.isPending
   const last = script.data?.last_run_at
   // Nothing saved, and the box holds what ran. Checked against the box rather
   // than against the answer alone, so the note goes the moment it is typed
@@ -393,7 +405,7 @@ export function ProjectScript({ projectId }: { projectId: string }) {
           {(script.data?.text || script.data?.unsaved_run) && (
             <button
               className="btn-ghost btn-sm ml-auto text-red-700 dark:text-red-300"
-              disabled={busy || drop.isPending}
+              disabled={busy}
               onClick={async () => {
                 const sure = await ask.confirm({
                   title: 'Delete this script?',
