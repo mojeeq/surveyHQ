@@ -279,6 +279,17 @@ export function ProjectScript({ projectId }: { projectId: string }) {
         // a box somebody has started a replacement in it would overwrite
         // them, and that is the loss all of this is against.
         if (live.current === shown.current) filledFor.current = null
+        // And then go and find out. Cancelling the read that was on its way
+        // back rolls the query to where it was before that read, so what was
+        // snapshotted above is the answer from before it - and putting that
+        // back is putting back something known to be behind. A script a
+        // colleague saved, a newer run, a newer complaint: all of it would
+        // stay hidden until something else happened to ask.
+        //
+        // Restoring first and asking second is the point of a rollback: the
+        // editor shows what it had rather than nothing, and the truth
+        // arrives a moment later through the ordinary rule.
+        queryClient.invalidateQueries({ queryKey: ['project-script', projectId] })
       }
       toast.push(error.message, 'error')
     },

@@ -65,7 +65,13 @@ const MUTATIONS = lines.flatMap((line) => {
  *  would be wrong.
  */
 const unclaimed = lines.filter(
-  (line) => /(?<![.\w])useMutation\s*[<(]/.test(line) && !DECLARED.test(line),
+  // No dot in the lookbehind, unlike the scan below. There the point is to
+  // skip a mention that is not a call; here anything that even looks like one
+  // and was not claimed by name should be noticed, a namespace-qualified
+  // `ReactQuery.useMutation({` included. Leaving the dot out of the net was
+  // the difference between failing on what this cannot read and passing over
+  // it, which is the whole claim this check makes.
+  (line) => /(?<!\w)useMutation\s*[<(]/.test(line) && !DECLARED.test(line),
 )
 if (unclaimed.length) {
   console.error('\nProjectScript declares a mutation in a shape this guard cannot read:\n')
