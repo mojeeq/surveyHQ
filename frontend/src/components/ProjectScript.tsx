@@ -106,14 +106,14 @@ export function fillWith(
 
 /** A project with no script, as the server describes one: `script_for`
  *  makes an empty one rather than answering 404. */
-const EMPTY_SCRIPT: Script = {
+const EMPTY_SCRIPT: Script = Object.freeze({
   text: '',
   unsaved_run: '',
   reads: [],
   writes: [],
   last_run_at: null,
   last_error: '',
-}
+})
 
 interface RunResult {
   log: { command: string; message: string }[]
@@ -250,11 +250,20 @@ export function ProjectScript({ projectId }: { projectId: string }) {
       toast.push(result.detail, 'success')
     },
     onError: (error: Error, before) => {
-      // Put the answer back, and let the ordinary rule do the rest: the box
-      // is empty and nobody has touched it, so it follows the script back.
-      // If they did start typing, the box is theirs and keeps what they
-      // wrote. Either way nothing here writes the box.
-      if (before) queryClient.setQueryData(['project-script', projectId], before)
+      if (before) {
+        // Put the answer back, and let the ordinary rule do the rest: the box
+        // is empty and nobody has touched it, so it follows the script back.
+        // If they did start typing, the box is theirs and keeps what they
+        // wrote. Either way nothing here writes the box.
+        queryClient.setQueryData(['project-script', projectId], before)
+        // And the saved text with it. `saved` means what the server holds,
+        // and the server still holds this one. Left empty it is a lie that
+        // reads two ways: `dirty` measures a draft against nothing, and
+        // `fillWith` sees a script that has been there all along as newly
+        // saved. Setting it here does not disturb a draft, because the box
+        // is not read.
+        setSaved(before.text)
+      }
       toast.push(error.message, 'error')
     },
   })
@@ -392,6 +401,14 @@ export function ProjectScript({ projectId }: { projectId: string }) {
                 // Keeping what the answer said is what lets a delete that
                 // fails put it back. See `fillWith` and the mutation's
                 // `onError`.
+                // A read already on its way back has to be stopped first. One
+                // started by a window regaining focus, or by the last run,
+                // lands after the line below and puts the pre-delete script
+                // back into the answer - and then the empty, untouched box
+                // follows it, which is the same bug through a second door.
+                await queryClient.cancelQueries({
+                  queryKey: ['project-script', projectId],
+                })
                 const before = queryClient.getQueryData<Script>(['project-script', projectId])
                 setText('')
                 shown.current = ''

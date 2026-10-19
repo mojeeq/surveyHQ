@@ -88,13 +88,50 @@ if (asked < 0) {
   console.error('\nProjectScript never asks for a delete; this guard needs rewriting.\n')
   process.exit(1)
 }
-const withRequest = lines.slice(Math.max(0, asked - 14), asked + 1).join('\n')
+const withRequest = lines.slice(Math.max(0, asked - 22), asked + 1).join('\n')
+// And a read already on its way back has to be stopped, or it lands after the
+// emptying and puts the script back into the answer - the same bug through a
+// second door. This is what TanStack's own optimistic-update guidance says to
+// do before writing the cache by hand.
+if (!/cancelQueries\(/.test(withRequest)) {
+  console.error('\nA delete empties the cached answer without stopping reads already out:\n')
+  console.error('  ProjectScript.tsx:' + (asked + 1) + '  ' + lines[asked].trim())
+  console.error('\n  Await cancelQueries for this query before emptying it. A read started')
+  console.error('  by a refocus or by the last run otherwise lands afterwards, puts the')
+  console.error('  script back in the answer, and the untouched box follows it.\n')
+  process.exit(1)
+}
+
 if (!/setQueryData\(\['project-script', projectId\], EMPTY_SCRIPT\)/.test(withRequest)) {
   console.error('\nA delete empties the box without emptying the cached answer:\n')
   console.error('  ProjectScript.tsx:' + (asked + 1) + '  ' + lines[asked].trim())
   console.error('\n  Set the cached answer to EMPTY_SCRIPT with the request. Left holding')
   console.error('  the script it no longer matches the saved text, so the untouched box')
   console.error('  follows it back and the clear is undone before the answer returns.\n')
+  process.exit(1)
+}
+
+// A delete that fails has to put the saved text back along with the answer.
+//
+// `saved` means what the server holds. The delete empties it with the request,
+// so a delete that fails and restores only the answer leaves it empty while
+// the script is still there - and that lie reads two ways: `dirty` measures a
+// draft against nothing, and `fillWith` sees a script that has been there all
+// along as newly saved. The restore is one act, like the emptying.
+const rolled = lines.findIndex((line) =>
+  /setQueryData\(\['project-script', projectId\], before\)/.test(line),
+)
+if (rolled < 0) {
+  console.error('\nNothing puts the answer back when a delete fails; this guard needs rewriting.\n')
+  process.exit(1)
+}
+const withRollback = lines.slice(rolled, rolled + 12).join('\n')
+if (!/setSaved\(before\.text\)/.test(withRollback)) {
+  console.error('\nA delete that fails restores the answer but not the saved text:\n')
+  console.error('  ProjectScript.tsx:' + (rolled + 1) + '  ' + lines[rolled].trim())
+  console.error('\n  Call setSaved(before.text) beside it. The server still holds this')
+  console.error('  script, so leaving the saved text empty measures a draft against')
+  console.error('  nothing and reads an old script as newly saved.\n')
   process.exit(1)
 }
 
