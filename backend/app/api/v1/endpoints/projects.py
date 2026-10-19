@@ -647,7 +647,12 @@ def run_script(
             headers={"X-Script-Line": str(exc.line_number)},
         ) from exc
     except CommandError as exc:
-        db.rollback()
+        # Committed, like the branch above. Nothing ran - the script has no
+        # command in it, or its first word is not one - so there is no data to
+        # unwind, and the one thing worth keeping is the text somebody typed.
+        # Rolled back, a comment-only draft was thrown away by the act of
+        # trying it, and the editor opened blank on what they had just lost.
+        db.commit()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
     record(
@@ -678,6 +683,8 @@ def _script_out(db: DbSession, script) -> ScriptOut:
         return [one.name for one in found if one is not None]
 
     ran = script.last_run_text or ""
+    # Stripped on both sides: a box of spaces is not a script, and a run of
+    # spaces is not worth offering back.
     return ScriptOut(
         text=script.text,
         # Only when it is news. A run of the saved script makes the two the

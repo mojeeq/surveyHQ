@@ -28,6 +28,17 @@ from app.services.projects import can_edit, memberships, visible_projects
 router = APIRouter()
 
 
+def _shown_text(script: ProjectScript) -> str:
+    """The script a reader is looking at: the saved one, or what last ran.
+
+    Stripped rather than merely truthy, the same test that decides whether it
+    counts as saved. A box cleared to spaces and saved is empty to one and a
+    script to the other, so the card counted the whitespace, found no commands
+    in it, and said "Run without being saved" over a run of three.
+    """
+    return script.text if script.text.strip() else (script.last_run_text or "")
+
+
 def _scripts_for(db: DbSession, user: CurrentUser) -> list[ProjectScript]:
     """The rows this reader can see that are actually scripts.
 
@@ -176,10 +187,7 @@ def overview(db: DbSession, user: CurrentUser) -> ScriptsOverview:
                 in_a_cycle=place.in_a_cycle,
                 reads=[names[one] for one in place.reads if one in names],
                 writes=[names[one] for one in place.writes if one in names],
-                lines=_lines_in(
-                    by_project[place.project_id].text
-                    or by_project[place.project_id].last_run_text
-                ),
+                lines=_lines_in(_shown_text(by_project[place.project_id])),
                 saved=bool(by_project[place.project_id].text.strip()),
                 last_run_at=by_project[place.project_id].last_run_at,
                 last_error=by_project[place.project_id].last_error,

@@ -528,3 +528,72 @@ def test_deleting_a_script_needs_the_manager_role_over_the_project(
         headers={"Authorization": f"Bearer {token}"},
     )
     assert refused.status_code in (403, 404), refused.text
+
+
+def test_a_run_that_never_started_still_keeps_what_was_typed(
+    client, auth_headers, project
+):
+    """A script with no command in it stops before anything runs, and the
+    endpoint used to unwind that - throwing away the draft by the act of
+    trying it, so the editor opened blank on what had just been lost."""
+    refused = client.post(
+        f"/api/v1/projects/{project['id']}/script/run",
+        headers=auth_headers,
+        json={"text": "* a draft I typed, all comments so far\n* second line"},
+    )
+    assert refused.status_code == 422, refused.text
+
+    seen = _script_as_seen(client, auth_headers, project["id"])
+    assert "all comments so far" in seen["unsaved_run"]
+
+
+def test_a_box_of_spaces_is_not_a_script(client, auth_headers, db_session, project):
+    """Saved whitespace counts as empty for whether it is saved, so it has to
+    count as empty for what is counted too. It did not, so a card read "Run
+    without being saved" over a run of three commands."""
+    from app.services import project_script
+
+    kept = client.put(
+        f"/api/v1/projects/{project['id']}/script",
+        headers=auth_headers,
+        json={"text": "   \n  \n"},
+    )
+    assert kept.status_code == 200, kept.text
+    db_session.expire_all()
+    project_script.run(db_session, project["id"], "use members\ngen a = 1\ngen b = 2")
+    db_session.commit()
+
+    mine = next(
+        place
+        for place in client.get("/api/v1/scripts", headers=auth_headers).json()["places"]
+        if place["project_id"] == project["id"]
+    )
+    assert mine["saved"] is False
+    assert mine["lines"] == 3, "the run is what a reader is looking at"
+
+    # And the editor is offered it, rather than the spaces.
+    seen = _script_as_seen(client, auth_headers, project["id"])
+    assert "gen b = 2" in seen["unsaved_run"]
+
+
+def test_a_run_behind_a_saved_script_is_offered_not_lost(
+    client, auth_headers, db_session, project
+):
+    """Saved A, ran B without saving. Both are real and they are different
+    things - one kept, one tried - so both have to be reachable. B was
+    recorded and then unreachable, which is a worse answer than not
+    recording it."""
+    from app.services import project_script
+
+    client.put(
+        f"/api/v1/projects/{project['id']}/script",
+        headers=auth_headers,
+        json={"text": "use members"},
+    )
+    db_session.expire_all()
+    project_script.run(db_session, project["id"], "use members\ngen tried = 1")
+    db_session.commit()
+
+    seen = _script_as_seen(client, auth_headers, project["id"])
+    assert seen["text"] == "use members", "the saved script is still the script"
+    assert "gen tried = 1" in seen["unsaved_run"], "and the run is still there"
