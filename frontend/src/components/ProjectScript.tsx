@@ -52,6 +52,50 @@ export function openingText(script: { text: string; unsaved_run: string }): stri
   return script.text.trim() ? script.text : script.unsaved_run
 }
 
+/** What the box should hold when an answer arrives, or null to leave it be.
+ *
+ *  Two things have to hold at once, and holding only one of them is a bug
+ *  each way round. A box that tracks the query throws away the draft
+ *  somebody is in the middle of correcting - which a failed run does, since
+ *  it refetches to show the newer complaint. A box filled once and then
+ *  never again hides a script a colleague saved while the tab was shut, and
+ *  Save afterwards writes over their work without either of them seeing it.
+ *
+ *  So the box belongs to the person from the moment they change it, and until
+ *  then it is only a view of what is saved and may follow it.
+ */
+export function fillWith(
+  answer: { text: string; unsaved_run: string },
+  where: { filled: string | null; project: string; inBox: string; saved: string },
+): string | null {
+  // Opening on a project. Falling back to the last run matters here: a blank
+  // box on a project whose data was plainly built by something is the
+  // complaint this started from.
+  //
+  // Judged by the project rather than by the box, because an untouched box
+  // would otherwise be measured against the previous project's saved text,
+  // and a draft left in one project would turn up in the next one's editor.
+  if (where.filled !== where.project) return openingText(answer)
+  // Open already, and nobody has changed it. Just what is saved - not
+  // `openingText`, whose fall back to the last run is a courtesy owed to an
+  // opening box and nothing else. Owed to an open one it would mean that
+  // clearing the box and saving it put the old run straight back in.
+  if (where.inBox === where.saved) return answer.text
+  // Theirs.
+  return null
+}
+
+/** A project with no script, as the server describes one: `script_for`
+ *  makes an empty one rather than answering 404. */
+const EMPTY_SCRIPT: Script = {
+  text: '',
+  unsaved_run: '',
+  reads: [],
+  writes: [],
+  last_run_at: null,
+  last_error: '',
+}
+
 interface RunResult {
   log: { command: string; message: string }[]
   saved: { id: string; name: string; created: boolean; rows: number }[]
@@ -85,36 +129,35 @@ export function ProjectScript({ projectId }: { projectId: string }) {
     queryFn: () => api.get<Script>(`/projects/${projectId}/script`),
   })
 
-  /** The project whose script is in the box, so it is filled once and then
-   *  left alone.
+  /** The project the box was last filled for. See `fillWith`.
    *
-   *  The box is the person's, not the query's. Anything that refetches while
-   *  they are typing - a failed run asking for the newer error, a window
-   *  regaining focus - used to refill it from the answer, which threw away
-   *  exactly the draft they were in the middle of correcting. Reads, writes
-   *  and the last error come from the query and are redrawn freely; the text
-   *  is seeded when the editor opens on a project and after that only by
-   *  somebody typing, saving, deleting, or asking for the run back.
+   *  Anything that refetches while somebody is typing - a failed run asking
+   *  for the newer error, a window regaining focus - used to refill the box
+   *  from the answer, throwing away the draft they were correcting. Reads,
+   *  writes and the last error come from the query and are redrawn freely;
+   *  the text is only replaced while nobody has changed it.
    */
   const filledFor = useRef<string | null>(null)
 
   useEffect(() => {
     if (script.data === undefined) return
-    if (filledFor.current === projectId) return
+    const fill = fillWith(script.data, {
+      filled: filledFor.current,
+      project: projectId,
+      inBox: text,
+      saved,
+    })
+    if (fill === null) return
     filledFor.current = projectId
-    // The saved script when there is one. Nothing saved but something ran:
-    // open on what ran, since the alternative is a blank box on a project
-    // whose data was plainly built by something.
-    //
-    // Where both exist they are different things - one somebody kept, one
-    // somebody tried - and the box opens on the kept one. The other is a
-    // click away rather than lost, which is the whole point of recording it:
-    // opening on it would let an experiment quietly replace the script.
-    setText(openingText(script.data))
-    // Still measured against what is saved, so an unsaved run opens dirty and
-    // the Save button is live: it is a draft recovered, not a saved script.
+    setText(fill)
+    // Always measured against what is saved, so a recovered run opens dirty
+    // and the Save button is live: it is a draft got back, not a saved
+    // script.
     setSaved(script.data.text)
-  }, [script.data, projectId])
+    // `text` and `saved` are read above, so they belong here. The effect runs
+    // again when they change and stops at `mayFill`, which is the point: the
+    // first keystroke is what hands the box over.
+  }, [script.data, projectId, text, saved])
 
   const keep = useMutation({
     mutationFn: (next: string) =>
@@ -158,6 +201,12 @@ export function ProjectScript({ projectId }: { projectId: string }) {
       setText('')
       setSaved('')
       setLog([])
+      // Say what is now true rather than only marking the answer stale. The
+      // box is empty and so counts as unchanged, which means a refetch that
+      // has not landed yet would fill it from the answer cached from before
+      // the delete - putting the script back in the box it was just removed
+      // from, until the real answer arrives and empties it again.
+      queryClient.setQueryData(['project-script', projectId], EMPTY_SCRIPT)
       queryClient.invalidateQueries({ queryKey: ['project-script', projectId] })
       // The overview lists this project because it has a script; it does not
       // any more.
