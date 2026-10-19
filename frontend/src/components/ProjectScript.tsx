@@ -81,6 +81,8 @@ export function fillWith(
     shown: string
     /** The saved text as the editor last knew it. */
     saved: string
+    /** The recorded run as the editor last knew it. */
+    knownRun: string
   },
 ): string | null {
   // Opening on a project. Falling back to the last run matters here: a blank
@@ -93,25 +95,27 @@ export function fillWith(
   if (where.filled !== where.project) return openingText(answer)
   // Theirs: what is in the box is not what the editor put there.
   if (where.inBox !== where.shown) return null
-  // Untouched, and the box is showing what was saved, and that has not
-  // changed. Nothing to say.
+  // Untouched, and the answer is the one the editor last settled on. Nothing
+  // has happened, so there is nothing to show.
   //
-  // This is narrow on purpose. It used to be `answer.text === saved` alone,
-  // which also covered the box showing a recorded run - and so an untouched
-  // box on a project with nothing saved never saw a newer run at all, since
-  // the saved text is empty either way. Whoever ran something next went
-  // unnoticed, and neither notice offered the newer run, because one wants a
-  // saved script and the other wants the run already in the box.
+  // Both halves of the answer, which took three goes to see. Comparing only
+  // the saved text was standing in for this, and it is a poor stand-in,
+  // because the saved text is empty in two quite different situations - a
+  // project nobody has saved anything in, and a box somebody cleared and
+  // saved on purpose - and in both of them the thing that moves is the run.
+  // So a run by anybody was read as "nothing has happened": the box stayed as
+  // it was and neither notice offered the new run, the amber one wanting the
+  // run already in the box and the offer wanting a saved script.
   //
-  // What it is actually for is the deliberate clear: somebody emptied the box
-  // and saved it, and falling back to the run would hand back the thing they
-  // had just replaced with nothing. That is this case and only this one - the
-  // box showing the saved text, which is empty, and the answer agreeing.
-  if (where.shown === where.saved && answer.text === where.saved) return null
-  // Untouched, and the answer says something else. Follow what the project
-  // opens on rather than the saved text alone: with nothing saved that is the
-  // recorded run, which is what an untouched box was already showing, and
-  // following only the saved text would blank it.
+  // The deliberate clear, which is what that stand-in was protecting, is
+  // covered by this as it stands: the answer still carries the run that was
+  // on record when they saved, so it has not changed and the run is not
+  // handed back. A new one is a new thing to say.
+  if (answer.text === where.saved && answer.unsaved_run === where.knownRun) return null
+  // Untouched, and the answer has moved. Follow what the project opens on
+  // rather than the saved text alone: with nothing saved that is the recorded
+  // run, and following only the saved text would blank a box that is showing
+  // one.
   const fresh = openingText(answer)
   return fresh === where.shown ? null : fresh
 }
@@ -177,6 +181,10 @@ export function ProjectScript({ projectId }: { projectId: string }) {
    *  person is told apart from a box the editor filled. Not state: nothing is
    *  drawn from it, and it must be read inside the effect that sets it. */
   const shown = useRef('')
+  /** The recorded run in the answer the editor last settled on, which is the
+   *  other half of "has anything happened". It moves wherever `shown` moves,
+   *  and `fillWith` reads both. */
+  const knownRun = useRef('')
 
   useEffect(() => {
     if (script.data === undefined) return
@@ -186,10 +194,12 @@ export function ProjectScript({ projectId }: { projectId: string }) {
       inBox: text,
       shown: shown.current,
       saved,
+      knownRun: knownRun.current,
     })
     if (fill === null) return
     filledFor.current = projectId
     shown.current = fill
+    knownRun.current = script.data.unsaved_run
     setText(fill)
     // Always measured against what is saved, so a recovered run opens dirty
     // and the Save button is live: it is a draft got back, not a saved
@@ -215,6 +225,7 @@ export function ProjectScript({ projectId }: { projectId: string }) {
       // reason: the marker records what was in the box, and a server that
       // tidies what it stores has not changed that.
       shown.current = sent
+      knownRun.current = result.unsaved_run
       setSaved(result.text)
       queryClient.setQueryData(['project-script', projectId], result)
     },
@@ -467,6 +478,8 @@ export function ProjectScript({ projectId }: { projectId: string }) {
                 const before = queryClient.getQueryData<Script>(['project-script', projectId])
                 setText('')
                 shown.current = ''
+                // The cached answer is about to say there is no run either.
+                knownRun.current = ''
                 setSaved('')
                 queryClient.setQueryData(['project-script', projectId], EMPTY_SCRIPT)
                 drop.mutate(before)

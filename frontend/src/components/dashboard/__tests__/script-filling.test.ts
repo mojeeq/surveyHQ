@@ -28,27 +28,41 @@ import { describe, expect, it } from "vitest";
 
 import { fillWith } from "../../ProjectScript";
 
-/** Open on p1, with the box as the editor left it: untouched. */
-const untouched = (shown: string, saved: string) => ({
+/** Open on p1, with the box as the editor left it: untouched.
+ *
+ *  `knownRun` is the run the editor last settled on, which is the other half
+ *  of "has anything happened" - so a test that means "nothing has changed"
+ *  has to pass the answer's own run here, and one that means "somebody ran
+ *  something" passes the older one. */
+const untouched = (shown: string, saved: string, knownRun = "") => ({
   filled: "p1",
   project: "p1",
   inBox: shown,
   shown,
   saved,
+  knownRun,
 });
 
 /** Open on p1, with something else in the box: the person typed. */
-const typed = (inBox: string, shown: string, saved: string) => ({
+const typed = (inBox: string, shown: string, saved: string, knownRun = "") => ({
   filled: "p1",
   project: "p1",
   inBox,
   shown,
   saved,
+  knownRun,
 });
 
 describe("what fills the editor's box", () => {
   describe("opening on a project", () => {
-    const opening = { filled: null, project: "p1", inBox: "", shown: "", saved: "" };
+    const opening = {
+      filled: null,
+      project: "p1",
+      inBox: "",
+      shown: "",
+      saved: "",
+      knownRun: "",
+    };
 
     it("is the saved script", () => {
       expect(fillWith({ text: "use people", unsaved_run: "" }, opening)).toBe("use people");
@@ -65,7 +79,14 @@ describe("what fills the editor's box", () => {
       expect(
         fillWith(
           { text: "p2's script", unsaved_run: "" },
-          { filled: "p1", project: "p2", inBox: "half a draft", shown: "", saved: "" },
+          {
+            filled: "p1",
+            project: "p2",
+            inBox: "half a draft",
+            shown: "",
+            saved: "",
+            knownRun: "",
+          },
         ),
       ).toBe("p2's script");
     });
@@ -101,11 +122,13 @@ describe("what fills the editor's box", () => {
       // the box kept the old run and neither notice offered the new one - the
       // amber one wants the run already in the box, the offer wants a saved
       // script.
-      expect(fillWith({ text: "", unsaved_run: "B" }, untouched("A", ""))).toBe("B");
+      expect(fillWith({ text: "", unsaved_run: "B" }, untouched("A", "", "A"))).toBe("B");
     });
 
     it("follows a colleague's save even when a run is on record behind it", () => {
-      expect(fillWith({ text: "theirs", unsaved_run: "B" }, untouched("A", ""))).toBe("theirs");
+      expect(fillWith({ text: "theirs", unsaved_run: "B" }, untouched("A", "", "A"))).toBe(
+        "theirs",
+      );
     });
 
     it("shows the run when a colleague deleted the script out from under it", () => {
@@ -120,13 +143,28 @@ describe("what fills the editor's box", () => {
     it("is left alone when nothing has been saved since", () => {
       // The plain refetch on that same project. Writing the saved text over
       // the box would empty it every time the query came back.
-      expect(fillWith({ text: "", unsaved_run: "what ran" }, untouched("what ran", ""))).toBe(null);
+      expect(
+        fillWith({ text: "", unsaved_run: "what ran" }, untouched("what ran", "", "what ran")),
+      ).toBe(null);
     });
 
     it("does not take the last run back after it was cleared and saved", () => {
-      // Saved empty on purpose. Following would be harmless; falling back to
-      // the run would hand back the thing just replaced with nothing.
-      expect(fillWith({ text: "", unsaved_run: "what ran" }, untouched("", ""))).toBe(null);
+      // Saved empty on purpose, and the run on record is the one that was
+      // there when they saved - so nothing has happened and the thing they
+      // just replaced with nothing is not handed back.
+      expect(fillWith({ text: "", unsaved_run: "what ran" }, untouched("", "", "what ran"))).toBe(
+        null,
+      );
+    });
+
+    it("follows a run that happened after the box was cleared and saved", () => {
+      // The same empty box, and this time somebody has run something since.
+      // That is a new thing to say, not the clear being undone - and nothing
+      // else would say it, the amber notice wanting the run in the box and
+      // the offer wanting a saved script.
+      expect(fillWith({ text: "", unsaved_run: "newer" }, untouched("", "", "what ran"))).toBe(
+        "newer",
+      );
     });
 
     it("brings the script back when a delete failed", () => {
@@ -157,11 +195,13 @@ describe("what fills the editor's box", () => {
       // a box still showing a run does follow a newer one, above. The
       // delete's failure path marks the project unfilled instead, which sends
       // the next pass down the opening branch below.
-      expect(fillWith({ text: "", unsaved_run: "what ran" }, untouched("", ""))).toBe(null);
+      expect(fillWith({ text: "", unsaved_run: "what ran" }, untouched("", "", "what ran"))).toBe(
+        null,
+      );
       expect(
         fillWith(
           { text: "", unsaved_run: "what ran" },
-          { filled: null, project: "p1", inBox: "", shown: "", saved: "" },
+          { filled: null, project: "p1", inBox: "", shown: "", saved: "", knownRun: "what ran" },
         ),
       ).toBe("what ran");
     });

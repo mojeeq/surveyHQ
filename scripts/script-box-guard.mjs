@@ -260,6 +260,34 @@ if (missing.length) {
   process.exit(1)
 }
 
+// The run the editor knows has to move wherever the shown text moves.
+//
+// They are the two halves of "has anything happened since the editor settled
+// on an answer", and `fillWith` reads both. Moving one without the other
+// makes the pair say something neither half meant: leave the run behind and
+// every later answer looks new, so an untouched box is rewritten on every
+// refetch; move it without the text and a change goes unnoticed.
+//
+// No test can see this. `fillWith` is given the pair and cannot tell whether
+// the component kept it honest - mutating either assignment away leaves all
+// of them passing, which is the whole reason this check exists.
+const moved = []
+for (let i = 0; i < lines.length; i += 1) {
+  if (!/(?<![.\w])shown\.current\s*=/.test(lines[i])) continue
+  const near = lines.slice(i, i + 4).join('\n')
+  if (!/(?<![.\w])knownRun\.current\s*=/.test(near)) {
+    moved.push(`${i + 1}  ${lines[i].trim()}`)
+  }
+}
+if (moved.length) {
+  console.error('\nThe shown text moves without the run the editor knows:\n')
+  for (const hit of moved) console.error('  ProjectScript.tsx:' + hit)
+  console.error('\n  Set `knownRun.current` beside it. The two are one fact in two')
+  console.error('  halves, and `fillWith` compares both to decide whether anything has')
+  console.error('  happened; half of it moving says something neither half meant.\n')
+  process.exit(1)
+}
+
 // And the one place that may fill it has to still ask.
 if (!/const fill = fillWith\(script\.data, \{/.test(source)) {
   console.error('\nProjectScript no longer fills the box through fillWith; this guard needs rewriting.\n')
