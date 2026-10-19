@@ -105,8 +105,18 @@ export function ProjectScript({ projectId }: { projectId: string }) {
       queryClient.invalidateQueries({ queryKey: ['project-script', projectId] })
       queryClient.invalidateQueries({ queryKey: ['datasets'] })
     },
-    onError: (error: Error) =>
-      setLog([{ command: '', message: error.message, ok: false }]),
+    onError: (error: Error) => {
+      setLog([{ command: '', message: error.message, ok: false }])
+      // A run that failed still changed something here: the complaint, and
+      // the text that was tried. Left alone, the cached answer from before
+      // the run stays fresh for half a minute, so leaving this tab and
+      // coming back inside that window resets the box to what was saved and
+      // loses the draft the server had just kept.
+      queryClient.invalidateQueries({ queryKey: ['project-script', projectId] })
+      // A script that stopped partway saved what it got to, which is the
+      // whole reason the run is not unwound.
+      queryClient.invalidateQueries({ queryKey: ['datasets'] })
+    },
   })
 
   const drop = useMutation({

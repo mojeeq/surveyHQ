@@ -76,11 +76,33 @@ def run(db: Session, project_id: str, text: str | None = None) -> stata.ScriptOu
         raise
     except CommandError as exc:
         # An empty script, or one whose first word is not a command. Nothing
-        # was read, so nothing recorded but the complaint.
-        _remember(db, script, read=[], written=[], error=str(exc), ran=source)
+        # ran, so nothing is recorded but the complaint and the text somebody
+        # typed - and nothing is forgotten either.
+        _remember_attempt(db, script, error=str(exc), ran=source)
         raise
     _remember(db, script, read=outcome.read, written=outcome.written, error="", ran=source)
     return outcome
+
+
+def _remember_attempt(
+    db: Session, script: ProjectScript, *, error: str, ran: str
+) -> None:
+    """A run that never started: keep what was typed, forget nothing else.
+
+    `reads` and `writes` are what the last run actually touched. They are how
+    a newer export finds the scripts standing on it, and how a script keeps
+    the right to rewrite the output it made. A script with no command in it
+    touched nothing - and writing that down as "touched nothing" would throw
+    away the real run's record, unhooking the script from its data so that a
+    fresh export no longer re-runs it and its outputs go quietly stale. That
+    is the one thing this whole subsystem exists to prevent.
+
+    `last_run_at` stays where it was for the same reason: nothing ran, so
+    nothing here is a newer run than the last one.
+    """
+    script.last_error = error
+    script.last_run_text = ran
+    db.flush()
 
 
 def _remember(

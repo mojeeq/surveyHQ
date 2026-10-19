@@ -597,3 +597,48 @@ def test_a_run_behind_a_saved_script_is_offered_not_lost(
     seen = _script_as_seen(client, auth_headers, project["id"])
     assert seen["text"] == "use members", "the saved script is still the script"
     assert "gen tried = 1" in seen["unsaved_run"], "and the run is still there"
+
+
+def test_a_run_that_never_started_keeps_the_last_real_run_s_dependencies(
+    client, auth_headers, db_session, project
+):
+    """Trying a half-written draft must not unhook the script from its data.
+
+    `reads` and `writes` are what the last run actually touched, and they are
+    how a newer export finds the scripts standing on it and how a script keeps
+    the right to rewrite its own output. A script with no command in it never
+    ran, so it touched nothing - and recording that as "touched nothing" threw
+    away the real run's record, leaving the outputs stale with nothing to say
+    so.
+    """
+    from sqlalchemy import select
+
+    from app.models import ProjectScript
+    from app.services import project_script
+
+    project_script.run(
+        db_session, project["id"], 'use members\ngen adult = age >= 18\nsave as "adults"'
+    )
+    db_session.commit()
+    script = db_session.scalar(
+        select(ProjectScript).where(ProjectScript.project_id == project["id"])
+    )
+    reads, writes, ran_at = list(script.reads), list(script.writes), script.last_run_at
+    assert reads and writes, "the first run has to have touched something"
+
+    refused = client.post(
+        f"/api/v1/projects/{project['id']}/script/run",
+        headers=auth_headers,
+        json={"text": "* half written, nothing to run yet"},
+    )
+    assert refused.status_code == 422, refused.text
+
+    db_session.expire_all()
+    after = db_session.scalar(
+        select(ProjectScript).where(ProjectScript.project_id == project["id"])
+    )
+    assert list(after.reads) == reads, "the scripts standing on this data are found by reads"
+    assert list(after.writes) == writes, "and `save as` keeps its own output by writes"
+    assert after.last_run_at == ran_at, "nothing ran, so nothing is a newer run"
+    # And the draft is still kept, which is what the commit was for.
+    assert "half written" in after.last_run_text
