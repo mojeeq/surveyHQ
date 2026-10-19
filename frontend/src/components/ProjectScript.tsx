@@ -157,6 +157,10 @@ export function ProjectScript({ projectId }: { projectId: string }) {
    *  the text is only replaced while nobody has changed it.
    */
   const filledFor = useRef<string | null>(null)
+  /** What is in the box, readable from a callback that runs long after the
+   *  render it was started from. Assigned here rather than in an effect so it
+   *  cannot lag behind by a tick, and never read while rendering. */
+  const live = useRef('')
   /** What the editor last put in the box, which is how a change made by the
    *  person is told apart from a box the editor filled. Not state: nothing is
    *  drawn from it, and it must be read inside the effect that sets it. */
@@ -263,10 +267,26 @@ export function ProjectScript({ projectId }: { projectId: string }) {
         // saved. Setting it here does not disturb a draft, because the box
         // is not read.
         setSaved(before.text)
+        // Nothing happened, so the editor should show what this project
+        // opens on - which is not always the saved text. With nothing saved
+        // and a run on record it is the run, and following cannot reach
+        // that: `fillWith` compares the saved text and would leave the box
+        // empty with no notice and no offer, the run invisible until a
+        // reload. Marking the project unfilled sends the next pass down the
+        // opening branch, which is exactly "what this project opens on".
+        //
+        // Only when nobody has typed. The opening branch does not ask, so on
+        // a box somebody has started a replacement in it would overwrite
+        // them, and that is the loss all of this is against.
+        if (live.current === shown.current) filledFor.current = null
       }
       toast.push(error.message, 'error')
     },
   })
+
+  // Above the early return, so a render that bails out early cannot leave
+  // this behind holding something the box no longer contains.
+  live.current = text
 
   if (script.isLoading) return <Loading />
 

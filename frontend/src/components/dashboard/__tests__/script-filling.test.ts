@@ -120,6 +120,25 @@ describe("what fills the editor's box", () => {
       );
     });
 
+    it("cannot reach a recorded run, which is why a failed delete reopens", () => {
+      // Nothing saved, a run on record. Following compares the saved text and
+      // these are both empty, so it leaves the box alone - correct when
+      // somebody has cleared the box and saved it on purpose, and wrong after
+      // a delete that failed, where the run was on screen a moment ago and
+      // would now be invisible with no notice and no offer.
+      //
+      // The two are the same question here, so nothing in this function can
+      // tell them apart. The delete's failure path marks the project unfilled
+      // instead, which sends the next pass down the opening branch below.
+      expect(fillWith({ text: "", unsaved_run: "what ran" }, untouched("", ""))).toBe(null);
+      expect(
+        fillWith(
+          { text: "", unsaved_run: "what ran" },
+          { filled: null, project: "p1", inBox: "", shown: "", saved: "" },
+        ),
+      ).toBe("what ran");
+    });
+
     it("stays empty while a delete is in flight", () => {
       // The cached answer was emptied with the request, so there is nothing
       // newer than the empty saved text and nothing refills the box.

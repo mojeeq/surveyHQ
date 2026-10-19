@@ -93,16 +93,35 @@ const withRequest = lines.slice(Math.max(0, asked - 22), asked + 1).join('\n')
 // emptying and puts the script back into the answer - the same bug through a
 // second door. This is what TanStack's own optimistic-update guidance says to
 // do before writing the cache by hand.
-if (!/cancelQueries\(/.test(withRequest)) {
-  console.error('\nA delete empties the cached answer without stopping reads already out:\n')
+//
+// Presence is not the invariant. An un-awaited call does not wait, a call
+// after the emptying does not protect it, and a call on another key does not
+// touch this read - and each of those would leave prelint reporting the thing
+// as held when it is not, which is worse than not checking at all.
+const cancel = /await\s+queryClient\.cancelQueries\(\s*\{\s*queryKey:\s*\['project-script',\s*projectId\],?\s*\}\s*\)/.exec(
+  withRequest,
+)
+const emptied = /queryClient\.setQueryData\(\['project-script', projectId\], EMPTY_SCRIPT\)/.exec(
+  withRequest,
+)
+if (!cancel) {
+  console.error('\nA delete empties the cached answer without awaiting a cancel of that read:\n')
   console.error('  ProjectScript.tsx:' + (asked + 1) + '  ' + lines[asked].trim())
-  console.error('\n  Await cancelQueries for this query before emptying it. A read started')
-  console.error('  by a refocus or by the last run otherwise lands afterwards, puts the')
-  console.error('  script back in the answer, and the untouched box follows it.\n')
+  console.error('\n  Needs `await queryClient.cancelQueries({ queryKey: [\'project-script\',')
+  console.error("  projectId] })` - awaited, on this key. Without the await it does not")
+  console.error('  wait; on another key it does not touch the read that overwrites the')
+  console.error('  emptying and puts the script back in the answer.\n')
+  process.exit(1)
+}
+if (emptied && cancel.index > emptied.index) {
+  console.error('\nA delete cancels the read after emptying the cached answer:\n')
+  console.error('  ProjectScript.tsx:' + (asked + 1) + '  ' + lines[asked].trim())
+  console.error('\n  The cancel has to come first. After the emptying it cancels nothing')
+  console.error('  that could still overwrite it, and the read already out lands on top.\n')
   process.exit(1)
 }
 
-if (!/setQueryData\(\['project-script', projectId\], EMPTY_SCRIPT\)/.test(withRequest)) {
+if (!emptied) {
   console.error('\nA delete empties the box without emptying the cached answer:\n')
   console.error('  ProjectScript.tsx:' + (asked + 1) + '  ' + lines[asked].trim())
   console.error('\n  Set the cached answer to EMPTY_SCRIPT with the request. Left holding')
@@ -125,13 +144,35 @@ if (rolled < 0) {
   console.error('\nNothing puts the answer back when a delete fails; this guard needs rewriting.\n')
   process.exit(1)
 }
-const withRollback = lines.slice(rolled, rolled + 12).join('\n')
+const withRollback = lines.slice(rolled, rolled + 26).join('\n')
 if (!/setSaved\(before\.text\)/.test(withRollback)) {
   console.error('\nA delete that fails restores the answer but not the saved text:\n')
   console.error('  ProjectScript.tsx:' + (rolled + 1) + '  ' + lines[rolled].trim())
   console.error('\n  Call setSaved(before.text) beside it. The server still holds this')
   console.error('  script, so leaving the saved text empty measures a draft against')
   console.error('  nothing and reads an old script as newly saved.\n')
+  process.exit(1)
+}
+
+// A delete that fails has to send the editor back to what the project opens
+// on, and only when nobody has typed.
+//
+// Following cannot get there. With nothing saved and a run on record the
+// opening text is the run, and following compares the saved text, so the box
+// would sit empty with no notice and no offer and the run invisible until a
+// reload. Marking the project unfilled sends the next pass down the opening
+// branch. The condition is the other half: the opening branch does not ask,
+// so without it a replacement somebody had started typing is overwritten.
+const reopens = /if \(live\.current === shown\.current\) filledFor\.current = null/.test(
+  withRollback,
+)
+if (!reopens) {
+  console.error('\nA delete that fails does not send the editor back to what the project opens on:\n')
+  console.error('  ProjectScript.tsx:' + (rolled + 1) + '  ' + lines[rolled].trim())
+  console.error('\n  Add `if (live.current === shown.current) filledFor.current = null`.')
+  console.error('  Following compares the saved text, so a project with nothing saved and')
+  console.error('  a run on record is left with an empty box and no way back to the run.')
+  console.error('  The condition keeps the opening branch off a box somebody is typing in.\n')
   process.exit(1)
 }
 
