@@ -8,6 +8,12 @@
 
 # The compose project name, the volume names, the database and the container
 # user stay "surveyhq" deliberately. They are stable installation identifiers.
+#
+# A second stack on the same machine - production beside development - sets
+# COMPOSE_PROJECT_NAME in its own env file, which compose prefers to the name
+# below, and so gets containers, a database and data volumes of its own:
+#   docker compose --env-file .env.prod up -d --build     (or: make up STACK=prod)
+# See "Development and production on one server" in docs/deployment.md.
 name: surveyhq
 
 x-backend-env: &backend-env
@@ -120,7 +126,8 @@ services:
       # bind rather than a copy into the volume: a census roster is gigabytes,
       # and `docker compose cp` of one would write it to disk a second time
       # for no reason. See "Importing from the server" in docs/deployment.md.
-      - ./incoming:/incoming:ro
+      # A second stack names a folder of its own with INCOMING_DIR.
+      - ${INCOMING_DIR:-./incoming}:/incoming:ro
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }
@@ -148,7 +155,7 @@ services:
       # The same staging folder the API mounts, because a folder connection is
       # listed by the API and read here. Mounted on one of them only, the
       # connection tests green and every import after it fails.
-      - ./incoming:/incoming:ro
+      - ${INCOMING_DIR:-./incoming}:/incoming:ro
     depends_on:
       postgres: { condition: service_healthy }
       redis: { condition: service_healthy }

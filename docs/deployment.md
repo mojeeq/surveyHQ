@@ -389,6 +389,96 @@ migration, so check the release notes before upgrading across one. A column that
 cannot be added safely is logged as an error at start-up rather than crashing
 the server, so look for it in `make logs` after an upgrade.
 
+## Development and production on one server
+
+One machine can run two independent stacks side by side: a development stack
+to try changes and imports on, and a production stack people rely on. Each has
+its own containers, database, data volumes, Redis, ports and staging folder,
+and its own secrets, so nothing done to one reaches the other.
+
+| | Development | Production |
+|---|---|---|
+| Configured by | `.env` | `.env.prod` |
+| Compose project | `surveyhq` | `surveyhq-prod` |
+| Web / API port | 8080 / 8000 | 8081 / 8001 |
+| Files staged for import | `./incoming` | `./incoming-prod` |
+| Backups | `./backups` | `./backups/prod` |
+| Make targets | `make up`, `make logs`, ... | `make up STACK=prod`, `make logs STACK=prod`, ... |
+
+An existing installation is the development stack already: its project name,
+volumes and port are exactly what they were, and nothing about it changes.
+
+### Setting up production
+
+```bash
+make setup STACK=prod        # writes .env.prod with fresh secrets
+nano .env.prod               # PUBLIC_URL, CORS_ORIGINS, FIRST_ADMIN_EMAIL, SMTP
+make up STACK=prod
+```
+
+Point the reverse proxy for the production address at port 8081 (see
+*Putting it behind HTTPS* above) and keep development on an address of its
+own, or on no public address at all.
+
+What keeps the two apart is `COMPOSE_PROJECT_NAME` in `.env.prod`. Compose
+prefers it to the `name: surveyhq` in `docker-compose.yml`, so every container
+and volume of the production stack carries the `surveyhq-prod` prefix. Remove
+it, and `make up STACK=prod` would rebuild the development stack's containers
+over its data instead.
+
+### Promoting a change
+
+Both stacks are built from this one checkout. Try a change on development
+first, commit it, then rebuild production from the same commit:
+
+```bash
+make up                      # development, with the change
+# ...check it...
+git commit ...
+make backup STACK=prod
+make up STACK=prod
+```
+
+`make up STACK=prod` refuses to build while the checkout has uncommitted
+changes, since they would go live with no commit to say what they were.
+`FORCE=1` overrides that. It prints the branch and commit it builds from.
+
+### Copying production's data into development
+
+```bash
+make copy-prod-to-dev                                  # take a fresh copy
+make copy-prod-to-dev FILE=backups/prod/surveyhq-....tar.gz   # or use a backup
+```
+
+This replaces development's database and datasets with production's. It never
+writes to production. Taking a fresh copy is a production backup, which stops
+production's API and workers until the database and every dataset file have
+been copied - minutes on a large survey - so name last night's archive instead
+during working hours. It refuses outright if
+`.env` and `.env.prod` name the same compose project, because that would restore
+production over itself.
+
+Development keeps its own secrets through the copy:
+
+- Everyone signs in to development with their production password, and has to
+  sign in again - production's sessions are not valid there.
+- Survey Solutions connections cannot read production's stored passwords, so
+  they do not sync on development until a password is entered there. That is
+  what keeps a copy from pulling from the live survey server on its own.
+- Alert rules come across with their recipients. Leave `SMTP_HOST` empty in
+  `.env` or development will email them too; the command warns when it is set.
+
+Nightly backups of both:
+
+```
+0 2 * * * cd /home/USER/surveyhq && make backup STACK=prod >> /var/log/surveyhq-backup.log 2>&1
+30 2 * * * cd /home/USER/surveyhq && make backup >> /var/log/surveyhq-backup.log 2>&1
+```
+
+Two stacks need roughly twice the memory of one: allow 8 GB for both, more for
+large surveys, or lower `DUCKDB_MEMORY_LIMIT` and the worker concurrencies in
+`.env` for development.
+
 ## Monitoring the platform itself
 
 ```bash

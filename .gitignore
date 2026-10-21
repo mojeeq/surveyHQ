@@ -65,3 +65,8 @@ docs/SurveyHQ-user-manual.docx
 # Files staged for 'make import'. The directory is kept, its contents are not.
 incoming/*
 !incoming/README.md
+# The production stack's staging folder, when one runs beside development.
+incoming-prod/
+
+# Backup archives carry the database and a copy of the env file's secrets.
+backups/

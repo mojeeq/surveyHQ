@@ -8,6 +8,12 @@
 **/.ruff_cache
 data
 storage
+# The web image is built from the repository root, so without these every
+# build would send staged census files and backup archives - secrets
+# included - to the builder. Neither is ever copied into an image.
+incoming
+incoming-prod
+backups
 # docs/ is NOT ignored: it is the source of the in-app help, which
 # scripts/build-help.mjs renders into the frontend bundle during the image
 # build. Ignoring it here fails that build rather than shrinking it.

@@ -1,7 +1,28 @@
 # SurveyHQ operations. Run `make help` for the list.
 
-COMPOSE := docker compose
-DEV     := docker compose -f docker-compose.yml -f docker-compose.dev.yml
+# Which stack a target acts on. Two can run side by side on one machine, each
+# with its own containers, database, data volumes and ports:
+#   make up                  development, configured by .env (the only stack on
+#                            a single install)
+#   make up STACK=prod       production, configured by .env.prod
+# See "Development and production on one server" in docs/deployment.md.
+STACK ?= dev
+ifeq ($(STACK),dev)
+ENV_FILE      := .env
+STACK_BACKUPS := backups
+else ifeq ($(STACK),prod)
+ENV_FILE      := .env.prod
+STACK_BACKUPS := backups/prod
+else
+$(error STACK must be dev or prod, not "$(STACK)")
+endif
+# A BACKUP_DIR set in the environment still wins, as it always has.
+BACKUP_DIR ?= $(STACK_BACKUPS)
+export SURVEYHQ_ENV_FILE := $(ENV_FILE)
+export BACKUP_DIR
+
+COMPOSE := docker compose --env-file $(ENV_FILE)
+DEV     := $(COMPOSE) -f docker-compose.yml -f docker-compose.dev.yml
 
 .DEFAULT_GOAL := help
 
@@ -11,28 +32,29 @@ help: ## Show this help
 		| awk 'BEGIN {FS = ":.*?## "}; {printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2}'
 
 .PHONY: setup
-setup: ## Create .env from the template and generate secrets
-	@test -f .env && echo ".env already exists, leaving it alone." || ( \
-		cp .env.example .env && \
-		SECRET=$$(openssl rand -hex 32) && \
-		FERNET=$$(python3 -c "import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())") && \
-		DBPASS=$$(openssl rand -hex 16) && \
-		ADMINPASS=$$(openssl rand -base64 18 | tr -d '/+=') && \
-		sed -i "s|^SECRET_KEY=.*|SECRET_KEY=$$SECRET|" .env && \
-		sed -i "s|^ENCRYPTION_KEY=.*|ENCRYPTION_KEY=$$FERNET|" .env && \
-		sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$$DBPASS|" .env && \
-		sed -i "s|^FIRST_ADMIN_PASSWORD=.*|FIRST_ADMIN_PASSWORD=$$ADMINPASS|" .env && \
-		echo "Created .env with generated secrets." && \
-		echo "" && \
-		echo "  Administrator: $$(grep '^FIRST_ADMIN_EMAIL=' .env | cut -d= -f2)" && \
-		echo "  Password:      $$ADMINPASS" && \
-		echo "" && \
-		echo "Write those down, then run: make up" )
+setup: ## Create the stack's env file and generate secrets (STACK=prod for .env.prod)
+	./scripts/setup-env.sh $(STACK)
+
+# Both stacks build from this checkout, so production is built from whatever
+# is in it at the time. A tree with uncommitted changes would put them live
+# with no commit to say what they were; FORCE=1 accepts that knowingly.
+.PHONY: prod-guard
+prod-guard:
+ifeq ($(STACK),prod)
+	@test -f $(ENV_FILE) || (echo "No $(ENV_FILE) yet. Run: make setup STACK=prod" && exit 1)
+	@if [ -z "$(FORCE)" ] && [ -n "$$(git status --porcelain)" ]; then \
+		echo "Uncommitted changes in this checkout would be built into production:"; \
+		git status --short; \
+		echo "Commit or stash them, or run again with FORCE=1."; \
+		exit 1; \
+	fi
+	@echo "Building production from $$(git rev-parse --abbrev-ref HEAD) at $$(git rev-parse --short HEAD)"
+endif
 
 .PHONY: up
-up: ## Build and start the whole stack
+up: prod-guard ## Build and start the whole stack
 	$(COMPOSE) up -d --build
-	@echo "SurveyHQ is starting on http://localhost:$${WEB_PORT:-8080}"
+	@echo "SurveyHQ ($(STACK)) is starting on http://localhost:$$(grep -E '^WEB_PORT=' $(ENV_FILE) | cut -d= -f2 | grep . || echo 8080)"
 
 .PHONY: down
 down: ## Stop the stack (data is kept)
@@ -55,7 +77,10 @@ ps: ## Show service status
 	$(COMPOSE) ps
 
 .PHONY: dev
-dev: ## Start the stack with hot reload
+dev: ## Start the development stack with hot reload
+ifeq ($(STACK),prod)
+	@echo "Hot reload mounts the source into the containers; it is for development only." && exit 1
+endif
 	$(DEV) up --build
 
 .PHONY: shell
@@ -87,7 +112,7 @@ import: ## Import a file staged in ./incoming: make import FILE=/incoming/roster
 	$(COMPOSE) exec api python -m app.cli import "$(FILE)" $(if $(PROJECT),--project "$(PROJECT)") $(if $(NAME),--name "$(NAME)") $(if $(USER_EMAIL),--user "$(USER_EMAIL)")
 
 .PHONY: backup
-backup: ## Back up the database and stored datasets into ./backups
+backup: ## Back up the database and stored datasets into ./backups (production: ./backups/prod)
 	./scripts/backup.sh
 
 .PHONY: restore
@@ -95,14 +120,18 @@ restore: ## Restore from a backup: make restore FILE=backups/surveyhq-2026-01-01
 	@test -n "$(FILE)" || (echo "Usage: make restore FILE=backups/....tar.gz" && exit 1)
 	./scripts/restore.sh "$(FILE)"
 
+.PHONY: copy-prod-to-dev
+copy-prod-to-dev: ## Replace development's data with production's: make copy-prod-to-dev [FILE=backups/prod/....tar.gz]
+	./scripts/copy-prod-to-dev.sh $(if $(FILE),"$(FILE)")
+
 .PHONY: update
 update: ## Pull the latest code and rebuild
 	git pull
-	$(COMPOSE) up -d --build
-	@echo "Updated. Check 'make logs' for the rollout."
+	$(MAKE) up
+	@echo "Updated. Check 'make logs$(if $(filter prod,$(STACK)), STACK=prod)' for the rollout."
 
 .PHONY: clean
 clean: ## Stop the stack and DELETE ALL DATA
-	@echo "This deletes the database and every imported dataset."
-	@read -p "Type 'delete' to confirm: " answer && [ "$$answer" = "delete" ] || exit 1
+	@echo "This deletes the $(STACK) stack's database and every imported dataset."
+	@read -p "Type 'delete $(STACK)' to confirm: " answer && [ "$$answer" = "delete $(STACK)" ] || exit 1
 	$(COMPOSE) down -v

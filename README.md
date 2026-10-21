@@ -218,6 +218,11 @@ make reset-password EMAIL=you@org PASS=newsecret
 make help              # everything else
 ```
 
+Add `STACK=prod` to any of these to act on a production stack running beside
+the development one on the same server - `make setup STACK=prod` creates it,
+and `make copy-prod-to-dev` refreshes development with production's data. See
+[Development and production on one server](docs/deployment.md#development-and-production-on-one-server).
+
 ---
 
 ## Connecting to Survey Solutions
