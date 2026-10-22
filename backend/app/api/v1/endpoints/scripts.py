@@ -189,6 +189,7 @@ def overview(db: DbSession, user: CurrentUser) -> ScriptsOverview:
                 writes=[names[one] for one in place.writes if one in names],
                 lines=_lines_in(_shown_text(by_project[place.project_id])),
                 saved=bool(by_project[place.project_id].text.strip()),
+                text_kept=bool(_shown_text(by_project[place.project_id]).strip()),
                 last_run_at=by_project[place.project_id].last_run_at,
                 last_error=by_project[place.project_id].last_error,
                 can_edit=place.project_id in editable,

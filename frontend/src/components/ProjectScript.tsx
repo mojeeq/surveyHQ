@@ -52,6 +52,33 @@ export function openingText(script: { text: string; unsaved_run: string }): stri
   return script.text.trim() ? script.text : script.unsaved_run
 }
 
+/** Whether this project has a script to throw away.
+ *
+ *  A run counts, not only text. The Scripts page lists every project whose
+ *  script has run, and a run from before the text of a run was recorded left
+ *  its time, reads and writes and no text at all - so asking only about text
+ *  hid Delete on exactly the scripts the page sent people here to deal with.
+ */
+export function hasScript(script: {
+  text: string
+  unsaved_run: string
+  last_run_at: string | null
+}): boolean {
+  return !!script.text || !!script.unsaved_run || script.last_run_at !== null
+}
+
+/** A run is on record and nothing of its text is: neither saved nor kept
+ *  from the run. The box is empty because there is nothing to put in it,
+ *  which the editor has to say - an empty box on its own reads as a script
+ *  that failed to load. */
+export function textNotKept(script: {
+  text: string
+  unsaved_run: string
+  last_run_at: string | null
+}): boolean {
+  return !script.text.trim() && !script.unsaved_run.trim() && script.last_run_at !== null
+}
+
 /** What the box should hold when an answer arrives, or null to leave it be.
  *
  *  Two things have to hold at once, and holding only one of them is a bug
@@ -385,6 +412,18 @@ export function ProjectScript({ projectId }: { projectId: string }) {
             </button>
           </div>
         )}
+        {script.data && textNotKept(script.data) && !text.trim() && (
+          // The run is real - it read and wrote the datasets listed beside
+          // this - but it ran before a run's text was recorded, so there is
+          // nothing to open on. Said, so the empty box is not taken for a
+          // fault, with the two ways out of it.
+          <p className="mb-2 rounded-control bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
+            This project&apos;s script has run, but the text of that run was
+            not kept - it ran before scripts were recorded - so there is
+            nothing to show here. Write it again and Save to keep it, or
+            delete it to take this project off the Scripts page.
+          </p>
+        )}
         {recovered && (
           // Said before the box rather than after it. Somebody who ran a
           // script without saving it comes back to what looks like their
@@ -445,7 +484,7 @@ export function ProjectScript({ projectId }: { projectId: string }) {
           )}
           {/* Pushed to the far end, away from Run and Save. It is the one
               control here that cannot be undone by typing again. */}
-          {(script.data?.text || script.data?.unsaved_run) && (
+          {script.data && hasScript(script.data) && (
             <button
               className="btn-ghost btn-sm ml-auto text-red-700 dark:text-red-300"
               disabled={busy}

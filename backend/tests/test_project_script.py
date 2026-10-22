@@ -576,6 +576,44 @@ def test_a_box_of_spaces_is_not_a_script(client, auth_headers, db_session, proje
     assert "gen b = 2" in seen["unsaved_run"]
 
 
+def test_a_run_from_before_its_text_was_kept_says_so_and_can_go(
+    client, auth_headers, db_session, project
+):
+    """A run older than `last_run_text` left its reads, writes and time and no
+    text. It is on the Scripts page, because it ran, and the editor it links
+    to opened on an empty box with no Delete - so it could neither be read
+    nor got rid of."""
+    from app.models import ProjectScript
+    from app.services import project_script
+
+    project_script.run(db_session, project["id"], "use members\ngen a = 1")
+    # What such a row looks like: the column added after it ran is empty.
+    row = db_session.scalars(
+        select(ProjectScript).where(ProjectScript.project_id == project["id"])
+    ).one()
+    row.last_run_text = ""
+    db_session.commit()
+
+    def mine():
+        return [
+            place
+            for place in client.get("/api/v1/scripts", headers=auth_headers).json()["places"]
+            if place["project_id"] == project["id"]
+        ]
+
+    [card] = mine()
+    assert card["saved"] is False
+    assert card["text_kept"] is False, "the card says the text is missing, not that it is empty"
+
+    seen = _script_as_seen(client, auth_headers, project["id"])
+    assert seen["text"] == "" and seen["unsaved_run"] == ""
+    assert seen["last_run_at"] is not None, "which is what tells the editor a script is here"
+
+    gone = client.delete(f"/api/v1/projects/{project['id']}/script", headers=auth_headers)
+    assert gone.status_code == 200, gone.text
+    assert mine() == []
+
+
 def test_a_run_behind_a_saved_script_is_offered_not_lost(
     client, auth_headers, db_session, project
 ):
