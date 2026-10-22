@@ -173,8 +173,8 @@ imports without anybody naming anything.
 
 `stata.py` runs a subset of Stata's data-preparation commands against one
 dataset: `gen`, `replace`, `egen` (aggregate with `by()`, and the row-wise
-family), `label variable` / `define` / `values`, `rename`, `drop` and `keep`,
-each with the `if` that makes them worth having.
+family), `label variable` / `define` / `values`, `rename`, `destring`, `drop`
+and `keep`, each with the `if` that makes them worth having.
 
 Dataset-scoped rather than project-scoped, and that is the right shape for
 this command set: every one of these operates on the variables of a single

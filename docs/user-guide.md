@@ -619,8 +619,17 @@ applied, exactly as a do-file behaves, and the log says what got through.
 | `label variable` | The question wording a chart reads. |
 | `label define` / `label values` | A value set, and the variable that uses it. |
 | `rename` | A new name, carried to everything built on the old one. |
+| `destring` | Text that holds numbers made into numbers, with `replace` or `generate()`. |
 | `drop` / `keep` | Variables, or rows with `if`. |
 | `local` / `global` | Name a piece of script text and use it by name. |
+
+`destring` follows Stata's rule for when a variable converts: only when every
+value is a number, a blank or `.`. One holding anything else - `"N/A"`, a
+thousands separator - is left as text and the log names a few of the values
+that stopped it, and the script carries on. `force` makes those values missing
+instead; `ignore(",$")` removes the characters named first; `percent` removes
+`%` and divides by 100; `dpcomma` reads a comma as the decimal point. With no
+variables named it goes over every one, passing over those already numeric.
 
 A comparison is a number, as it is in Stata: `gen adult = age >= 18` gives 1
 and 0, not true and false, so `egen total = sum(adult)` and
