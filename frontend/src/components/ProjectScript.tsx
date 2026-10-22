@@ -196,15 +196,23 @@ export function ProjectScript({ projectId }: { projectId: string }) {
       saved,
       knownRun: knownRun.current,
     })
+    // The baselines describe the answer, not the box, so they settle on every
+    // answer the editor is shown - including one that calls for no write.
+    //
+    // Returning null from `fillWith` means "leave the box", and this used to
+    // be read as "nothing happened". Those are different. Open on a recovered
+    // run, have somebody save exactly that run, and the answer moves from a
+    // run with nothing saved to a saved script with no run - while the text
+    // to show is the same either way, so there is nothing to write. The
+    // saved text stayed empty against a server holding a script: Save read
+    // "unsaved changes" for a box that matched it, and clearing the box
+    // turned Save off entirely, on a project with a script still in it.
+    setSaved(script.data.text)
+    knownRun.current = script.data.unsaved_run
     if (fill === null) return
     filledFor.current = projectId
     shown.current = fill
-    knownRun.current = script.data.unsaved_run
     setText(fill)
-    // Always measured against what is saved, so a recovered run opens dirty
-    // and the Save button is live: it is a draft got back, not a saved
-    // script.
-    setSaved(script.data.text)
     // `text` and `saved` are read above, so they belong here. The effect runs
     // again when they change and stops at `fillWith`, which is the point:
     // the first keystroke is what hands the box over.
@@ -290,6 +298,7 @@ export function ProjectScript({ projectId }: { projectId: string }) {
         // saved. Setting it here does not disturb a draft, because the box
         // is not read.
         setSaved(before.text)
+        knownRun.current = before.unsaved_run
         // Nothing happened, so the editor should show what this project
         // opens on - which is not always the saved text. With nothing saved
         // and a run on record it is the run, and following cannot reach
