@@ -37,6 +37,9 @@ interface ScriptPlace {
   /** Whether `lines` counted the saved script. False means it counted the
    *  last run, which was never kept. */
   saved: boolean
+  /** False when there is no text at all: a run from before the text of a run
+   *  was recorded. */
+  text_kept: boolean
   last_run_at: string | null
   last_error: string
   /** Whether this reader may change this script, which is not the same as
@@ -238,7 +241,9 @@ function ScriptCard({
             ? `${place.lines} command${place.lines === 1 ? '' : 's'}${
                 place.saved ? '' : ', not saved'
               }`
-            : 'Run without being saved'}
+            : place.text_kept
+              ? 'Run without being saved'
+              : 'Its text was not kept'}
           {place.last_run_at && ` · last run ${relativeTime(place.last_run_at)}`}
         </p>
 

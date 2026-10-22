@@ -35,6 +35,11 @@ class ScriptPlace(BaseModel):
     # Whether what `lines` counted is the saved script. False means it is the
     # last run, which the card says and the editor opens on.
     saved: bool = True
+    # Whether there is any text to show at all. A run from before the text of
+    # a run was recorded left its reads, writes and time and nothing else, so
+    # the card and the editor say so rather than offering an empty box as if
+    # it were the script.
+    text_kept: bool = True
     last_run_at: dt.datetime | None = None
     last_error: str = ""
     # Whether this reader may change this script, which is not the same as

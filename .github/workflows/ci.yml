@@ -233,3 +233,21 @@ jobs:
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
           shellcheck --severity=warning scripts/*.sh
+      # Production beside development has to be a compose project of its own,
+      # on ports and a staging folder of its own. Were the two ever to resolve
+      # to the same project, `make up STACK=prod` would rebuild development's
+      # containers over its data - and copy-prod-to-dev would restore
+      # production over itself.
+      - name: A production env file makes a stack of its own
+        run: |
+          ./scripts/setup-env.sh
+          ./scripts/setup-env.sh prod
+          docker compose --env-file .env config > dev.yml
+          docker compose --env-file .env.prod config > prod.yml
+          grep -qx 'name: surveyhq' dev.yml
+          grep -qx 'name: surveyhq-prod' prod.yml
+          grep -q 'name: surveyhq-prod_survey-data' prod.yml
+          grep -q 'published: "8081"' prod.yml
+          grep -q 'incoming-prod' prod.yml
+          ! grep -q 'incoming-prod' dev.yml
+          echo "development and production are separate stacks"
