@@ -40,6 +40,7 @@ from app.services.datasets import (
 )
 from app.services.ingest import IngestResult, numeric_code_text
 from app.services.query_engine import (
+    MISSING_TAG_SUFFIX,
     DatasetContext,
     _quote_path,
     column_types,
@@ -768,6 +769,174 @@ def _keep(run: Run, rest: str) -> CommandResult:
         variables_removed=dropped,
         data_changed=True,
     )
+
+
+# What destring will read as a number once spaces and ignored characters are
+# gone: Stata's own notation, written out rather than left to a cast. DuckDB's
+# cast also takes "inf", "nan" and "1_000", none of which Stata would call
+# numeric, and a variable holding them would be converted here and refused in
+# the do-file it came from.
+NUMERIC_TEXT = r"[+-]?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][+-]?[0-9]+)?"
+# What destring reads as missing: an empty string, and Stata's missing values.
+MISSING_TEXT = r"\.[a-z]?"
+
+
+def _destring(run: Run, rest: str) -> CommandResult:
+    """destring [varlist], replace | generate(newvars) [force ignore("chars") percent dpcomma].
+
+    Text that holds numbers - an export that wrote every column as a string,
+    or a code read in with its leading zeros - becomes a number, so it can be
+    summed, compared and charted as one.
+
+    Stata's rules, because the do-file is the reference: a variable is
+    converted only when every value is a number, blank or a missing value. One
+    that holds anything else is left as it is and said so, and the command
+    goes on to the next - unless `force`, which makes those values missing. A
+    variable that is already a number is passed over rather than refused, so
+    `destring, replace` over the whole dataset does what it says.
+    """
+    frame, work = run.data, run.work
+    body, options = _split_options(rest)
+    # Read before anything else looks at the options: the characters to ignore
+    # are quoted and can be anything, a comma or a bracket included.
+    ignore = ""
+    quoted = re.search(r'\bignore\s*\(\s*"([^"]*)"\s*\)', options, re.IGNORECASE)
+    if quoted is not None:
+        ignore = quoted.group(1)
+        options = options[: quoted.start()] + options[quoted.end() :]
+    elif re.search(r"\bignore\b", options, re.IGNORECASE):
+        raise CommandError('ignore() takes the characters in quotes, e.g. ignore(",$")')
+    _reject_unknown_options(
+        options, ("replace", "generate", "gen", "g", "force", "percent", "dpcomma")
+    )
+    flags = {word.lower() for word in re.findall(r"[A-Za-z]+", re.sub(r"\([^)]*\)", " ", options))}
+    generated = re.search(r"\b(?:generate|gen|g)\s*\(([^)]*)\)", options, re.IGNORECASE)
+    replacing = "replace" in flags
+    if replacing == (generated is not None):
+        raise CommandError(
+            "destring needs either replace or generate(), e.g. destring age, replace"
+        )
+
+    ctx = frame.context
+    # No variables means every one of them, as in Stata - but not the hidden
+    # columns recording which blanks were .a and which .b. They are text that
+    # looks like missing values, so they would convert cleanly and lose the
+    # very tags they exist to keep.
+    names = (
+        _variable_list(ctx, body)
+        if body
+        else [name for name in ctx.variables if not name.endswith(MISSING_TAG_SUFFIX)]
+    )
+    new_names = _names_in(generated.group(1)) if generated else []
+    if generated and len(new_names) != len(names):
+        raise CommandError(
+            f"generate() needs one new name for each variable: {len(names)} "
+            f"variable(s), {len(new_names)} name(s)"
+        )
+    for new in new_names:
+        _check_new_name(frame, new)
+    # Where each variable's numbers go: over itself, or into its new name.
+    target = dict(zip(names, new_names, strict=True)) if generated else {n: n for n in names}
+
+    kinds = _expression_kinds(frame)
+    notes: list[str] = []
+    texts = [name for name in names if kinds.get(name) == "text"]
+    for name in names:
+        if kinds.get(name) != "text" and body:
+            # Named, so worth a word. Over the whole dataset this is most of
+            # the variables and saying so for each would bury what happened.
+            notes.append(f"{name}: already numeric; left alone")
+    if not texts:
+        return CommandResult(
+            command="",
+            message="; ".join(notes) or "Nothing to do: every variable is already numeric",
+        )
+
+    cleaned = {name: _destring_cleaned(name, ignore, "percent" in flags, "dpcomma" in flags)
+               for name in texts}
+    bad = {
+        name: f"NOT (regexp_full_match({text}, '{NUMERIC_TEXT}') "
+        f"OR regexp_full_match({text}, '{MISSING_TEXT}') OR {text} = '')"
+        for name, text in cleaned.items()
+    }
+    counts = dict(zip(texts, _destring_counts(frame, bad), strict=True))
+
+    force = "force" in flags
+    converting: dict[str, str] = {}
+    for name in texts:
+        if counts[name] and not force:
+            notes.append(
+                f"{name}: contains nonnumeric characters, such as "
+                f"{_destring_examples(frame, name, bad[name])}; left as text"
+            )
+            continue
+        number = (
+            f"CASE WHEN regexp_full_match({cleaned[name]}, '{NUMERIC_TEXT}') "
+            f"THEN CAST({cleaned[name]} AS DOUBLE) END"
+        )
+        if "percent" in flags:
+            number = f"({number}) / 100"
+        converting[name] = number
+        made_missing = (
+            f" ({counts[name]:,} nonnumeric value(s) made missing)" if counts[name] else ""
+        )
+        done = "replaced" if replacing else f"generated {target[name]}"
+        notes.append(f"{name}: {done} as numeric{made_missing}")
+
+    if not converting:
+        return CommandResult(command="", message="; ".join(notes))
+
+    if replacing:
+        write(work, frame, _select_sql(frame, ctx, replace=converting))
+        added: list[str] = []
+    else:
+        added = [target[name] for name in converting]
+        # The new variable carries the old one's label, as Stata's does.
+        for name in converting:
+            if frame.label_of(name):
+                frame.labels[target[name]] = frame.label_of(name)
+        extra = [(target[name], number) for name, number in converting.items()]
+        write(work, frame, _select_sql(frame, ctx, extra=extra))
+    return CommandResult(
+        command="",
+        message="; ".join(notes),
+        variables_added=added,
+        changed_rows=frame.rows,
+        data_changed=True,
+    )
+
+
+def _destring_cleaned(name: str, ignore: str, percent: bool, dpcomma: bool) -> str:
+    """The SQL for a variable's text as destring reads it.
+
+    Each ignored character is removed wherever it is, which is how Stata reads
+    ignore(",") on "1,234". Written into the query as literals, quotes
+    doubled, since the characters are the only part of the command that is
+    neither a name nor a number.
+    """
+    text = f"TRIM(CAST({quote_ident(name)} AS VARCHAR))"
+    for character in dict.fromkeys(ignore + ("%" if percent else "")):
+        text = f"REPLACE({text}, '{character.replace(chr(39), chr(39) * 2)}', '')"
+    if dpcomma:
+        text = f"REPLACE({text}, ',', '.')"
+    # Trimmed again: ignoring a currency sign leaves the space after it.
+    return f"COALESCE(TRIM({text}), '')"
+
+
+def _destring_counts(frame: Frame, bad: dict[str, str]) -> list[int]:
+    """How many values of each variable are not numbers, in one scan."""
+    counted = ", ".join(f"COUNT(*) FILTER (WHERE {condition})" for condition in bad.values())
+    _, rows = run_sql(f"SELECT {counted} FROM read_parquet({_quote_path(str(frame.path))})")
+    return [int(value or 0) for value in rows[0]] if rows else [0] * len(bad)
+
+
+def _destring_examples(frame: Frame, name: str, condition: str) -> str:
+    """A few of the values that stopped a conversion, so they can be found."""
+    _, rows = run_sql(
+        f"SELECT DISTINCT {quote_ident(name)} FROM read_parquet({_quote_path(str(frame.path))}) "
+        f"WHERE {condition} LIMIT 3"
+    )
+    return ", ".join(f'"{row[0]}"' for row in rows)
 
 
 # --- reading and writing datasets -------------------------------------------
@@ -1511,6 +1680,7 @@ def verbs() -> dict[str, Any]:
         "rename": _rename, "ren": _rename,
         "drop": _drop,
         "keep": _keep,
+        "destring": _destring,
         "local": _local,
         "global": _global,
     }

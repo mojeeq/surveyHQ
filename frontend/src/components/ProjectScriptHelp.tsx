@@ -50,6 +50,8 @@ const SECTIONS: Section[] = [
       { line: 'gen band = cond(age < 15, 1, cond(age < 65, 2, 3))', note: 'Nested conditions' },
       { line: 'egen hh_size = count(person_id), by(hhid)', note: 'An aggregate written back onto every row of the group' },
       { line: 'egen assets = rowtotal(tv fridge car)', note: 'Across the variables of one row' },
+      { line: 'destring age income, replace', note: 'Text that holds numbers, made into numbers' },
+      { line: 'destring income, replace ignore(",$") force', note: 'Strip characters first; anything still not a number becomes missing' },
     ],
   },
   {

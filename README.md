@@ -57,8 +57,8 @@ Runs on Ubuntu with Docker. One command to install.
 - Tabulate a "tick all that apply" question from the 0/1 columns it exports as,
   as one table rather than twelve.
 - Prepare data with a **Stata command box**: `gen`, `replace`, `egen` with
-  `by()` and the row-wise family, `label`, `rename`, `drop` and `keep`, each
-  with `if`. Every command is recorded on the dataset and replayed after a
+  `by()` and the row-wise family, `label`, `rename`, `destring`, `drop` and
+  `keep`, each with `if` where Stata has one. Every command is recorded on the dataset and replayed after a
   newer export replaces it, so a generated variable does not vanish on the
   upload the platform exists to make routine.
 - Export any result to CSV or Excel, or download a whole dataset as Stata (with
