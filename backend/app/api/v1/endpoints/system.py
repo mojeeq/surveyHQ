@@ -2,22 +2,35 @@
 
 from __future__ import annotations
 
+import datetime as dt
 from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 
 from app.api.deps import CurrentUser, DbSession, RequireAdmin
 from app.core.config import settings
 from app.db.base import utcnow
-from app.models import AuditLog, Job, Notification, Role
+from app.models import AuditLog, Connection, Job, JobStatus, JobType, Notification, Project, Role
 from app.schemas.common import Message, Page
-from app.schemas.monitoring import JobOut, NotificationOut
+from app.schemas.monitoring import (
+    ActivityJob,
+    ActivityOut,
+    JobOut,
+    NotificationOut,
+    ScheduledSync,
+)
 from app.services import preferences
 from app.services.audit import record
 from app.services.hostnames import base_domain as dashboard_domain
+from app.services.projects import scope_for
+from app.services.scheduling import next_due
 
 router = APIRouter()
+
+# How long a finished import stays in the activity panel, so that somebody who
+# looks away while it runs can still read what it did.
+RECENT_MINUTES = 30
 
 
 @router.get("/jobs", response_model=list[JobOut])
@@ -30,6 +43,90 @@ def list_jobs(
     if status:
         statement = statement.where(Job.status == status)
     return list(db.scalars(statement).all())
+
+
+@router.get("/activity", response_model=ActivityOut)
+def activity(db: DbSession, user: CurrentUser) -> ActivityOut:
+    """What is happening in the background that this person can see, and what is next.
+
+    The top bar asks this every few seconds while something is running. Not
+    the jobs list: that is an administrator's page and shows a person only the
+    jobs they started, while a scheduled import is started by nobody and was
+    therefore invisible to everybody but an administrator - which is exactly
+    the import whose data a dashboard is waiting on. Here a job shows to
+    anybody who can see the project it imports into.
+
+    Without its parameters, which can hold an archive's password.
+    """
+    scope = scope_for(db, user)
+    since = utcnow() - dt.timedelta(minutes=RECENT_MINUTES)
+    jobs = db.scalars(
+        select(Job)
+        .where(
+            Job.job_type.in_([JobType.sync, JobType.ingest]),
+            or_(
+                Job.status.in_([JobStatus.queued, JobStatus.running]),
+                Job.finished_at >= since,
+            ),
+        )
+        .order_by(Job.created_at.desc())
+        .limit(40)
+    ).all()
+    names = {project.id: project.name for project in db.scalars(select(Project)).all()}
+
+    def visible(job: Job) -> bool:
+        if user.has_role(Role.admin) or job.created_by == user.id:
+            return True
+        project_id = (job.params or {}).get("project_id") or None
+        return job.created_by is None and scope.allows(project_id)
+
+    shown = [
+        ActivityJob(
+            id=job.id,
+            job_type=job.job_type.value,
+            status=job.status.value,
+            title=job.title,
+            progress=job.progress or 0.0,
+            stages=list(job.stages or []),
+            error=job.error,
+            warnings=list((job.result or {}).get("warnings") or [])[:20],
+            project_name=names.get((job.params or {}).get("project_id") or "", ""),
+            started_at=job.started_at,
+            finished_at=job.finished_at,
+            created_at=job.created_at,
+        )
+        for job in jobs
+        if visible(job)
+    ][:15]
+
+    now = utcnow()
+    upcoming: list[ScheduledSync] = []
+    for connection in db.scalars(
+        select(Connection).where(
+            Connection.is_active.is_(True), Connection.sync_enabled.is_(True)
+        )
+    ).all():
+        if not scope.allows(connection.project_id):
+            continue
+        due = next_due(
+            mode=connection.sync_mode or "interval",
+            times=list(connection.sync_times or []),
+            timezone=connection.sync_timezone or "UTC",
+            interval_minutes=connection.sync_interval_minutes,
+            last_sync_at=connection.last_sync_at,
+            now=now,
+        )
+        if due is not None:
+            upcoming.append(
+                ScheduledSync(
+                    connection_id=connection.id,
+                    name=connection.name,
+                    project_name=names.get(connection.project_id or "", ""),
+                    due_at=due,
+                )
+            )
+    upcoming.sort(key=lambda one: one.due_at)
+    return ActivityOut(jobs=shown, upcoming=upcoming[:5])
 
 
 @router.get("/jobs/{job_id}", response_model=JobOut)

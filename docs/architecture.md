@@ -105,6 +105,33 @@ would be lost every morning if they were not put back:
    rounds, so a merge of a merge is rebuilt only once the merge underneath it
    has been.
 
+### One order, whichever way the data came
+
+`pipeline.after_import` is the one place that decides what follows new data,
+and every way data arrives calls it - an upload read in the request, a queued
+upload, a Survey Solutions sync, a folder connection, a reviewed import and
+`app.cli import`. In order: the recorded commands are applied again to what
+was replaced; the merges standing on anything that changed are rebuilt -
+appended to as well as replaced, since an append changes a join as surely;
+the saved project scripts reading any of it are re-run; and the indicators,
+alert rules and quality checks on all of it are evaluated, so a dashboard
+tile moves with the data rather than at the next scheduled tick.
+
+Each path used to carry its own copy of this, and the copies drifted: the
+sync rebuilt merges and never ran a script, an append rebuilt nothing, and
+none of them refreshed an indicator. Each step is now written onto the job as
+it starts and finishes (`Job.stages`), which is what the activity panel in the
+top bar shows.
+
+A merged dataset carries its own recipe - which datasets, which keys - copied
+from the relationship it was made from. It used to carry only that
+relationship's id, so deleting the relationship, or clearing and detecting
+relationships again, left the merge with no way to be rebuilt, and every
+import passed it over without a word. A merge made before recipes were copied
+is recovered from the dataset names it was built from, when exactly one
+relationship joins them now; one that still cannot be rebuilt is reported in
+the job and on its card, with the reason.
+
 ## Where an upload is read
 
 Small uploads are read in the request. Anything over 48 MB is written to disk,
@@ -511,6 +538,7 @@ backend/app/
                   multiselect.py      0/1 columns -> one "tick all" question
                   relationships.py    detecting and storing the links
                   derived.py          merges, and rebuilding what depends
+                  pipeline.py         what follows new data in, in order
                   freshness.py        how recent a dataset's data is
 
                 preparing it

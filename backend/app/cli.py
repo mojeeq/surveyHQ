@@ -118,8 +118,8 @@ def import_files() -> None:
         load_file_into_dataset,
         merge_imports,
     )
-    from app.services.derived import rebuild_dependents
     from app.services.ingest import SUPPORTED_EXTENSIONS, IngestError
+    from app.services.pipeline import after_import
 
     parser = argparse.ArgumentParser(
         prog="python -m app.cli import",
@@ -226,9 +226,17 @@ def import_files() -> None:
                             after_replace=stata.replay,
                         ),
                     )
-                    rebuild_dependents(db, outcome.replaced_ids)
+                    # Merges, then scripts, then indicators - the same as
+                    # every other way data arrives. See pipeline.after_import.
+                    aftermath = after_import(
+                        db,
+                        changed=[d.id for d in outcome.datasets],
+                        replaced=outcome.replaced_ids,
+                    )
                     made.extend(outcome.datasets)
                     print(f"    {len(outcome.datasets)} dataset(s)")
+                    for line in aftermath.notes():
+                        print(f"    {line}")
                     record(
                         db,
                         user=user,

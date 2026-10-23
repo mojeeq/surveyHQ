@@ -10,6 +10,7 @@ import type { Notification } from '@/lib/types'
 import { relativeTime } from '@/lib/format'
 import AppIcon, { type AppIconName } from '@/components/AppIcon'
 import ProjectFilter from '@/components/ProjectFilter'
+import ActivityIndicator from '@/components/ActivityIndicator'
 
 function useClickOutside(refs: React.RefObject<HTMLElement>[], onOutside: () => void) {
   useEffect(() => {
@@ -513,6 +514,8 @@ export default function Layout() {
             >
               <ThemeIcon dark={resolvedTheme === 'dark'} />
             </button>
+
+            <ActivityIndicator />
 
             <div className="relative" ref={notificationsRef}>
               <button

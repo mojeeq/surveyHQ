@@ -42,9 +42,9 @@ from app.services.datasets import (
     load_file_into_dataset,
     merge_imports,
 )
-from app.services.derived import rebuild_dependents
 from app.services.ingest import IngestError
 from app.services.monitoring import evaluate_alert_rule, refresh_indicator
+from app.services.pipeline import AFTER_IMPORT, Progress, after_import
 from app.services.quality import execute_rule
 from app.services.scheduling import is_due
 from app.services.survey_solutions import (
@@ -81,8 +81,13 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
 
     summary: dict[str, Any] = {"datasets": [], "errors": [], "rows": 0}
     workdir = Path(tempfile.mkdtemp(prefix="surveyhq-sync-"))
+    progress = Progress(
+        job_id, [("download", "Download from Survey Solutions and read the files"), *AFTER_IMPORT]
+    )
 
     try:
+        progress.start(None, "download", "Connecting to the server")
+        progress.save_now()
         with session_scope() as db:
             connection = db.get(Connection, connection_id)
             if connection is None:
@@ -119,10 +124,27 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
             # score = score + 1` would add two, and a recorded `gen` would fail
             # outright because its column already exists.
             replaced: list[str] = []
+            # Every dataset the plan wrote - created, appended to or replaced.
+            # What is built on the data follows all of them; see pipeline.
+            changed: list[str] = []
 
-            for identity, identity_mode in plan:
+            for number, (identity, identity_mode) in enumerate(plan, start=1):
                 questionnaire = catalogue.get(identity)
                 title = questionnaire.title if questionnaire else identity
+                said = f"'{title}'" + (f" ({number} of {len(plan)})" if len(plan) > 1 else "")
+
+                def preparing(export: Any, said: str = said) -> None:
+                    # Called on every poll of the export job. The server's own
+                    # percentage, because preparing the export on Survey
+                    # Solutions is usually the longest wait of the whole sync.
+                    progress.start(
+                        None, "download",
+                        f"Survey Solutions is preparing {said}: {export.progress}%",
+                    )
+                    progress.save_now()
+
+                progress.start(None, "download", f"Asking the server to export {said}")
+                progress.save_now()
                 with session_scope() as db:
                     run = SyncRun(
                         connection_id=connection_id,
@@ -144,7 +166,10 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
                         archive,
                         export_type=export_format,  # type: ignore[arg-type]
                         interview_status=interview_status,  # type: ignore[arg-type]
+                        on_progress=preparing,
                     )
+                    progress.start(None, "download", f"Reading the files of {said}")
+                    progress.save_now()
                     outcome = _import_export_archive(
                         connection_id=str(connection_id),
                         connection_name=connection_name,
@@ -174,6 +199,7 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
                             )
                             run.log = outcome["log"]
                     replaced.extend(outcome.get("replaced_ids") or [])
+                    changed.extend(outcome.get("changed_ids") or [])
                 except (SurveySolutionsError, IngestError) as exc:
                     logger.error("Sync failed for %s: %s", identity, exc)
                     summary["errors"].append({"questionnaire": title, "error": str(exc)})
@@ -190,28 +216,47 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
             # appends: replaying on the replacement alone would compute a
             # generated variable over the first version's rows and leave it
             # blank on the rest, and a recorded `drop if` would never reach
-            # them. Order matters after it too - the merges standing on those
-            # datasets are rebuilt from the replayed data, not from the export.
-            if replaced:
-                ids = list(dict.fromkeys(replaced))
+            # them. Then the merges, the scripts and the indicators, in that
+            # order - see pipeline.after_import.
+            progress.finish(
+                None,
+                "download",
+                f"{summary['rows']:,} records into {len(summary['datasets'])} dataset(s)"
+                + (
+                    f"; {len(summary['errors'])} questionnaire(s) failed"
+                    if summary["errors"]
+                    else ""
+                ),
+                status="warning" if summary["errors"] else "done",
+                items=_imported(summary["datasets"])
+                + [
+                    {"name": entry["questionnaire"], "status": "failed", "detail": entry["error"]}
+                    for entry in summary["errors"]
+                ],
+            )
+            progress.save_now()
+            if changed:
                 with session_scope() as db:
-                    problems: list[str] = []
-                    for dataset_id in ids:
-                        dataset = db.get(Dataset, dataset_id)
-                        if dataset is not None:
-                            problems.extend(stata.replay(db, dataset))
-                    db.flush()
-                    rebuild_dependents(db, ids)
+                    aftermath = after_import(
+                        db,
+                        changed=changed,
+                        replaced=replaced,
+                        replay=True,
+                        progress=progress,
+                    )
                     # The counts were read per version, before these commands
                     # ran, so a recorded `drop if` left the job reporting the
                     # file's rows rather than the dataset's.
                     for entry in summary["datasets"]:
-                        if entry["id"] in ids:
-                            dataset = db.get(Dataset, entry["id"])
-                            if dataset is not None:
-                                entry["rows"] = dataset.row_count
-                    if problems:
-                        summary.setdefault("warnings", []).extend(problems)
+                        dataset = db.get(Dataset, entry["id"])
+                        if dataset is not None:
+                            entry["rows"] = dataset.row_count
+                    notes = aftermath.notes()
+                    if notes:
+                        summary.setdefault("warnings", []).extend(notes)
+            else:
+                progress.skip_rest(None, "Nothing was imported")
+                progress.save_now()
 
         prune_archives(str(connection_id))
 
@@ -241,6 +286,8 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
 
     except Exception as exc:  # noqa: BLE001 - always record why a job died
         logger.exception("Sync job %s failed", job_id)
+        progress.skip_rest(None, f"Stopped: {exc}")
+        progress.save_now()
         with session_scope() as db:
             job = db.get(Job, job_id)
             if job:
@@ -255,6 +302,14 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
         return {"error": str(exc)}
     finally:
         shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _imported(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The datasets an import wrote, as the activity panel lists them."""
+    return [
+        {"name": entry["name"], "status": "imported", "detail": f"{entry['rows'] or 0:,} rows"}
+        for entry in entries
+    ]
 
 
 ARCHIVES_KEPT = 5
@@ -361,8 +416,11 @@ def run_folder_import(self: Any, job_id: str) -> dict[str, Any]:
     connection_id = params.get("connection_id")
     mode = params.get("mode") or "replace"
     summary: dict[str, Any] = {"datasets": [], "errors": [], "rows": 0, "skipped": 0}
+    progress = Progress(job_id, [("read", "Read new files in the folder"), *AFTER_IMPORT])
 
     try:
+        progress.start(None, "read", "Looking for new files")
+        progress.save_now()
         with session_scope() as db:
             connection = db.get(Connection, connection_id)
             if connection is None:
@@ -392,7 +450,10 @@ def run_folder_import(self: Any, job_id: str) -> dict[str, Any]:
             pending.append(found)
 
         replaced: list[str] = []
-        for found in pending:
+        changed: list[str] = []
+        for number, found in enumerate(pending, start=1):
+            progress.start(None, "read", f"Reading {found.name} ({number} of {len(pending)})")
+            progress.save_now()
             with session_scope() as db:
                 run = SyncRun(
                     connection_id=connection_id,
@@ -442,6 +503,7 @@ def run_folder_import(self: Any, job_id: str) -> dict[str, Any]:
                         )
                     )
                 replaced.extend(outcome.get("replaced_ids") or [])
+                changed.extend(outcome.get("changed_ids") or [])
             except (IngestError, OSError) as exc:
                 logger.error("Folder import failed for %s: %s", found.name, exc)
                 summary["errors"].append({"questionnaire": found.name, "error": str(exc)})
@@ -466,32 +528,43 @@ def run_folder_import(self: Any, job_id: str) -> dict[str, Any]:
                         )
                     )
 
-        if replaced:
-            ids = list(dict.fromkeys(replaced))
+        progress.finish(
+            None,
+            "read",
+            (
+                f"{len(pending)} new file(s), {summary['rows']:,} records"
+                if pending
+                else "No new files"
+            )
+            + (f"; {waiting} still being copied in" if waiting else ""),
+            status="warning" if summary["errors"] else ("done" if pending else "skipped"),
+            items=[
+                {"name": entry["questionnaire"], "status": "failed", "detail": entry["error"]}
+                for entry in summary["errors"]
+            ],
+        )
+        progress.save_now()
+        if changed:
             with session_scope() as db:
-                problems: list[str] = []
-                for dataset_id in ids:
-                    dataset = db.get(Dataset, dataset_id)
-                    if dataset is not None:
-                        problems.extend(stata.replay(db, dataset))
-                db.flush()
-                # After the replays, not before: the import rebuilt the merges
-                # standing on these datasets from the file as it arrived, and a
-                # recorded `drop if` or a generated column runs after that. A
-                # merge left as it was would hold the pre-replay rows while its
-                # source holds the replayed ones, and nothing on either would
-                # say which was which.
-                rebuild_dependents(db, ids)
+                # Replayed, then merges, then scripts, then indicators: the
+                # same order a sync owes, because this is the sync with the
+                # download taken out. See pipeline.after_import.
+                aftermath = after_import(
+                    db, changed=changed, replaced=replaced, replay=True, progress=progress
+                )
                 # The counts were read before those commands ran, so a dropped
                 # row would leave the job reporting the file's rows rather than
                 # the dataset's.
                 for entry in summary["datasets"]:
-                    if entry["id"] in ids:
-                        dataset = db.get(Dataset, entry["id"])
-                        if dataset is not None:
-                            entry["rows"] = dataset.row_count
-                if problems:
-                    summary.setdefault("warnings", []).extend(problems)
+                    dataset = db.get(Dataset, entry["id"])
+                    if dataset is not None:
+                        entry["rows"] = dataset.row_count
+                notes = aftermath.notes()
+                if notes:
+                    summary.setdefault("warnings", []).extend(notes)
+        else:
+            progress.skip_rest(None, "Nothing was imported")
+            progress.save_now()
 
         with session_scope() as db:
             connection = db.get(Connection, connection_id)
@@ -521,6 +594,7 @@ def run_folder_import(self: Any, job_id: str) -> dict[str, Any]:
                     "already_imported": summary["skipped"],
                     "still_arriving": waiting,
                     "errors": summary["errors"],
+                    "warnings": summary.get("warnings", []),
                 }
                 if summary["errors"]:
                     job.error = summary["errors"][0]["error"]
@@ -528,6 +602,8 @@ def run_folder_import(self: Any, job_id: str) -> dict[str, Any]:
 
     except file_source.FolderError as exc:
         logger.error("Folder import failed: %s", exc)
+        progress.skip_rest(None, f"Stopped: {exc}")
+        progress.save_now()
         with session_scope() as db:
             connection = db.get(Connection, connection_id)
             if connection:
@@ -579,7 +655,6 @@ def _import_export_archive(
             # would never reach them at all. The caller replays once the whole
             # plan has been imported; see run_connection_sync.
         )
-        rebuilt = rebuild_dependents(db, result.replaced_ids)
         db.flush()
         for dataset in result.datasets:
             summary["datasets"].append(
@@ -587,8 +662,6 @@ def _import_export_archive(
             )
         summary["rows"] += result.rows
         log = result.created + result.replaced + result.appended
-        if rebuilt:
-            log.append(f"{len(rebuilt)} merged dataset(s) rebuilt")
         # The connection is recorded on each dataset so a later sync of the same
         # questionnaire finds them, and so the UI can say where they came from.
         for dataset in result.datasets:
@@ -603,6 +676,7 @@ def _import_export_archive(
             "rows": result.rows,
             "datasets": len(result.datasets),
             "replaced_ids": list(result.replaced_ids),
+            "changed_ids": [dataset.id for dataset in result.datasets],
             "log": log + result.warnings,
         }
 
@@ -821,10 +895,13 @@ def run_upload_import(self: Any, job_id: str) -> dict[str, Any]:
     summary: dict[str, Any] = {}
     review = bool(params.get("review"))
     candidates = []
+    progress = Progress(job_id, [("read", "Read the uploaded files"), *AFTER_IMPORT])
 
     try:
         if not upload_paths or not all(path.is_file() for path in upload_paths):
             raise IngestError("The uploaded file is no longer on the server.")
+        progress.start(None, "read", ", ".join(filenames))
+        progress.save_now()
         with session_scope() as db:
             from app.services.import_review import baseline, prepare
 
@@ -853,12 +930,26 @@ def run_upload_import(self: Any, job_id: str) -> dict[str, Any]:
                         password=password,
                     )
                     outcome = merge_imports(outcome, step)
-                rebuilt = [] if review else rebuild_dependents(db, outcome.replaced_ids)
                 db.flush()
                 warnings = list(outcome.warnings)
-                if rebuilt:
-                    names = [d.name for d in (db.get(Dataset, i) for i in rebuilt) if d]
-                    warnings.append("Rebuilt from the new data: " + ", ".join(sorted(names)))
+                if not review:
+                    # Committed here, by the first step's save: the files are
+                    # read, and what follows them is saved step by step.
+                    progress.finish(
+                        db,
+                        "read",
+                        f"{outcome.rows:,} records into {len(outcome.datasets)} dataset(s)",
+                        items=_imported(
+                            [{"name": d.name, "rows": d.row_count} for d in outcome.datasets]
+                        ),
+                    )
+                    aftermath = after_import(
+                        db,
+                        changed=[d.id for d in outcome.datasets],
+                        replaced=outcome.replaced_ids,
+                        progress=progress,
+                    )
+                    warnings.extend(aftermath.notes())
                 summary = {
                     "datasets": [
                         {"id": d.id, "name": d.name, "rows": d.row_count} for d in outcome.datasets
@@ -889,6 +980,13 @@ def run_upload_import(self: Any, job_id: str) -> dict[str, Any]:
                 for one, path in zip(targets, upload_paths, strict=True):
                     load_file_into_dataset(db, one, path)
                 db.flush()
+                if not review:
+                    # A file always makes a dataset of its own, so nothing is
+                    # built on it yet and there is nothing to follow it.
+                    progress.finish(
+                        db, "read", f"{sum(one.row_count or 0 for one in targets):,} records"
+                    )
+                    progress.skip_rest(db, "A new dataset: nothing is built on it yet")
                 dataset = targets[0]
                 summary = {
                     "datasets": [
@@ -912,8 +1010,15 @@ def run_upload_import(self: Any, job_id: str) -> dict[str, Any]:
                     "warnings": summary.get("warnings", []),
                 }
                 db.rollback()
+        if review:
+            progress.finish(None, "read", "Read; waiting for the changes to be reviewed")
+            progress.skip_rest(None, "Runs once the reviewed changes are accepted")
+            progress.save_now()
     except (IngestError, OSError, MemoryError) as exc:
         logger.error("Upload import job %s failed: %s", job_id, exc)
+        progress.finish(None, "read", str(exc) or exc.__class__.__name__, status="failed")
+        progress.skip_rest(None, "The files could not be read")
+        progress.save_now()
         with session_scope() as db:
             job = db.get(Job, job_id)
             if job:

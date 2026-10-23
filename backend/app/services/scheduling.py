@@ -117,3 +117,62 @@ def is_due(
         return True
     last = last_sync_at if last_sync_at.tzinfo else last_sync_at.replace(tzinfo=dt.UTC)
     return (now - last).total_seconds() >= max(interval_minutes, 1) * 60
+
+
+def next_due(
+    *,
+    mode: str,
+    times: list[str],
+    timezone: str,
+    interval_minutes: int,
+    last_sync_at: dt.datetime | None,
+    now: dt.datetime,
+    days: list[int] | None = None,
+) -> dt.datetime | None:
+    """When scheduled work will next start, as `is_due` will see it.
+
+    `now` when it is due already - it starts at the next check, a few minutes
+    off at most. None when nothing is scheduled. Said so that somebody can see
+    when the data, and every dashboard on it, will move next; worked out from
+    the same rule that decides it rather than a second opinion of it.
+    """
+    if is_due(
+        mode=mode,
+        times=times,
+        timezone=timezone,
+        interval_minutes=interval_minutes,
+        last_sync_at=last_sync_at,
+        now=now,
+        days=days,
+    ):
+        return now
+    if mode == "daily":
+        return next_occurrence(times, now, timezone, days)
+    last = last_sync_at if last_sync_at.tzinfo else last_sync_at.replace(tzinfo=dt.UTC)
+    return last + dt.timedelta(minutes=max(interval_minutes, 1))
+
+
+def next_occurrence(
+    times: list[str],
+    now: dt.datetime,
+    timezone: str,
+    days: list[int] | None = None,
+) -> dt.datetime | None:
+    """The first scheduled moment after `now`; `last_occurrence` looking forward."""
+    valid = sorted(t.strip() for t in times if valid_time(t))
+    if not valid:
+        return None
+    wanted = {day for day in (days or []) if valid_weekday(day)}
+
+    tz = zone(timezone)
+    local = now.astimezone(tz)
+    for ahead in range(8):
+        day = local.date() + dt.timedelta(days=ahead)
+        if wanted and day.weekday() not in wanted:
+            continue
+        for text in valid:
+            hour, minute = (int(part) for part in text.split(":"))
+            moment = dt.datetime.combine(day, dt.time(hour, minute), tzinfo=tz)
+            if moment > local:
+                return moment
+    return None

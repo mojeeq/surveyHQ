@@ -535,6 +535,18 @@ function DatasetCard({
         </p>
       )}
 
+      {dataset.source === 'derived' &&
+        dataset.meta.rebuild &&
+        dataset.meta.rebuild.status !== 'rebuilt' && (
+          // A merge that could not be rebuilt looked exactly like one that had
+          // been - same name, same badge - and holds older data than its
+          // sources. Said where it is seen, with what to do about it.
+          <p className="mt-3 rounded-control bg-amber-50 px-2.5 py-1.5 text-xs leading-5 text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
+            <span className="font-semibold">Not rebuilt from the latest data.</span>{' '}
+            {dataset.meta.rebuild.message}
+          </p>
+        )}
+
       <div className="mt-4 flex flex-wrap items-center gap-1.5">
         {dataset.source === 'survey_solutions' && (
           <Badge tone="info" icon="⇄">

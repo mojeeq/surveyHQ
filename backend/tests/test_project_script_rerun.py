@@ -341,15 +341,16 @@ def test_the_script_runs_after_the_merges_it_stands_on(
     """A script reading a merged dataset must not build on last week's join."""
     # Nothing here builds a merge, so this pins the ordering rather than the
     # arithmetic: the re-run is handed the ids the rebuild returned as well as
-    # the ones that were replaced.
+    # the ones that changed. Every import path goes through after_import, so
+    # pinning it there pins it for all of them.
     import inspect
 
-    from app.api.v1.endpoints import datasets as endpoint
+    from app.services import pipeline
 
-    source = inspect.getsource(endpoint.upload_dataset)
-    rebuild_at = source.index("rebuild_dependents(db, replaced)")
-    rerun_at = source.index("project_script.rerun_for(")
+    source = inspect.getsource(pipeline.after_import)
+    rebuild_at = source.index("rebuild_merges(db, changed)")
+    rerun_at = source.index("project_script.rerun_for(db, standing)")
     assert rebuild_at < rerun_at, "the script re-runs before the merges rebuild"
-    assert "replaced + rebuilt" in source, (
+    assert "standing = changed + outcome.rebuilt" in source, (
         "the re-run is not told about the datasets the rebuild changed"
     )

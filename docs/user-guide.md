@@ -244,8 +244,21 @@ rows rather than add columns. Those links are recorded but cannot be merged.
 
 The merge is saved with the dataset it produces. **Rebuild from sources** re-runs
 it on demand, and a merged dataset rebuilds itself automatically whenever a
-source is replaced by a newer export or changed by a command - including a
-merge of a merge, which waits for the merge underneath it to finish first.
+source is replaced by a newer export, appended to, or changed by a command -
+including a merge of a merge, which waits for the merge underneath it to
+finish first.
+
+A merge keeps its own recipe - which two datasets, joined on which keys - so
+clearing the relationships and detecting them again does not stop it
+rebuilding. While the relationship it was made from exists, that relationship
+wins: correcting its key is how you correct the merge. A merge made before
+merges kept their recipe finds its relationship again by the names of the two
+datasets, when exactly one relationship joins them.
+
+A merge that cannot be rebuilt - one of its datasets was deleted, or there is
+no relationship between them any more - says so on its card, **Not rebuilt
+from the latest data**, with the reason and what to do. It keeps the data it
+had rather than being emptied.
 
 ## Getting data in
 
@@ -414,6 +427,37 @@ directory the administrator of *this* server allows, so a connection cannot be
 pointed at the rest of the machine. The details, including what is read and
 what is left alone, are in
 [survey-solutions.md](survey-solutions.md#when-there-is-no-api-user).
+
+### What happens after the data lands
+
+However the data arrives - an upload, a Survey Solutions import, a folder, a
+reviewed import - the same steps follow it, in this order:
+
+1. **Re-apply recorded commands** to every dataset that was replaced, since a
+   generated variable is not in the export.
+2. **Rebuild merged datasets** standing on anything that changed.
+3. **Run project scripts** that read any of it. Only a *saved* script is run
+   again; one that was only ever tried is named in the report instead, with a
+   note to save it.
+4. **Update indicators and dashboards.** Charts read the new data straight
+   away and indicator tiles were recomputed as each dataset landed; the step
+   names the dashboards that now show it. Alerts and quality checks follow at
+   the next scheduled check.
+
+The **activity** button in the top bar (the pulse line beside the bell) shows
+this as it happens. While something runs it names the step it is on -
+*Survey Solutions is preparing the export: 40%*, *Rebuild merged datasets* -
+and the panel lists every step with what it did: how many records were read,
+which merges were rebuilt and which could not be and why, which scripts ran,
+and which dashboards now show the new data. A finished import stays there for
+half an hour; an amber dot means one of them has something to check. Below
+that are the next scheduled imports and when each will start.
+
+When an import finishes, everything on the screen is fetched again, so a
+dashboard that was open while its data was replaced moves without a reload.
+
+Anybody who can see the project an import goes into sees it there, scheduled
+imports included.
 
 ### Refreshing
 

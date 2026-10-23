@@ -65,13 +65,24 @@ def _calls_to(tree: ast.AST, name: str) -> list[ast.Call]:
 
 
 def _replays(tree: ast.AST, function: str) -> bool:
+    """Replays itself, or hands the replay to the pipeline and says to do it."""
     node = _functions(tree).get(function)
-    return node is not None and any(
-        isinstance(inner, ast.Call)
-        and isinstance(inner.func, ast.Attribute)
-        and inner.func.attr == "replay"
-        for inner in ast.walk(node)
-    )
+    if node is None:
+        return False
+    for inner in ast.walk(node):
+        if not isinstance(inner, ast.Call):
+            continue
+        if isinstance(inner.func, ast.Attribute) and inner.func.attr == "replay":
+            return True
+        if isinstance(inner.func, ast.Name) and inner.func.id == "after_import":
+            for keyword in inner.keywords:
+                if (
+                    keyword.arg == "replay"
+                    and isinstance(keyword.value, ast.Constant)
+                    and keyword.value.value is True
+                ):
+                    return True
+    return False
 
 
 @pytest.mark.parametrize("source", SOURCES, ids=lambda p: p.name)
@@ -95,37 +106,86 @@ def test_every_archive_import_replays_recorded_commands(source: Path):
             )
 
 
-def test_publishing_a_reviewed_import_replays_before_it_rebuilds():
+#: Every way data arrives, by the function that receives it. Each has to hand
+#: what it wrote to the pipeline, or the merges, scripts and dashboards built
+#: on that data stay where they were - which is how a sync came to rebuild
+#: merges and never run a script, and an append to rebuild nothing at all.
+ARRIVALS = [
+    (Path("app/workers/tasks.py"), "run_connection_sync"),
+    (Path("app/workers/tasks.py"), "run_folder_import"),
+    (Path("app/workers/tasks.py"), "run_upload_import"),
+    (Path("app/api/v1/endpoints/datasets.py"), "upload_dataset"),
+    (Path("app/services/import_review.py"), "accept"),
+    (Path("app/cli.py"), "import_files"),
+]
+
+
+@pytest.mark.parametrize("source,function", ARRIVALS, ids=lambda one: str(one))
+def test_every_way_data_arrives_goes_through_the_pipeline(source: Path, function: str):
+    tree = ast.parse(source.read_text())
+    node = _functions(tree).get(function)
+    assert node is not None, f"{source} has no {function}(); update ARRIVALS"
+    assert any(
+        isinstance(inner, ast.Call)
+        and isinstance(inner.func, ast.Name)
+        and inner.func.id == "after_import"
+        for inner in ast.walk(node)
+    ), f"{function}() in {source} brings data in without calling after_import"
+
+
+@pytest.mark.parametrize("source,function", ARRIVALS, ids=lambda one: str(one))
+def test_nothing_rebuilds_merges_beside_the_pipeline(source: Path, function: str):
+    """A second copy of the order is how the copies drifted apart."""
+    node = _functions(ast.parse(source.read_text()))[function]
+    names = {
+        inner.func.id
+        for inner in ast.walk(node)
+        if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name)
+    }
+    assert not names & {"rebuild_dependents", "rebuild_merges"}, (
+        f"{function}() rebuilds merges itself; leave that to after_import"
+    )
+
+
+def test_the_pipeline_replays_then_merges_then_scripts_then_dashboards():
     """Order, not merely presence.
 
     A merge standing on a generated variable cannot be rebuilt until the
-    variable is back, and the row counts in the job summary are read from the
-    datasets - so a `drop if` that has not run yet is reported as the file's
-    rows rather than the dataset's.
+    variable is back; a script reading a merged dataset has to wait for the
+    merge; and the dashboards are named from what all of that wrote.
     """
+    body = Path("app/services/pipeline.py").read_text()
+    start = body.index("def after_import(")
+    inside = body[start : body.index("\ndef ", start + 1)]
+    replay = inside.index("stata.replay(db, dataset)")
+    merges = inside.index("rebuild_merges(db, changed)")
+    scripts = inside.index("project_script.rerun_for(db, standing)")
+    boards = inside.index("_dashboards_on(db, affected)")
+    assert replay < merges < scripts < boards
+
+
+def test_publishing_a_reviewed_import_replays_before_it_counts():
+    """The row counts in the job summary are read from the datasets - so a
+    `drop if` that has not run yet is reported as the file's rows."""
     body = Path("app/services/import_review.py").read_text()
-    replay = body.index("stata.replay(db, target)")
-    rebuild = body.index("rebuild_dependents(db, [d.id for d in published])")
+    pipeline = body.index("after_import(db, changed=ids, replaced=ids, replay=True")
     counts = body.index('"rows": sum(d.row_count for d in published)')
-    assert replay < rebuild, "the rebuild runs before the replay"
-    assert replay < counts, "the row counts are read before the replay"
+    assert pipeline < counts, "the row counts are read before the replay"
 
 
-def test_a_sync_replays_after_every_version_is_in_and_rebuilds_after_that():
+def test_a_sync_replays_after_every_version_is_in_and_counts_after_that():
     """The deferred replay has an order of its own.
 
     It has to sit after the loop that imports the plan, or it sees only the
-    versions imported so far; and the dependent rebuild has to sit after it, or
-    the merges are built from an export the commands have not touched.
+    versions imported so far; and the row counts have to be read after it.
     """
     body = Path("app/workers/tasks.py").read_text()
-    loop = body.index("for identity, identity_mode in plan:")
-    replay = body.index("problems.extend(stata.replay(db, dataset))")
-    rebuild = body.index("rebuild_dependents(db, ids)")
-    counts = body.index('entry["rows"] = dataset.row_count')
-    assert loop < replay, "the sync replays before it has imported every version"
-    assert replay < rebuild, "the sync rebuilds dependents before it replays"
-    assert replay < counts, "the sync reports row counts read before the replay"
+    sync = body[body.index("def run_connection_sync(") : body.index("def run_folder_import(")]
+    loop = sync.index("for number, (identity, identity_mode) in enumerate(plan, start=1):")
+    pipeline = sync.index("aftermath = after_import(")
+    counts = sync.index('entry["rows"] = dataset.row_count')
+    assert loop < pipeline, "the sync replays before it has imported every version"
+    assert pipeline < counts, "the sync reports row counts read before the replay"
 
 
 def test_a_sync_replays_only_what_it_replaced():
@@ -134,34 +194,25 @@ def test_a_sync_replays_only_what_it_replaced():
     Replaying the whole history over one would apply every command a second
     time to rows that already carry it: `replace score = score + 1` adds two,
     and a recorded `gen` fails because its column exists. Only a replacement
-    wipes those columns, and only a replacement earns the full replay.
+    wipes those columns, and only a replacement earns the full replay - while
+    everything the plan wrote, appends included, is what the merges follow.
     """
     body = Path("app/workers/tasks.py").read_text()
     assert '"replaced_ids": list(result.replaced_ids)' in body
     assert "replaced.extend(outcome.get(\"replaced_ids\") or [])" in body
-    # The word itself is fine in the comment that explains the distinction;
-    # what must not come back is a list of everything the plan touched.
-    assert "touched.extend(" not in body, (
-        "the sync is collecting every dataset it touched, not only the ones it "
-        "replaced, so an append would be replayed over twice"
-    )
+    assert "changed=changed," in body and "replaced=replaced," in body
+    assert "touched.extend(" not in body
 
 
-def test_a_folder_import_replays_and_rebuilds_in_the_same_order_a_sync_does():
+def test_a_folder_import_goes_through_the_pipeline_in_the_same_order_a_sync_does():
     """The folder path is the sync with the download taken out, and it owes
-    the same order: replay what was recorded, then rebuild the merges standing
-    on those datasets, then read the row counts.
-
-    Rebuilt first, a merge holds the rows as the file delivered them while its
-    source holds the replayed ones, and nothing on either says which is which.
-    """
+    the same order: the pipeline after every file is in, then the counts."""
     body = Path("app/workers/tasks.py").read_text()
     folder = body.index("def run_folder_import(")
     nextdef = body.index("def _import_export_archive(", folder)
     inside = body[folder:nextdef]
 
-    replay = inside.index("problems.extend(stata.replay(db, dataset))")
-    rebuild = inside.index("rebuild_dependents(db, ids)")
+    loop = inside.index("for number, found in enumerate(pending, start=1):")
+    pipeline = inside.index("aftermath = after_import(")
     counts = inside.index('entry["rows"] = dataset.row_count')
-    assert replay < rebuild, "the folder import rebuilds dependents before it replays"
-    assert replay < counts, "it reports row counts read before the replay"
+    assert loop < pipeline < counts
