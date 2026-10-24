@@ -83,6 +83,12 @@ projects are something you opt into rather than something you must set up first.
 To create one: **Projects → New project**. You are added as its manager, so it
 stays visible to you.
 
+The project picker at the top of every page chooses the project you are
+working in, and the other pages then show its data only. The **Projects** page
+always lists every project you can reach, whatever is chosen there: the one you
+are working in is marked **Working here**, and **Work in this project** on any
+other switches to it, exactly as choosing it at the top does.
+
 A project opens on its **Overview**: the whole of it in the order the data
 travels. *Data comes in* lists its connections - when each last imported and
 when it next will - and its datasets. *Joined* lists the merged datasets and
