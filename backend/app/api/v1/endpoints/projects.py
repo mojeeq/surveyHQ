@@ -39,7 +39,7 @@ from app.schemas.project import (
     ScriptRunIn,
 )
 from app.services import archive as archiving
-from app.services import project_script, stata
+from app.services import project_overview, project_script, stata
 from app.services.audit import record
 from app.services.dashboard_assets import remove_all
 from app.services.datasets import delete_dataset_files
@@ -540,6 +540,19 @@ def _to_out(project: Project, db: DbSession, user: User) -> ProjectOut:
     return out
 
 
+# --- the project as a pipeline ----------------------------------------------
+
+
+@router.get("/{project_id}/overview", response_model=dict)
+def read_overview(project_id: str, db: DbSession, user: CurrentUser) -> dict[str, Any]:
+    """The project in the order its data travels, and what needs attention.
+
+    See services/project_overview.py.
+    """
+    _visible_project(project_id, db, user)
+    return project_overview.overview(db, project_id)
+
+
 # --- the project's script ---------------------------------------------------
 
 
@@ -636,6 +649,7 @@ def run_script(
         archiving.refuse_if_archived(project, "running its script")
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
+    before = project_script.script_for(db, project_id).text
     try:
         outcome = project_script.run(db, project_id, payload.text)
     except stata.ScriptError as exc:
@@ -655,16 +669,23 @@ def run_script(
         db.commit()
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 
+    script = project_script.script_for(db, project_id)
+    kept = script.text != before
+    if kept:
+        script.updated_by = user.id
     record(
         db,
         user=user,
         action="run_project_script",
         entity_type="project",
         entity_id=project_id,
-        detail={"saved": [entry.name for entry in outcome.saved]},
+        detail={"saved": [entry.name for entry in outcome.saved], "kept": kept},
     )
     db.commit()
     return {
+        # Whether the run's text is now the saved script, so the editor can
+        # move its marker without being sent the text back.
+        "kept": kept,
         "log": [
             {"command": step.command, "message": step.message}
             for step in outcome.results
@@ -695,6 +716,11 @@ def _script_out(db: DbSession, script) -> ScriptOut:
         writes=named(script.writes),
         last_run_at=script.last_run_at,
         last_error=script.last_error,
+        previous_text=(
+            ""
+            if (script.previous_text or "").strip() == script.text.strip()
+            else script.previous_text or ""
+        ),
     )
 
 

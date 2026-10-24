@@ -1,4 +1,5 @@
-import ReactECharts from 'echarts-for-react'
+import type ReactEChartsCore from 'echarts-for-react/lib/core'
+import ReactECharts from '@/components/ReactECharts'
 import { useEffect, useRef, useState } from 'react'
 import { buildChartOption, type BuildOptions } from '@/lib/charts'
 import { formatCell, formatNumber } from '@/lib/format'
@@ -71,7 +72,7 @@ export default function ChartCard({
   const container = useRef<HTMLDivElement>(null)
   /** The drawn width, watched so long labels can be capped against it. */
   const [width, setWidth] = useState(0)
-  const chart = useRef<ReactECharts>(null)
+  const chart = useRef<ReactEChartsCore>(null)
 
   // ECharts draws to a canvas sized in pixels at layout time and only listens
   // for *window* resizes. Dragging a dashboard widget's corner resizes the

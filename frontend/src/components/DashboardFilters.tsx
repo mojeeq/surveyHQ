@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import type { Dataset, FilterGroup, Page } from '@/lib/types'
+import type { Dataset, FilterGroup } from '@/lib/types'
 
 export interface FilterControl {
   /** The variable every widget that has it will be filtered on. */
@@ -191,7 +191,7 @@ export function filterableVariables(dataset: Dataset | undefined) {
 export function useDashboardDatasets(ids: string[]) {
   return useQuery({
     queryKey: ['datasets', 'for-filters'],
-    queryFn: () => api.get<Page<Dataset>>('/datasets?limit=200&status=ready'),
+    queryFn: () => api.getAll<Dataset>('/datasets?status=ready'),
     select: (page) => page.items.filter((d) => ids.includes(d.id)),
     enabled: ids.length > 0,
   })

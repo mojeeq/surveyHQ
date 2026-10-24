@@ -328,23 +328,52 @@ def test_a_tagged_missing_survives_every_command_that_touches_the_data(
 # gone. They are kept now, beside the saved text rather than instead of it.
 
 
+def _ran_and_never_saved(db_session, project_id: str, text: str) -> None:
+    """The state a run left before a clean run kept its script.
+
+    Still real in every database that ran scripts before that change: the
+    run's text is recorded and nothing is saved. The editor and the Scripts
+    page go on handling it, so it is set up here directly rather than by a
+    run, which now keeps what ran.
+    """
+    from app.models import ProjectScript
+    from app.services import project_script
+
+    project_script.run(db_session, project_id, text)
+    row = db_session.scalars(
+        select(ProjectScript).where(ProjectScript.project_id == project_id)
+    ).one()
+    row.text, row.previous_text = "", ""
+    db_session.commit()
+
+
 def _script_as_seen(client, headers, project_id) -> dict:
     answered = client.get(f"/api/v1/projects/{project_id}/script", headers=headers)
     assert answered.status_code == 200, answered.text
     return answered.json()
 
 
-def test_a_run_that_was_never_saved_is_still_there_afterwards(
-    client, auth_headers, db_session, project
-):
-    """The fault this exists for: the editor opened on nothing."""
+def test_a_clean_run_keeps_the_script(client, auth_headers, db_session, project):
+    """The fault this answers: a script run, seen to work, never saved - and
+    so never re-run on the next export, which nobody could see."""
     from app.services import project_script
 
     project_script.run(db_session, project["id"], "use members\ngen adult = age >= 18")
     db_session.commit()
 
     seen = _script_as_seen(client, auth_headers, project["id"])
-    assert seen["text"] == "", "nothing was saved, and running must not save"
+    assert seen["text"] == "use members\ngen adult = age >= 18"
+    assert seen["unsaved_run"] == "", "what ran is what is saved, so nothing is offered"
+
+
+def test_a_run_from_before_runs_were_kept_is_still_there_afterwards(
+    client, auth_headers, db_session, project
+):
+    """The fault the recorded run exists for: the editor opened on nothing."""
+    _ran_and_never_saved(db_session, project["id"], "use members\ngen adult = age >= 18")
+
+    seen = _script_as_seen(client, auth_headers, project["id"])
+    assert seen["text"] == ""
     assert seen["unsaved_run"] == "use members\ngen adult = age >= 18"
 
 
@@ -390,10 +419,7 @@ def test_saving_what_was_recovered_ends_the_notice(
     client, auth_headers, db_session, project
 ):
     """Save keeps it, and the two agree from then on."""
-    from app.services import project_script
-
-    project_script.run(db_session, project["id"], "use members")
-    db_session.commit()
+    _ran_and_never_saved(db_session, project["id"], "use members")
     recovered = _script_as_seen(client, auth_headers, project["id"])["unsaved_run"]
 
     kept = client.put(
@@ -446,10 +472,7 @@ def test_a_deleted_script_takes_its_last_run_with_it(
 ):
     """Including the text the editor would otherwise offer back, which is the
     difference between deleting it and clearing the box."""
-    from app.services import project_script
-
-    project_script.run(db_session, project["id"], "use members")
-    db_session.commit()
+    _ran_and_never_saved(db_session, project["id"], "use members")
     assert _script_as_seen(client, auth_headers, project["id"])["unsaved_run"]
 
     client.delete(f"/api/v1/projects/{project['id']}/script", headers=auth_headers)
@@ -551,16 +574,13 @@ def test_a_box_of_spaces_is_not_a_script(client, auth_headers, db_session, proje
     """Saved whitespace counts as empty for whether it is saved, so it has to
     count as empty for what is counted too. It did not, so a card read "Run
     without being saved" over a run of three commands."""
-    from app.services import project_script
+    from app.models import ProjectScript
 
-    kept = client.put(
-        f"/api/v1/projects/{project['id']}/script",
-        headers=auth_headers,
-        json={"text": "   \n  \n"},
-    )
-    assert kept.status_code == 200, kept.text
-    db_session.expire_all()
-    project_script.run(db_session, project["id"], "use members\ngen a = 1\ngen b = 2")
+    _ran_and_never_saved(db_session, project["id"], "use members\ngen a = 1\ngen b = 2")
+    row = db_session.scalars(
+        select(ProjectScript).where(ProjectScript.project_id == project["id"])
+    ).one()
+    row.text = "   \n  \n"
     db_session.commit()
 
     mine = next(
@@ -584,9 +604,8 @@ def test_a_run_from_before_its_text_was_kept_says_so_and_can_go(
     to opened on an empty box with no Delete - so it could neither be read
     nor got rid of."""
     from app.models import ProjectScript
-    from app.services import project_script
 
-    project_script.run(db_session, project["id"], "use members\ngen a = 1")
+    _ran_and_never_saved(db_session, project["id"], "use members\ngen a = 1")
     # What such a row looks like: the column added after it ran is empty.
     row = db_session.scalars(
         select(ProjectScript).where(ProjectScript.project_id == project["id"])
@@ -614,13 +633,11 @@ def test_a_run_from_before_its_text_was_kept_says_so_and_can_go(
     assert mine() == []
 
 
-def test_a_run_behind_a_saved_script_is_offered_not_lost(
+def test_a_clean_run_over_a_saved_script_keeps_the_run_and_offers_the_old_one(
     client, auth_headers, db_session, project
 ):
-    """Saved A, ran B without saving. Both are real and they are different
-    things - one kept, one tried - so both have to be reachable. B was
-    recorded and then unreachable, which is a worse answer than not
-    recording it."""
+    """Saved A, ran B cleanly. B is the script now - it ran - and A is a
+    click away, so trying something over a good script costs nothing."""
     from app.services import project_script
 
     client.put(
@@ -633,8 +650,56 @@ def test_a_run_behind_a_saved_script_is_offered_not_lost(
     db_session.commit()
 
     seen = _script_as_seen(client, auth_headers, project["id"])
-    assert seen["text"] == "use members", "the saved script is still the script"
-    assert "gen tried = 1" in seen["unsaved_run"], "and the run is still there"
+    assert seen["text"] == "use members\ngen tried = 1"
+    assert seen["previous_text"] == "use members"
+
+
+def test_a_run_that_stops_on_a_line_leaves_the_saved_script_alone(
+    client, auth_headers, db_session, project
+):
+    """A broken draft never replaces a working script."""
+    from app.services import project_script
+
+    client.put(
+        f"/api/v1/projects/{project['id']}/script",
+        headers=auth_headers,
+        json={"text": "use members"},
+    )
+    db_session.expire_all()
+    with pytest.raises(ScriptError):
+        project_script.run(db_session, project["id"], "use members\ngen x = nonsense(age)")
+    db_session.commit()
+
+    seen = _script_as_seen(client, auth_headers, project["id"])
+    assert seen["text"] == "use members"
+    assert "nonsense" in seen["unsaved_run"], "the draft that failed is still offered"
+    assert seen["previous_text"] == ""
+
+
+def test_the_endpoint_says_whether_the_run_was_kept(client, auth_headers, project):
+    url = f"/api/v1/projects/{project['id']}/script/run"
+    first = client.post(url, headers=auth_headers, json={"text": "use members"})
+    assert first.status_code == 200, first.text
+    assert first.json()["kept"] is True
+    again = client.post(url, headers=auth_headers, json={"text": "use members"})
+    assert again.json()["kept"] is False, "it was already the saved script"
+
+
+def test_a_saved_script_behind_an_older_unsaved_run_is_offered_both_ways(
+    client, auth_headers, db_session, project
+):
+    """Saved A with an older run of B never saved - a state from before runs
+    were kept. Both stay reachable."""
+    _ran_and_never_saved(db_session, project["id"], "use members\ngen tried = 1")
+    client.put(
+        f"/api/v1/projects/{project['id']}/script",
+        headers=auth_headers,
+        json={"text": "use members"},
+    )
+
+    seen = _script_as_seen(client, auth_headers, project["id"])
+    assert seen["text"] == "use members"
+    assert "gen tried = 1" in seen["unsaved_run"]
 
 
 def test_a_run_that_never_started_keeps_the_last_real_run_s_dependencies(

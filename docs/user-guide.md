@@ -83,6 +83,17 @@ projects are something you opt into rather than something you must set up first.
 To create one: **Projects → New project**. You are added as its manager, so it
 stays visible to you.
 
+A project opens on its **Overview**: the whole of it in the order the data
+travels. *Data comes in* lists its connections - when each last imported and
+when it next will - and its datasets. *Joined* lists the merged datasets and
+whether each was rebuilt from the latest data. *Prepared* is the script:
+whether imports run it again, when it last ran, what it writes. *Shown* lists
+the dashboards and how old the data under each is, and *Watched* counts the
+indicators, open alerts and failing quality checks. Anything that needs a
+person - a failed import, a merge that could not be rebuilt, a script that
+failed or was never saved - is gathered at the top, each with a link to where
+it is put right.
+
 To put data in it, either choose the project when uploading, or open a dataset
 or dashboard and click the project button in its header to move it. Moving needs
 manager rights on *both* projects, so nobody can take a dataset out of a project
@@ -393,7 +404,14 @@ time if you want to choose the names yourself.
 An upload over 48 MB is handed to the background worker rather than read while
 you wait: the browser says *Importing…* and watches it, and a census roster
 export that takes minutes no longer depends on a connection staying open for
-all of them. An upload over the platform's limit is refused before it is sent,
+all of them.
+
+An upload over 90 MB is sent in pieces of 50 MB and put back together on the
+server before it is read. Nothing changes for you - one progress bar runs
+from empty to full - but it is what lets a large export through a proxy that
+refuses big requests (Cloudflare refuses anything over 100 MB), and a piece
+lost to a dropped connection is sent again on its own rather than starting the
+whole file over. An upload over the platform's limit is refused before it is sent,
 with the size and the limit in the message - the limit is `MAX_UPLOAD_MB` on
 the server, and an administrator can raise it.
 
@@ -855,8 +873,13 @@ the result a name of its own with `save as`.
 #### Saving, running, and running again
 
 **Save** keeps the script without running it, so one half-written at the end of
-the day survives being closed. **Run script** runs what is in the box, whether
-or not it has been saved.
+the day survives being closed. **Run script** runs what is in the box, and
+when every line goes through it keeps it as well - it is the script that will
+run again on the next export. A run that stops on a line keeps nothing, so a
+broken draft never replaces a working script.
+
+The script a clean run replaced is kept one deep: **Put the previous one in the
+box** brings it back, and Save keeps it again.
 
 The script is a recipe rather than a one-off. When a newer export replaces a
 dataset the script read, the script runs again from the top and rebuilds

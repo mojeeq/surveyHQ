@@ -1,6 +1,7 @@
 // Thin fetch wrapper: attaches the token, unwraps JSON and normalises errors.
 
 import { getProjectScope } from '@/hooks/useProjectScope'
+import type { Page } from './types'
 
 const TOKEN_KEY = 'surveyhq.token'
 const GRANT_PREFIX = 'surveyhq.share.'
@@ -242,15 +243,16 @@ export type UploadProgress = {
  */
 function uploadWithProgress<T>(
   path: string,
-  form: FormData,
+  form: FormData | Blob,
   onProgress?: (progress: UploadProgress) => void,
+  method: 'POST' | 'PUT' = 'POST',
 ): Promise<T> {
   const token = tokenStore.get()
   const grant = shareGrants.get(shareTokenOf(path))
 
   return new Promise<T>((resolve, reject) => {
     const xhr = new XMLHttpRequest()
-    xhr.open('POST', `/api/v1${path}`)
+    xhr.open(method, `/api/v1${path}`)
     if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
     if (grant) xhr.setRequestHeader('X-Share-Grant', grant)
     // Content-Type is left alone: the browser sets it with the multipart
@@ -342,11 +344,127 @@ export function withoutWords(status: number): string {
   return `Request failed with status ${status}`
 }
 
+/** Above this much in one upload, the files are sent in pieces.
+ *
+ *  Cloudflare refuses any request over 100 MB on its free and Pro plans, and
+ *  no setting on the server reaches it; plenty of other proxies have a ceiling
+ *  of their own. So a large upload goes as pieces every one of them accepts,
+ *  and the server joins them before reading the file. */
+export const STAGE_ABOVE = 90 * 1024 * 1024
+
+/** Try again on what a retry can mend - no connection, an overloaded proxy,
+ *  a server error - and not on a refusal, which will only be refused again. */
+export async function withRetries<T>(
+  attempt: () => Promise<T>,
+  tries = 4,
+  wait: (ms: number) => Promise<void> = (ms) => new Promise((done) => setTimeout(done, ms)),
+): Promise<T> {
+  for (let made = 1; ; made += 1) {
+    try {
+      return await attempt()
+    } catch (error) {
+      const status = error instanceof ApiError ? error.status : 0
+      const mendable = status === 0 || status === 429 || status >= 500
+      if (!mendable || made >= tries) throw error
+      await wait(1000 * 2 ** (made - 1))
+    }
+  }
+}
+
+/** The four requests a staged upload is made of, so the walk can be tested. */
+export interface StagingTransport {
+  start: (file: File) => Promise<{ id: string; chunk_size: number; pieces: number }>
+  send: (id: string, index: number, piece: Blob, onSent: (bytes: number) => void) => Promise<unknown>
+  complete: (id: string) => Promise<unknown>
+  post: <T>(form: FormData) => Promise<T>
+}
+
+/**
+ * Send files in pieces, then the upload form naming them.
+ *
+ * Each piece is tried again if the connection drops or a proxy turns it away,
+ * so a gigabyte that loses its connection at 90% resends one piece rather than
+ * the whole file. The progress reported spans every piece of every file, so
+ * the bar moves once from empty to full.
+ */
+export async function stagedUpload<T>(
+  form: FormData,
+  files: File[],
+  transport: StagingTransport,
+  onProgress?: (progress: UploadProgress) => void,
+): Promise<T> {
+  const total = files.reduce((sum, one) => sum + one.size, 0)
+  const started = Date.now()
+  const report = (sent: number) => {
+    if (!onProgress) return
+    const seconds = (Date.now() - started) / 1000
+    const rate = seconds > 0 ? sent / seconds : 0
+    onProgress({ sent, total, rate, remaining: rate > 0 ? (total - sent) / rate : null })
+  }
+  let done = 0
+  const ids: string[] = []
+  for (const file of files) {
+    const begun = await transport.start(file)
+    for (let index = 0; index < begun.pieces; index += 1) {
+      const piece = file.slice(index * begun.chunk_size, (index + 1) * begun.chunk_size)
+      await withRetries(() =>
+        transport.send(begun.id, index, piece, (bytes) => report(done + bytes)),
+      )
+      done += piece.size
+      report(done)
+    }
+    await withRetries(() => transport.complete(begun.id))
+    ids.push(begun.id)
+  }
+  const rest = new FormData()
+  form.forEach((value, key) => {
+    if (key !== 'file') rest.append(key, value)
+  })
+  rest.append('staged', JSON.stringify(ids))
+  return transport.post<T>(rest)
+}
+
+/** The largest page the list endpoints hand out. */
+const PAGE_LIMIT = 200
+
+/**
+ * Every page of a paged list, as one page.
+ *
+ * The lists that feed a picker or a grouping were fetched as a single page of
+ * 200 and the total ignored, so the 201st dataset was simply not there - not in
+ * the Datasets listing, not in any dataset picker - with nothing to say so. An
+ * office running a few census rounds passes 200 datasets without trying.
+ *
+ * `next` is how one page is fetched; it is a parameter so the walk itself can
+ * be tested without a server.
+ */
+export async function allPages<T>(
+  path: string,
+  next: (path: string) => Promise<Page<T>>,
+): Promise<Page<T>> {
+  const items: T[] = []
+  let total = 0
+  for (let offset = 0; ; offset += PAGE_LIMIT) {
+    const url = new URL(path, 'http://x')
+    url.searchParams.set('limit', String(PAGE_LIMIT))
+    url.searchParams.set('offset', String(offset))
+    const page = await next(`${url.pathname}${url.search}`)
+    items.push(...page.items)
+    total = page.total
+    // A short page is the last one, whatever the total said: rows deleted
+    // while walking would otherwise leave this asking for pages forever.
+    if (page.items.length < PAGE_LIMIT || items.length >= total) break
+  }
+  return { items, total, limit: items.length, offset: 0 }
+}
+
 export const api = {
   get: async <T>(path: string) => {
     const value = await request<T>(scopedGetPath(path))
     return filterScopedCollection(path, value)
   },
+  /** Every item of a paged list. Use it wherever the whole list is wanted. */
+  getAll: <T>(path: string) => allPages<T>(path, (one) => api.get<Page<T>>(one)),
   post: <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body }),
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', body }),
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PUT', body }),
@@ -355,7 +473,34 @@ export const api = {
     path: string,
     form: FormData,
     onProgress?: (progress: UploadProgress) => void,
-  ) => uploadWithProgress<T>(path, form, onProgress),
+  ) => {
+    const files = form.getAll('file').filter((one): one is File => one instanceof File)
+    const total = files.reduce((sum, one) => sum + one.size, 0)
+    if (path !== '/datasets/upload' || total <= STAGE_ABOVE) {
+      return uploadWithProgress<T>(path, form, onProgress)
+    }
+    return stagedUpload<T>(
+      form,
+      files,
+      {
+        start: (file) =>
+          request('/datasets/uploads', {
+            method: 'POST',
+            body: { filename: file.name, size: file.size },
+          }),
+        send: (id, index, piece, onSent) =>
+          uploadWithProgress(
+            `/datasets/uploads/${id}/pieces/${index}`,
+            piece,
+            (progress) => onSent(progress.sent),
+            'PUT',
+          ),
+        complete: (id) => request(`/datasets/uploads/${id}/complete`, { method: 'POST' }),
+        post: <R>(rest: FormData) => uploadWithProgress<R>(path, rest),
+      },
+      onProgress,
+    )
+  },
   blob: (path: string, body?: unknown) =>
     request<Blob>(path, { method: 'POST', body, raw: true }),
   // A GET that returns bytes rather than JSON. An <img src> cannot carry the

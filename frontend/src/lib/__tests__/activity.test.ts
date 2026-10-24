@@ -3,7 +3,15 @@
  */
 import { describe, expect, it } from 'vitest'
 
-import { currentStage, headline, justFinished, needsAttention, pollInterval, untilText } from '../activity'
+import {
+  boardFreshness,
+  currentStage,
+  headline,
+  justFinished,
+  needsAttention,
+  pollInterval,
+  untilText,
+} from '../activity'
 import type { Activity, ActivityJob, JobStage } from '../types'
 
 function stage(key: string, status: JobStage['status'], detail = ''): JobStage {
@@ -103,5 +111,27 @@ describe('when a scheduled import starts', () => {
 
   it('says due now once it is', () => {
     expect(untilText('2026-10-23T09:30:00Z', now)).toBe('due now')
+  })
+})
+
+describe('the line over a dashboard', () => {
+  const now = Date.now()
+  const ago = (minutes: number) => new Date(now - minutes * 60000).toISOString()
+  const ahead = (minutes: number) => new Date(now + minutes * 60000).toISOString()
+
+  it('says how old the data is and when it next moves', () => {
+    expect(boardFreshness({ imported_at: ago(120), next_import_at: ahead(25) }, '', now)).toBe(
+      'Data imported 2 h ago · next import in 25 min',
+    )
+  })
+
+  it('says so when nothing will move it', () => {
+    expect(boardFreshness({ imported_at: ago(5), next_import_at: null }, '', now)).toBe(
+      'Data imported 5 min ago · no import scheduled',
+    )
+  })
+
+  it('falls back to the fetch time only when the server does not say', () => {
+    expect(boardFreshness(undefined, ago(0), now)).toBe('Data as of just now')
   })
 })

@@ -15,7 +15,6 @@ import { useToast } from '@/hooks/useToast'
 import type {
 Chart,
 Dataset,
-Page,
 Project
 } from '@/lib/types'
 
@@ -46,7 +45,7 @@ export default function Explore() {
 
   const datasets = useQuery({
     queryKey: ['datasets', 'all'],
-    queryFn: () => api.get<Page<Dataset>>('/datasets?limit=200&status=ready'),
+    queryFn: () => api.getAll<Dataset>('/datasets?status=ready'),
   })
   const projects = useQuery({
     queryKey: ['projects'],

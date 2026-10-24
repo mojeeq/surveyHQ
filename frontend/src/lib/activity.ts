@@ -8,6 +8,7 @@
  * starts and ends; this decides how that reads in the top bar.
  */
 
+import { relativeTime } from './format'
 import type { Activity, ActivityJob, JobStage } from './types'
 
 /** Still to finish: queued, or running. */
@@ -75,4 +76,21 @@ export const STAGE_MARK: Record<JobStage['status'], string> = {
   warning: '!',
   failed: '✕',
   skipped: '–',
+}
+
+/** The line over a dashboard: how old its data is, and when it next moves.
+ *
+ *  It used to say when the browser fetched the numbers - "Data as of just
+ *  now" over figures imported days before - which answers nobody's question.
+ *  The fetch time is kept only for a server that does not say. */
+export function boardFreshness(
+  freshness: { imported_at: string | null; next_import_at: string | null } | undefined,
+  fetchedAt: string,
+  now: number = Date.now(),
+): string {
+  if (!freshness?.imported_at) return `Data as of ${fetchedAt ? relativeTime(fetchedAt) : 'just now'}`
+  const next = freshness.next_import_at
+    ? `next import ${untilText(freshness.next_import_at, now)}`
+    : 'no import scheduled'
+  return `Data imported ${relativeTime(freshness.imported_at)} · ${next}`
 }

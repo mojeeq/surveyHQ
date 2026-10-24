@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import ReactECharts from 'echarts-for-react'
+import ReactECharts from '@/components/ReactECharts'
 import { api } from '@/lib/api'
 import { buildSparkline, STATUS_COLORS } from '@/lib/charts'
 import { formatNumber, formatValue, relativeTime } from '@/lib/format'

@@ -214,6 +214,16 @@ def test_a_script_that_was_only_ever_run_is_named_rather_than_skipped_silently(
         json={"text": "use people\nkeep if age >= 18\nsave as adults"},
     )
     assert ran.status_code == 200, ran.text
+    # A clean run keeps its script now; this is the state one left before
+    # that, which databases still hold.
+    from app.models import ProjectScript
+
+    db_session.expire_all()
+    row = db_session.scalars(
+        select(ProjectScript).where(ProjectScript.project_id == project["id"])
+    ).one()
+    row.text = ""
+    db_session.commit()
 
     body = upload(client, auth_headers, project["id"], MORE_PEOPLE)
 
@@ -333,3 +343,114 @@ def test_a_sync_rebuilds_the_merges_then_runs_the_scripts_and_shows_each_step(
     assert stages["merges"]["detail"] == "1 rebuilt"
     assert stages["scripts"]["items"][0]["status"] == "ran"
     assert job.progress == 100.0
+
+
+def test_a_board_says_how_old_its_data_is_and_when_it_next_moves(
+    client, auth_headers, db_session, project
+):
+    """Through the merge to the connection feeding its source: the merged
+    dataset has no connection of its own, and is what the board shows."""
+    import datetime as dt
+
+    from app.models import Connection
+
+    merged = merge(client, auth_headers, db_session, project["id"])
+    people = named(db_session, project["id"], "people")
+    feed = Connection(
+        name="Field server",
+        base_url=BASE,
+        username="u",
+        password_encrypted="",
+        project_id=project["id"],
+        sync_enabled=True,
+        sync_interval_minutes=60,
+        last_sync_at=dt.datetime.now(dt.UTC) - dt.timedelta(minutes=15),
+    )
+    db_session.add(feed)
+    db_session.flush()
+    people.connection_id = feed.id
+    db_session.commit()
+
+    board = client.post(
+        "/api/v1/dashboards",
+        headers=auth_headers,
+        json={"name": "Fresh", "project_id": project["id"]},
+    ).json()
+    tile = client.post(
+        f"/api/v1/dashboards/{board['id']}/widgets",
+        headers=auth_headers,
+        json={"title": "Freshness", "widget_type": "freshness", "dataset_id": merged.id},
+    )
+    assert tile.status_code == 201, tile.text
+
+    data = client.post(f"/api/v1/dashboards/{board['id']}/data", headers=auth_headers, json={})
+    assert data.status_code == 200, data.text
+    fresh = data.json()["freshness"]
+    assert fresh["imported_at"] is not None
+    due = dt.datetime.fromisoformat(fresh["next_import_at"])
+    assert dt.timedelta(minutes=40) < due - dt.datetime.now(dt.UTC) < dt.timedelta(minutes=50)
+
+
+def test_a_merge_is_written_without_passing_through_a_frame(
+    client, auth_headers, db_session, project, monkeypatch
+):
+    """The joined table never sits in the worker's memory: at census scale
+    that was where the worker was killed, and the import with it."""
+    import app.services.query_engine as engine
+
+    def refuse(sql):
+        raise AssertionError("a merge built a frame")
+
+    monkeypatch.setattr(engine, "run_frame", refuse)
+    monkeypatch.setattr("app.services.relationships.run_frame", refuse)
+    merged = merge(client, auth_headers, db_session, project["id"])
+    assert merged.row_count == 3
+
+    upload(client, auth_headers, project["id"], MORE_PEOPLE)
+    merged = named(db_session, project["id"], "People + Households")
+    assert merged.row_count == 2
+    data = pd.read_parquet(merged.storage_path)
+    assert sorted(data["province"]) == ["Highland", "Northern"]
+    assert {v.name for v in merged.variables} >= {"hhid", "age", "province"}
+
+
+def test_the_project_reads_as_its_pipeline_with_what_needs_attention_on_top(
+    client, auth_headers, db_session, project
+):
+    """In, joined, prepared, shown, watched - and the two things on the way
+    that would otherwise go unnoticed gathered first."""
+    from app.models import ProjectScript
+
+    merged = merge(client, auth_headers, db_session, project["id"])
+    _as_made_before_recipes(db_session, merged)
+    ran = client.post(
+        f"/api/v1/projects/{project['id']}/script/run",
+        headers=auth_headers,
+        json={"text": "use people\nkeep if age >= 18\nsave as adults"},
+    )
+    assert ran.status_code == 200, ran.text
+    db_session.expire_all()
+    row = db_session.scalars(
+        select(ProjectScript).where(ProjectScript.project_id == project["id"])
+    ).one()
+    row.text = ""  # the state a run left before a clean run kept its script
+    db_session.commit()
+    upload(client, auth_headers, project["id"], MORE_PEOPLE)
+
+    seen = client.get(f"/api/v1/projects/{project['id']}/overview", headers=auth_headers)
+    assert seen.status_code == 200, seen.text
+    body = seen.json()
+
+    assert {one["name"] for one in body["sources"]} == {"people", "households"}
+    assert [one["name"] for one in body["outputs"]] == ["adults"]
+    [joined] = body["merges"]
+    assert joined["status"] == "stuck" and joined["message"]
+    assert body["script"]["exists"] and not body["script"]["saved"]
+    assert body["script"]["runs_on_import"] is False
+    kinds = [one["kind"] for one in body["attention"]]
+    assert "merge" in kinds and "script" in kinds
+
+
+def test_a_project_somebody_cannot_see_has_no_overview(client, auth_headers):
+    missing = client.get("/api/v1/projects/not-a-project/overview", headers=auth_headers)
+    assert missing.status_code == 404

@@ -146,15 +146,17 @@ def test_a_failing_line_says_which_and_keeps_what_ran(client, auth_headers, proj
     assert "never" not in names
 
 
-def test_running_something_other_than_what_is_stored(client, auth_headers, project):
-    """The editor tries a script before it is kept."""
+def test_running_something_other_than_what_is_stored_keeps_it(client, auth_headers, project):
+    """The editor runs what is in the box, and a clean run is what gets re-run
+    on the next export - so it is what is kept."""
     put_script(client, auth_headers, project, "* nothing yet")
     body = run_script(client, auth_headers, project, text=SCRIPT).json()
     assert [entry["name"] for entry in body["saved"]] == ["totals"]
     kept = client.get(
         f"/api/v1/projects/{project['id']}/script", headers=auth_headers
     ).json()
-    assert kept["text"] == "* nothing yet"
+    assert kept["text"] == SCRIPT
+    assert kept["previous_text"] == "* nothing yet"
 
 
 def test_what_the_last_run_touched_is_reported_by_name(client, auth_headers, project):

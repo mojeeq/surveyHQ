@@ -12,7 +12,6 @@ import type {
   CheckType,
   Dataset,
   FilterGroup,
-  Page,
   QualityRule,
   Severity,
 } from '@/lib/types'
@@ -108,7 +107,7 @@ export default function Quality() {
 
   const datasets = useQuery({
     queryKey: ['datasets', 'ready'],
-    queryFn: () => api.get<Page<Dataset>>('/datasets?limit=200&status=ready'),
+    queryFn: () => api.getAll<Dataset>('/datasets?status=ready'),
   })
 
   // This page is read one dataset at a time, so a project narrows which

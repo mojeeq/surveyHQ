@@ -20,7 +20,7 @@ import { useToast } from '@/hooks/useToast'
 import { by } from '@/lib/collections'
 import { formatNumber } from '@/lib/format'
 import { matchAgainst, parsePasted } from '@/lib/targets'
-import type { Dataset, Page, Variable } from '@/lib/types'
+import type { Dataset, Variable } from '@/lib/types'
 import { Card, EmptyState, Field, Modal, Spinner } from '@/components/ui'
 
 interface TargetSetSummary {
@@ -199,7 +199,7 @@ function TargetSetModal({
 
   const datasets = useQuery({
     queryKey: ['datasets', 'ready'],
-    queryFn: () => api.get<Page<Dataset>>('/datasets?limit=200&status=ready'),
+    queryFn: () => api.getAll<Dataset>('/datasets?status=ready'),
   })
   const dataset = useQuery({
     queryKey: ['dataset', datasetId],

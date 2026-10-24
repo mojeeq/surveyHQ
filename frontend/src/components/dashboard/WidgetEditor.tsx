@@ -17,7 +17,6 @@ import type {
   Chart,
   Dataset,
   Indicator,
-  Page,
   Widget,
 } from "@/lib/types";
 
@@ -243,7 +242,7 @@ export function AddWidgetModal({
   });
   const datasets = useQuery({
     queryKey: ["datasets", projectId],
-    queryFn: () => api.get<Page<Dataset>>(`/datasets?limit=200${scope}`),
+    queryFn: () => api.getAll<Dataset>(`/datasets?${scope}`),
     enabled: kind === "quality" || kind === "map" || kind === "freshness",
   });
   // The map needs the variables, to know which column holds the coordinates.
@@ -805,8 +804,8 @@ export function EditWidgetModal({
   const datasets = useQuery({
     queryKey: ["datasets", projectId],
     queryFn: () =>
-      api.get<Page<Dataset>>(
-        `/datasets?limit=200${projectId ? `&project_id=${projectId}` : ""}`,
+      api.getAll<Dataset>(
+        `/datasets?${projectId ? `&project_id=${projectId}` : ""}`,
       ),
     enabled: kind === "quality" || kind === "map" || kind === "freshness",
   });

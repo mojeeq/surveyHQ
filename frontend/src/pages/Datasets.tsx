@@ -7,7 +7,7 @@ import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
 import { formatBytes, formatNumber, relativeTime, timeLeft } from '@/lib/format'
 import { summarise } from '@/lib/inventory'
-import type { ArchiveImport, Dataset, Job, Page, Project } from '@/lib/types'
+import type { ArchiveImport, Dataset, Job, Project } from '@/lib/types'
 import ImportReview, { type Review } from '@/components/ImportReview'
 import BoundaryLibrary from '@/components/BoundaryLibrary'
 import ProjectPicker from '@/components/ProjectPicker'
@@ -104,7 +104,7 @@ export default function Datasets() {
   const datasets = useQuery({
     queryKey: ['datasets', search],
     queryFn: () =>
-      api.get<Page<Dataset>>(`/datasets?limit=200&search=${encodeURIComponent(search)}`),
+      api.getAll<Dataset>(`/datasets?search=${encodeURIComponent(search)}`),
   })
   const projects = useQuery({
     queryKey: ['projects'],

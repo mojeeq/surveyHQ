@@ -35,7 +35,7 @@ from app.models import (
     SyncRun,
     SyncStatus,
 )
-from app.services import file_source, snapshots, stata
+from app.services import file_source, snapshots, staged_uploads, stata
 from app.services.datasets import (
     ArchiveImport,
     load_archive_as_datasets,
@@ -1108,6 +1108,8 @@ def prune_history() -> dict[str, int]:
         removed["report_bursts"] = reports.sweep_bursts(db)
 
     logger.info("Pruned old records: %s", removed)
+    # Large uploads sent in pieces and never finished or used.
+    removed["staged_uploads"] = staged_uploads.prune()
     return removed
 
 

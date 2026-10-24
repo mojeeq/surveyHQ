@@ -71,7 +71,7 @@ function Users() {
 
   const users = useQuery({
     queryKey: ['users'],
-    queryFn: () => api.get<Page<User>>('/users?limit=200'),
+    queryFn: () => api.getAll<User>('/users'),
   })
 
   const create = useMutation({

@@ -101,6 +101,12 @@ class ProjectScript(UUIDMixin, TimestampMixin, Base):
     # fact that it ran - the editor opens on this when nothing is saved, and
     # the overview counts it rather than showing a script of no length.
     last_run_text: Mapped[str] = mapped_column(Text, default="", server_default="")
+    # The saved script a successful run replaced. A run that goes through
+    # keeps what ran, because a script that was run and never saved was never
+    # re-run on a newer export - which looked from outside like the platform
+    # ignoring it. Kept one deep so that trying something over a good script
+    # costs nothing: the editor offers this back.
+    previous_text: Mapped[str] = mapped_column(Text, default="", server_default="")
     # Where somebody put this script among the ones it shares a step with.
     # Only a tie-break: the steps themselves come from what the scripts read
     # and write, and no rank moves a script past something it waits for.
