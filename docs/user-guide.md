@@ -784,8 +784,16 @@ refused, with the dependency that decides it, since a script cannot run before
 the one whose output it reads.
 
 **Delete**, above the script, removes it and what its last run recorded. The
-datasets it built stay as they are. Opening another script with changes you
-have not saved asks first.
+datasets it built stay as they are.
+
+Changes you have not saved are kept, as an editor keeps an unsaved file open:
+leave for another page, open another script, or reload, and they are back in
+the box when you return, with a note saying when they were made and a
+**Discard them** to go back to the saved script. A script with changes waiting
+has an amber • after its name in the list, and the page opens on the script
+you had open last, with its last run's output. They are kept in this browser
+only - nothing reaches the server until you **Save** or **Run**, because the
+saved script is the one the next import runs.
 
 #### Naming a condition you use more than once
 
