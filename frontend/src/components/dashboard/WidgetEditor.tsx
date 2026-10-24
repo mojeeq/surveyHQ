@@ -572,6 +572,7 @@ export function AddWidgetModal({
                   value={tiles}
                   onChange={(event) => setTiles(event.target.value)}
                   placeholder={DEFAULT_TILES}
+                  data-suggest=""
                 />
               </Field>
 
@@ -1189,6 +1190,7 @@ export function EditWidgetModal({
               className="input"
               value={config.expired_text ?? ""}
               placeholder="Time is up"
+              data-suggest=""
               onChange={(event) => set({ expired_text: event.target.value })}
             />
           </Field>
@@ -1443,6 +1445,7 @@ export function EditWidgetModal({
               className="input font-mono text-xs"
               value={config.tiles ?? ""}
               placeholder={DEFAULT_TILES}
+              data-suggest=""
               onChange={(event) => set({ tiles: event.target.value })}
             />
           </Field>

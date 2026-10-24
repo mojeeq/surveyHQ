@@ -17,6 +17,13 @@ new line, and on a list that is offering you a choice it takes the choice.
 In the **Command** tab, where Enter has to be a new line, **Ctrl+Enter**
 (**Cmd+Enter** on a Mac) runs the script.
 
+Where an empty box shows a suggestion in grey - the name a saved chart will
+get, a variable's own name as its label, the folder imports are read from - a
+small **Tab** mark sits at its right while you are in it. **Tab** fills the
+suggestion in and leaves you in the box to change it; the next Tab moves on as
+usual, and **Shift+Tab** never fills anything. Grey text that is an instruction
+("Search datasets…") or says what an empty box means ("auto") is not offered.
+
 Dialogs are the platform's own rather than the browser's, so they carry its
 styling, say what a deletion will cost instead of asking whether you are sure,
 and can refuse a name that is already taken without throwing away what you

@@ -808,6 +808,7 @@ function LabelModal({
           value={label}
           onChange={(event) => setLabel(event.target.value)}
           placeholder={variable.name}
+          data-suggest=""
         />
       </Field>
 
@@ -834,6 +835,7 @@ function LabelModal({
                     className="input py-1 text-sm"
                     value={labels[code] ?? ''}
                     placeholder={code}
+                    data-suggest=""
                     onChange={(event) =>
                       setLabels({ ...labels, [code]: event.target.value })
                     }

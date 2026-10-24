@@ -410,6 +410,7 @@ function NewProjectModal({
           value={name}
           onChange={(event) => setName(event.target.value)}
           placeholder="Round 1 fieldwork"
+          data-suggest=""
         />
       </Field>
       <Field label="Description" hint="What this project covers.">

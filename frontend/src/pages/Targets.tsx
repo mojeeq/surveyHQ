@@ -328,6 +328,7 @@ function TargetSetModal({
             value={name}
             onChange={(event) => setName(event.target.value)}
             placeholder="Enumeration area quotas"
+            data-suggest=""
           />
         </Field>
         <Field label="Dataset" hint={editing ? 'Fixed: the groups belong to it.' : ''}>

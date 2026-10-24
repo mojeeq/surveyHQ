@@ -319,6 +319,7 @@ export default function ProjectDetail() {
               value={confirmName}
               onChange={(event) => setConfirmName(event.target.value)}
               placeholder={project.data.name}
+              data-suggest=""
               autoFocus
             />
           </Field>
