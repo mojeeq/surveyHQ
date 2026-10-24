@@ -39,7 +39,7 @@ from app.schemas.project import (
     ScriptRunIn,
 )
 from app.services import archive as archiving
-from app.services import project_script, stata
+from app.services import project_overview, project_script, stata
 from app.services.audit import record
 from app.services.dashboard_assets import remove_all
 from app.services.datasets import delete_dataset_files
@@ -538,6 +538,19 @@ def _to_out(project: Project, db: DbSession, user: User) -> ProjectOut:
     out.member_count = members
     out.your_role = effective_role(db, user, project.id)
     return out
+
+
+# --- the project as a pipeline ----------------------------------------------
+
+
+@router.get("/{project_id}/overview", response_model=dict)
+def read_overview(project_id: str, db: DbSession, user: CurrentUser) -> dict[str, Any]:
+    """The project in the order its data travels, and what needs attention.
+
+    See services/project_overview.py.
+    """
+    _visible_project(project_id, db, user)
+    return project_overview.overview(db, project_id)
 
 
 # --- the project's script ---------------------------------------------------

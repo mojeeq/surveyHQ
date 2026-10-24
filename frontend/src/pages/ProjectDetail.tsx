@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { ProjectOverview } from '@/components/ProjectOverview'
 import { ProjectScript } from '@/components/ProjectScript'
 import { api } from '@/lib/api'
 import { useDialog } from '@/hooks/useDialog'
@@ -30,8 +31,8 @@ import {
   Tabs,
 } from '@/components/ui'
 
-export type TabId = 'data' | 'model' | 'script' | 'members'
-const TAB_IDS: TabId[] = ['data', 'model', 'script', 'members']
+export type TabId = 'overview' | 'data' | 'model' | 'script' | 'members'
+const TAB_IDS: TabId[] = ['overview', 'data', 'model', 'script', 'members']
 
 /** Which tab a link is asking for, and which one may actually be drawn.
  *
@@ -43,8 +44,8 @@ const TAB_IDS: TabId[] = ['data', 'model', 'script', 'members']
  *  invites them to try.
  */
 export function tabFromUrl(asked: string | null, canManage: boolean): TabId {
-  const wanted = TAB_IDS.includes(asked as TabId) ? (asked as TabId) : 'data'
-  return wanted === 'script' && !canManage ? 'data' : wanted
+  const wanted = TAB_IDS.includes(asked as TabId) ? (asked as TabId) : 'overview'
+  return wanted === 'script' && !canManage ? 'overview' : wanted
 }
 
 const PROJECT_ROLES: { value: Role; label: string; description: string }[] = [
@@ -72,7 +73,7 @@ export default function ProjectDetail() {
   const setTab = (next: TabId) => {
     // Replace rather than push: flipping between tabs is not a journey to
     // retrace, and the back button should leave the project, not walk the tabs.
-    setParams(next === 'data' ? {} : { tab: next }, { replace: true })
+    setParams(next === 'overview' ? {} : { tab: next }, { replace: true })
   }
 
   const project = useQuery({
@@ -326,6 +327,9 @@ export default function ProjectDetail() {
 
       <Tabs
         tabs={[
+          // The project's front page: the whole pipeline, in the order the
+          // data travels, with what needs attention on top.
+          { id: 'overview', label: 'Overview' },
           {
             id: 'data',
             label: 'Data & dashboards',
@@ -342,7 +346,9 @@ export default function ProjectDetail() {
         onChange={(next) => setTab(next as TabId)}
       />
 
-      {shown === 'data' ? (
+      {shown === 'overview' ? (
+        <ProjectOverview projectId={id} canManage={canManage} openTab={(tab) => setTab(tab)} />
+      ) : shown === 'data' ? (
         <div className="mt-4 grid gap-4 lg:grid-cols-2">
           <Card title="Datasets" subtitle="Available as a source for anything in this project">
             {datasets.isLoading ? (

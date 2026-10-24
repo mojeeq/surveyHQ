@@ -412,3 +412,45 @@ def test_a_merge_is_written_without_passing_through_a_frame(
     data = pd.read_parquet(merged.storage_path)
     assert sorted(data["province"]) == ["Highland", "Northern"]
     assert {v.name for v in merged.variables} >= {"hhid", "age", "province"}
+
+
+def test_the_project_reads_as_its_pipeline_with_what_needs_attention_on_top(
+    client, auth_headers, db_session, project
+):
+    """In, joined, prepared, shown, watched - and the two things on the way
+    that would otherwise go unnoticed gathered first."""
+    from app.models import ProjectScript
+
+    merged = merge(client, auth_headers, db_session, project["id"])
+    _as_made_before_recipes(db_session, merged)
+    ran = client.post(
+        f"/api/v1/projects/{project['id']}/script/run",
+        headers=auth_headers,
+        json={"text": "use people\nkeep if age >= 18\nsave as adults"},
+    )
+    assert ran.status_code == 200, ran.text
+    db_session.expire_all()
+    row = db_session.scalars(
+        select(ProjectScript).where(ProjectScript.project_id == project["id"])
+    ).one()
+    row.text = ""  # the state a run left before a clean run kept its script
+    db_session.commit()
+    upload(client, auth_headers, project["id"], MORE_PEOPLE)
+
+    seen = client.get(f"/api/v1/projects/{project['id']}/overview", headers=auth_headers)
+    assert seen.status_code == 200, seen.text
+    body = seen.json()
+
+    assert {one["name"] for one in body["sources"]} == {"people", "households"}
+    assert [one["name"] for one in body["outputs"]] == ["adults"]
+    [joined] = body["merges"]
+    assert joined["status"] == "stuck" and joined["message"]
+    assert body["script"]["exists"] and not body["script"]["saved"]
+    assert body["script"]["runs_on_import"] is False
+    kinds = [one["kind"] for one in body["attention"]]
+    assert "merge" in kinds and "script" in kinds
+
+
+def test_a_project_somebody_cannot_see_has_no_overview(client, auth_headers):
+    missing = client.get("/api/v1/projects/not-a-project/overview", headers=auth_headers)
+    assert missing.status_code == 404

@@ -539,6 +539,8 @@ backend/app/
                   relationships.py    detecting and storing the links
                   derived.py          merges, and rebuilding what depends
                   pipeline.py         what follows new data in, in order
+                  staged_uploads.py   a large upload sent in pieces
+                  project_overview.py a project read as its pipeline
                   freshness.py        how recent a dataset's data is
 
                 preparing it
