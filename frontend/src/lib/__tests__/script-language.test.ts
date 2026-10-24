@@ -10,6 +10,7 @@ import { StringStream } from '@codemirror/language'
 import { describe, expect, it } from 'vitest'
 
 import {
+  acceptChange,
   completeAt,
   describeAt,
   indexLanguage,
@@ -182,6 +183,20 @@ describe('what is offered', () => {
     expect(answer?.options.find((one) => one.label === 'Household roster')?.insert).toBe('Household roster"')
   })
 
+  it('uses the closing quote the editor already typed rather than adding another', () => {
+    // `use "Hou|"`: the editor closed the quote when it was opened.
+    const doc = 'use "Hou"'
+    const answer = completeAt(doc, 8, index)
+    const roster = answer!.options.find((one) => one.label === 'Household roster')!
+    const change = acceptChange(doc, answer!.from, 8, roster)
+    const after = doc.slice(0, change.from) + change.insert + doc.slice(change.to)
+    expect(after).toBe('use "Household roster"')
+    expect(change.caret).toBe(after.length)
+    // With no closing quote there, it is added.
+    const open = acceptChange('use "Hou', 5, 8, roster)
+    expect('use "'.slice(0, open.from) + open.insert).toBe('use "Household roster"')
+  })
+
   it('offers the variables in memory, from the dataset loaded above', () => {
     expect(offered('use people\ndrop |')).toEqual(['if', 'hhid', 'age'])
     expect(offered('use "Household roster"\nreplace |')).toEqual(['hhid', 'province'])
@@ -218,6 +233,14 @@ describe('what is offered', () => {
     expect(offered('use people\ncollapse (|')).toEqual(['sum', 'mean'])
     expect(offered('use people\ncollapse (sum) age, by(|')).toEqual(['hhid', 'age'])
     expect(offered('use people\negen n = |')).toEqual(['total'])
+  })
+
+  it('offers the merged-in dataset\'s variables inside keepusing()', () => {
+    // merge checks keepusing() against the other dataset, not the one in memory.
+    expect(offered('use people\nmerge m:1 hhid using "Household roster", keepusing(|')).toEqual([
+      'hhid', 'province',
+    ])
+    expect(offered('use people\nmerge m:1 hhid using nowhere, keepusing(|')).toEqual([])
   })
 
   it('offers merge\'s shapes and label\'s kinds', () => {

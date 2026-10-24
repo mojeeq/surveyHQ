@@ -44,7 +44,7 @@ import { defaultKeymap, history, historyKeymap } from '@codemirror/commands'
 import { tags } from '@lezer/highlight'
 
 import { insertLine } from '@/lib/script-insert'
-import { completeAt, describeAt, scriptParser } from '@/lib/script-language'
+import { acceptChange, completeAt, describeAt, scriptParser } from '@/lib/script-language'
 import type { LanguageIndex } from '@/lib/script-language'
 
 export interface ScriptEditorHandle {
@@ -156,10 +156,10 @@ export const ScriptEditor = forwardRef<
               one.insert === undefined
                 ? undefined
                 : (target, _completion, from, to) => {
-                    const insert = one.insert!
+                    const change = acceptChange(target.state.sliceDoc(0, to + 1), from, to, one)
                     target.dispatch({
-                      changes: { from, to, insert },
-                      selection: { anchor: from + insert.length - (one.caretBack ?? 0) },
+                      changes: { from: change.from, to: change.to, insert: change.insert },
+                      selection: { anchor: change.caret },
                       userEvent: 'input.complete',
                     })
                     // Into the brackets of `by()` or `keep()`: what goes there

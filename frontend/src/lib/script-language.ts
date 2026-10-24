@@ -429,6 +429,25 @@ function functionSuggestions(index: LanguageIndex): Suggestion[] {
   }))
 }
 
+/** What accepting a suggestion changes: the text from `from` to `to`
+ *  replaced, and where the caret lands.
+ *
+ *  A suggestion ending in a closing quote uses one already after the caret
+ *  rather than adding a second. The editor types the closing quote along with
+ *  the opening one, so `use "Hou` is really `use "Hou|"` - and a second quote
+ *  made `use "Household roster""`, a name no dataset has.
+ */
+export function acceptChange(
+  doc: string,
+  from: number,
+  to: number,
+  suggestion: Suggestion,
+): { from: number; to: number; insert: string; caret: number } {
+  const insert = suggestion.insert ?? suggestion.label
+  const end = insert.endsWith('"') && doc[to] === '"' ? to + 1 : to
+  return { from, to: end, insert, caret: from + insert.length - (suggestion.caretBack ?? 0) }
+}
+
 function datasetSuggestions(index: LanguageIndex, quoted: boolean): Suggestion[] {
   const seen = new Set<DatasetNames>()
   const out: Suggestion[] = []
@@ -528,6 +547,27 @@ export function completeAt(doc: string, pos: number, index: LanguageIndex): Comp
     if (inOptions) {
       if (command.name === 'merge' && named === 'keep') {
         return { from, validFor, eager: true, options: index.vocabulary.merge_keep.map((one) => ({ label: one.name, type: 'constant' as const, info: one.summary })) }
+      }
+      // keepusing() names variables of the dataset being merged in, not of
+      // the one in memory: merge checks them against that one, so a name
+      // offered from memory is a name the run refuses.
+      if (command.name === 'merge' && named === 'keepusing') {
+        const using = /\busing\s+("[^"]*"|[^\s,]+)/i.exec(head.slice(0, comma))
+        const other = using
+          ? index.datasets.get(using[1].replace(/^"|"$/g, '').trim().toLowerCase())
+          : undefined
+        if (!other) return null
+        return {
+          from,
+          validFor,
+          eager: true,
+          options: other.variables.map((one) => ({
+            label: one.name,
+            type: 'variable' as const,
+            detail: one.label || undefined,
+            info: `In ${other.name}`,
+          })),
+        }
       }
       if (['generate', 'gen', 'g', 'ignore'].includes(named)) return null
       return { from, validFor, eager: true, options: variableSuggestions(doc, pos, index) }
