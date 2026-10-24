@@ -113,7 +113,7 @@ function scopedGetPath(path: string): string {
  * `/projects?scope=all` is the deliberate escape hatch used by the workspace
  * switcher: it must always be able to list the projects the user can switch to.
  */
-function filterScopedCollection<T>(requestedPath: string, value: T): T {
+export function filterScopedCollection<T>(requestedPath: string, value: T): T {
   const project = getProjectScope()
   if (project === null || !Array.isArray(value)) return value
 

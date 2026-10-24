@@ -8,6 +8,7 @@ import { formatNumber, relativeTime } from '@/lib/format'
 import type { Project, ProjectStatus } from '@/lib/types'
 import type { Direction, Sortable } from '@/lib/collections'
 import { arrange } from '@/lib/collections'
+import { useProjectScope } from '@/hooks/useProjectScope'
 import { useRemembered } from '@/hooks/useRemembered'
 import CollectionBar, {
   SortHeader,
@@ -74,10 +75,24 @@ export default function Projects() {
   )
   const [view, setView] = useRemembered<ViewMode>('projects.view', 'cards', VIEW_MODES)
 
+  // Every project, whatever workspace is chosen in the header. The workspace
+  // narrows the other pages to one project's data; applied here as well it
+  // left this page listing the one project already chosen, which is the one
+  // page whose job is to show them all and move between them. Its own key,
+  // because ['projects'] is the scoped list the Datasets page groups by.
   const projects = useQuery({
-    queryKey: ['projects'],
-    queryFn: () => api.get<Project[]>('/projects'),
+    queryKey: ['projects', 'all'],
+    queryFn: () => api.get<Project[]>('/projects?scope=all'),
   })
+  const { project: working, setProject } = useProjectScope()
+  /** Work in a project, as choosing it in the header does. */
+  const workIn = (next: string | null) => {
+    setProject(next)
+    // Older screens read the scope only when they fetch; see ProjectFilter.
+    queryClient.invalidateQueries()
+  }
+  const workingName =
+    working === '' ? 'the shared area' : projects.data?.find((one) => one.id === working)?.name
 
   const all = projects.data ?? []
   const shown = arrange(all, {
@@ -105,6 +120,18 @@ export default function Projects() {
           )
         }
       />
+
+      {working !== null && workingName && (
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-control bg-brand-50 px-3 py-2 text-sm text-brand-800 dark:bg-brand-500/10 dark:text-brand-200">
+          <span>
+            You are working in <span className="font-semibold">{workingName}</span>: the other
+            pages show its data only. Every project is listed here.
+          </span>
+          <button className="btn-ghost btn-sm" onClick={() => workIn(null)}>
+            Work across all projects
+          </button>
+        </div>
+      )}
 
       {!projects.isLoading && !projects.error && all.length > 0 && (
         <CollectionBar
@@ -160,7 +187,14 @@ export default function Projects() {
           />
         </Card>
       ) : view === 'list' ? (
-        <ProjectRows projects={shown} sort={sort} direction={direction} onSort={orderBy} />
+        <ProjectRows
+          projects={shown}
+          sort={sort}
+          direction={direction}
+          onSort={orderBy}
+          working={working}
+          onWorkIn={workIn}
+        />
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {shown.map((project) => (
@@ -172,7 +206,10 @@ export default function Projects() {
                 >
                   {project.name}
                 </Link>
-                <Badge tone={STATUS_TONE[project.status]}>{project.status}</Badge>
+                <span className="flex shrink-0 gap-1.5">
+                  {project.id === working && <Badge tone="info">Working here</Badge>}
+                  <Badge tone={STATUS_TONE[project.status]}>{project.status}</Badge>
+                </span>
               </div>
               {project.description && (
                 <p className="mt-1 line-clamp-2 text-sm text-ink-500">{project.description}</p>
@@ -199,6 +236,14 @@ export default function Projects() {
                   : 'Administrator access'}{' '}
                 · updated {relativeTime(project.updated_at)}
               </p>
+              {project.id !== working && (
+                <button
+                  className="btn-ghost btn-sm mt-2 self-start"
+                  onClick={() => workIn(project.id)}
+                >
+                  Work in this project
+                </button>
+              )}
             </article>
           ))}
         </div>
@@ -230,11 +275,16 @@ function ProjectRows({
   sort,
   direction,
   onSort,
+  working,
+  onWorkIn,
 }: {
   projects: Project[]
   sort: string
   direction: Direction
   onSort: (column: string, direction: Direction) => void
+  /** The workspace chosen in the header, which is marked here. */
+  working: string | null
+  onWorkIn: (project: string) => void
 }) {
   return (
     <div className="card overflow-x-auto">
@@ -248,6 +298,9 @@ function ProjectRows({
             <SortHeader label="Members" column="members" sort={sort} direction={direction} onSort={onSort} align="right" />
             <SortHeader label="Updated" column="updated" sort={sort} direction={direction} onSort={onSort} />
             <th className="px-3 py-2 text-left font-medium">Your role</th>
+            <th className="px-3 py-2 text-left font-medium">
+              <span className="sr-only">Workspace</span>
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -288,6 +341,15 @@ function ProjectRows({
                 {project.your_role && project.your_role !== 'admin'
                   ? project.your_role
                   : 'Administrator'}
+              </td>
+              <td className="whitespace-nowrap px-3 py-2.5 text-right">
+                {project.id === working ? (
+                  <Badge tone="info">Working here</Badge>
+                ) : (
+                  <button className="btn-ghost btn-sm" onClick={() => onWorkIn(project.id)}>
+                    Work here
+                  </button>
+                )}
               </td>
             </tr>
           ))}
