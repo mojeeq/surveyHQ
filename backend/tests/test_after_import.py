@@ -389,3 +389,26 @@ def test_a_board_says_how_old_its_data_is_and_when_it_next_moves(
     assert fresh["imported_at"] is not None
     due = dt.datetime.fromisoformat(fresh["next_import_at"])
     assert dt.timedelta(minutes=40) < due - dt.datetime.now(dt.UTC) < dt.timedelta(minutes=50)
+
+
+def test_a_merge_is_written_without_passing_through_a_frame(
+    client, auth_headers, db_session, project, monkeypatch
+):
+    """The joined table never sits in the worker's memory: at census scale
+    that was where the worker was killed, and the import with it."""
+    import app.services.query_engine as engine
+
+    def refuse(sql):
+        raise AssertionError("a merge built a frame")
+
+    monkeypatch.setattr(engine, "run_frame", refuse)
+    monkeypatch.setattr("app.services.relationships.run_frame", refuse)
+    merged = merge(client, auth_headers, db_session, project["id"])
+    assert merged.row_count == 3
+
+    upload(client, auth_headers, project["id"], MORE_PEOPLE)
+    merged = named(db_session, project["id"], "People + Households")
+    assert merged.row_count == 2
+    data = pd.read_parquet(merged.storage_path)
+    assert sorted(data["province"]) == ["Highland", "Northern"]
+    assert {v.name for v in merged.variables} >= {"hhid", "age", "province"}

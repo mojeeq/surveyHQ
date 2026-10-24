@@ -10,6 +10,7 @@ replacement re-runs every merge that stands on what was replaced.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -19,8 +20,10 @@ from app.db.base import utcnow
 from app.models import Dataset, DatasetRelationship
 from app.models.relationship import KeyMatch
 from app.services.datasets import _apply_ingest, dataset_directory
-from app.services.ingest import ingest_frame
-from app.services.relationships import merge_frames, unmatched_warning
+from app.services.ingest import IngestResult
+from app.services.query_engine import copy_to_parquet
+from app.services.relationships import merge_sql, unmatched_warning
+from app.services.stata_frame import columns_of, row_count, variables_of
 
 logger = get_logger(__name__)
 
@@ -63,9 +66,17 @@ def run_merge(
     left: Dataset,
     right: Dataset,
 ) -> None:
-    """Join left to right per the target's stored derivation, into the target."""
+    """Join left to right per the target's stored derivation, into the target.
+
+    Written straight from DuckDB to Parquet. It used to come back as a pandas
+    frame and be ingested from there, which held the whole joined table in the
+    worker's memory - at census scale, a person file joined to its
+    households, the point where the worker was killed and the import with it.
+    The sources are datasets already, cleaned and typed, so there is nothing
+    for a frame to add on the way.
+    """
     derivation = target.derivation or {}
-    frame = merge_frames(
+    sql = merge_sql(
         left,
         right,
         relationship.left_variable,
@@ -75,6 +86,11 @@ def run_merge(
         prefix=derivation.get("prefix", ""),
         match=relationship.key_match,
     )
+    directory = dataset_directory(target.id)
+    directory.mkdir(parents=True, exist_ok=True)
+    parquet = directory / f"data-{uuid4().hex}.parquet"
+    copy_to_parquet(sql, str(parquet))
+    rows = row_count(parquet)
 
     labels = {v.name: v.label for v in left.variables if v.label}
     value_labels = {v.name: v.value_labels for v in left.variables if v.value_labels}
@@ -93,17 +109,28 @@ def run_merge(
         relationship.right_variable,
         relationship.key_match,
     )
-    if derivation.get("how") == "left" and len(frame) > left.row_count:
+    if derivation.get("how") == "left" and rows > left.row_count:
         # A left join that grows the row count means the right side had several
         # matches per key, which is a fact about the data worth stating.
         warnings.append(
-            f"The join produced {len(frame):,} rows from {left.row_count:,}, because "
+            f"The join produced {rows:,} rows from {left.row_count:,}, because "
             f"'{right.name}' has more than one row per key. Each left row is repeated."
         )
+    if rows == 0:
+        warnings.append("The file contains no data rows.")
     _apply_ingest(
         db,
         target,
-        ingest_frame(frame, labels, value_labels, dataset_directory(target.id), warnings),
+        IngestResult(
+            parquet_path=parquet,
+            row_count=rows,
+            column_count=len(columns_of(parquet)),
+            file_size=parquet.stat().st_size,
+            # The profiler a script's `save as` uses, companions included: a
+            # tagged-missing column carried from either side stays hidden.
+            variables=variables_of(parquet, labels, value_labels),
+            warnings=warnings,
+        ),
     )
 
 

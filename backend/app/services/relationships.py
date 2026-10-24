@@ -347,11 +347,33 @@ def merge_frames(
     prefix: str = "",
     match: KeyMatch = KeyMatch.exact,
 ) -> pd.DataFrame:
-    """Join two datasets on their related key.
+    """Join two datasets on their related key, as a frame.
 
-    Reads through DuckDB rather than loading both into pandas and merging: the
-    join happens over Parquet, so only the columns asked for are read and the
-    memory cost is the result rather than both inputs.
+    For a caller that wants the rows in hand. Building a merged dataset does
+    not: see `merge_sql`, which derived.run_merge writes straight to Parquet.
+    """
+    # Through DuckDB's own conversion rather than a list of lists: building a
+    # Python object per cell cost fourteen seconds and 400 MB of heap on a
+    # 200,000-row join before anything had been done with it.
+    return run_frame(
+        merge_sql(left, right, left_variable, right_variable, how, columns, prefix, match)
+    )
+
+
+def merge_sql(
+    left: Dataset,
+    right: Dataset,
+    left_variable: str,
+    right_variable: str,
+    how: str = "left",
+    columns: list[str] | None = None,
+    prefix: str = "",
+    match: KeyMatch = KeyMatch.exact,
+) -> str:
+    """The query joining two datasets on their related key.
+
+    The join happens in DuckDB over Parquet, so only the columns asked for are
+    read and nothing of either input is loaded into Python.
     """
     check_key_types(left, right, left_variable, right_variable, match)
 
@@ -385,7 +407,4 @@ def merge_frames(
         f"{join} read_parquet({_quote_path(right.storage_path)}) r "
         f"ON {join_condition(left, right, left_variable, right_variable, match)}"
     )
-    # Through DuckDB's own conversion rather than a list of lists: building a
-    # Python object per cell cost fourteen seconds and 400 MB of heap on a
-    # 200,000-row join before anything had been done with it.
-    return run_frame(sql)
+    return sql
