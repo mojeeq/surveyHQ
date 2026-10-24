@@ -28,6 +28,7 @@ import { useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ProjectScript } from '@/components/ProjectScript'
 import { api } from '@/lib/api'
+import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { relativeTime } from '@/lib/format'
 import { lastOpen, rememberOpen, useDrafts } from '@/lib/script-drafts'
@@ -73,7 +74,8 @@ export default function Scripts() {
   const [params, setParams] = useSearchParams()
   // The scripts with changes nobody has saved yet, which are kept while the
   // editor is away and marked in the list. See `script-drafts`.
-  const drafts = useDrafts()
+  const owner = useAuth().user?.id ?? ''
+  const drafts = useDrafts(owner)
 
   const scripts = useQuery({
     queryKey: ['scripts'],
@@ -133,11 +135,11 @@ export default function Scripts() {
   // would carry off whatever had been typed in its place.
   useEffect(() => {
     if (asked) {
-      rememberOpen(asked)
+      rememberOpen(owner, asked)
       return
     }
     if (scripts.isLoading) return
-    const back = lastOpen()
+    const back = lastOpen(owner)
     const known =
       !!back &&
       (places.some((one) => one.project_id === back) ||
@@ -147,7 +149,7 @@ export default function Scripts() {
     if (back && !known && projects.isLoading) return
     const target = known ? back : listed[0]?.project_id
     if (target) setParams({ project: target }, { replace: true })
-  }, [asked, listed, places, projects.data, projects.isLoading, scripts.isLoading, setParams])
+  }, [asked, listed, places, projects.data, projects.isLoading, scripts.isLoading, setParams, owner])
 
   if (scripts.isLoading) return <Loading />
   if (scripts.error) return <ErrorNote error={scripts.error} retry={scripts.refetch} />

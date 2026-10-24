@@ -3,7 +3,8 @@
  *
  * Leaving the Scripts page used to lose whatever had not been saved. Drafts
  * are kept now - in memory for moving around the app, and in the browser's
- * storage for a reload - and these are the rules they are kept by.
+ * storage for a reload - each belonging to the account that typed it, and
+ * these are the rules they are kept by.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -47,65 +48,105 @@ describe('drafts', () => {
 
   it('keeps a draft until it is cleared', async () => {
     const drafts = await fresh()
-    expect(drafts.writeDraft('p1', draft)).toBe(true)
-    expect(drafts.readDraft('p1')).toEqual(draft)
-    expect(drafts.draftedScripts().has('p1')).toBe(true)
-    drafts.clearDraft('p1')
-    expect(drafts.readDraft('p1')).toBeNull()
-    expect(drafts.draftedScripts().has('p1')).toBe(false)
+    expect(drafts.writeDraft('ann', 'p1', draft)).toBe(true)
+    expect(drafts.readDraft('ann', 'p1')).toEqual(draft)
+    expect(drafts.draftedScripts('ann').has('p1')).toBe(true)
+    drafts.clearDraft('ann', 'p1')
+    expect(drafts.readDraft('ann', 'p1')).toBeNull()
+    expect(drafts.draftedScripts('ann').has('p1')).toBe(false)
     expect(storage.items.size).toBe(0)
   })
 
   it('outlives a reload, by way of the browser\'s storage', async () => {
     const before = await fresh()
-    before.writeDraft('p1', draft)
+    before.writeDraft('ann', 'p1', draft)
     const after = await fresh()
-    expect(after.readDraft('p1')).toEqual(draft)
-    expect(after.draftedScripts()).toEqual(new Set(['p1']))
+    expect(after.readDraft('ann', 'p1')).toEqual(draft)
+    expect(after.draftedScripts('ann')).toEqual(new Set(['p1']))
+  })
+
+  it('is the account\'s that typed it, not the next one to sign in', async () => {
+    // A shared office computer: one person signs out, another signs in with
+    // the right to edit the same project.
+    const drafts = await fresh()
+    drafts.writeDraft('ann', 'p1', draft)
+    expect(drafts.readDraft('ben', 'p1')).toBeNull()
+    expect(drafts.draftedScripts('ben').size).toBe(0)
+    drafts.clearDraft('ben', 'p1')
+    expect(drafts.readDraft('ann', 'p1')).toEqual(draft)
+    const reloaded = await fresh()
+    expect(reloaded.readDraft('ben', 'p1')).toBeNull()
+    expect(reloaded.readDraft('ann', 'p1')).toEqual(draft)
+  })
+
+  it('keeps nothing with nobody signed in', async () => {
+    const drafts = await fresh()
+    expect(drafts.writeDraft('', 'p1', draft)).toBe(false)
+    expect(drafts.readDraft('', 'p1')).toBeNull()
+    expect(storage.items.size).toBe(0)
+  })
+
+  it('leaves a draft from before drafts had owners alone', async () => {
+    storage.items.set('surveyhq.scriptDraft.p1', JSON.stringify(draft))
+    const drafts = await fresh()
+    expect(drafts.readDraft('ann', 'p1')).toBeNull()
+    expect(drafts.draftedScripts('ann').size).toBe(0)
   })
 
   it('still covers moving around the app where storage is refused, and says so', async () => {
     vi.stubGlobal('window', { localStorage: fakeStorage(true) })
     const drafts = await fresh()
-    expect(drafts.writeDraft('p1', draft)).toBe(false)
-    expect(drafts.readDraft('p1')).toEqual(draft)
+    expect(drafts.writeDraft('ann', 'p1', draft)).toBe(false)
+    expect(drafts.readDraft('ann', 'p1')).toEqual(draft)
   })
 
   it('works with no storage at all', async () => {
     vi.stubGlobal('window', undefined)
     const drafts = await fresh()
-    expect(drafts.writeDraft('p1', draft)).toBe(false)
-    expect(drafts.readDraft('p1')).toEqual(draft)
-    expect(drafts.lastOpen()).toBeNull()
+    expect(drafts.writeDraft('ann', 'p1', draft)).toBe(false)
+    expect(drafts.readDraft('ann', 'p1')).toEqual(draft)
+    expect(drafts.lastOpen('ann')).toBeNull()
   })
 
   it('tells the list only when a script gains or loses a draft', async () => {
     const drafts = await fresh()
-    drafts.writeDraft('p1', draft)
-    const first = drafts.draftedScripts()
-    drafts.writeDraft('p1', { ...draft, text: 'use people' })
+    drafts.writeDraft('ann', 'p1', draft)
+    const first = drafts.draftedScripts('ann')
+    drafts.writeDraft('ann', 'p1', { ...draft, text: 'use people' })
     // A keystroke in a script that has a draft already is the same list.
-    expect(drafts.draftedScripts()).toBe(first)
-    drafts.writeDraft('p2', draft)
-    expect(drafts.draftedScripts()).not.toBe(first)
+    expect(drafts.draftedScripts('ann')).toBe(first)
+    drafts.writeDraft('ann', 'p2', draft)
+    expect(drafts.draftedScripts('ann')).not.toBe(first)
   })
 
   it('ignores what it cannot read', async () => {
-    storage.items.set('surveyhq.scriptDraft.p1', '{not json')
-    storage.items.set('surveyhq.scriptDraft.p2', JSON.stringify({ base: 'x' }))
+    storage.items.set('surveyhq.scriptDraft.ann.p1', '{not json')
+    storage.items.set('surveyhq.scriptDraft.ann.p2', JSON.stringify({ base: 'x' }))
     const drafts = await fresh()
-    expect(drafts.readDraft('p1')).toBeNull()
-    expect(drafts.readDraft('p2')).toBeNull()
+    expect(drafts.readDraft('ann', 'p1')).toBeNull()
+    expect(drafts.readDraft('ann', 'p2')).toBeNull()
   })
 
-  it('remembers the last run\'s output and the script that was open', async () => {
+  it('keeps what a draft was begun from until it is saved or thrown away', async () => {
+    const drafts = await fresh()
+    // Begun over the saved script...
+    const begun = drafts.draftFrom(null, 'use people\ndrop x', 'use people', 't1')
+    expect(begun.base).toBe('use people')
+    // ...and reopened after somebody saved another: still begun from the first.
+    const reopened = drafts.draftFrom(begun, 'use people\ndrop x', 'use people\ngen y = 2', 't2')
+    expect(reopened).toEqual({ text: 'use people\ndrop x', base: 'use people', at: 't2' })
+  })
+
+  it('remembers the last run\'s output and the script that was open, per account', async () => {
     const drafts = await fresh()
     const log = [{ command: 'use people', message: 'Loaded people', ok: true }]
-    drafts.rememberLog('p1', log)
-    expect(drafts.recallLog('p1')).toEqual(log)
-    drafts.rememberLog('p1', [])
-    expect(drafts.recallLog('p1')).toEqual([])
-    drafts.rememberOpen('p9')
-    expect(drafts.lastOpen()).toBe('p9')
+    drafts.rememberLog('ann', 'p1', log)
+    expect(drafts.recallLog('ann', 'p1')).toEqual(log)
+    expect(drafts.recallLog('ben', 'p1')).toEqual([])
+    drafts.rememberLog('ann', 'p1', [])
+    expect(drafts.recallLog('ann', 'p1')).toEqual([])
+    drafts.rememberOpen('ann', 'p9')
+    expect(drafts.lastOpen('ann')).toBe('p9')
+    expect(drafts.lastOpen('ben')).toBeNull()
   })
 })

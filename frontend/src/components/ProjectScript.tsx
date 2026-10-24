@@ -32,9 +32,17 @@ import { ScriptEditor } from '@/components/ScriptEditor'
 import type { ScriptEditorHandle } from '@/components/ScriptEditor'
 import { api } from '@/lib/api'
 import { relativeTime } from '@/lib/format'
+import { useAuth } from '@/hooks/useAuth'
 import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
-import { clearDraft, readDraft, recallLog, rememberLog, writeDraft } from '@/lib/script-drafts'
+import {
+  clearDraft,
+  draftFrom,
+  readDraft,
+  recallLog,
+  rememberLog,
+  writeDraft,
+} from '@/lib/script-drafts'
 import type { Draft, LogLine } from '@/lib/script-drafts'
 import { EMPTY_VOCABULARY, indexLanguage } from '@/lib/script-language'
 import type { ScriptNames, Vocabulary } from '@/lib/script-language'
@@ -204,15 +212,17 @@ export function ProjectScript({
   const queryClient = useQueryClient()
   const ask = useDialog()
   const toast = useToast()
+  // Drafts belong to the account that typed them. See `script-drafts`.
+  const owner = useAuth().user?.id ?? ''
   const [text, setText] = useState('')
   // What the editor held when it was last saved, so "unsaved changes" is a
   // comparison rather than a flag somebody has to remember to clear.
   const [saved, setSaved] = useState('')
   // The output of the last run here, kept while the page is away: coming back
   // to a script shows what it just did. See `script-drafts`.
-  const [log, setLogShown] = useState<LogLine[]>(() => recallLog(projectId))
+  const [log, setLogShown] = useState<LogLine[]>(() => recallLog(owner, projectId))
   const setLog = (next: LogLine[]) => {
-    rememberLog(projectId, next)
+    rememberLog(owner, projectId, next)
     setLogShown(next)
   }
   /** The draft put back in the box when the editor opened, if there was one,
@@ -241,6 +251,11 @@ export function ProjectScript({
   const script = useQuery({
     queryKey: ['project-script', projectId],
     queryFn: () => api.get<Script>(`/projects/${projectId}/script`),
+    // Asked again whenever the editor opens, rather than shown from a copy up
+    // to half a minute old. Somebody coming back to a draft has to see the
+    // script as it is now, or a colleague's save in the meantime goes
+    // unmentioned and Save writes over it.
+    refetchOnMount: 'always',
   })
 
   // What the editor colours and offers: the language, read off the engine
@@ -319,15 +334,21 @@ export function ProjectScript({
   // been filled for the project. After the fill, so the editor's own marker
   // is on what the project opens on and the draft reads as theirs - which
   // it is - and no later answer writes over it. See `fillWith`.
+  //
+  // Not settled for a reader who may not edit: nothing is kept for them, and
+  // if the right to edit arrives later - the page learning it a moment after
+  // the script - the draft is put back then rather than having been passed
+  // over, and then cleared as though there were none.
   useEffect(() => {
-    if (draftSettled || script.data === undefined || filledFor.current !== projectId) return
-    const draft = canEdit ? readDraft(projectId) : null
+    if (draftSettled || !canEdit || script.data === undefined) return
+    if (filledFor.current !== projectId) return
+    const draft = readDraft(owner, projectId)
     if (draft && draft.text !== openingText(script.data)) {
       setText(draft.text)
       setRestored(draft)
     }
     setDraftSettled(true)
-  }, [draftSettled, script.data, projectId, canEdit, text])
+  }, [draftSettled, script.data, projectId, canEdit, owner, text])
 
   const keep = useMutation({
     mutationFn: (next: string) =>
@@ -482,17 +503,17 @@ export function ProjectScript({
     if (!draftSettled || !canEdit || script.data === undefined) return
     if (wouldLose) {
       setDraftKept(
-        writeDraft(projectId, {
-          text,
-          base: openingText(script.data),
-          at: new Date().toISOString(),
-        }),
+        writeDraft(
+          owner,
+          projectId,
+          draftFrom(readDraft(owner, projectId), text, openingText(script.data), new Date().toISOString()),
+        ),
       )
     } else {
-      clearDraft(projectId)
+      clearDraft(owner, projectId)
       setRestored(null)
     }
-  }, [draftSettled, canEdit, script.data, wouldLose, text, projectId])
+  }, [draftSettled, canEdit, script.data, wouldLose, text, projectId, owner])
 
   // Closing the tab loses a draft only where the browser would not keep it,
   // and only then is it left to the browser's own question.
