@@ -520,9 +520,10 @@ The default is sized for one field team. For a larger operation:
 A browser upload is the wrong tool for a census round. A 2.3 GB roster export
 wants one connection held open for the whole transfer, roughly twice its size
 in transient disk, and agreement from every proxy in the way about how large a
-request body may be - and losing the connection at 90% means starting again.
-Cloudflare, for one, caps request bodies between 100 MB and 200 MB on its
-non-enterprise plans, which no setting in this platform can lift.
+request body may be. The browser sends anything over 90 MB in 50 MB pieces,
+which gets it past Cloudflare's 100 MB cap and resends only a piece lost to a
+dropped connection - but the transfer still rides on a browser tab staying
+open for as long as it takes.
 
 Copy the file to the server with something that resumes, and import it there:
 
@@ -640,9 +641,10 @@ grep -n max_size /etc/caddy/Caddyfile                      # host Caddy
 Set `client_max_body_size 0;` and `proxy_request_buffering off;` in the
 server block, or drop the Caddy `request_body` limit, then reload the proxy.
 See *Putting it behind HTTPS* for the whole block. A CDN's limit (Cloudflare's
-free plan stops at 100 MB) cannot be raised from here: upload through an
-address that does not pass through it, or import the file from the server -
-*Importing from the server* below.
+free plan stops at 100 MB) cannot be raised from here, but it does not need to
+be: the browser sends any upload over 90 MB in 50 MB pieces. A 413 behind one
+therefore means a proxy whose ceiling is below 50 MB - nginx's 1 MB default,
+almost always.
 
 **"Could not reach the server" in the browser**
 
