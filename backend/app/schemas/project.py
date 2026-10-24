@@ -109,3 +109,6 @@ class ScriptOut(BaseModel):
     writes: list[str] = Field(default_factory=list)
     last_run_at: dt.datetime | None = None
     last_error: str = ""
+    # The saved script the last successful run replaced, so it can be put
+    # back. Empty when there was none, or when it is what is saved now.
+    previous_text: str = ""

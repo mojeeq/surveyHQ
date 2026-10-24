@@ -60,8 +60,8 @@ def run(db: Session, project_id: str, text: str | None = None) -> stata.ScriptOu
     """Run the project's script and remember what it touched.
 
     `text` runs something other than what is stored, which is what the editor
-    does: a script is tried before it is kept, and a run that fails should not
-    have to be undone by hand.
+    does. A run of it that goes through keeps it - see `_keep` - and one that
+    stops on a line does not, so a broken draft never replaces a working script.
     """
     script = script_for(db, project_id)
     source = script.text if text is None else text
@@ -81,7 +81,29 @@ def run(db: Session, project_id: str, text: str | None = None) -> stata.ScriptOu
         _remember_attempt(db, script, ran=source)
         raise
     _remember(db, script, read=outcome.read, written=outcome.written, error="", ran=source)
+    if text is not None:
+        _keep(script, text)
+        db.flush()
     return outcome
+
+
+def _keep(script: ProjectScript, text: str) -> None:
+    """A run that went through keeps what ran.
+
+    Running and saving were separate, so that a script could be tried without
+    being kept. In practice that was how scripts went missing from the nightly
+    re-run: somebody ran theirs, saw it work, closed the tab, and the next
+    export re-ran nothing because nothing had been saved. A clean run is the
+    strongest sign there is that the text is the one wanted.
+
+    The script it replaces is kept one deep, so trying something over a good
+    script is a click from undone.
+    """
+    if not text.strip() or text == script.text:
+        return
+    if script.text.strip():
+        script.previous_text = script.text
+    script.text = text
 
 
 def _remember_attempt(db: Session, script: ProjectScript, *, ran: str) -> None:

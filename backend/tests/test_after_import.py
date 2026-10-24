@@ -214,6 +214,16 @@ def test_a_script_that_was_only_ever_run_is_named_rather_than_skipped_silently(
         json={"text": "use people\nkeep if age >= 18\nsave as adults"},
     )
     assert ran.status_code == 200, ran.text
+    # A clean run keeps its script now; this is the state one left before
+    # that, which databases still hold.
+    from app.models import ProjectScript
+
+    db_session.expire_all()
+    row = db_session.scalars(
+        select(ProjectScript).where(ProjectScript.project_id == project["id"])
+    ).one()
+    row.text = ""
+    db_session.commit()
 
     body = upload(client, auth_headers, project["id"], MORE_PEOPLE)
 

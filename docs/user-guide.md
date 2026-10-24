@@ -855,8 +855,13 @@ the result a name of its own with `save as`.
 #### Saving, running, and running again
 
 **Save** keeps the script without running it, so one half-written at the end of
-the day survives being closed. **Run script** runs what is in the box, whether
-or not it has been saved.
+the day survives being closed. **Run script** runs what is in the box, and
+when every line goes through it keeps it as well - it is the script that will
+run again on the next export. A run that stops on a line keeps nothing, so a
+broken draft never replaces a working script.
+
+The script a clean run replaced is kept one deep: **Put the previous one in the
+box** brings it back, and Save keeps it again.
 
 The script is a recipe rather than a one-off. When a newer export replaces a
 dataset the script read, the script runs again from the top and rebuilds

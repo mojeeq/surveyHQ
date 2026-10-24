@@ -6,9 +6,12 @@
  * means reading two of them, joining them and writing out a third. A box that
  * could only ever see one file had nowhere to put that.
  *
- * Saving and running are separate on purpose. A script half-written at the end
- * of the day should survive being closed, and running it then would build half
- * of something.
+ * Save keeps a script without running it: one half-written at the end of the
+ * day should survive being closed, and running it then would build half of
+ * something. Run keeps it too, when it goes through. They used to be wholly
+ * separate, and that was how scripts went missing from the nightly re-run -
+ * run, seen to work, never saved. The script a clean run replaced is offered
+ * back, so trying something over a good one costs nothing.
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -31,6 +34,8 @@ interface Script {
   writes: string[]
   last_run_at: string | null
   last_error: string
+  /** The saved script the last clean run replaced, so it can be put back. */
+  previous_text: string
 }
 
 /** What the editor opens on for a project.
@@ -156,9 +161,12 @@ const EMPTY_SCRIPT: Script = Object.freeze({
   writes: [],
   last_run_at: null,
   last_error: '',
+  previous_text: '',
 })
 
 interface RunResult {
+  /** Whether what ran is now the saved script. */
+  kept: boolean
   log: { command: string; message: string }[]
   saved: { id: string; name: string; created: boolean; rows: number }[]
 }
@@ -269,7 +277,15 @@ export function ProjectScript({ projectId }: { projectId: string }) {
   const run = useMutation({
     mutationFn: (next: string) =>
       api.post<RunResult>(`/projects/${projectId}/script/run`, { text: next }),
-    onSuccess: (result) => {
+    onSuccess: (result, sent) => {
+      // A clean run kept what ran. The marker moves to it exactly as a save
+      // moves it - to the text that was sent, never by writing the box, which
+      // may have been typed in while the run was out. See `keep`.
+      if (result.kept) {
+        shown.current = sent
+        knownRun.current = ''
+        setSaved(sent)
+      }
       // Newest first, so a long script's last line is the one in view.
       setLog(
         result.log
@@ -424,6 +440,19 @@ export function ProjectScript({ projectId }: { projectId: string }) {
             delete it to take this project off the Scripts page.
           </p>
         )}
+        {!!script.data?.previous_text && text !== script.data.previous_text && (
+          // A clean run replaced a saved script. The old one is kept one deep,
+          // so trying something over a good script is a click from undone.
+          <div className="mb-2 flex flex-wrap items-center gap-2 rounded-control bg-ink-50 px-2.5 py-1.5 text-xs text-ink-700 dark:bg-dark-100 dark:text-dark-700">
+            <span>The last run replaced the script that was saved before it.</span>
+            <button
+              className="btn-ghost btn-sm"
+              onClick={() => setText(script.data?.previous_text ?? '')}
+            >
+              Put the previous one in the box
+            </button>
+          </div>
+        )}
         {recovered && (
           // Said before the box rather than after it. Somebody who ran a
           // script without saving it comes back to what looks like their
@@ -479,7 +508,7 @@ export function ProjectScript({ projectId }: { projectId: string }) {
           </button>
           {dirty && (
             <span className="text-xs text-amber-700 dark:text-amber-300">
-              Unsaved changes. Running uses what is in the box.
+              Unsaved changes. Running uses what is in the box, and keeps it if it runs cleanly.
             </span>
           )}
           {/* Pushed to the far end, away from Run and Save. It is the one
