@@ -20,6 +20,7 @@ from fastapi import (
     UploadFile,
 )
 from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 
 from app.api.deps import (
@@ -57,7 +58,7 @@ from app.schemas.dataset import (
 from app.schemas.monitoring import JobOut
 from app.schemas.query import FilterGroup
 from app.services import archive as archiving
-from app.services import preferences, stata
+from app.services import preferences, staged_uploads, stata
 from app.services.audit import record
 from app.services.columnar import holds_numbers
 from app.services.datasets import (
@@ -218,6 +219,82 @@ def _queue_import(
 INLINE_IMPORT_LIMIT = 48 * 1024 * 1024
 
 
+# --- a large upload, in pieces -----------------------------------------------
+#
+# The browser sends a file larger than a proxy will carry in one request as
+# pieces, then posts the ordinary upload naming what it sent instead of
+# attaching it. See services/staged_uploads.py.
+
+
+class StageIn(BaseModel):
+    filename: str = Field(min_length=1, max_length=300)
+    size: int = Field(ge=0)
+
+
+@router.post("/uploads", status_code=201)
+def start_staged_upload(payload: StageIn, user: RequireManager) -> dict[str, Any]:
+    """Make room for a file that will arrive in pieces."""
+    suffix = Path(payload.filename).suffix.lower()
+    if suffix not in SUPPORTED_EXTENSIONS and suffix != ".zip":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"'{suffix or payload.filename}' is not a supported format. Upload a "
+                ".zip archive, or one of: " + ", ".join(sorted(SUPPORTED_EXTENSIONS))
+            ),
+        )
+    limit = preferences.value("max_upload_mb") * 1024 * 1024
+    if payload.size > limit:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"{payload.filename} is {payload.size / (1024 * 1024):,.0f} MB and the "
+                f"limit is {preferences.upload_label()}. An administrator can raise it "
+                "under Administration -> Settings."
+            ),
+        )
+    settings.ensure_directories()
+    upload_id = staged_uploads.start(user.id, payload.filename, payload.size)
+    return {
+        "id": upload_id,
+        "chunk_size": staged_uploads.CHUNK_BYTES,
+        "pieces": staged_uploads.pieces(payload.size),
+    }
+
+
+@router.put("/uploads/{upload_id}/pieces/{index}")
+async def send_staged_piece(
+    upload_id: str, index: int, request: Request, user: RequireManager
+) -> dict[str, int]:
+    """One piece of a file, as the raw body. Sending a piece again replaces it."""
+    try:
+        received = await staged_uploads.write_piece(upload_id, user.id, index, request.stream())
+    except staged_uploads.StagingError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"index": index, "received": received}
+
+
+@router.post("/uploads/{upload_id}/complete")
+def complete_staged_upload(upload_id: str, user: RequireManager) -> dict[str, Any]:
+    """Put the pieces back together. The upload can then be named in /upload."""
+    try:
+        staged = staged_uploads.complete(upload_id, user.id)
+    except staged_uploads.StagingError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"id": staged.id, "filename": staged.filename, "size": staged.size}
+
+
+@router.delete("/uploads/{upload_id}", response_model=Message)
+def cancel_staged_upload(upload_id: str, user: RequireManager) -> Message:
+    """Throw away an upload that will not be finished."""
+    try:
+        staged_uploads.check(upload_id, user.id)
+    except staged_uploads.StagingError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    staged_uploads.discard(upload_id)
+    return Message(detail="Upload cancelled")
+
+
 @router.post(
     "/upload",
     response_model=DatasetDetail | ArchiveImportOut | JobOut,
@@ -228,8 +305,9 @@ async def upload_dataset(
     db: DbSession,
     user: RequireManager,
     file: Annotated[
-        list[UploadFile], File(description="Stata, SPSS, CSV, tab, Excel or zip files")
-    ],
+        list[UploadFile] | None,
+        File(description="Stata, SPSS, CSV, tab, Excel or zip files"),
+    ] = None,
     name: Annotated[str, Form()] = "",
     description: Annotated[str, Form()] = "",
     tags: Annotated[str, Form()] = "",
@@ -242,6 +320,9 @@ async def upload_dataset(
     # A locked export is opened with this and it is never stored: it belongs to
     # the file, not to the dataset, and the next export may have another.
     password: Annotated[str, Form()] = "",
+    # Files sent beforehand in pieces, by the ids /uploads gave them, in place
+    # of attaching them here. A JSON list, in the order they are to be read.
+    staged: Annotated[str, Form()] = "",
 ) -> DatasetDetail | ArchiveImportOut | JobOut:
     """Upload a data file, or an export archive, and ingest it immediately.
 
@@ -269,9 +350,22 @@ async def upload_dataset(
     `version_column` names a variable each file's label is written into, which
     is what keeps the versions tellable apart afterwards.
     """
-    uploads = list(file)
-    if not uploads:
+    uploads = list(file or [])
+    try:
+        chosen = staged_uploads.take(
+            [str(one) for one in json.loads(staged)] if staged.strip() else [], user.id
+        )
+    except (ValueError, TypeError) as exc:
+        detail = str(exc) if isinstance(exc, staged_uploads.StagingError) else (
+            "staged must be a JSON list of upload ids"
+        )
+        raise HTTPException(status_code=422, detail=detail) from exc
+    if not uploads and not chosen:
         raise HTTPException(status_code=422, detail="Choose a file to upload")
+    if uploads and chosen:
+        raise HTTPException(
+            status_code=422, detail="Attach the files or name staged ones, not both"
+        )
 
     # An archived project has had its data removed on purpose, and importing
     # into one would quietly un-archive half of it: some datasets holding rows
@@ -282,7 +376,11 @@ async def upload_dataset(
         except ValueError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
 
-    names = [Path(item.filename or "upload.dat").name for item in uploads]
+    names = (
+        [Path(item.filename or "upload.dat").name for item in uploads]
+        if uploads
+        else [one.filename for one in chosen]
+    )
     suffixes = [Path(item).suffix.lower() for item in names]
     for one, suffix in zip(names, suffixes, strict=True):
         if suffix not in SUPPORTED_EXTENSIONS and suffix != ".zip":
@@ -297,7 +395,7 @@ async def upload_dataset(
     # own dataset. Both are useful and they are different operations, so a
     # mixture of the two has no single meaning and is refused rather than
     # guessed at.
-    if len(uploads) > 1 and len({suffix == ".zip" for suffix in suffixes}) > 1:
+    if len(names) > 1 and len({suffix == ".zip" for suffix in suffixes}) > 1:
         raise HTTPException(
             status_code=422,
             detail=(
@@ -311,7 +409,7 @@ async def upload_dataset(
         stamps = [str(one) for one in json.loads(labels)] if labels.strip() else []
     except (ValueError, TypeError) as exc:
         raise HTTPException(status_code=422, detail="labels must be a JSON list") from exc
-    if stamps and len(stamps) != len(uploads):
+    if stamps and len(stamps) != len(names):
         raise HTTPException(status_code=422, detail="Give a label for every file, or none at all")
     stamp_column = version_column.strip()
     if stamp_column and not stamps:
@@ -336,6 +434,9 @@ async def upload_dataset(
     # longer being read reported it as a bad gateway rather than as the size
     # limit it was.
     declared = request.headers.get("content-length")
+    if chosen:
+        # The body is a few form fields; the files were sent beforehand.
+        declared = str(sum(one.size for one in chosen))
     if declared and declared.isdigit() and int(declared) > max_bytes + 1024 * 1024:
         raise HTTPException(
             status_code=413,
@@ -401,8 +502,26 @@ async def upload_dataset(
 
     saved: list[Path] = []
     written = 0
+    # A file sent in pieces is already on this disk, whole: it is moved into
+    # place rather than copied, and from here on it is an upload like any other.
+    for index, (one, item_suffix) in enumerate(
+        zip(chosen, suffixes if chosen else [], strict=True)
+    ):
+        target = settings.uploads_path / (
+            f"{datasets[index].id}{item_suffix}"
+            if index < len(datasets)
+            else f"{uuid4().hex}{item_suffix}"
+        )
+        shutil.move(str(one.path), target)
+        staged_uploads.discard(one.id)
+        saved.append(target)
+        written += one.size
     try:
-        for index, (item, item_suffix) in enumerate(zip(uploads, suffixes, strict=True)):
+        # Attached files only; staged ones were moved into place above, and
+        # only one of the two is ever given.
+        for index, (item, item_suffix) in enumerate(
+            zip(uploads, suffixes if uploads else [], strict=True)
+        ):
             target = settings.uploads_path / (
                 f"{datasets[index].id}{item_suffix}"
                 if index < len(datasets)
