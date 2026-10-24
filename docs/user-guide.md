@@ -16,7 +16,9 @@ new line, and on a list that is offering you a choice it takes the choice.
 
 In the script editor on **Scripts**, where Enter has to be a new line,
 **Ctrl+Enter** (**Cmd+Enter** on a Mac) runs the script and **Ctrl+S**
-(**Cmd+S**) saves it.
+(**Cmd+S**) saves it. **Ctrl+Space** opens the list of what can come next;
+**Enter** or **Tab** takes the highlighted suggestion and **Escape** closes the
+list. With no list open, Tab moves on as it does everywhere else.
 
 Where an empty box shows a suggestion in grey - the name a saved chart will
 get, a variable's own name as its label, the folder imports are read from - a
@@ -688,6 +690,31 @@ applied, exactly as a do-file behaves, and the **Output** panel beside the
 script says what got through. The line a run stopped on is marked in red in
 the line numbers, and **Stopped at line…** in the bar under the script puts
 the cursor on it. `*` and `//` start a comment, `///` continues a line.
+
+The editor colours the script as you write it: commands in blue, dataset
+names in teal, functions in purple, options after the comma in indigo,
+numbers and missing values in amber, text in quotes in brick red, macros in
+pink, and comments in green italics. A first word that is not a command is underlined in red, so a
+typo shows before the run finds it.
+
+As you type it offers what can come next, from the language itself and from
+the project's own datasets:
+
+- at the start of a line, the commands, with how each is written;
+- after `use` or `using`, the project's datasets, with their rows and
+  variables - a name with a space in it goes in with its quotes;
+- wherever a variable belongs, the variables in memory at that point. The list
+  follows the script above the cursor: `use` loads a dataset's variables,
+  `merge` and `append` add another's, `gen` and `egen` add the one they make,
+  and `rename`, `drop`, `keep` and `collapse` change the list;
+- in an expression, the functions as well;
+- after the comma, the command's options, and inside `keep()` or after
+  `collapse (` the words they take;
+- after `` ` `` or `$`, the macros defined above.
+
+Pointing at a command, function, option, dataset or variable shows what it is:
+how a command is written, what a function does, a variable's label and the
+dataset it comes from.
 
 The **Reference** panel lists what the language understands; click a line
 there to put it in the script where the cursor is.

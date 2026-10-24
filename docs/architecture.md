@@ -550,6 +550,8 @@ backend/app/
                   stata_frame.py      the frame a script works on
                   project_script.py   where a project's script lives, and
                                       when it runs again
+                  script_language.py  the language, described for the
+                                      editor that colours and completes it
 
                 monitoring it
                   monitoring.py       indicators, thresholds, alerts
