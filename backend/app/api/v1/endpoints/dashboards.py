@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import datetime as dt
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,6 +15,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, ConfigDict
 from slugify import slugify
 from sqlalchemy import or_, select
+from sqlalchemy.orm import Session
 
 from app.api.deps import (
     CurrentUser,
@@ -24,6 +26,7 @@ from app.api.deps import (
 from app.core.logging import get_logger
 from app.core.security import hash_password, new_public_token
 from app.db.base import utcnow
+from app.db.session import SessionLocal
 from app.models import (
     BoundaryLayer,
     Chart,
@@ -2288,15 +2291,42 @@ def _render_widgets(
         # fetched, which is what the board used to say. See freshness.board.
         "freshness": board_freshness(db, list(dashboard.widgets)),
     }
-    for widget in dashboard.widgets:
+    def one(use: Session, widget: Widget) -> dict[str, Any]:
         try:
-            payload["widgets"][widget.id] = _render_widget(
-                db, widget, None if widget.id == except_widget else filters, drill
+            return _render_widget(
+                use, widget, None if widget.id == except_widget else filters, drill
             )
         except (QueryError, HTTPException) as exc:
             detail = exc.detail if isinstance(exc, HTTPException) else str(exc)
-            payload["widgets"][widget.id] = {"error": str(detail)}
+            return {"error": str(detail)}
+
+    widgets = list(dashboard.widgets)
+    if len(widgets) < 2 or RENDER_WORKERS < 2:
+        for widget in widgets:
+            payload["widgets"][widget.id] = one(db, widget)
+        return payload
+
+    # Side by side rather than one after another. Each widget is a query, and
+    # a board's first opening after an import - when every cached answer has
+    # just gone stale with the dataset's version - used to cost the sum of
+    # all of them. A session each, because a session is not to be shared
+    # between threads; rendering only reads, so each is closed unwritten.
+    def own(widget_id: str) -> dict[str, Any]:
+        with SessionLocal() as use:
+            found = use.get(Widget, widget_id)
+            return one(use, found) if found is not None else {"error": "Widget not found"}
+
+    with ThreadPoolExecutor(max_workers=min(RENDER_WORKERS, len(widgets))) as pool:
+        rendered = list(pool.map(own, [widget.id for widget in widgets]))
+    # In the board's own order, so the answer reads as it always did.
+    for widget, result in zip(widgets, rendered, strict=True):
+        payload["widgets"][widget.id] = result
     return payload
+
+
+# How many widgets of one board are rendered at once. Each is a DuckDB query
+# that uses several threads of its own, so this stays small.
+RENDER_WORKERS = 4
 
 
 def _map_boundary(
