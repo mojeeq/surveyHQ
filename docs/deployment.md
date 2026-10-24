@@ -210,11 +210,14 @@ sudo apt install -y caddy
 ```
 surveyhq.example.org {
     reverse_proxy localhost:8080
-    request_body {
-        max_size 1GB
-    }
 }
 ```
+
+No `request_body` limit. SurveyHQ enforces its own upload limit and answers
+with the size and the limit when a file is over it; a smaller ceiling here
+refuses the file first, with a bare `413` the browser can only report as
+"Request failed with status 413". This example used to set `max_size 1GB`,
+which quietly undercut the platform's 20 GB default.
 
 ```bash
 sudo systemctl reload caddy
@@ -233,7 +236,13 @@ server {
     listen 80;
     server_name surveyhq.example.org;
 
-    client_max_body_size 1024m;
+    # No ceiling of its own, and no buffering of the body: SurveyHQ decides
+    # the upload limit and says what it is when a file is over it. nginx's
+    # default is 1 MB, and any number here refuses larger files with a bare
+    # 413 before SurveyHQ sees them - this example once said 1024m, below
+    # the platform's own 20 GB.
+    client_max_body_size 0;
+    proxy_request_buffering off;
 
     location / {
         proxy_pass http://127.0.0.1:8080;
@@ -241,8 +250,8 @@ server {
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_read_timeout 600s;
-        proxy_send_timeout 600s;
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
     }
 }
 ```
@@ -418,7 +427,10 @@ make up STACK=prod
 
 Point the reverse proxy for the production address at port 8081 (see
 *Putting it behind HTTPS* above) and keep development on an address of its
-own, or on no public address at all.
+own, or on no public address at all. Each address needs the proxy settings
+shown there - in particular no body-size limit of the proxy's own. nginx's
+default is 1 MB, so a server block written without `client_max_body_size 0`
+refuses every real export with a bare "Request failed with status 413".
 
 What keeps the two apart is `COMPOSE_PROJECT_NAME` in `.env.prod`. Compose
 prefers it to the `name: surveyhq` in `docker-compose.yml`, so every container
@@ -611,6 +623,26 @@ make ps                        # is `web` up?
 docker compose logs web
 sudo ss -tlnp | grep 8080      # something else on the port?
 ```
+
+**An upload fails with "Request failed with status 413"**
+
+Something in front of SurveyHQ refused the file before SurveyHQ saw it.
+SurveyHQ's own limit always answers with a sentence - the file's size, the
+limit, and where to raise it - so a bare status means a reverse proxy on the
+host (nginx's default is 1 MB), or a CDN in front of the server, has a smaller
+ceiling of its own. Find it and remove it:
+
+```bash
+sudo nginx -T 2>/dev/null | grep -n client_max_body_size   # host nginx
+grep -n max_size /etc/caddy/Caddyfile                      # host Caddy
+```
+
+Set `client_max_body_size 0;` and `proxy_request_buffering off;` in the
+server block, or drop the Caddy `request_body` limit, then reload the proxy.
+See *Putting it behind HTTPS* for the whole block. A CDN's limit (Cloudflare's
+free plan stops at 100 MB) cannot be raised from here: upload through an
+address that does not pass through it, or import the file from the server -
+*Importing from the server* below.
 
 **"Could not reach the server" in the browser**
 

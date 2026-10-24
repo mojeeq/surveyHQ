@@ -186,7 +186,7 @@ async function request<T>(path: string, options: Options = {}): Promise<T> {
   }
 
   if (!response.ok) {
-    let message = `Request failed with status ${response.status}`
+    let message = withoutWords(response.status)
     let fields: { field: string; message: string }[] = []
     try {
       const payload = await response.json()
@@ -211,7 +211,7 @@ async function detailOf(response: Response): Promise<string> {
   } catch {
     /* fall through to the generic message */
   }
-  return `Request failed with status ${response.status}`
+  return withoutWords(response.status)
 }
 
 
@@ -319,7 +319,26 @@ function uploadWithProgress<T>(
 /** The server's own words for a failure, or a generic line if it had none. */
 function detailIn(payload: any, status: number): string {
   if (typeof payload?.detail === 'string') return payload.detail
-  if (Array.isArray(payload?.detail)) return payload.detail[0]?.msg ?? `Request failed with status ${status}`
+  if (Array.isArray(payload?.detail)) return payload.detail[0]?.msg ?? withoutWords(status)
+  return withoutWords(status)
+}
+
+/** What to say when the answer carried no words of its own.
+ *
+ *  A 413 is the one worth explaining. SurveyHQ's own size limit always says
+ *  the file's size and the limit, so a bare one came from something in front
+ *  of it - a reverse proxy on the host, whose default in nginx is 1 MB, or a
+ *  CDN - and "Request failed with status 413" sent people looking at the
+ *  platform for a limit it does not have.
+ */
+export function withoutWords(status: number): string {
+  if (status === 413)
+    return (
+      'The file was refused before it reached SurveyHQ: a proxy in front of the server ' +
+      '(nginx, Caddy or a CDN) has an upload limit of its own that is smaller than this file. ' +
+      'Ask your administrator to remove it - see "Request failed with status 413" under ' +
+      'Troubleshooting in the deployment guide.'
+    )
   return `Request failed with status ${status}`
 }
 
