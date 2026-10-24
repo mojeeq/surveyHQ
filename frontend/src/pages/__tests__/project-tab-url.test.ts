@@ -1,44 +1,46 @@
 /**
  * Which tab a project opens on, read from the address.
  *
- * The Scripts page lists every project's script and had nowhere to send you:
- * its cards pointed at the project, which opens on Data, leaving the reader
- * to notice a tab called Command. So the tab is in the address now, and the
- * cards link straight to the script.
+ * The tab is in the address so that a refresh, the back button and a pasted
+ * link keep it. Anyone can type anything there, so it is read rather than
+ * obeyed.
  *
- * Which puts a permission question in the address too. The script tab is only
- * offered to somebody who may change the data, because running it does, so a
- * link asking for it has to be read rather than obeyed.
+ * The script was one of these tabs, called Command, until it moved to the
+ * Scripts page. Links to it are still about - in bookmarks, in messages - and
+ * they go on to the same script there.
  */
 import { describe, expect, it } from "vitest";
 
-import { tabFromUrl } from "../ProjectDetail";
+import { scriptMovedTo, tabFromUrl } from "../ProjectDetail";
 
 describe("the tab a link asks for", () => {
-  it("opens the script for somebody who may change the data", () => {
-    expect(tabFromUrl("script", true)).toBe("script");
-  });
-
-  it("opens the project instead for somebody who may not", () => {
-    // Not an error page: they can see the project, just not that tab. The
-    // server refuses the save and the run as well; this is so that nothing
-    // invites them to try.
-    expect(tabFromUrl("script", false)).toBe("overview");
-  });
-
-  it("carries the other tabs for anybody", () => {
-    expect(tabFromUrl("model", false)).toBe("model");
-    expect(tabFromUrl("members", false)).toBe("members");
-    expect(tabFromUrl("data", false)).toBe("data");
-    expect(tabFromUrl("overview", false)).toBe("overview");
+  it("carries the project's tabs", () => {
+    expect(tabFromUrl("model")).toBe("model");
+    expect(tabFromUrl("members")).toBe("members");
+    expect(tabFromUrl("data")).toBe("data");
+    expect(tabFromUrl("overview")).toBe("overview");
   });
 
   it("falls back to the project when the address says something else", () => {
-    // Anyone can type anything in there, and a blank panel is worse than the
-    // page they asked for.
-    expect(tabFromUrl(null, true)).toBe("overview");
-    expect(tabFromUrl("", true)).toBe("overview");
-    expect(tabFromUrl("nonsense", true)).toBe("overview");
-    expect(tabFromUrl("SCRIPT", true)).toBe("overview");
+    // A blank panel is worse than the page they asked for.
+    expect(tabFromUrl(null)).toBe("overview");
+    expect(tabFromUrl("")).toBe("overview");
+    expect(tabFromUrl("nonsense")).toBe("overview");
+    expect(tabFromUrl("SCRIPT")).toBe("overview");
+  });
+
+  it("is never the script, which is not a tab here any more", () => {
+    expect(tabFromUrl("script")).toBe("overview");
+  });
+});
+
+describe("a link to the old script tab", () => {
+  it("goes on to the same project's script on the Scripts page", () => {
+    expect(scriptMovedTo("script", "p-1")).toBe("/scripts?project=p-1");
+  });
+
+  it("leaves every other tab where it is", () => {
+    expect(scriptMovedTo("model", "p-1")).toBeNull();
+    expect(scriptMovedTo(null, "p-1")).toBeNull();
   });
 });

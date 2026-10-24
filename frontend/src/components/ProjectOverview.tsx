@@ -2,7 +2,7 @@
  * A project, in the order its data travels.
  *
  * A survey round's work was spread over six pages - Connections, Datasets,
- * this project's Relationships and Command tabs, Dashboards, and four more for
+ * this project's Relationships tab, Scripts, Dashboards, and four more for
  * monitoring - and following one import from the server to the board meant
  * visiting all of them. Nothing on any of them said that a merge on the way
  * had not been rebuilt, or that the script had never been saved and so never
@@ -115,7 +115,7 @@ export function ProjectOverview({
 }: {
   projectId: string
   canManage: boolean
-  openTab: (tab: 'model' | 'script' | 'data') => void
+  openTab: (tab: 'model' | 'data') => void
 }) {
   const overview = useQuery({
     queryKey: ['project-overview', projectId],
@@ -244,10 +244,16 @@ export function ProjectOverview({
                   : 'A script that ran but was never saved, so imports do not re-run it'
           }
           action={
-            canManage ? (
-              <button className="btn-ghost btn-sm" onClick={() => openTab('script')}>
-                {data.script.exists ? 'Open script' : 'Write a script'}
-              </button>
+            // To the project's script on the Scripts page, where every
+            // project's script is written. Somebody who may only read it is
+            // shown it, read-only; writing one takes the manager role.
+            canManage || data.script.exists ? (
+              <Link
+                to={`/scripts?project=${encodeURIComponent(projectId)}`}
+                className="btn-ghost btn-sm"
+              >
+                {!canManage ? 'View script' : data.script.exists ? 'Open script' : 'Write a script'}
+              </Link>
             ) : undefined
           }
         >

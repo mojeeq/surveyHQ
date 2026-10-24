@@ -14,8 +14,6 @@
 
 import { useState } from 'react'
 
-import { Card } from '@/components/ui'
-
 type Example = {
   /** The line, exactly as it would be typed. */
   line: string
@@ -129,16 +127,22 @@ const VOCABULARY: { label: string; items: string }[] = [
   },
 ]
 
-export function ScriptHelp({ onInsert }: { onInsert: (line: string) => void }) {
+/** The reference, as the editor's side panel draws it. Without `onInsert` -
+ *  a script the reader may not change - the lines are shown and not offered,
+ *  since a click that put text in a box they cannot save is a click that
+ *  promises something. */
+export function ScriptHelp({ onInsert }: { onInsert?: (line: string) => void }) {
   // Open on the first section: a pane that starts entirely shut looks like a
   // heading, and the reason it exists is that people did not know what to type.
   const [open, setOpen] = useState<string | null>(SECTIONS[0].title)
 
   return (
-    <Card
-      title="What you can write"
-      subtitle="Click a line to put it in the script"
-    >
+    <div>
+      <p className="mb-2 text-xs text-ink-500 dark:text-dark-600">
+        {onInsert
+          ? 'Click a line to put it in the script, where the cursor is.'
+          : 'What the command language can do.'}
+      </p>
       <div className="space-y-1">
         {SECTIONS.map((section) => {
           const showing = open === section.title
@@ -167,18 +171,19 @@ export function ScriptHelp({ onInsert }: { onInsert: (line: string) => void }) {
                   <ul className="space-y-1.5">
                     {section.examples.map((example) => (
                       <li key={example.line}>
-                        <button
-                          className="w-full rounded px-2 py-1 text-left hover:bg-brand-50 dark:hover:bg-dark-100"
-                          onClick={() => onInsert(example.line)}
-                          title="Put this line in the script"
-                        >
-                          <code className="block font-mono text-xs text-ink-800 dark:text-dark-800">
-                            {example.line}
-                          </code>
-                          <span className="text-xs text-ink-500 dark:text-dark-600">
-                            {example.note}
-                          </span>
-                        </button>
+                        {onInsert ? (
+                          <button
+                            className="w-full rounded px-2 py-1 text-left hover:bg-brand-50 dark:hover:bg-dark-100"
+                            onClick={() => onInsert(example.line)}
+                            title="Put this line in the script"
+                          >
+                            <ExampleLine example={example} />
+                          </button>
+                        ) : (
+                          <div className="px-2 py-1">
+                            <ExampleLine example={example} />
+                          </div>
+                        )}
                       </li>
                     ))}
                   </ul>
@@ -209,6 +214,17 @@ export function ScriptHelp({ onInsert }: { onInsert: (line: string) => void }) {
         what ran before it stays applied. The full reference, including what
         merge does with a missing key, is under <strong>Help</strong>.
       </p>
-    </Card>
+    </div>
+  )
+}
+
+function ExampleLine({ example }: { example: Example }) {
+  return (
+    <>
+      <code className="block font-mono text-xs text-ink-800 dark:text-dark-800">
+        {example.line}
+      </code>
+      <span className="text-xs text-ink-500 dark:text-dark-600">{example.note}</span>
+    </>
   )
 }

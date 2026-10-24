@@ -150,7 +150,7 @@ def overview(db: Session, project_id: str) -> dict[str, Any]:
                     "kind": "script",
                     "title": "The script's last run failed",
                     "detail": script.last_error,
-                    "link": f"/projects/{project_id}?tab=script",
+                    "link": f"/scripts?project={project_id}",
                 }
             )
         elif not saved and script.reads:
@@ -159,7 +159,7 @@ def overview(db: Session, project_id: str) -> dict[str, Any]:
                     "kind": "script",
                     "title": "The script has run but was never saved, so imports do not re-run it",
                     "detail": "Open it and run it once, or save it.",
-                    "link": f"/projects/{project_id}?tab=script",
+                    "link": f"/scripts?project={project_id}",
                 }
             )
 

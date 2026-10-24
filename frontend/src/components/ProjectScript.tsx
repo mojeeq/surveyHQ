@@ -1,5 +1,5 @@
 /*
- * The project's do-file.
+ * The project's do-file, as the Scripts page's editor.
  *
  * It used to be one command box per dataset, which is the wrong shape for what
  * people actually do: a survey export is several tables, and preparing it
@@ -12,17 +12,27 @@
  * separate, and that was how scripts went missing from the nightly re-run -
  * run, seen to work, never saved. The script a clean run replaced is offered
  * back, so trying something over a good one costs nothing.
+ *
+ * It used to be a tab on the project's own page, and every script's place in
+ * the running order was on another page entirely, so writing one, reordering
+ * it and deleting it were three trips. It is drawn now as an editor's pane -
+ * the box with its line numbers, a toolbar over it, a status bar under it and
+ * the output and the reference beside it - for the Scripts page to set beside
+ * the list of every script.
  */
 
 import { useEffect, useRef, useState } from 'react'
+import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
-import { Card, Loading, Spinner } from '@/components/ui'
+import { Loading, Spinner } from '@/components/ui'
 import { ScriptHelp } from '@/components/ProjectScriptHelp'
 import { api } from '@/lib/api'
+import { relativeTime } from '@/lib/format'
 import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
 import { insertLine } from '@/lib/script-insert'
+import { caretAt, commandStarts, failedLine } from '@/lib/script-lines'
 
 interface Script {
   text: string
@@ -171,7 +181,28 @@ interface RunResult {
   saved: { id: string; name: string; created: boolean; rows: number }[]
 }
 
-export function ProjectScript({ projectId }: { projectId: string }) {
+/** Line height of the box and of its line numbers, which have to agree to
+ *  the pixel or the numbers drift away from their lines down a long script. */
+const LINE_PX = 20
+
+export function ProjectScript({
+  projectId,
+  projectName,
+  canEdit,
+  onDirtyChange,
+}: {
+  projectId: string
+  /** Named in the editor's title bar. */
+  projectName: string
+  /** Whether this reader may change the script. Running it writes the
+   *  project's datasets, so that takes the manager role over the project,
+   *  while anybody who can see the project can read it. The server refuses
+   *  the rest either way; this is so that nothing invites them to try. */
+  canEdit: boolean
+  /** Told whenever leaving would start or stop losing something, so the
+   *  page can ask before moving to another script. */
+  onDirtyChange?: (dirty: boolean) => void
+}) {
   const queryClient = useQueryClient()
   const ask = useDialog()
   const toast = useToast()
@@ -180,8 +211,13 @@ export function ProjectScript({ projectId }: { projectId: string }) {
   // comparison rather than a flag somebody has to remember to clear.
   const [saved, setSaved] = useState('')
   const [log, setLog] = useState<{ command: string; message: string; ok: boolean }[]>([])
+  /** The side panel. Null until somebody picks: it then opens on the output
+   *  of a script that has run and on the reference for one that has not. */
+  const [panel, setPanel] = useState<'output' | 'reference' | null>(null)
+  const [caret, setCaret] = useState({ line: 1, column: 1 })
 
   const box = useRef<HTMLTextAreaElement>(null)
+  const gutter = useRef<HTMLDivElement>(null)
 
   /** Put an example where the cursor is, then carry on from the end of it. */
   const insert = (line: string) => {
@@ -271,6 +307,10 @@ export function ProjectScript({ projectId }: { projectId: string }) {
       knownRun.current = result.unsaved_run
       setSaved(result.text)
       queryClient.setQueryData(['project-script', projectId], result)
+      // The list beside the editor counts commands and says whether each
+      // script is saved; a first save is what puts a new one in it.
+      queryClient.invalidateQueries({ queryKey: ['scripts'] })
+      queryClient.invalidateQueries({ queryKey: ['project-overview', projectId] })
     },
   })
 
@@ -294,6 +334,10 @@ export function ProjectScript({ projectId }: { projectId: string }) {
       )
       queryClient.invalidateQueries({ queryKey: ['project-script', projectId] })
       queryClient.invalidateQueries({ queryKey: ['datasets'] })
+      // What it read and wrote decides its step in the list, so a run can
+      // move it there.
+      queryClient.invalidateQueries({ queryKey: ['scripts'] })
+      queryClient.invalidateQueries({ queryKey: ['project-overview', projectId] })
     },
     onError: (error: Error) => {
       setLog([{ command: '', message: error.message, ok: false }])
@@ -306,6 +350,8 @@ export function ProjectScript({ projectId }: { projectId: string }) {
       // A script that stopped partway saved what it got to, which is the
       // whole reason the run is not unwound.
       queryClient.invalidateQueries({ queryKey: ['datasets'] })
+      // And the list beside the editor marks it as failed.
+      queryClient.invalidateQueries({ queryKey: ['scripts'] })
     },
   })
 
@@ -322,9 +368,10 @@ export function ProjectScript({ projectId }: { projectId: string }) {
       // this whole arrangement is against.
       setLog([])
       queryClient.invalidateQueries({ queryKey: ['project-script', projectId] })
-      // The overview lists this project because it has a script; it does not
-      // any more.
+      // The list beside the editor holds this project because it has a
+      // script; it does not any more.
       queryClient.invalidateQueries({ queryKey: ['scripts'] })
+      queryClient.invalidateQueries({ queryKey: ['project-overview', projectId] })
       toast.push(result.detail, 'success')
     },
     onError: (error: Error, before) => {
@@ -370,13 +417,48 @@ export function ProjectScript({ projectId }: { projectId: string }) {
     },
   })
 
+
   // Above the early return, so a render that bails out early cannot leave
   // this behind holding something the box no longer contains.
   live.current = text
 
-  if (script.isLoading) return <Loading />
-
   const dirty = text !== saved
+  // Whether leaving would lose anything, which is not the same as `dirty`. A
+  // project with nothing saved opens on the run on record, so the box differs
+  // from the saved text before anybody touches it - Save is right to offer
+  // itself, and asking "leave without saving?" would be a false alarm: coming
+  // back opens on that same run. What is lost is a change from what the
+  // editor opens on.
+  const wouldLose = script.data !== undefined && text !== openingText(script.data)
+
+  // Above the early return too, being hooks. The page asks before moving to
+  // another script with changes that would be lost, and is told there are
+  // none when the editor goes.
+  useEffect(() => {
+    onDirtyChange?.(wouldLose)
+    return () => onDirtyChange?.(false)
+  }, [wouldLose, onDirtyChange])
+
+  // And closing the tab, which the page cannot ask about, is left to the
+  // browser's own question. It is the one leaving that throws a script away.
+  useEffect(() => {
+    if (!wouldLose) return
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault()
+      event.returnValue = ''
+    }
+    window.addEventListener('beforeunload', warn)
+    return () => window.removeEventListener('beforeunload', warn)
+  }, [wouldLose])
+
+  if (script.isLoading) {
+    return (
+      <div className="grid flex-1 place-items-center p-8">
+        <Loading />
+      </div>
+    )
+  }
+
   // Every request that changes the script, so nothing that would make another
   // one can be pressed while one is out.
   //
@@ -406,225 +488,376 @@ export function ProjectScript({ projectId }: { projectId: string }) {
     !!script.data?.unsaved_run &&
     text !== script.data.unsaved_run
 
+  // The line the last run stopped on, marked in the margin - only while the
+  // box holds what ran. The complaint counts commands in that text, and in
+  // any other text the same count lands somewhere it means nothing.
+  const ran = script.data ? script.data.unsaved_run || script.data.text : ''
+  const stopped =
+    script.data?.last_error && text === ran ? failedLine(script.data.last_error, text) : null
+  const lineCount = text.split('\n').length
+  const commands = commandStarts(text).length
+  const side = panel ?? (last || log.length ? 'output' : 'reference')
+
+  const start = () => {
+    setPanel('output')
+    run.mutate(text)
+  }
+
+  /** Put the caret at the start of a line and bring it into view. */
+  const goTo = (line: number) => {
+    const area = box.current
+    if (!area) return
+    const offset = text.split('\n').slice(0, line - 1).join('\n').length + (line > 1 ? 1 : 0)
+    area.focus()
+    area.setSelectionRange(offset, offset)
+    area.scrollTop = Math.max(0, (line - 1) * LINE_PX - area.clientHeight / 2)
+    setCaret(caretAt(text, offset))
+  }
+
+  const notice = 'flex flex-wrap items-center gap-x-2 gap-y-1 border-b px-3 py-1.5 text-xs'
+  const plain = `${notice} border-ink-200 bg-ink-50 text-ink-700 dark:border-dark-200 dark:bg-dark-100 dark:text-dark-700`
+  const amber = `${notice} border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200`
+
   return (
-    <div className="mt-4 grid gap-4 lg:grid-cols-[3fr_2fr]">
-      <Card
-        title="Script"
-        subtitle="Read the project's datasets, put them together, write new ones"
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row">
+      <section
+        className="flex min-h-0 min-w-0 flex-1 flex-col"
+        aria-label={`Script for ${projectName}`}
+        onKeyDown={(event) => {
+          if (!(event.metaKey || event.ctrlKey)) return
+          // Ctrl/Cmd+Enter runs, because Enter has to be a new line in a
+          // script box; Ctrl/Cmd+S saves, as in any editor, rather than
+          // offering to save the page.
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            if (canEdit && text.trim() && !busy) start()
+          } else if (event.key === 's' || event.key === 'S') {
+            event.preventDefault()
+            if (canEdit && dirty && !busy) keep.mutate(text)
+          }
+        }}
       >
+        <div className="flex flex-wrap items-center gap-2 border-b border-ink-200 px-3 py-1.5 dark:border-dark-200">
+          <div className="mr-auto flex min-w-0 items-center gap-2">
+            <Link
+              to={`/projects/${projectId}`}
+              className="truncate text-[13px] font-semibold text-ink-800 hover:text-brand-700 dark:text-dark-800 dark:hover:text-brand-400"
+              title="Open the project"
+            >
+              {projectName}
+            </Link>
+            {!canEdit ? (
+              <span className="chip border-ink-200 bg-ink-100 text-ink-700 dark:border-dark-300 dark:bg-dark-200 dark:text-dark-700">
+                Read only
+              </span>
+            ) : dirty ? (
+              <span
+                className="chip border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200"
+                title="Running uses what is in the box, and keeps it if it runs cleanly."
+              >
+                Unsaved
+              </span>
+            ) : null}
+          </div>
+          {canEdit ? (
+            <>
+              <button
+                className="btn-primary btn-sm"
+                onClick={start}
+                disabled={busy || !text.trim()}
+                title="Run the script (Ctrl/⌘ + Enter)"
+              >
+                {run.isPending ? (
+                  <Spinner className="h-3.5 w-3.5 text-white" />
+                ) : (
+                  <span aria-hidden>▶</span>
+                )}
+                Run
+              </button>
+              <button
+                className="btn-secondary btn-sm"
+                onClick={() => keep.mutate(text)}
+                disabled={busy || !dirty}
+                title="Keep it without running it (Ctrl/⌘ + S)"
+              >
+                {keep.isPending && <Spinner className="h-3.5 w-3.5" />}
+                {dirty ? 'Save' : 'Saved'}
+              </button>
+              {/* Set apart from Run and Save, and quieter. It is the one
+                  control here that cannot be undone by typing again. */}
+              {script.data && hasScript(script.data) && (
+                <button
+                  className="btn-ghost btn-sm text-red-700 dark:text-red-300"
+                  disabled={busy}
+                  title="Delete this script"
+                  onClick={async () => {
+                    const sure = await ask.confirm({
+                      title: 'Delete this script?',
+                      message:
+                        'The script goes, along with what its last run read and wrote. ' +
+                        'The datasets it built stay exactly as they are - deleting the ' +
+                        'recipe does not unmake what it cooked. It then drops out of ' +
+                        'the list of scripts until something is written here again.',
+                      confirmLabel: 'Delete script',
+                      tone: 'danger',
+                    })
+                    if (!sure) return
+                    // Emptying the box is part of what they asked for, so it
+                    // happens with the request rather than when the answer
+                    // gets back. The cached answer is emptied in the same
+                    // breath: left holding the script, the empty, untouched
+                    // box follows it straight back, and the clear is undone
+                    // before the request has returned. Keeping what the answer
+                    // said is what lets a delete that fails put it back. See
+                    // `fillWith` and the mutation's `onError`.
+                    //
+                    // A read already on its way back is stopped first, or it
+                    // lands after the emptying and puts the script back into
+                    // the answer - the same bug through a second door.
+                    await queryClient.cancelQueries({
+                      queryKey: ['project-script', projectId],
+                    })
+                    const before = queryClient.getQueryData<Script>(['project-script', projectId])
+                    setText('')
+                    shown.current = ''
+                    // The cached answer is about to say there is no run either.
+                    knownRun.current = ''
+                    setSaved('')
+                    queryClient.setQueryData(['project-script', projectId], EMPTY_SCRIPT)
+                    drop.mutate(before)
+                  }}
+                >
+                  {drop.isPending && <Spinner className="h-3.5 w-3.5" />}
+                  Delete
+                </button>
+              )}
+            </>
+          ) : (
+            <span className="text-xs text-ink-500 dark:text-dark-500">
+              Changing it takes the manager role on this project
+            </span>
+          )}
+        </div>
+
         {alsoRan && (
           // The run is kept but is not the script, so it is offered rather
           // than opened on. Without this it was recorded and unreachable,
           // which is a worse answer than not recording it.
-          <div className="mb-2 flex flex-wrap items-center gap-2 rounded-control bg-ink-50 px-2.5 py-1.5 text-xs text-ink-700 dark:bg-dark-100 dark:text-dark-700">
-            <span>
-              The last run here was not this script. It is kept, unsaved.
-            </span>
-            <button
-              className="btn-ghost btn-sm"
-              onClick={() => setText(script.data?.unsaved_run ?? '')}
-            >
-              Put it in the box
-            </button>
+          <div className={plain}>
+            <span>The last run here was not this script. It is kept, unsaved.</span>
+            {canEdit && (
+              <button
+                className="font-medium text-brand-700 hover:underline dark:text-brand-400"
+                onClick={() => setText(script.data?.unsaved_run ?? '')}
+              >
+                Put it in the box
+              </button>
+            )}
           </div>
         )}
         {script.data && textNotKept(script.data) && !text.trim() && (
-          // The run is real - it read and wrote the datasets listed beside
-          // this - but it ran before a run's text was recorded, so there is
+          // The run is real - it read and wrote the datasets listed in the
+          // output - but it ran before a run's text was recorded, so there is
           // nothing to open on. Said, so the empty box is not taken for a
           // fault, with the two ways out of it.
-          <p className="mb-2 rounded-control bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
-            This project&apos;s script has run, but the text of that run was
-            not kept - it ran before scripts were recorded - so there is
-            nothing to show here. Write it again and Save to keep it, or
-            delete it to take this project off the Scripts page.
+          <p className={amber}>
+            This script has run, but the text of that run was not kept - it ran
+            before scripts were recorded. Write it again and Save to keep it, or
+            delete it to take it out of the list.
           </p>
         )}
         {!!script.data?.previous_text && text !== script.data.previous_text && (
           // A clean run replaced a saved script. The old one is kept one deep,
           // so trying something over a good script is a click from undone.
-          <div className="mb-2 flex flex-wrap items-center gap-2 rounded-control bg-ink-50 px-2.5 py-1.5 text-xs text-ink-700 dark:bg-dark-100 dark:text-dark-700">
+          <div className={plain}>
             <span>The last run replaced the script that was saved before it.</span>
-            <button
-              className="btn-ghost btn-sm"
-              onClick={() => setText(script.data?.previous_text ?? '')}
-            >
-              Put the previous one in the box
-            </button>
+            {canEdit && (
+              <button
+                className="font-medium text-brand-700 hover:underline dark:text-brand-400"
+                onClick={() => setText(script.data?.previous_text ?? '')}
+              >
+                Put the previous one in the box
+              </button>
+            )}
           </div>
         )}
         {recovered && (
-          // Said before the box rather than after it. Somebody who ran a
+          // Said above the box rather than under it. Somebody who ran a
           // script without saving it comes back to what looks like their
           // script, and the one thing they need to know is that nothing has
           // kept it yet.
-          <p className="mb-2 rounded-control bg-amber-50 px-2.5 py-1.5 text-xs text-amber-800 dark:bg-amber-500/10 dark:text-amber-200">
+          <p className={amber}>
             This is the script that last ran here. It was never saved, so it is
             in the box rather than kept - Save keeps it.
           </p>
         )}
-        <textarea
-          ref={box}
-          className="input min-h-[280px] font-mono text-sm"
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            // Ctrl/Cmd+Enter runs, because Enter has to be a new line in a
-            // script box. Same as the dataset command box always was.
-            if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
-              event.preventDefault()
-              if (text.trim() && !busy) run.mutate(text)
-            }
-          }}
-          placeholder={
-            '* Read two files, join them, write a third\n' +
-            'use people\n' +
-            'merge m:1 hhid using households, keep(match)\n' +
-            'gen adult = age >= 18\n' +
-            'collapse (sum) adult, by(province)\n' +
-            'save as "Adults by province"'
-          }
-          spellCheck={false}
-          rows={14}
-        />
 
-        <div className="mt-2 flex flex-wrap items-center gap-3">
-          <button
-            className="btn-primary"
-            onClick={() => run.mutate(text)}
-            disabled={busy || !text.trim()}
+        <div className="flex min-h-[320px] flex-1 overflow-hidden">
+          {/* The margin scrolls with the box rather than on its own, and
+              carries a little more than the text so it can follow the box to
+              the bottom past a horizontal scrollbar. */}
+          <div
+            ref={gutter}
+            aria-hidden
+            className="w-11 shrink-0 select-none overflow-hidden border-r border-ink-100 bg-ink-50 py-2 text-right font-mono text-[12px] text-ink-400 dark:border-dark-200 dark:bg-dark-100 dark:text-dark-500"
+            style={{ lineHeight: `${LINE_PX}px` }}
           >
-            {run.isPending && <Spinner className="h-4 w-4 text-white" />}
-            Run script
-          </button>
-          <span className="text-xs text-ink-400">Ctrl/⌘ + Enter</span>
-          <button
-            className="btn-secondary"
-            onClick={() => keep.mutate(text)}
-            disabled={busy || !dirty}
-          >
-            {keep.isPending && <Spinner className="h-4 w-4" />}
-            {dirty ? 'Save' : 'Saved'}
-          </button>
-          {dirty && (
-            <span className="text-xs text-amber-700 dark:text-amber-300">
-              Unsaved changes. Running uses what is in the box, and keeps it if it runs cleanly.
-            </span>
-          )}
-          {/* Pushed to the far end, away from Run and Save. It is the one
-              control here that cannot be undone by typing again. */}
-          {script.data && hasScript(script.data) && (
-            <button
-              className="btn-ghost btn-sm ml-auto text-red-700 dark:text-red-300"
-              disabled={busy}
-              onClick={async () => {
-                const sure = await ask.confirm({
-                  title: 'Delete this script?',
-                  message:
-                    'The script goes, along with what its last run read and wrote. ' +
-                    'The datasets it built stay exactly as they are - deleting the ' +
-                    'recipe does not unmake what it cooked. This project then drops ' +
-                    'off the Scripts page until something is written here again.',
-                  confirmLabel: 'Delete script',
-                  tone: 'danger',
-                })
-                if (!sure) return
-                // Emptying the box is part of what they asked for, so it
-                // happens with the request rather than when the answer gets
-                // back.
-                //
-                // The cached answer has to be emptied in the same breath. Left
-                // holding the script it no longer matches the saved text, so
-                // the box - empty and untouched - follows it straight back,
-                // and the clear is undone before the request has even
-                // returned. On a slow delete the box then shows the script
-                // that is being deleted, and anything typed into it is typed
-                // onto the end of that.
-                //
-                // Keeping what the answer said is what lets a delete that
-                // fails put it back. See `fillWith` and the mutation's
-                // `onError`.
-                // A read already on its way back has to be stopped first. One
-                // started by a window regaining focus, or by the last run,
-                // lands after the line below and puts the pre-delete script
-                // back into the answer - and then the empty, untouched box
-                // follows it, which is the same bug through a second door.
-                await queryClient.cancelQueries({
-                  queryKey: ['project-script', projectId],
-                })
-                const before = queryClient.getQueryData<Script>(['project-script', projectId])
-                setText('')
-                shown.current = ''
-                // The cached answer is about to say there is no run either.
-                knownRun.current = ''
-                setSaved('')
-                queryClient.setQueryData(['project-script', projectId], EMPTY_SCRIPT)
-                drop.mutate(before)
-              }}
-            >
-              {drop.isPending && <Spinner className="h-4 w-4" />}
-              Delete script
-            </button>
-          )}
+            {Array.from({ length: lineCount }, (_, index) => (
+              <div
+                key={index}
+                className={`pr-2 ${
+                  index + 1 === stopped
+                    ? 'bg-red-100 font-semibold text-red-700 dark:bg-red-500/20 dark:text-red-300'
+                    : index + 1 === caret.line
+                      ? 'text-ink-800 dark:text-dark-800'
+                      : ''
+                }`}
+              >
+                {index + 1}
+              </div>
+            ))}
+            <div className="h-8" />
+          </div>
+          <textarea
+            ref={box}
+            aria-label={`Script for ${projectName}`}
+            className="min-w-0 flex-1 resize-none overflow-auto whitespace-pre border-0 bg-transparent px-3 py-2 font-mono text-[13px] text-ink-800 placeholder:text-ink-400 focus:outline-none focus:ring-0 dark:text-dark-800 dark:placeholder:text-dark-500"
+            style={{ lineHeight: `${LINE_PX}px` }}
+            value={text}
+            readOnly={!canEdit}
+            wrap="off"
+            onChange={(event) => setText(event.target.value)}
+            onScroll={(event) => {
+              if (gutter.current) gutter.current.scrollTop = event.currentTarget.scrollTop
+            }}
+            onSelect={(event) =>
+              setCaret(caretAt(event.currentTarget.value, event.currentTarget.selectionStart))
+            }
+            placeholder={
+              canEdit
+                ? '* Read two files, join them, write a third\n' +
+                  'use people\n' +
+                  'merge m:1 hhid using households, keep(match)\n' +
+                  'gen adult = age >= 18\n' +
+                  'collapse (sum) adult, by(province)\n' +
+                  'save as "Adults by province"'
+                : 'No script here yet.'
+            }
+            spellCheck={false}
+          />
         </div>
 
-        <p className="mt-2 text-xs text-ink-500">
-          Start with <code>use</code> to load one of the project's datasets, and
-          finish with <code>save as</code> to write what you built. Nothing on
-          disk changes until a save, so a script that stops halfway leaves the
-          project as it was. Lines run top to bottom and stop at the first
-          error.
-        </p>
-      </Card>
-
-      <div className="space-y-4">
-        <ScriptHelp onInsert={insert} />
-        <Card title="Last run">
-          {!last ? (
-            <p className="text-sm text-ink-500">
-              This script has not been run yet. It will not re-run on a new
-              export until it has been run once here, so a draft is never
-              started off inside somebody else's import.
-            </p>
-          ) : (
-            <div className="space-y-2 text-sm">
-              <p className="text-ink-600 dark:text-dark-600">
-                {new Date(last).toLocaleString()}
-              </p>
-              {script.data?.last_error ? (
-                <p className="aero-pane aero-pane-warn px-3 py-2 pl-4 text-xs text-amber-900 dark:text-amber-200">
-                  {script.data.last_error}
-                </p>
-              ) : null}
-              <Names label="Reads" names={script.data?.reads ?? []} />
-              <Names label="Writes" names={script.data?.writes ?? []} />
-              {(script.data?.reads.length ?? 0) > 0 && (
-                <p className="text-xs text-ink-500">
-                  A newer export of anything under Reads runs this script again,
-                  so what it writes keeps up with the data.
-                </p>
-              )}
-            </div>
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 border-t border-ink-200 bg-ink-50 px-3 py-1 text-[11px] text-ink-500 dark:border-dark-200 dark:bg-dark-100 dark:text-dark-600">
+          <span className="tabular-nums">
+            Ln {caret.line}, Col {caret.column}
+          </span>
+          <span>{commands === 1 ? '1 command' : `${commands} commands`}</span>
+          <span>
+            {!last
+              ? 'Never run'
+              : script.data?.last_error
+                ? `Last run failed ${relativeTime(last)}`
+                : `Last ran ${relativeTime(last)}`}
+          </span>
+          {stopped !== null && (
+            <button
+              className="font-medium text-red-700 hover:underline dark:text-red-300"
+              onClick={() => goTo(stopped)}
+            >
+              Stopped at line {stopped}
+            </button>
           )}
-        </Card>
+          {canEdit && (
+            <span className="ml-auto hidden xl:inline">Ctrl+Enter runs · Ctrl+S saves</span>
+          )}
+        </div>
+      </section>
 
-        {log.length > 0 && (
-          <Card title="Log">
-            <div className="max-h-96 overflow-auto rounded border border-ink-200 bg-ink-50 p-3 font-mono text-xs dark:border-dark-200 dark:bg-dark-100">
-              {log.map((entry, index) => (
-                <div key={index} className="mb-2">
-                  {entry.command && (
-                    <div className="text-ink-700 dark:text-dark-700">. {entry.command}</div>
-                  )}
-                  <div className={entry.ok ? 'text-green-700' : 'text-red-700'}>
-                    {entry.message}
+      <aside className="flex min-h-[240px] min-w-0 flex-col border-t border-ink-200 dark:border-dark-200 lg:min-h-0 lg:w-[340px] lg:shrink-0 lg:border-l lg:border-t-0">
+        <div role="tablist" aria-label="Beside the script" className="flex shrink-0 border-b border-ink-200 px-1 dark:border-dark-200">
+          {(['output', 'reference'] as const).map((id) => (
+            <button
+              key={id}
+              role="tab"
+              aria-selected={side === id}
+              onClick={() => setPanel(id)}
+              className={`-mb-px border-b-2 px-3 py-2 text-xs font-medium transition-colors ${
+                side === id
+                  ? 'border-brand-600 text-brand-700 dark:text-brand-400'
+                  : 'border-transparent text-ink-500 hover:text-ink-800 dark:text-dark-500 dark:hover:text-dark-800'
+              }`}
+            >
+              {id === 'output' ? 'Output' : 'Reference'}
+              {id === 'output' && !!script.data?.last_error && (
+                <span aria-hidden className="ml-1.5 inline-block h-1.5 w-1.5 rounded-full bg-red-500 align-middle" />
+              )}
+            </button>
+          ))}
+        </div>
+        <div role="tabpanel" className="min-h-0 flex-1 overflow-y-auto p-3">
+          {side === 'reference' ? (
+            <ScriptHelp onInsert={canEdit ? insert : undefined} />
+          ) : (
+            <div className="space-y-3 text-xs">
+              {log.length > 0 && (
+                <div>
+                  <h3 className="mb-1 font-semibold text-ink-700 dark:text-dark-700">This run</h3>
+                  <div className="rounded-control border border-ink-200 bg-ink-50 p-2 font-mono dark:border-dark-200 dark:bg-dark-100">
+                    {log.map((entry, index) => (
+                      <div key={index} className="mb-1.5 last:mb-0">
+                        {entry.command && (
+                          <div className="text-ink-700 dark:text-dark-700">. {entry.command}</div>
+                        )}
+                        <div
+                          className={
+                            entry.ok
+                              ? 'text-green-700 dark:text-green-400'
+                              : 'text-red-700 dark:text-red-300'
+                          }
+                        >
+                          {entry.message}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
-              ))}
+              )}
+              <div>
+                <h3 className="mb-1 font-semibold text-ink-700 dark:text-dark-700">Last run</h3>
+                {!last ? (
+                  <p className="leading-relaxed text-ink-500 dark:text-dark-600">
+                    Not run yet. Start with <code>use</code> to load one of the
+                    project&apos;s datasets and finish with <code>save as</code> to
+                    write what you built; nothing on disk changes until a save. A
+                    script re-runs on a new export only once it has been run here,
+                    so a draft is never started off inside somebody else&apos;s
+                    import.
+                  </p>
+                ) : (
+                  <div className="space-y-1.5">
+                    <p className="text-ink-600 dark:text-dark-600">
+                      {new Date(last).toLocaleString()}
+                    </p>
+                    {script.data?.last_error ? (
+                      <p className="aero-pane aero-pane-warn px-3 py-2 pl-4 text-amber-900 dark:text-amber-200">
+                        {script.data.last_error}
+                      </p>
+                    ) : null}
+                    <Names label="Reads" names={script.data?.reads ?? []} />
+                    <Names label="Writes" names={script.data?.writes ?? []} />
+                    {(script.data?.reads.length ?? 0) > 0 && (
+                      <p className="text-ink-500 dark:text-dark-600">
+                        A newer export of anything under Reads runs this script
+                        again, so what it writes keeps up with the data.
+                      </p>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
-          </Card>
-        )}
-      </div>
+          )}
+        </div>
+      </aside>
     </div>
   )
 }
@@ -632,7 +865,7 @@ export function ProjectScript({ projectId }: { projectId: string }) {
 function Names({ label, names }: { label: string; names: string[] }) {
   if (!names.length) return null
   return (
-    <p className="text-xs text-ink-600 dark:text-dark-600">
+    <p className="text-ink-600 dark:text-dark-600">
       <span className="font-semibold">{label}:</span> {names.join(', ')}
     </p>
   )
