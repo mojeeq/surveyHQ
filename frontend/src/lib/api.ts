@@ -1,6 +1,7 @@
 // Thin fetch wrapper: attaches the token, unwraps JSON and normalises errors.
 
 import { getProjectScope } from '@/hooks/useProjectScope'
+import type { Page } from './types'
 
 const TOKEN_KEY = 'surveyhq.token'
 const GRANT_PREFIX = 'surveyhq.share.'
@@ -342,11 +343,47 @@ export function withoutWords(status: number): string {
   return `Request failed with status ${status}`
 }
 
+/** The largest page the list endpoints hand out. */
+const PAGE_LIMIT = 200
+
+/**
+ * Every page of a paged list, as one page.
+ *
+ * The lists that feed a picker or a grouping were fetched as a single page of
+ * 200 and the total ignored, so the 201st dataset was simply not there - not in
+ * the Datasets listing, not in any dataset picker - with nothing to say so. An
+ * office running a few census rounds passes 200 datasets without trying.
+ *
+ * `next` is how one page is fetched; it is a parameter so the walk itself can
+ * be tested without a server.
+ */
+export async function allPages<T>(
+  path: string,
+  next: (path: string) => Promise<Page<T>>,
+): Promise<Page<T>> {
+  const items: T[] = []
+  let total = 0
+  for (let offset = 0; ; offset += PAGE_LIMIT) {
+    const url = new URL(path, 'http://x')
+    url.searchParams.set('limit', String(PAGE_LIMIT))
+    url.searchParams.set('offset', String(offset))
+    const page = await next(`${url.pathname}${url.search}`)
+    items.push(...page.items)
+    total = page.total
+    // A short page is the last one, whatever the total said: rows deleted
+    // while walking would otherwise leave this asking for pages forever.
+    if (page.items.length < PAGE_LIMIT || items.length >= total) break
+  }
+  return { items, total, limit: items.length, offset: 0 }
+}
+
 export const api = {
   get: async <T>(path: string) => {
     const value = await request<T>(scopedGetPath(path))
     return filterScopedCollection(path, value)
   },
+  /** Every item of a paged list. Use it wherever the whole list is wanted. */
+  getAll: <T>(path: string) => allPages<T>(path, (one) => api.get<Page<T>>(one)),
   post: <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body }),
   patch: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', body }),
   put: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PUT', body }),

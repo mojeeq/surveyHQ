@@ -8,7 +8,7 @@
  * where every other line was written to be read.
  */
 import { describe, expect, it } from 'vitest'
-import { plainly, withoutWords } from '@/lib/api'
+import { allPages, plainly, withoutWords } from '@/lib/api'
 
 describe('plainly', () => {
   it('drops the prefix a validator puts in front of its message', () => {
@@ -46,5 +46,36 @@ describe('a refusal that carried no words of its own', () => {
 
   it('leaves every other status as it was', () => {
     expect(withoutWords(500)).toBe('Request failed with status 500')
+  })
+})
+
+describe('every page of a list', () => {
+  const rows = Array.from({ length: 450 }, (_, i) => i)
+  const server = async (path: string) => {
+    const url = new URL(path, 'http://x')
+    const offset = Number(url.searchParams.get('offset'))
+    const limit = Number(url.searchParams.get('limit'))
+    return { items: rows.slice(offset, offset + limit), total: rows.length, limit, offset }
+  }
+
+  it('walks past the first 200 rather than stopping there', async () => {
+    const all = await allPages('/datasets?status=ready', server)
+    expect(all.items).toHaveLength(450)
+    expect(all.total).toBe(450)
+  })
+
+  it('keeps the filters it was asked for', async () => {
+    const asked: string[] = []
+    await allPages('/datasets?status=ready', async (path) => {
+      asked.push(path)
+      return server(path)
+    })
+    expect(asked.every((one) => one.includes('status=ready'))).toBe(true)
+  })
+
+  it('stops on a short page even if the total said there were more', async () => {
+    const shrinking = async (path: string) => ({ ...(await server(path)), total: 10_000 })
+    const all = await allPages('/datasets', shrinking)
+    expect(all.items).toHaveLength(450)
   })
 })

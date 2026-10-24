@@ -20,7 +20,6 @@ import type {
   FormulaPart,
   Indicator,
   IndicatorValue,
-  Page,
 } from '@/lib/types'
 import ChartCard from '@/components/ChartCard'
 import ProjectFilter, { datasetProjectParam, projectParam } from '@/components/ProjectFilter'
@@ -522,7 +521,7 @@ function IndicatorModal({
   const scope = datasetProjectParam(project ?? null)
   const datasets = useQuery({
     queryKey: ['datasets', 'ready', scope],
-    queryFn: () => api.get<Page<Dataset>>(`/datasets?limit=200&status=ready${scope}`),
+    queryFn: () => api.getAll<Dataset>(`/datasets?status=ready${scope}`),
   })
   const dataset = useQuery({
     queryKey: ['dataset', datasetId],

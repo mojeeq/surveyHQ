@@ -12,7 +12,6 @@ import type {
   Dashboard,
   Dataset,
   KeyMatch,
-  Page,
   Project,
   ProjectMember,
   Relationship,
@@ -82,7 +81,7 @@ export default function ProjectDetail() {
   })
   const datasets = useQuery({
     queryKey: ['datasets', { project: id }],
-    queryFn: () => api.get<Page<Dataset>>(`/datasets?project_id=${id}&limit=200`),
+    queryFn: () => api.getAll<Dataset>(`/datasets?project_id=${id}`),
   })
   const dashboards = useQuery({
     queryKey: ['dashboards', { project: id }],
