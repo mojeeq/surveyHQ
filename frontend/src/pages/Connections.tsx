@@ -426,6 +426,7 @@ function ConnectionModal({
             value={form.name}
             onChange={(event) => update({ name: event.target.value })}
             placeholder="National Household Survey"
+            data-suggest=""
           />
         </Field>
         <Field
@@ -454,6 +455,7 @@ function ConnectionModal({
               value={form.folder_path}
               onChange={(event) => update({ folder_path: event.target.value })}
               placeholder="/incoming"
+              data-suggest=""
             />
           </Field>
         ) : (

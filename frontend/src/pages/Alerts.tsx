@@ -388,6 +388,7 @@ function RuleModal({ rule, onClose }: { rule?: AlertRule; onClose: () => void })
           value={name}
           onChange={(event) => setName(event.target.value)}
           placeholder="Completion falling behind"
+          data-suggest=""
         />
       </Field>
       <Field label="Watch this indicator">

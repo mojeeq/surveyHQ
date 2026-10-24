@@ -3,6 +3,7 @@ import { createRoot } from 'react-dom/client'
 import { BrowserRouter } from 'react-router-dom'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import App from './App'
+import { installSuggestions } from '@/lib/suggest'
 import { AuthProvider } from '@/hooks/useAuth'
 import PreferenceBridge from '@/components/PreferenceBridge'
 import { DialogProvider } from '@/hooks/useDialog'
@@ -14,6 +15,9 @@ import './redesign.css'
 // After the flat stylesheet, because it puts the gloss back where that took
 // it off. Does nothing unless the surface preference is aero.
 import './aero.css'
+
+// Tab takes the suggestion an empty box is showing. See lib/suggest.ts.
+installSuggestions()
 
 const queryClient = new QueryClient({
   defaultOptions: {

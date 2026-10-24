@@ -248,6 +248,7 @@ export default function ShareLinks({
               className="input"
               value={name}
               placeholder="Field supervisors"
+              data-suggest=""
               onChange={(event) => setName(event.target.value)}
             />
           </Field>

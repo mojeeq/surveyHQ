@@ -607,6 +607,7 @@ export function NameOptionsModal({
               className="input py-1.5 text-sm"
               value={names[option.column] ?? ""}
               placeholder={option.label}
+              data-suggest=""
               onChange={(event) =>
                 setNames({ ...names, [option.column]: event.target.value })
               }
@@ -698,6 +699,7 @@ export function SaveMultiSelectModal({
           value={name}
           onChange={(event) => setName(event.target.value)}
           placeholder={defaultName}
+          data-suggest=""
         />
       </Field>
     </Modal>

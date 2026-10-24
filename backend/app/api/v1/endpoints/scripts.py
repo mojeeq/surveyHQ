@@ -1,16 +1,17 @@
 """Every project's script, and the order they have to run in.
 
-A script belongs to a project and is edited there, which is right: it is that
-project's recipe. But a survey office runs more than one project, and the
-scripts are not independent of each other - one writes a cleaned person file
-that another reads to build an indicator table. Nothing on any single
-project's page can show that, because the relationship is between projects.
+A script belongs to a project: it is that project's recipe. But a survey
+office runs more than one project, and the scripts are not independent of
+each other - one writes a cleaned person file that another reads to build an
+indicator table. Nothing on any single project's page can show that, because
+the relationship is between projects.
 
 So there is one page that shows all of them, with the order read off what
-each run actually opened and saved. Running them is still done from the
-project that owns the script, where the log and the editor are, and the page
-links straight there - for the readers who may, which is why each entry says
-whether this one can.
+each run actually opened and saved, and it is where they are written too: the
+list down its side comes from here, and the editor beside it reads, saves,
+runs and deletes through the project's own script endpoints. Each entry says
+whether this reader may change it, because the page lists every script they
+can see and the editor opens read-only on the rest.
 """
 
 from __future__ import annotations

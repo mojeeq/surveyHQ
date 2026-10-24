@@ -1010,6 +1010,7 @@ export function FilterChoice({
           title="What this filter is called on the dashboard"
           value={picked.label ?? ""}
           placeholder={variable.name}
+          data-suggest=""
           onChange={(event) => onRelabel(control, event.target.value)}
         />
       )}

@@ -676,6 +676,7 @@ function IndicatorModal({
             value={name}
             onChange={(event) => setName(event.target.value)}
             placeholder="Completion rate"
+            data-suggest=""
           />
         </Field>
         <Field label="Dataset">

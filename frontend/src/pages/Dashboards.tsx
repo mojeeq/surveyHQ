@@ -381,6 +381,7 @@ export default function Dashboards() {
             value={name}
             onChange={(event) => setName(event.target.value)}
             placeholder="Daily field monitoring"
+            data-suggest=""
             autoFocus
           />
         </Field>

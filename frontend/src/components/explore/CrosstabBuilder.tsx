@@ -456,6 +456,7 @@ export function SaveCrosstabModal({
           value={name}
           onChange={(event) => setName(event.target.value)}
           placeholder={defaultName}
+          data-suggest=""
         />
       </Field>
     </Modal>

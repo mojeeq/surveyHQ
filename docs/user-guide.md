@@ -14,8 +14,16 @@ whichever it ends in - and **Escape** closes it. Enter is left alone wherever
 it already means something: in a box meant to hold more than one line it is a
 new line, and on a list that is offering you a choice it takes the choice.
 
-In the **Command** tab, where Enter has to be a new line, **Ctrl+Enter**
-(**Cmd+Enter** on a Mac) runs the script.
+In the script editor on **Scripts**, where Enter has to be a new line,
+**Ctrl+Enter** (**Cmd+Enter** on a Mac) runs the script and **Ctrl+S**
+(**Cmd+S**) saves it.
+
+Where an empty box shows a suggestion in grey - the name a saved chart will
+get, a variable's own name as its label, the folder imports are read from - a
+small **Tab** mark sits at its right while you are in it. **Tab** fills the
+suggestion in and leaves you in the box to change it; the next Tab moves on as
+usual, and **Shift+Tab** never fills anything. Grey text that is an instruction
+("Search datasets…") or says what an empty box means ("auto") is not offered.
 
 Dialogs are the platform's own rather than the browser's, so they carry its
 styling, say what a deletion will cost instead of asking whether you are sure,
@@ -662,20 +670,30 @@ Deriving a variable, recoding an answer, labelling a question: anyone who has
 prepared survey data has the idioms in their fingers, and reaching for a
 spreadsheet to add one derived column is a poor substitute for them.
 
-Open a project and go to its **Command** tab. It takes a script, one command
-per line, as a do-file is written:
+Open **Scripts**, under Data, and choose the project's script in the list down
+the side - or **+ New** at the top of the list to start one for a project that
+has none. It takes a script, one command per line, as a do-file is written:
 
     * everyone old enough to work
     gen adult = age >= 18
     replace adult = 0 if age == .
     label variable adult "Aged 18 or over"
 
-**Ctrl+Enter**, or **Cmd+Enter** on a Mac, runs it; plain Enter is a new line,
-because a script is more than one.
+**Run**, or **Ctrl+Enter** (**Cmd+Enter** on a Mac), runs it; plain Enter is a
+new line, because a script is more than one. **Save**, or **Ctrl+S**, keeps it
+without running it.
 
 Lines run top to bottom and stop at the first error. What ran before it stays
-applied, exactly as a do-file behaves, and the log says what got through.
-`*` and `//` start a comment, `///` continues a line.
+applied, exactly as a do-file behaves, and the **Output** panel beside the
+script says what got through. The line a run stopped on is marked in red in
+the line numbers, and **Stopped at line…** in the bar under the script puts
+the cursor on it. `*` and `//` start a comment, `///` continues a line.
+
+The **Reference** panel lists what the language understands; click a line
+there to put it in the script where the cursor is.
+
+Writing a script, running it and saving it take the manager role on its
+project. Anyone who can see a project can open its script, read-only.
 
 #### What it understands
 
@@ -705,7 +723,7 @@ and 0, not true and false, so `egen total = sum(adult)` and
 
 #### Seeing every script at once
 
-A script belongs to a project and is edited on that project's Command tab.
+A script belongs to a project, and they are all written on the one page.
 An office runs several projects, and the scripts are not independent of each
 other: one writes a cleaned person file, that file is moved to the project
 that reports on it, and a second script reads it. Run them the other way
@@ -713,9 +731,12 @@ round and the second builds on last week's data, silently, because nothing
 fails.
 
 Nothing on any single project's page can show that, because the relationship
-is between projects. **Scripts**, under Data, shows all of them: what each one
-reads and writes, when it last ran, whether that run failed, and the order
-they have to run in.
+is between projects. The list down the side of **Scripts** shows all of them,
+grouped by the order they have to run in: under each name, how many commands
+it has and when it last ran, or that the last run failed. Pointing at a name
+shows what it reads and writes. The dot before it is filled when it ran,
+amber when it ran and was never saved, red when the last run failed, and
+hollow when it has never run.
 
 The order is read off what each run actually opened and saved - the same
 record the automatic re-run uses - rather than out of the script text, which
@@ -725,12 +746,19 @@ step 1 with everything else that waits on nothing.
 
 Step 1 is not "first". Every script in step 1 can be run at once, or in any
 order; a script moves to step 2 only when it reads something a step 1 script
-writes, and its card names which one. Two scripts that each read what the
-other writes have no order at all, and the page says so rather than inventing
-one.
+writes, and the step's heading names which. Two scripts that each read what
+the other writes have no order at all, and the list puts them under **No
+order** rather than inventing one.
 
-The page is read-only. Running a script is still done from the project that
-owns it, where the editor and the log are.
+Within a step, **↑** and **↓** beside a script - shown when you point at it or
+have it open - move it earlier or later. That is the order an import runs
+them in when more than one stands on the same data. A move across steps is
+refused, with the dependency that decides it, since a script cannot run before
+the one whose output it reads.
+
+**Delete**, above the script, removes it and what its last run recorded. The
+datasets it built stay as they are. Opening another script with changes you
+have not saved asks first.
 
 #### Naming a condition you use more than once
 
@@ -904,8 +932,8 @@ Two things follow from that:
   build, unless the line says `save as <name>, replace`.
 
 A re-run that fails does not fail the import, which has already happened. It is
-reported beside the uploaded data and on the project's Command tab, with the
-line that stopped it.
+reported beside the uploaded data and on the project's script, with the line
+that stopped it.
 
 Scripts run after merges rebuild, so one that reads a merged dataset gets the
 new join rather than the previous export's.

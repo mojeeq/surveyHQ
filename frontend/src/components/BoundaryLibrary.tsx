@@ -223,6 +223,7 @@ function AddBoundaries({ onClose }: { onClose: () => void }) {
           className="input"
           value={name}
           placeholder="Enumeration areas 2026"
+          data-suggest=""
           onChange={(event) => setName(event.target.value)}
         />
       </Field>

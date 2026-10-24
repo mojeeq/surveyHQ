@@ -1,8 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { ProjectOverview } from '@/components/ProjectOverview'
-import { ProjectScript } from '@/components/ProjectScript'
 import { api } from '@/lib/api'
 import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
@@ -31,21 +30,25 @@ import {
   Tabs,
 } from '@/components/ui'
 
-export type TabId = 'overview' | 'data' | 'model' | 'script' | 'members'
-const TAB_IDS: TabId[] = ['overview', 'data', 'model', 'script', 'members']
+export type TabId = 'overview' | 'data' | 'model' | 'members'
+const TAB_IDS: TabId[] = ['overview', 'data', 'model', 'members']
 
-/** Which tab a link is asking for, and which one may actually be drawn.
+/** Which tab a link is asking for. Anyone can put anything in the address,
+ *  so an unknown name opens the project rather than a blank panel. */
+export function tabFromUrl(asked: string | null): TabId {
+  return TAB_IDS.includes(asked as TabId) ? (asked as TabId) : 'overview'
+}
+
+/** Where a link to the project's old script tab goes now.
  *
- *  Anyone can put anything in the address, so an unknown name opens the
- *  project rather than a blank panel. The script is only offered to somebody
- *  who may change the data - running it does - so a link asking for it gives
- *  a reader the project instead of a tab that is not in the row above it.
- *  The server refuses the save and the run as well; this is so that nothing
- *  invites them to try.
+ *  The script was a tab here, called Command, until it moved to the Scripts
+ *  page with every other project's. Links to the tab are in bookmarks, in
+ *  messages people sent each other and in the attention list of an overview
+ *  cached before the move, so they are sent on to the same script there
+ *  rather than left opening the project's front page.
  */
-export function tabFromUrl(asked: string | null, canManage: boolean): TabId {
-  const wanted = TAB_IDS.includes(asked as TabId) ? (asked as TabId) : 'overview'
-  return wanted === 'script' && !canManage ? 'overview' : wanted
+export function scriptMovedTo(asked: string | null, projectId: string): string | null {
+  return asked === 'script' ? `/scripts?project=${encodeURIComponent(projectId)}` : null
 }
 
 const PROJECT_ROLES: { value: Role; label: string; description: string }[] = [
@@ -62,12 +65,9 @@ export default function ProjectDetail() {
   const [deleting, setDeleting] = useState(false)
   const [archiving, setArchiving] = useState(false)
   const [confirmName, setConfirmName] = useState('')
-  // The tab lives in the address rather than in this component, so a project's
-  // script has a link of its own. The Scripts page lists every project's script
-  // and had nowhere to send you: its cards pointed at the project, which opens
-  // on Data, leaving the reader to find a tab called Command. It also means a
-  // refresh, the back button and a pasted link all keep the tab you were on,
-  // which none of them did.
+  // The tab lives in the address rather than in this component, so a refresh,
+  // the back button and a pasted link all keep the tab you were on, which none
+  // of them did.
   const [params, setParams] = useSearchParams()
   const asked = params.get('tab')
   const setTab = (next: TabId) => {
@@ -97,7 +97,8 @@ export default function ProjectDetail() {
   // user's own role on the server, so this is the only check the UI needs.
   const canManage = project.data?.your_role === 'manager' || project.data?.your_role === 'admin'
 
-  const shown = tabFromUrl(asked, canManage)
+  const shown = tabFromUrl(asked)
+  const moved = scriptMovedTo(asked, id)
 
   const archived = project.data?.status === 'archived'
 
@@ -145,6 +146,9 @@ export default function ProjectDetail() {
     onError: (error: Error) => toast.push(error.message, 'error'),
   })
 
+  // After the hooks, before waiting for the project: the Scripts page asks
+  // the same questions of it and says the same when it is not there.
+  if (moved) return <Navigate to={moved} replace />
   if (project.isLoading) return <Loading />
   if (project.error) return <ErrorNote error={project.error} />
   if (!project.data) return null
@@ -319,6 +323,7 @@ export default function ProjectDetail() {
               value={confirmName}
               onChange={(event) => setConfirmName(event.target.value)}
               placeholder={project.data.name}
+              data-suggest=""
               autoFocus
             />
           </Field>
@@ -336,10 +341,6 @@ export default function ProjectDetail() {
             count: (datasets.data?.items.length ?? 0) + (dashboards.data?.length ?? 0),
           },
           { id: 'model', label: 'Relationships', count: relationships.data?.length },
-          // The script belongs to the project, not to any one dataset: it
-          // reads the household file and writes the person file. Only for
-          // somebody who may change the data, since running it does.
-          ...(canManage ? [{ id: 'script' as const, label: 'Command' }] : []),
           { id: 'members', label: 'Members', count: project.data.member_count },
         ]}
         active={shown}
@@ -419,8 +420,6 @@ export default function ProjectDetail() {
           relationships={relationships.data ?? []}
           canManage={canManage}
         />
-      ) : shown === 'script' ? (
-        <ProjectScript projectId={id} />
       ) : (
         <Members projectId={id} members={project.data.members ?? []} canManage={canManage} />
       )}

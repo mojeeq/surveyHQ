@@ -925,6 +925,7 @@ function UploadModal({
             <input
               className="input py-1 text-xs"
               placeholder="version"
+              data-suggest=""
               value={versionColumn}
               onChange={(event) => setVersionColumn(event.target.value)}
             />

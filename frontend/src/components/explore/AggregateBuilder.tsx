@@ -1073,6 +1073,7 @@ export function SaveChartModal({
           value={name}
           onChange={(event) => setName(event.target.value)}
           placeholder={`Chart on ${datasetName}`}
+          data-suggest=""
         />
       </Field>
     </Modal>
