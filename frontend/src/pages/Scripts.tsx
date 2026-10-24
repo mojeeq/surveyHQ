@@ -22,15 +22,15 @@
  * tell somebody to do one at a time what they can do in any order. So they are
  * grouped by step, and a step above the first says who it waits for.
  */
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useSearchParams } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { ProjectScript } from '@/components/ProjectScript'
 import { api } from '@/lib/api'
-import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
 import { relativeTime } from '@/lib/format'
+import { lastOpen, rememberOpen, useDrafts } from '@/lib/script-drafts'
 import type { Project } from '@/lib/types'
 import { EmptyState, ErrorNote, Loading } from '@/components/ui'
 
@@ -70,12 +70,10 @@ function mayWrite(project: Project): boolean {
 export default function Scripts() {
   const queryClient = useQueryClient()
   const toast = useToast()
-  const ask = useDialog()
   const [params, setParams] = useSearchParams()
-  // Whether the open script has changes that leaving would lose, as the
-  // editor reports it, so moving to another one can ask first.
-  const [dirty, setDirty] = useState(false)
-  const onDirtyChange = useCallback((next: boolean) => setDirty(next), [])
+  // The scripts with changes nobody has saved yet, which are kept while the
+  // editor is away and marked in the list. See `script-drafts`.
+  const drafts = useDrafts()
 
   const scripts = useQuery({
     queryKey: ['scripts'],
@@ -123,18 +121,33 @@ export default function Scripts() {
     [steps, tangled],
   )
   const asked = params.get('project')
-  // With nothing in the address, the first script in the list: an editor that
-  // opens on nothing is a page to click through before it does anything.
+  // With nothing in the address, the script that was open last, or else the
+  // first in the list: coming back to the page from anywhere in the app, the
+  // sidebar included, should be coming back to where you were - and an
+  // editor that opens on nothing is a page to click through before it does
+  // anything.
   //
   // Written into the address rather than only worked out, so the open script
   // stays open when the list changes under it. Deleting it takes it out of
   // the list, and an editor that then jumped to whichever script was first
   // would carry off whatever had been typed in its place.
   useEffect(() => {
-    if (!asked && listed.length) {
-      setParams({ project: listed[0].project_id }, { replace: true })
+    if (asked) {
+      rememberOpen(asked)
+      return
     }
-  }, [asked, listed, setParams])
+    if (scripts.isLoading) return
+    const back = lastOpen()
+    const known =
+      !!back &&
+      (places.some((one) => one.project_id === back) ||
+        !!projects.data?.some((one) => one.id === back))
+    // A script that was being started has no place in the list yet; wait for
+    // the projects before deciding it is gone.
+    if (back && !known && projects.isLoading) return
+    const target = known ? back : listed[0]?.project_id
+    if (target) setParams({ project: target }, { replace: true })
+  }, [asked, listed, places, projects.data, projects.isLoading, scripts.isLoading, setParams])
 
   if (scripts.isLoading) return <Loading />
   if (scripts.error) return <ErrorNote error={scripts.error} retry={scripts.refetch} />
@@ -148,22 +161,21 @@ export default function Scripts() {
     .sort((a, b) => a.name.localeCompare(b.name))
   const failing = places.filter((one) => one.last_error).length
 
-  /** Open another script, asking first if this one has unsaved changes. */
-  const choose = async (projectId: string) => {
+  // Scripts being started - a project with none saved yet - that are open or
+  // have changes waiting. They are in no step until they are saved or run.
+  const fresh = (projects.data ?? []).filter(
+    (one) =>
+      mayWrite(one) &&
+      !places.some((place) => place.project_id === one.id) &&
+      (one.id === openId || drafts.has(one.id)),
+  )
+
+  /** Open another script. Nothing is lost by it: changes not saved in the
+   *  one being left are kept, and are back when it is opened again. */
+  const choose = (projectId: string) => {
     if (projectId === openId) return
-    if (dirty) {
-      const sure = await ask.confirm({
-        title: 'Leave without saving?',
-        message:
-          `The changes to the script for ${open?.project_name ?? openProject?.name ?? 'this project'} ` +
-          'are not saved. Opening another script throws them away.',
-        confirmLabel: 'Discard changes',
-        tone: 'danger',
-      })
-      if (!sure) return
-    }
     // Replaced rather than pushed, so the back button leaves the page rather
-    // than walking back through scripts past this question.
+    // than walking back through every script that was looked at.
     setParams({ project: projectId }, { replace: true })
   }
 
@@ -192,21 +204,29 @@ export default function Scripts() {
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto py-1">
-            {open === undefined && openProject && mayWrite(openProject) && (
-              // A script being started: the project has none yet, so it is in
-              // no step until it has been saved or run.
+            {fresh.length > 0 && (
               <Group title="New" detail="not saved yet">
-                <li>
-                  <div className="flex items-start gap-2 bg-brand-50 px-3 py-1.5 text-brand-800 dark:bg-brand-500/15 dark:text-brand-200">
-                    <Mark tone="new" label="Not saved yet" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[13px] font-medium">
-                        {openProject.name}
-                        {dirty && ' •'}
+                {fresh.map((project) => (
+                  <li key={project.id}>
+                    <button
+                      onClick={() => choose(project.id)}
+                      aria-current={project.id === openId ? 'true' : undefined}
+                      className={`flex w-full items-start gap-2 px-3 py-1.5 text-left ${
+                        project.id === openId
+                          ? 'bg-brand-50 text-brand-800 dark:bg-brand-500/15 dark:text-brand-200'
+                          : 'text-ink-700 hover:bg-ink-50 dark:text-dark-700 dark:hover:bg-dark-100'
+                      }`}
+                    >
+                      <Mark tone="new" label="Not saved yet" />
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[13px] font-medium">
+                          {project.name}
+                          {drafts.has(project.id) && <Unsaved />}
+                        </span>
                       </span>
-                    </span>
-                  </div>
-                </li>
+                    </button>
+                  </li>
+                ))}
               </Group>
             )}
 
@@ -235,7 +255,7 @@ export default function Scripts() {
                       key={place.project_id}
                       place={place}
                       selected={place.project_id === openId}
-                      dirty={dirty}
+                      drafted={drafts.has(place.project_id)}
                       onSelect={() => choose(place.project_id)}
                       onMove={
                         movable
@@ -264,7 +284,7 @@ export default function Scripts() {
                     key={place.project_id}
                     place={place}
                     selected={place.project_id === openId}
-                    dirty={dirty}
+                    drafted={drafts.has(place.project_id)}
                     onSelect={() => choose(place.project_id)}
                   />
                 ))}
@@ -291,7 +311,6 @@ export default function Scripts() {
             projectId={openId}
             projectName={open?.project_name ?? openProject?.name ?? ''}
             canEdit={open ? open.can_edit : !!openProject && mayWrite(openProject)}
-            onDirtyChange={onDirtyChange}
           />
         ) : (
           <div className="grid flex-1 place-items-center p-6">
@@ -335,6 +354,15 @@ function Group({
   )
 }
 
+/** The mark an editor puts on a file with unsaved changes. */
+function Unsaved() {
+  return (
+    <span className="ml-1 text-amber-600 dark:text-amber-400" title="Unsaved changes, kept until you save or discard them">
+      •<span className="sr-only"> unsaved changes</span>
+    </span>
+  )
+}
+
 const MARKS = {
   failed: 'bg-red-500',
   unsaved: 'bg-amber-500',
@@ -357,7 +385,7 @@ function Mark({ tone, label }: { tone: keyof typeof MARKS; label: string }) {
 function Entry({
   place,
   selected,
-  dirty,
+  drafted,
   onSelect,
   onMove,
   first,
@@ -366,8 +394,8 @@ function Entry({
 }: {
   place: ScriptPlace
   selected: boolean
-  /** Whether the open script has changes leaving would lose; marked on it. */
-  dirty: boolean
+  /** Whether it has changes nobody has saved yet. */
+  drafted: boolean
   onSelect: () => void
   /** Move this script earlier (-1) or later (+1) among its step. Absent
    *  where the step holds one script, or where the reader may not change
@@ -418,7 +446,7 @@ function Entry({
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[13px] font-medium">
             {place.project_name}
-            {selected && dirty && ' •'}
+            {drafted && <Unsaved />}
           </span>
           <span
             className={`block truncate text-[11px] ${

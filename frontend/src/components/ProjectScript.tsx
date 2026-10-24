@@ -34,6 +34,8 @@ import { api } from '@/lib/api'
 import { relativeTime } from '@/lib/format'
 import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
+import { clearDraft, readDraft, recallLog, rememberLog, writeDraft } from '@/lib/script-drafts'
+import type { Draft, LogLine } from '@/lib/script-drafts'
 import { EMPTY_VOCABULARY, indexLanguage } from '@/lib/script-language'
 import type { ScriptNames, Vocabulary } from '@/lib/script-language'
 import { commandStarts, failedLine } from '@/lib/script-lines'
@@ -189,7 +191,6 @@ export function ProjectScript({
   projectId,
   projectName,
   canEdit,
-  onDirtyChange,
 }: {
   projectId: string
   /** Named in the editor's title bar. */
@@ -199,9 +200,6 @@ export function ProjectScript({
    *  while anybody who can see the project can read it. The server refuses
    *  the rest either way; this is so that nothing invites them to try. */
   canEdit: boolean
-  /** Told whenever leaving would start or stop losing something, so the
-   *  page can ask before moving to another script. */
-  onDirtyChange?: (dirty: boolean) => void
 }) {
   const queryClient = useQueryClient()
   const ask = useDialog()
@@ -210,7 +208,24 @@ export function ProjectScript({
   // What the editor held when it was last saved, so "unsaved changes" is a
   // comparison rather than a flag somebody has to remember to clear.
   const [saved, setSaved] = useState('')
-  const [log, setLog] = useState<{ command: string; message: string; ok: boolean }[]>([])
+  // The output of the last run here, kept while the page is away: coming back
+  // to a script shows what it just did. See `script-drafts`.
+  const [log, setLogShown] = useState<LogLine[]>(() => recallLog(projectId))
+  const setLog = (next: LogLine[]) => {
+    rememberLog(projectId, next)
+    setLogShown(next)
+  }
+  /** The draft put back in the box when the editor opened, if there was one,
+   *  so the editor can say so. */
+  const [restored, setRestored] = useState<Draft | null>(null)
+  /** Whether the draft question has been settled for this project. Until it
+   *  has, nothing may be written over the draft or cleared: the box is still
+   *  empty, or still holds the saved script, and either would read as "no
+   *  changes" and throw the draft away before it was put back. */
+  const [draftSettled, setDraftSettled] = useState(false)
+  /** Whether the draft is in the browser's storage, so it outlives the tab.
+   *  When it cannot be, closing the tab asks first. */
+  const [draftKept, setDraftKept] = useState(true)
   /** The side panel. Null until somebody picks: it then opens on the output
    *  of a script that has run and on the reference for one that has not. */
   const [panel, setPanel] = useState<'output' | 'reference' | null>(null)
@@ -299,6 +314,20 @@ export function ProjectScript({
     // again when they change and stops at `fillWith`, which is the point:
     // the first keystroke is what hands the box over.
   }, [script.data, projectId, text, saved])
+
+  // Put back what somebody had typed here and not saved, once the box has
+  // been filled for the project. After the fill, so the editor's own marker
+  // is on what the project opens on and the draft reads as theirs - which
+  // it is - and no later answer writes over it. See `fillWith`.
+  useEffect(() => {
+    if (draftSettled || script.data === undefined || filledFor.current !== projectId) return
+    const draft = canEdit ? readDraft(projectId) : null
+    if (draft && draft.text !== openingText(script.data)) {
+      setText(draft.text)
+      setRestored(draft)
+    }
+    setDraftSettled(true)
+  }, [draftSettled, script.data, projectId, canEdit, text])
 
   const keep = useMutation({
     mutationFn: (next: string) =>
@@ -445,25 +474,37 @@ export function ProjectScript({
   // editor opens on.
   const wouldLose = script.data !== undefined && text !== openingText(script.data)
 
-  // Above the early return too, being hooks. The page asks before moving to
-  // another script with changes that would be lost, and is told there are
-  // none when the editor goes.
+  // Above the early return too, being hooks. Changes that leaving would lose
+  // are kept as a draft as they are typed, and the draft goes once nothing
+  // would be lost - saved, run cleanly, put back, or the script deleted. So
+  // leaving the page, opening another script or reloading loses nothing.
   useEffect(() => {
-    onDirtyChange?.(wouldLose)
-    return () => onDirtyChange?.(false)
-  }, [wouldLose, onDirtyChange])
+    if (!draftSettled || !canEdit || script.data === undefined) return
+    if (wouldLose) {
+      setDraftKept(
+        writeDraft(projectId, {
+          text,
+          base: openingText(script.data),
+          at: new Date().toISOString(),
+        }),
+      )
+    } else {
+      clearDraft(projectId)
+      setRestored(null)
+    }
+  }, [draftSettled, canEdit, script.data, wouldLose, text, projectId])
 
-  // And closing the tab, which the page cannot ask about, is left to the
-  // browser's own question. It is the one leaving that throws a script away.
+  // Closing the tab loses a draft only where the browser would not keep it,
+  // and only then is it left to the browser's own question.
   useEffect(() => {
-    if (!wouldLose) return
+    if (!wouldLose || draftKept) return
     const warn = (event: BeforeUnloadEvent) => {
       event.preventDefault()
       event.returnValue = ''
     }
     window.addEventListener('beforeunload', warn)
     return () => window.removeEventListener('beforeunload', warn)
-  }, [wouldLose])
+  }, [wouldLose, draftKept])
 
   if (script.isLoading) {
     return (
@@ -684,6 +725,24 @@ export function ProjectScript({
                 Put the previous one in the box
               </button>
             )}
+          </div>
+        )}
+        {restored && wouldLose && script.data && (
+          // Put back from a draft, which is easy to mistake for the saved
+          // script - and if the saved one changed since, Save would write
+          // over somebody else's work. Both are said, with the way back.
+          <div className={plain}>
+            <span>
+              Your unsaved changes from {relativeTime(restored.at)} are back in the box.
+              {restored.base !== openingText(script.data) &&
+                ' The saved script has changed since you made them.'}
+            </span>
+            <button
+              className="font-medium text-brand-700 hover:underline dark:text-brand-400"
+              onClick={() => setText(script.data ? openingText(script.data) : '')}
+            >
+              Discard them
+            </button>
           </div>
         )}
         {recovered && (
