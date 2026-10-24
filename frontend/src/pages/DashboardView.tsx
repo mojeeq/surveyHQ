@@ -28,7 +28,7 @@ import { useToast } from '@/hooks/useToast'
 import { CHART_THEMES } from '@/lib/charts'
 
 
-import { relativeTime } from '@/lib/format'
+import { boardFreshness } from '@/lib/activity'
 
 import type {
 Dashboard,
@@ -205,7 +205,10 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
     // the page, whose filters are its own.
     queryKey: ['dashboard-data', id, publicToken, activePage, filterValues, picked, path],
     queryFn: () =>
-      api.post<{ widgets: Record<string, any> }>(
+      api.post<{
+        widgets: Record<string, any>
+        freshness?: { imported_at: string | null; next_import_at: string | null }
+      }>(
         `${basePath}/data?drill_level=${path.length}` +
           // The widget a click was made on is left unfiltered; the widget a
           // drill was made on is not, because descending is the whole point.
@@ -856,9 +859,9 @@ export default function DashboardView({ publicToken }: { publicToken?: string })
       <p className="mb-2 text-xs text-ink-500" style={asOfStyle}>
         {rendered.isFetching && !rendered.data
           ? 'Loading...'
-          : `Data as of ${fetchedAt ? relativeTime(fetchedAt) : 'just now'}`}
+          : boardFreshness(rendered.data?.freshness, fetchedAt)}
         {dashboard.data!.refresh_interval_seconds
-          ? `, refreshing every ${Math.round(
+          ? ` · page refreshes every ${Math.round(
               dashboard.data!.refresh_interval_seconds / 60,
             )} min`
           : ''}

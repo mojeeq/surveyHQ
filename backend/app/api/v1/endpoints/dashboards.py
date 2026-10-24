@@ -106,6 +106,7 @@ from app.services.freshness import (
     DEFAULT_CRITICAL_HOURS,
     DEFAULT_WARN_HOURS,
 )
+from app.services.freshness import board as board_freshness
 from app.services.freshness import report as freshness_report
 from app.services.geo import points as geo_points
 from app.services.hostnames import HostnameError
@@ -2283,6 +2284,9 @@ def _render_widgets(
         "dashboard_id": dashboard.id,
         "name": dashboard.name,
         "widgets": {},
+        # How old the data is and when it next moves - not when this was
+        # fetched, which is what the board used to say. See freshness.board.
+        "freshness": board_freshness(db, list(dashboard.widgets)),
     }
     for widget in dashboard.widgets:
         try:

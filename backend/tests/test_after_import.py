@@ -343,3 +343,49 @@ def test_a_sync_rebuilds_the_merges_then_runs_the_scripts_and_shows_each_step(
     assert stages["merges"]["detail"] == "1 rebuilt"
     assert stages["scripts"]["items"][0]["status"] == "ran"
     assert job.progress == 100.0
+
+
+def test_a_board_says_how_old_its_data_is_and_when_it_next_moves(
+    client, auth_headers, db_session, project
+):
+    """Through the merge to the connection feeding its source: the merged
+    dataset has no connection of its own, and is what the board shows."""
+    import datetime as dt
+
+    from app.models import Connection
+
+    merged = merge(client, auth_headers, db_session, project["id"])
+    people = named(db_session, project["id"], "people")
+    feed = Connection(
+        name="Field server",
+        base_url=BASE,
+        username="u",
+        password_encrypted="",
+        project_id=project["id"],
+        sync_enabled=True,
+        sync_interval_minutes=60,
+        last_sync_at=dt.datetime.now(dt.UTC) - dt.timedelta(minutes=15),
+    )
+    db_session.add(feed)
+    db_session.flush()
+    people.connection_id = feed.id
+    db_session.commit()
+
+    board = client.post(
+        "/api/v1/dashboards",
+        headers=auth_headers,
+        json={"name": "Fresh", "project_id": project["id"]},
+    ).json()
+    tile = client.post(
+        f"/api/v1/dashboards/{board['id']}/widgets",
+        headers=auth_headers,
+        json={"title": "Freshness", "widget_type": "freshness", "dataset_id": merged.id},
+    )
+    assert tile.status_code == 201, tile.text
+
+    data = client.post(f"/api/v1/dashboards/{board['id']}/data", headers=auth_headers, json={})
+    assert data.status_code == 200, data.text
+    fresh = data.json()["freshness"]
+    assert fresh["imported_at"] is not None
+    due = dt.datetime.fromisoformat(fresh["next_import_at"])
+    assert dt.timedelta(minutes=40) < due - dt.datetime.now(dt.UTC) < dt.timedelta(minutes=50)

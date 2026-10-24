@@ -171,3 +171,88 @@ def report(
     ages = [age for age in (line["hours_since_import"], line["hours_since_record"]) if age]
     line["status"] = status(max(ages) if ages else None, warn_hours, critical_hours)
     return line
+
+
+def board(db: Any, widgets: list[Any]) -> dict[str, str | None]:
+    """When the data a dashboard reads last arrived, and when it next will.
+
+    The board said "Data as of just now" - the moment the browser fetched the
+    numbers - over figures imported days before. The question anyone looking
+    at a board is asking is the other one: how old is this data, and when does
+    it move. So: the oldest refresh among the datasets its widgets read, since
+    everything on the board is at least that fresh, and the next scheduled
+    import feeding any of them.
+
+    A merged dataset has no connection of its own, nor does one a project
+    script wrote, so each is followed back to what it was built from.
+
+    Times only. This rides along with a shared link's data, and the names of
+    connections are nobody's business there.
+    """
+    from sqlalchemy import select
+
+    from app.db.base import utcnow
+    from app.models import Chart, Connection, Indicator, ProjectScript
+    from app.services.scheduling import next_due
+
+    ids: set[str] = set()
+    charts: set[str] = set()
+    indicators: set[str] = set()
+    for widget in widgets:
+        found = widget.dataset_id or (widget.config or {}).get("dataset_id")
+        if found:
+            ids.add(str(found))
+        if widget.chart_id:
+            charts.add(widget.chart_id)
+        if widget.indicator_id:
+            indicators.add(widget.indicator_id)
+    if charts:
+        ids |= set(db.scalars(select(Chart.dataset_id).where(Chart.id.in_(charts))).all())
+    if indicators:
+        ids |= set(
+            db.scalars(select(Indicator.dataset_id).where(Indicator.id.in_(indicators))).all()
+        )
+    shown = [one for one in (db.get(Dataset, i) for i in ids) if one is not None]
+    arrived = [one.refreshed_at for one in shown if one.refreshed_at is not None]
+
+    # Back through merges and scripts to the datasets an import writes.
+    written_by: dict[str, list[str]] = {}
+    for script in db.scalars(select(ProjectScript)).all():
+        for output in script.writes or []:
+            written_by.setdefault(output, []).extend(script.reads or [])
+    connections: set[str] = set()
+    seen: set[str] = set()
+    frontier = list(shown)
+    while frontier:
+        dataset = frontier.pop()
+        if dataset.id in seen:
+            continue
+        seen.add(dataset.id)
+        if dataset.connection_id:
+            connections.add(dataset.connection_id)
+        derivation = dataset.derivation or {}
+        sources = [derivation.get("left_dataset_id"), derivation.get("right_dataset_id")]
+        sources += written_by.get(dataset.id, [])
+        frontier.extend(
+            one for one in (db.get(Dataset, s) for s in sources if s) if one is not None
+        )
+
+    now = utcnow()
+    upcoming = []
+    for connection in (db.get(Connection, c) for c in connections):
+        if connection is None or not connection.is_active or not connection.sync_enabled:
+            continue
+        due = next_due(
+            mode=connection.sync_mode or "interval",
+            times=list(connection.sync_times or []),
+            timezone=connection.sync_timezone or "UTC",
+            interval_minutes=connection.sync_interval_minutes,
+            last_sync_at=connection.last_sync_at,
+            now=now,
+        )
+        if due is not None:
+            upcoming.append(due)
+    return {
+        "imported_at": min(arrived).isoformat() if arrived else None,
+        "next_import_at": min(upcoming).isoformat() if upcoming else None,
+    }
