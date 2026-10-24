@@ -1,0 +1,235 @@
+"""The script language, described for the editor that writes it.
+
+The editor colours a script and offers what can come next - a command at the
+start of a line, a dataset after `use`, an option after the comma, a function
+inside an expression. Every one of those lists is a fact about the engine, and
+a copy of it kept in the browser would drift the way the engine's own error
+message once did, when it listed nine commands and left out four that worked.
+An editor that offers an option the command then refuses is worse than one
+that offers nothing.
+
+So the lists are read off the engine's tables here: the verbs and their
+spellings from `stata.verbs()`, the options from `stata.OPTIONS`, the functions
+from `stata_expr`, the egen and collapse names from theirs. What the tables do
+not carry - a line saying what each thing is for and how it is written - is
+written out beside them, and a test holds the two to the same names, so a
+command or function added to the engine without a line here fails the build
+rather than going unoffered.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from app.services import stata, stata_expr
+
+# How each command is written and what it is for. Keyed by the name
+# `stata.verb_names()` gives it; its other spellings come from the engine.
+COMMANDS: dict[str, tuple[str, str]] = {
+    "use": ("use <dataset>", "Load a copy of one of the project's datasets."),
+    "save": (
+        'save as "<name>" | save, replace',
+        "Write what is in memory out as a new dataset, or back over the one it came from.",
+    ),
+    "merge": (
+        "merge 1:1|m:1|1:m <keys> using <dataset> [, keep() keepusing() nogen]",
+        "Add another dataset's variables, matched on keys.",
+    ),
+    "append": ("append using <dataset>", "Put another dataset's rows under these."),
+    "collapse": (
+        "collapse (stat) <variables> [(stat) <variables>...] [, by(<variables>)]",
+        "One row per group, with a statistic of each variable.",
+    ),
+    "contract": ("contract <variables>", "How many rows each combination has, in _freq."),
+    "gen": (
+        "gen <name> = <expression> [if <condition>]",
+        "Make a new variable.",
+    ),
+    "replace": (
+        "replace <name> = <expression> [if <condition>]",
+        "Change the values of a variable that exists.",
+    ),
+    "egen": (
+        "egen <name> = <function>(<arguments>) [, by(<variables>)]",
+        "Make a variable from a whole column or a whole row: totals, means, counts, groups.",
+    ),
+    "label": (
+        'label variable <name> "<text>" | label define <set> 1 "Yes" 2 "No" '
+        "| label values <name> <set>",
+        "Name a variable, or give its values words.",
+    ),
+    "rename": ("rename <old> <new>", "Give a variable another name."),
+    "drop": ("drop <variables> | drop if <condition>", "Remove variables, or rows."),
+    "keep": ("keep <variables> | keep if <condition>", "Keep only these variables, or rows."),
+    "destring": (
+        "destring [<variables>], replace | generate(<names>) "
+        '[force ignore("<chars>") percent dpcomma]',
+        "Turn text that holds numbers into numbers.",
+    ),
+    "local": ("local <name> <text>", "Name a piece of script text, used as `name'."),
+    "global": ("global <name> <text>", "Name a piece of script text, used as $name."),
+}
+
+# What each option is for, keyed by command and then by option, for the
+# options in `stata.OPTIONS`. Spellings of one option share a line.
+OPTION_NOTES: dict[str, dict[str, str]] = {
+    "merge": {
+        "keep": "Which rows survive: master, using, match.",
+        "keepusing": "Only these variables from the other dataset.",
+        "nogen": "Do not make _merge.",
+        "nogenerate": "Do not make _merge.",
+    },
+    "collapse": {"by": "The variables to group by: one row per combination."},
+    "destring": {
+        "replace": "Convert the variables in place.",
+        "generate": "Put the numbers in new variables, named here.",
+        "gen": "Put the numbers in new variables, named here.",
+        "g": "Put the numbers in new variables, named here.",
+        "force": "Make anything that is not a number missing.",
+        "percent": "Read 45% as 0.45.",
+        "dpcomma": "Read a comma as the decimal point.",
+        "ignore": "Characters to take out first, in quotes.",
+    },
+    "egen": {"by": "Work within each group of these variables."},
+    "save": {"replace": "Write over a dataset that exists."},
+}
+
+# Options written with brackets after them, so the editor can put the cursor
+# between them. The rest are words on their own.
+TAKES_ARGUMENT = {"keep", "keepusing", "by", "generate", "gen", "g", "ignore"}
+
+# Functions, by the name the expression language takes.
+FUNCTIONS: dict[str, tuple[str, str]] = {
+    "abs": ("abs(x)", "The value without its sign."),
+    "ceil": ("ceil(x)", "Round up to a whole number."),
+    "exp": ("exp(x)", "e to the power of x."),
+    "floor": ("floor(x)", "Round down to a whole number."),
+    "int": ("int(x)", "The whole-number part, towards zero."),
+    "ln": ("ln(x)", "Natural logarithm."),
+    "log": ("log(x)", "Natural logarithm, as ln()."),
+    "log10": ("log10(x)", "Logarithm to base 10."),
+    "round": ("round(x[, places])", "Round to the nearest whole number, or to places."),
+    "sqrt": ("sqrt(x)", "Square root."),
+    "max": ("max(a, b, ...)", "The largest of the values in a row."),
+    "min": ("min(a, b, ...)", "The smallest of the values in a row."),
+    "length": ("length(s)", "How many characters the text has."),
+    "strlen": ("strlen(s)", "How many characters the text has."),
+    "lower": ("lower(s)", "The text in lower case."),
+    "upper": ("upper(s)", "The text in upper case."),
+    "strlower": ("strlower(s)", "The text in lower case."),
+    "strupper": ("strupper(s)", "The text in upper case."),
+    "trim": ("trim(s)", "The text without spaces at either end."),
+    "strtrim": ("strtrim(s)", "The text without spaces at either end."),
+    "substr": ("substr(s, start, length)", "Part of the text, counted from 1."),
+    "year": ("year(d)", "The year of a date."),
+    "month": ("month(d)", "The month of a date, 1 to 12."),
+    "day": ("day(d)", "The day of the month of a date."),
+    "mod": ("mod(x, y)", "The remainder of x divided by y."),
+    "missing": ("missing(x)", "True where the value is missing."),
+    "mi": ("mi(x)", "True where the value is missing, as missing()."),
+    "inlist": ("inlist(x, a, b, ...)", "True where x is one of the values listed."),
+    "inrange": ("inrange(x, low, high)", "True where x is between low and high, inclusive."),
+    "cond": ("cond(test, a, b)", "a where the test holds, b where it does not."),
+    "string": ("string(x)", "The number written as text."),
+    "real": ("real(s)", "The text read as a number; missing where it is not one."),
+}
+
+EGEN: dict[str, str] = {
+    "total": "The column's total, within by() groups.",
+    "sum": "The column's total, as total().",
+    "mean": "The column's mean, within by() groups.",
+    "count": "How many values are not missing, within by() groups.",
+    "min": "The smallest value, within by() groups.",
+    "max": "The largest value, within by() groups.",
+    "median": "The median, within by() groups.",
+    "sd": "The standard deviation, within by() groups.",
+    "rowtotal": "The total across these variables, row by row.",
+    "rowmean": "The mean across these variables, row by row.",
+    "rowmiss": "How many of these variables are missing, row by row.",
+    "rownonmiss": "How many of these variables are not missing, row by row.",
+    "rowmax": "The largest of these variables, row by row.",
+    "rowmin": "The smallest of these variables, row by row.",
+    "group": "A number for each combination of these variables.",
+    "tag": "1 on the first row of each combination of these variables, else 0.",
+}
+
+COLLAPSE: dict[str, str] = {
+    "mean": "The mean.",
+    "sum": "The total.",
+    "count": "How many are not missing.",
+    "max": "The largest.",
+    "min": "The smallest.",
+    "median": "The median.",
+    "p50": "The median, as median.",
+    "sd": "The standard deviation.",
+    "first": "The first value in the group.",
+    "last": "The last value in the group.",
+}
+
+LABEL_KINDS: dict[str, str] = {
+    "variable": "Give a variable a label.",
+    "define": "Make a set of value labels.",
+    "values": "Put a set of value labels on a variable.",
+}
+
+MERGE_KEEP: dict[str, str] = {
+    "master": "Rows only in the data in memory.",
+    "using": "Rows only in the other dataset.",
+    "match": "Rows in both.",
+}
+
+
+def _aliases() -> dict[str, list[str]]:
+    """Every other spelling of each command, read off the engine's table."""
+    canonical: dict[Any, str] = {}
+    for name, handler in stata.verbs().items():
+        canonical.setdefault(handler, name)
+    out: dict[str, list[str]] = {name: [] for name in canonical.values()}
+    for name, handler in stata.verbs().items():
+        if name != canonical[handler]:
+            out[canonical[handler]].append(name)
+    return out
+
+
+def language() -> dict[str, Any]:
+    """The whole vocabulary, in the shape the editor reads."""
+    aliases = _aliases()
+    return {
+        "commands": [
+            {
+                "name": name,
+                "aliases": aliases.get(name, []),
+                "syntax": COMMANDS[name][0],
+                "summary": COMMANDS[name][1],
+                "options": [
+                    {
+                        "name": option,
+                        "summary": OPTION_NOTES.get(name, {}).get(option, ""),
+                        "takes_argument": option in TAKES_ARGUMENT,
+                    }
+                    for option in stata.OPTIONS.get(name, ())
+                ],
+            }
+            for name in stata.verb_names()
+        ],
+        "functions": [
+            {"name": name, "syntax": FUNCTIONS[name][0], "summary": FUNCTIONS[name][1]}
+            for name in sorted(set(stata_expr.FUNCTIONS) | stata_expr.SPECIAL)
+        ],
+        "egen": [
+            {"name": name, "summary": EGEN[name], "rowwise": name in stata.EGEN_ROWWISE}
+            for name in sorted(_egen_names())
+        ],
+        "collapse": [
+            {"name": name, "summary": COLLAPSE[name]} for name in stata.COLLAPSE_STATS
+        ],
+        "label_kinds": [{"name": name, "summary": text} for name, text in LABEL_KINDS.items()],
+        "merge_shapes": list(stata.MERGE_SHAPES),
+        "merge_keep": [{"name": name, "summary": text} for name, text in MERGE_KEEP.items()],
+    }
+
+
+def _egen_names() -> set[str]:
+    # group() and tag() are handled by name inside egen rather than listed in
+    # a table, so they are added here by name as well.
+    return set(stata.EGEN_AGGREGATES) | stata.EGEN_ROWWISE | {"group", "tag"}

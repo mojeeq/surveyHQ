@@ -112,3 +112,23 @@ class ScriptOut(BaseModel):
     # The saved script the last successful run replaced, so it can be put
     # back. Empty when there was none, or when it is what is saved now.
     previous_text: str = ""
+
+
+class ScriptVariable(BaseModel):
+    name: str
+    label: str = ""
+    type: str = ""
+
+
+class ScriptDataset(BaseModel):
+    """A dataset a script in this project can `use`, with what is in it."""
+
+    name: str
+    # The other name `use` answers to, for a name with spaces in it.
+    slug: str = ""
+    rows: int = 0
+    variables: list[ScriptVariable] = Field(default_factory=list)
+
+
+class ScriptNames(BaseModel):
+    datasets: list[ScriptDataset] = Field(default_factory=list)

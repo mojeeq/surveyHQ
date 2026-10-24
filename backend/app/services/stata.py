@@ -99,6 +99,19 @@ EGEN_AGGREGATES = {
 # These work across the variables of one row rather than down a column.
 EGEN_ROWWISE = {"rowtotal", "rowmean", "rowmiss", "rownonmiss", "rowmax", "rowmin"}
 
+# The options each command takes after its comma, as it checks them. One
+# table rather than a tuple at each check, because the script editor offers
+# these as you type: a second list there would drift, and an editor that
+# suggests an option the command then refuses is worse than one that offers
+# nothing. Commands absent here take no options.
+OPTIONS: dict[str, tuple[str, ...]] = {
+    "merge": ("keepusing", "keep", "nogen", "nogenerate"),
+    "collapse": ("by",),
+    "destring": ("replace", "generate", "gen", "g", "force", "percent", "dpcomma", "ignore"),
+    "egen": ("by",),
+    "save": ("replace",),
+}
+
 
 @dataclass
 class Saved:
@@ -806,8 +819,9 @@ def _destring(run: Run, rest: str) -> CommandResult:
         options = options[: quoted.start()] + options[quoted.end() :]
     elif re.search(r"\bignore\b", options, re.IGNORECASE):
         raise CommandError('ignore() takes the characters in quotes, e.g. ignore(",$")')
+    # ignore() was taken out above, quoted characters and all.
     _reject_unknown_options(
-        options, ("replace", "generate", "gen", "g", "force", "percent", "dpcomma")
+        options, tuple(one for one in OPTIONS["destring"] if one != "ignore")
     )
     flags = {word.lower() for word in re.findall(r"[A-Za-z]+", re.sub(r"\([^)]*\)", " ", options))}
     generated = re.search(r"\b(?:generate|gen|g)\s*\(([^)]*)\)", options, re.IGNORECASE)
@@ -1263,7 +1277,7 @@ def _merge(run: Run, rest: str) -> CommandResult:
     wanted = _keepusing(options, there_names, keys, other.name)
     keeping = _merge_keep(options)
     generate = not re.search(r"\bnogen(erate)?\b", options, re.IGNORECASE)
-    _reject_unknown_options(options, ("keepusing", "keep", "nogen", "nogenerate"))
+    _reject_unknown_options(options, OPTIONS["merge"])
     if generate and frame.has("_merge"):
         raise CommandError(
             "_merge is already there from an earlier merge. Drop it first "
@@ -1517,7 +1531,7 @@ def _collapse(run: Run, rest: str) -> CommandResult:
     frame, work = run.data, run.work
     body, options = _split_options(rest)
     by = _by_variables(frame.context, options)
-    _reject_unknown_options(options, ("by",))
+    _reject_unknown_options(options, OPTIONS["collapse"])
 
     wanted = _collapse_terms(frame, body, by)
     if not wanted:

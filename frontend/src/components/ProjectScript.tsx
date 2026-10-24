@@ -18,21 +18,25 @@
  * it and deleting it were three trips. It is drawn now as an editor's pane -
  * the box with its line numbers, a toolbar over it, a status bar under it and
  * the output and the reference beside it - for the Scripts page to set beside
- * the list of every script.
+ * the list of every script. The box itself is ScriptEditor, which colours
+ * the script and offers what can come next.
  */
 
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { Loading, Spinner } from '@/components/ui'
 import { ScriptHelp } from '@/components/ProjectScriptHelp'
+import { ScriptEditor } from '@/components/ScriptEditor'
+import type { ScriptEditorHandle } from '@/components/ScriptEditor'
 import { api } from '@/lib/api'
 import { relativeTime } from '@/lib/format'
 import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
-import { insertLine } from '@/lib/script-insert'
-import { caretAt, commandStarts, failedLine } from '@/lib/script-lines'
+import { EMPTY_VOCABULARY, indexLanguage } from '@/lib/script-language'
+import type { ScriptNames, Vocabulary } from '@/lib/script-language'
+import { commandStarts, failedLine } from '@/lib/script-lines'
 
 interface Script {
   text: string
@@ -181,10 +185,6 @@ interface RunResult {
   saved: { id: string; name: string; created: boolean; rows: number }[]
 }
 
-/** Line height of the box and of its line numbers, which have to agree to
- *  the pixel or the numbers drift away from their lines down a long script. */
-const LINE_PX = 20
-
 export function ProjectScript({
   projectId,
   projectName,
@@ -216,24 +216,35 @@ export function ProjectScript({
   const [panel, setPanel] = useState<'output' | 'reference' | null>(null)
   const [caret, setCaret] = useState({ line: 1, column: 1 })
 
-  const box = useRef<HTMLTextAreaElement>(null)
-  const gutter = useRef<HTMLDivElement>(null)
+  const box = useRef<ScriptEditorHandle>(null)
 
-  /** Put an example where the cursor is, then carry on from the end of it. */
-  const insert = (line: string) => {
-    const area = box.current
-    const { text: next, caret } = insertLine(text, area ? area.selectionStart : text.length, line)
-    setText(next)
-    requestAnimationFrame(() => {
-      area?.focus()
-      area?.setSelectionRange(caret, caret)
-    })
-  }
+  /** Put an example where the cursor is, then carry on from the end of it.
+   *  Through the editor, as typing it would be, so it arrives in the box the
+   *  way a keystroke does. */
+  const insert = (line: string) => box.current?.insertLine(line)
 
   const script = useQuery({
     queryKey: ['project-script', projectId],
     queryFn: () => api.get<Script>(`/projects/${projectId}/script`),
   })
+
+  // What the editor colours and offers: the language, read off the engine
+  // and the same for every script, and this project's datasets with their
+  // variables. Neither holds up the editor - without them it is a plain box
+  // until they arrive.
+  const vocabulary = useQuery({
+    queryKey: ['script-language'],
+    queryFn: () => api.get<Vocabulary>('/scripts/language'),
+    staleTime: Infinity,
+  })
+  const names = useQuery({
+    queryKey: ['script-names', projectId],
+    queryFn: () => api.get<ScriptNames>(`/projects/${projectId}/script/names`),
+  })
+  const language = useMemo(
+    () => indexLanguage(vocabulary.data ?? EMPTY_VOCABULARY, names.data),
+    [vocabulary.data, names.data],
+  )
 
   /** The project the box was last filled for. See `fillWith`.
    *
@@ -334,6 +345,9 @@ export function ProjectScript({
       )
       queryClient.invalidateQueries({ queryKey: ['project-script', projectId] })
       queryClient.invalidateQueries({ queryKey: ['datasets'] })
+      // A dataset it saved is one the next `use` can name, so the editor
+      // offers it.
+      queryClient.invalidateQueries({ queryKey: ['script-names', projectId] })
       // What it read and wrote decides its step in the list, so a run can
       // move it there.
       queryClient.invalidateQueries({ queryKey: ['scripts'] })
@@ -494,7 +508,6 @@ export function ProjectScript({
   const ran = script.data ? script.data.unsaved_run || script.data.text : ''
   const stopped =
     script.data?.last_error && text === ran ? failedLine(script.data.last_error, text) : null
-  const lineCount = text.split('\n').length
   const commands = commandStarts(text).length
   const side = panel ?? (last || log.length ? 'output' : 'reference')
 
@@ -504,15 +517,7 @@ export function ProjectScript({
   }
 
   /** Put the caret at the start of a line and bring it into view. */
-  const goTo = (line: number) => {
-    const area = box.current
-    if (!area) return
-    const offset = text.split('\n').slice(0, line - 1).join('\n').length + (line > 1 ? 1 : 0)
-    area.focus()
-    area.setSelectionRange(offset, offset)
-    area.scrollTop = Math.max(0, (line - 1) * LINE_PX - area.clientHeight / 2)
-    setCaret(caretAt(text, offset))
-  }
+  const goTo = (line: number) => box.current?.goTo(line)
 
   const notice = 'flex flex-wrap items-center gap-x-2 gap-y-1 border-b px-3 py-1.5 text-xs'
   const plain = `${notice} border-ink-200 bg-ink-50 text-ink-700 dark:border-dark-200 dark:bg-dark-100 dark:text-dark-700`
@@ -693,46 +698,15 @@ export function ProjectScript({
         )}
 
         <div className="flex min-h-[320px] flex-1 overflow-hidden">
-          {/* The margin scrolls with the box rather than on its own, and
-              carries a little more than the text so it can follow the box to
-              the bottom past a horizontal scrollbar. */}
-          <div
-            ref={gutter}
-            aria-hidden
-            className="w-11 shrink-0 select-none overflow-hidden border-r border-ink-100 bg-ink-50 py-2 text-right font-mono text-[12px] text-ink-400 dark:border-dark-200 dark:bg-dark-100 dark:text-dark-500"
-            style={{ lineHeight: `${LINE_PX}px` }}
-          >
-            {Array.from({ length: lineCount }, (_, index) => (
-              <div
-                key={index}
-                className={`pr-2 ${
-                  index + 1 === stopped
-                    ? 'bg-red-100 font-semibold text-red-700 dark:bg-red-500/20 dark:text-red-300'
-                    : index + 1 === caret.line
-                      ? 'text-ink-800 dark:text-dark-800'
-                      : ''
-                }`}
-              >
-                {index + 1}
-              </div>
-            ))}
-            <div className="h-8" />
-          </div>
-          <textarea
+          <ScriptEditor
             ref={box}
-            aria-label={`Script for ${projectName}`}
-            className="min-w-0 flex-1 resize-none overflow-auto whitespace-pre border-0 bg-transparent px-3 py-2 font-mono text-[13px] text-ink-800 placeholder:text-ink-400 focus:outline-none focus:ring-0 dark:text-dark-800 dark:placeholder:text-dark-500"
-            style={{ lineHeight: `${LINE_PX}px` }}
+            label={`Script for ${projectName}`}
             value={text}
+            onChange={setText}
             readOnly={!canEdit}
-            wrap="off"
-            onChange={(event) => setText(event.target.value)}
-            onScroll={(event) => {
-              if (gutter.current) gutter.current.scrollTop = event.currentTarget.scrollTop
-            }}
-            onSelect={(event) =>
-              setCaret(caretAt(event.currentTarget.value, event.currentTarget.selectionStart))
-            }
+            index={language}
+            stoppedLine={stopped}
+            onCaret={setCaret}
             placeholder={
               canEdit
                 ? '* Read two files, join them, write a third\n' +
@@ -743,7 +717,6 @@ export function ProjectScript({
                   'save as "Adults by province"'
                 : 'No script here yet.'
             }
-            spellCheck={false}
           />
         </div>
 

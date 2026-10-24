@@ -24,6 +24,7 @@ from app.models import (
     Role,
     SavedQuery,
     User,
+    Variable,
 )
 from app.schemas.common import Message
 from app.schemas.project import (
@@ -34,9 +35,12 @@ from app.schemas.project import (
     ProjectMemberOut,
     ProjectOut,
     ProjectUpdate,
+    ScriptDataset,
     ScriptIn,
+    ScriptNames,
     ScriptOut,
     ScriptRunIn,
+    ScriptVariable,
 )
 from app.services import archive as archiving
 from app.services import project_overview, project_script, stata
@@ -563,6 +567,55 @@ def read_script(project_id: str, db: DbSession, user: CurrentUser) -> ScriptOut:
     script = project_script.script_for(db, project_id)
     db.commit()
     return _script_out(db, script)
+
+
+@router.get("/{project_id}/script/names", response_model=ScriptNames)
+def script_names(project_id: str, db: DbSession, user: CurrentUser) -> ScriptNames:
+    """The datasets a script here can `use`, and the variables in each.
+
+    For the editor, which offers them as they are typed: a dataset after
+    `use` or `using`, a variable wherever a script names one. The project's
+    own datasets only, because that is where `use` looks.
+
+    Two queries whatever the size of the project, the variables read for all
+    of its datasets at once. The editor asks this when a script is opened, and
+    a project of forty survey files is not forty-one questions.
+    """
+    _visible_project(project_id, db, user)
+    datasets = list(
+        db.scalars(
+            select(Dataset).where(Dataset.project_id == project_id).order_by(Dataset.name)
+        ).all()
+    )
+    by_dataset: dict[str, list[ScriptVariable]] = {one.id: [] for one in datasets}
+    if datasets:
+        for variable in db.scalars(
+            select(Variable)
+            .where(Variable.dataset_id.in_(list(by_dataset)))
+            .order_by(Variable.dataset_id, Variable.position)
+        ).all():
+            # Not the hidden columns: the ones recording which blanks were .a
+            # and which .b are the engine's bookkeeping, not something to type.
+            if variable.is_hidden or variable.name.endswith(stata.MISSING_TAG_SUFFIX):
+                continue
+            by_dataset[variable.dataset_id].append(
+                ScriptVariable(
+                    name=variable.name,
+                    label=variable.label or "",
+                    type=getattr(variable.var_type, "value", str(variable.var_type)),
+                )
+            )
+    return ScriptNames(
+        datasets=[
+            ScriptDataset(
+                name=one.name,
+                slug=one.slug or "",
+                rows=one.row_count or 0,
+                variables=by_dataset[one.id],
+            )
+            for one in datasets
+        ]
+    )
 
 
 @router.put("/{project_id}/script", response_model=ScriptOut)

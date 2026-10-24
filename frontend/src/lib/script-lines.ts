@@ -24,29 +24,37 @@ function commentAt(line: string): number | null {
   return null
 }
 
-/** The line, counted from one, that each command starts on. */
-export function commandStarts(text: string): number[] {
-  const starts: number[] = []
-  // The line a command being continued with `///` began on.
-  let open: number | null = null
+/** Each command, as the engine will read it, with the line it starts on. */
+export function commandsOf(text: string): { line: number; text: string }[] {
+  const found: { line: number; text: string }[] = []
+  // The command being continued with `///`, and the line it began on.
+  let open: { line: number; text: string } | null = null
   text.split(/\r\n|\r|\n/).forEach((raw, index) => {
     const line = raw.trim()
     if (line.startsWith('*')) return
     let body = line
     const marker = commentAt(line)
     if (marker !== null) {
+      const head = line.slice(0, marker).trim()
       if (line.slice(marker).startsWith('///')) {
-        if (open === null) open = index + 1
+        open = open
+          ? { line: open.line, text: `${open.text} ${head}`.trim() }
+          : { line: index + 1, text: head }
         return
       }
-      body = line.slice(0, marker).trim()
+      body = head
     }
     if (!body) return
-    starts.push(open ?? index + 1)
+    found.push(open ? { line: open.line, text: `${open.text} ${body}`.trim() } : { line: index + 1, text: body })
     open = null
   })
-  if (open !== null) starts.push(open)
-  return starts
+  if (open !== null) found.push(open)
+  return found
+}
+
+/** The line, counted from one, that each command starts on. */
+export function commandStarts(text: string): number[] {
+  return commandsOf(text).map((one) => one.line)
 }
 
 /** The line of the box a run's complaint points at, or null when it names

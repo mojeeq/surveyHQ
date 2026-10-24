@@ -22,7 +22,7 @@ from sqlalchemy import select
 from app.api.deps import CurrentUser, DbSession
 from app.models import Dataset, ProjectScript, Role
 from app.schemas.script import ScriptOrderIn, ScriptPlace, ScriptsOverview
-from app.services import project_script, stata
+from app.services import project_script, script_language, stata
 from app.services.project_script import running_order
 from app.services.projects import can_edit, memberships, visible_projects
 
@@ -151,6 +151,13 @@ def set_order(
         scripts[project_id].run_rank = rank
     db.commit()
     return overview(db, user)
+
+
+@router.get("/language", response_model=dict)
+def language(user: CurrentUser) -> dict:
+    """What the script language understands, for the editor to colour and
+    offer. Read off the engine's own tables; see `script_language`."""
+    return script_language.language()
 
 
 @router.get("", response_model=ScriptsOverview)
