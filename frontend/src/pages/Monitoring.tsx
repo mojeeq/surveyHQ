@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import ReactECharts from 'echarts-for-react'
+import ReactECharts from '@/components/ReactECharts'
 import { measurable } from '@/lib/measures'
 import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
