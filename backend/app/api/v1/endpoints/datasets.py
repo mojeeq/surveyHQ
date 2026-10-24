@@ -57,7 +57,7 @@ from app.schemas.dataset import (
 from app.schemas.monitoring import JobOut
 from app.schemas.query import FilterGroup
 from app.services import archive as archiving
-from app.services import preferences, project_script, stata
+from app.services import preferences, stata
 from app.services.audit import record
 from app.services.columnar import holds_numbers
 from app.services.datasets import (
@@ -79,6 +79,7 @@ from app.services.derived import propagate_labels, rebuild_dependents
 from app.services.download import FORMATS as DOWNLOAD_FORMATS
 from app.services.download import download_file, temp_directory
 from app.services.ingest import SUPPORTED_EXTENSIONS, IngestError, numeric_code_text
+from app.services.pipeline import AFTER_IMPORT, Progress, after_import
 from app.services.projects import can_edit, can_view, restrict, scope_for
 from app.services.query_engine import (
     DatasetContext,
@@ -486,31 +487,25 @@ async def upload_dataset(
         for path in saved:
             path.unlink(missing_ok=True)
 
-    # Whatever was merged out of the replaced files is holding the previous
-    # export's join until it is re-run. Nothing on a dashboard would say so:
-    # the merged dataset keeps its id, its name and its old row count.
-    replaced = outcome.replaced_ids if archive else []
-    rebuilt = rebuild_dependents(db, replaced)
-    if rebuilt:
-        names = [d.name for d in (db.get(Dataset, i) for i in rebuilt) if d]
-        outcome.warnings.append("Rebuilt from the new data: " + ", ".join(sorted(names)))
-
-    # And the scripts that read what was replaced, after the merges: a script
-    # that reads a merged dataset has to wait for that merge to be rebuilt, or
-    # it builds on last week's join.
+    # Everything built on what just landed follows it: the merges, then the
+    # scripts reading them, then the indicators a dashboard shows - and every
+    # dataset the archive wrote counts, appended to as much as replaced. The
+    # recorded commands were already put back as each dataset was replaced.
+    # See pipeline.after_import.
     #
-    # Only for an archive. `outcome` exists only on that branch, and so does
-    # the possibility of anything having been replaced: a single file always
-    # creates a dataset of its own.
+    # Only for an archive. A single file always creates a dataset of its own,
+    # so nothing is built on it yet.
+    stages: list[dict] = []
     if archive:
-        reruns = project_script.rerun_for(db, replaced + rebuilt)
-        outcome.warnings.extend(project_script.warnings_from(db, reruns))
-        made = [i for entry in reruns if entry.ran for i in entry.written]
-        names = sorted({d.name for d in (db.get(Dataset, i) for i in made) if d})
-        if names:
-            outcome.warnings.append(
-                "Rebuilt by the project's script: " + ", ".join(names)
-            )
+        progress = Progress(None, AFTER_IMPORT)
+        aftermath = after_import(
+            db,
+            changed=[d.id for d in outcome.datasets],
+            replaced=outcome.replaced_ids,
+            progress=progress,
+        )
+        outcome.warnings.extend(aftermath.notes())
+        stages = progress.stages
     if archive:
         record(
             db,
@@ -528,6 +523,7 @@ async def upload_dataset(
             appended=outcome.appended,
             replaced=outcome.replaced,
             skipped=outcome.skipped,
+            stages=stages,
             warnings=sorted(
                 set(outcome.warnings)
                 | {w for d in outcome.datasets for w in (d.meta or {}).get("warnings", [])}

@@ -191,6 +191,9 @@ export interface Dataset {
     /** Which file inside an export archive this dataset holds, and so which
      *  file a later archive's rows get appended to. */
     archive_member?: string
+    /** How the last rebuild of a merged dataset went. Anything but
+     *  `rebuilt` means it is holding older data than its sources. */
+    rebuild?: { status: 'rebuilt' | 'failed' | 'stuck'; message: string; at: string }
   }
   version: number
   refreshed_at: string | null
@@ -860,6 +863,39 @@ export interface Job {
   started_at: string | null
   finished_at: string | null
   created_at: string
+}
+
+/** One step of a background job, as the server writes it while it runs. */
+export interface JobStage {
+  key: string
+  label: string
+  status: 'pending' | 'running' | 'done' | 'warning' | 'failed' | 'skipped'
+  detail: string
+  items: { name: string; status: string; detail?: string }[]
+  started_at?: string
+  finished_at?: string
+}
+
+/** A job as the activity panel sees it: its steps, never its parameters. */
+export interface ActivityJob {
+  id: string
+  job_type: string
+  status: Job['status']
+  title: string
+  progress: number
+  stages: JobStage[]
+  error: string
+  warnings: string[]
+  project_name: string
+  started_at: string | null
+  finished_at: string | null
+  created_at: string
+}
+
+export interface Activity {
+  jobs: ActivityJob[]
+  /** When each scheduled connection imports next. */
+  upcoming: { connection_id: string; name: string; project_name: string; due_at: string }[]
 }
 
 export interface Notification {

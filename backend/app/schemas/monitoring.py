@@ -397,6 +397,37 @@ class NotificationOut(BaseModel):
     read_at: dt.datetime | None = None
 
 
+class ActivityJob(BaseModel):
+    """A job as the activity panel shows it: its steps, never its parameters."""
+
+    id: str
+    job_type: str
+    status: str
+    title: str = ""
+    progress: float = 0.0
+    stages: list[dict[str, Any]] = Field(default_factory=list)
+    error: str = ""
+    warnings: list[str] = Field(default_factory=list)
+    project_name: str = ""
+    started_at: dt.datetime | None = None
+    finished_at: dt.datetime | None = None
+    created_at: dt.datetime
+
+
+class ScheduledSync(BaseModel):
+    """When a connection will next import, and so when its dashboards move."""
+
+    connection_id: str
+    name: str
+    project_name: str = ""
+    due_at: dt.datetime
+
+
+class ActivityOut(BaseModel):
+    jobs: list[ActivityJob] = Field(default_factory=list)
+    upcoming: list[ScheduledSync] = Field(default_factory=list)
+
+
 class JobOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -407,6 +438,7 @@ class JobOut(BaseModel):
     progress: float = 0.0
     params: dict[str, Any] = Field(default_factory=dict)
     result: dict[str, Any] = Field(default_factory=dict)
+    stages: list[dict[str, Any]] | None = None
     error: str = ""
     started_at: dt.datetime | None = None
     finished_at: dt.datetime | None = None

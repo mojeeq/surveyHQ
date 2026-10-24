@@ -139,34 +139,24 @@ def accept(db, job, user):
         target.meta = {**(target.meta or {}), **item["meta"]}
         _apply_ingest(db, target, as_ingest(item["snapshot"]))
         published.append(target)
-    from app.services import stata
-    from app.services.derived import rebuild_dependents
+    from app.services.pipeline import AFTER_IMPORT, Progress, after_import
 
     # Publishing a reviewed import replaces the data under each dataset, so
-    # what was recorded against it is run again: a generated variable is not in
-    # the file that was reviewed either.
-    #
-    # Before the rebuild and before the counts, and the order matters for both.
-    # A merge standing on a generated variable cannot be rebuilt until the
-    # variable is back, and rebuilding first leaves the merged dataset holding
-    # the previous export with nothing to say so. The row counts reported below
-    # are the other half: a `drop if` in the history has not run yet when they
-    # are read, so the job would report the file's rows rather than the
-    # dataset's.
-    warnings: list[str] = []
-    for target in published:
-        warnings.extend(stata.replay(db, target))
-    db.flush()
-
-    rebuilt = rebuild_dependents(db, [d.id for d in published])
-
-    # Then the project scripts standing on any of it. After the merges, for
-    # the same reason the merges come after the replay: a script that reads a
-    # merged dataset would otherwise build on the previous export's join.
-    from app.services import project_script
-
-    reruns = project_script.rerun_for(db, [d.id for d in published] + rebuilt)
-    warnings.extend(project_script.warnings_from(db, reruns))
+    # what was recorded against it is run again - a generated variable is not
+    # in the file that was reviewed either - and then everything built on it
+    # follows: merges, scripts, indicators, in that order. Before the counts
+    # below, which a `drop if` in the history would otherwise leave reporting
+    # the file's rows rather than the dataset's. See pipeline.after_import.
+    ids = [d.id for d in published]
+    # Not saved step by step: this runs in the request that accepted the
+    # review, which commits once at the end. The steps are recorded on the job
+    # with everything else.
+    progress = Progress(None, AFTER_IMPORT)
+    aftermath = after_import(db, changed=ids, replaced=ids, replay=True, progress=progress)
+    warnings: list[str] = aftermath.notes()
+    read = {"key": "read", "label": "Read the uploaded files", "status": "done",
+            "detail": "Reviewed and accepted", "items": []}
+    job.stages = [read, *progress.stages]
     db.flush()
     for entry in published:
         db.refresh(entry)

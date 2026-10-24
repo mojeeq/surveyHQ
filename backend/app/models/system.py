@@ -42,6 +42,11 @@ class Job(UUIDMixin, TimestampMixin, Base):
     progress: Mapped[float] = mapped_column(Float, default=0.0)
     params: Mapped[dict] = mapped_column(JSON, default=dict)
     result: Mapped[dict] = mapped_column(JSON, default=dict)
+    # What the job is doing, step by step, written as each one starts and
+    # ends: download, read the files, re-apply commands, rebuild merges, run
+    # scripts, refresh indicators. A percentage said nothing about which of
+    # those was taking the time, or which of them quietly did nothing.
+    stages: Mapped[list | None] = mapped_column(JSON, nullable=True, default=list)
     error: Mapped[str] = mapped_column(Text, default="")
     celery_task_id: Mapped[str] = mapped_column(String(80), default="")
     started_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))

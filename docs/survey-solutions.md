@@ -87,8 +87,16 @@ more interviews, and nothing downstream should have to be rebuilt.
 Choose *append* instead if your export really is incremental - each run holding
 only what is new.
 
-Progress and history appear under **Recent imports** on the connection, and
-under **Administration → Background jobs**. Each run keeps the export zip
+After the files are in, the merges standing on them are rebuilt, the saved
+project scripts reading them are run again, and the dashboards on them move -
+in that order, on every import, scheduled or not. See *What happens after the
+data lands* in the [user guide](user-guide.md#what-happens-after-the-data-lands).
+
+While it runs, the **activity** button in the top bar shows which step it is
+on - including the server's own percentage while it prepares the export, which
+is usually the longest wait - and what each step did once it finishes.
+History appears under **Recent imports** on the connection, and under
+**Administration → Background jobs**. Each run keeps the export zip
 exactly as the server sent it; **Download** on the run hands it back. It is the
 only record of what was actually imported, and it can be re-uploaded like any
 other archive. The last five per connection are kept - an export is tens of

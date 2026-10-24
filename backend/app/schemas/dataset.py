@@ -108,6 +108,8 @@ class ArchiveImportOut(BaseModel):
     skipped: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     rows: int = 0
+    # What followed the data in: commands, merges, scripts, indicators.
+    stages: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class DatasetUpdate(BaseModel):

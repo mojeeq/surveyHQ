@@ -29,7 +29,7 @@ from app.services.datasets import (
     create_dataset_record,
     dataset_is_queryable,
 )
-from app.services.derived import run_merge
+from app.services.derived import Join, _pin, note, recipe, run_merge
 from app.services.projects import can_edit, restrict, scope_for
 from app.services.relationships import detect, store
 
@@ -254,6 +254,10 @@ def merge_datasets(payload: MergeIn, db: DbSession, user: RequireManager) -> Dat
         project_id=left.project_id,
     )
     merged.derivation = derivation
+    # The recipe is copied onto the merge as well, so that it can still be
+    # rebuilt after the relationship is deleted or detected afresh.
+    _pin(merged, Join(relationship.left_variable, relationship.right_variable,
+                      relationship.key_match), left, right, relationship.id)
     _merge_into(db, merged, relationship, left, right)
     record(
         db,
@@ -280,15 +284,16 @@ def rebuild_derived_dataset(
             status_code=422,
             detail=f"'{dataset.name}' was uploaded, not derived, so there is nothing to re-run",
         )
-    relationship = db.get(DatasetRelationship, derivation.get("relationship_id"))
-    if relationship is None:
-        raise HTTPException(
-            status_code=409,
-            detail="The relationship this was built from no longer exists",
-        )
-    left = get_dataset(relationship.left_dataset_id, db, user)
-    right = get_dataset(relationship.right_dataset_id, db, user)
-    _merge_into(db, dataset, relationship, left, right)
+    found = recipe(db, dataset)
+    if isinstance(found, str):
+        db.commit()  # keeps a recipe that was recovered, if one was
+        raise HTTPException(status_code=409, detail=found)
+    join, left, right = found
+    # Through the scope check, so a rebuild cannot read a dataset out of reach.
+    get_dataset(left.id, db, user)
+    get_dataset(right.id, db, user)
+    _merge_into(db, dataset, join, left, right)
+    note(dataset, "rebuilt")
     db.commit()
     db.refresh(dataset)
     return DatasetDetail.model_validate(dataset)
@@ -300,7 +305,7 @@ def rebuild_derived_dataset(
 def _merge_into(
     db: DbSession,
     target: Dataset,
-    relationship: DatasetRelationship,
+    relationship: DatasetRelationship | Join,
     left: Dataset,
     right: Dataset,
 ) -> None:
