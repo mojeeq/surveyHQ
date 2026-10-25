@@ -1,4 +1,4 @@
-import { NavLink, Outlet, useNavigate } from 'react-router-dom'
+import { Link, NavLink, Outlet, useNavigate } from 'react-router-dom'
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import { api } from '@/lib/api'
@@ -148,21 +148,44 @@ function PaletteIcon() {
   )
 }
 
-function Brand() {
+/** The mark on its own, and the way home.
+ *
+ *  The logo is a tile already - its own blue, gloss and edge - and it used to
+ *  sit inside a second blue square, a tile in a tile, with the mark shrunk to
+ *  fit. So it stands alone now, at the size the square was, and like the name
+ *  in any app's corner it goes to the front page.
+ */
+function Logo({ size }: { size: number }) {
+  return <img src="/logo.svg" alt="" className="shrink-0" style={{ width: size, height: size }} />
+}
+
+const HOME_LINK =
+  'rounded-lg outline-none focus-visible:ring-2 focus-visible:ring-brand-400 focus-visible:ring-offset-2 focus-visible:ring-offset-transparent'
+
+/** One link whether the pane is open or a rail, so it is the same element
+ *  under the pointer either way. Pointing at the rail opens it, and two links
+ *  swapped at that moment let a quick click press on one and let go on the
+ *  other - which is no click at all. */
+function Brand({ compact }: { compact: boolean }) {
   return (
-    <div className="flex items-center gap-3">
-      <div className="grid h-9 w-9 place-items-center rounded-xl bg-brand-500 shadow-lg shadow-brand-500/20">
-        <img src="/logo.svg" alt="" className="h-6 w-6" />
-      </div>
+    <Link
+      to="/"
+      className={`flex shrink-0 items-center gap-3 ${HOME_LINK}`}
+      title="Go to the overview"
+      aria-label={compact ? 'SurveyHQ, go to the overview' : undefined}
+    >
+      <Logo size={40} />
       {/* Ink from the pane, not white: the name was the one thing left
           unreadable when the pane was painted a pale colour. */}
-      <div className="min-w-0">
-        <div className="text-[15px] font-bold tracking-tight text-[var(--sb-ink)]">SurveyHQ</div>
-        <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-[var(--sb-faint)]">
-          Survey operations
+      {!compact && (
+        <div className="min-w-0">
+          <div className="text-[15px] font-bold tracking-tight text-[var(--sb-ink)]">SurveyHQ</div>
+          <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-[var(--sb-faint)]">
+            Survey operations
+          </div>
         </div>
-      </div>
-    </div>
+      )}
+    </Link>
   )
 }
 
@@ -358,13 +381,18 @@ export default function Layout() {
           if (!event.currentTarget.contains(event.relatedTarget as Node)) setRailHovered(false)
         }}
       >
+        {/* The logo sits 12 pixels in whether the pane is open or a rail -
+            centred in the rail's 64 - so it does not move under the pointer
+            as the pane opens. And the row clips rather than squeezes, so the
+            pin button stays out past the edge until the pane is wide enough
+            for it, instead of passing over the logo on the way. */}
         <div
-          className={`flex h-[72px] shrink-0 items-center border-b ${expanded ? 'px-5' : 'justify-center px-0'}`}
+          className="flex h-[72px] shrink-0 items-center overflow-hidden border-b px-3"
           style={{ borderColor: 'var(--sb-edge)' }}
         >
-          {expanded ? (
+          <Brand compact={!expanded} />
+          {expanded && (
             <>
-              <Brand />
               {/* Sized from the shared control height rather than from its own
                   padding, which came to 30 and made it the one control on
                   every page that was not 32. Not `.icon-button`: that class
@@ -385,10 +413,6 @@ export default function Layout() {
                 <PinIcon pinned={sidebarPinned} />
               </button>
             </>
-          ) : (
-            <div className="grid h-9 w-9 place-items-center rounded-xl bg-brand-500 shadow-lg shadow-brand-500/20">
-              <img src="/logo.svg" alt="" className="h-6 w-6" />
-            </div>
           )}
         </div>
         <SidebarNav admin={can('admin')} compact={!expanded} />
@@ -425,12 +449,19 @@ export default function Layout() {
             >
               <MenuIcon />
             </button>
-            <div className="flex items-center gap-2.5">
-              <div className="grid h-8 w-8 place-items-center rounded-lg bg-brand-500">
-                <img src="/logo.svg" alt="" className="h-5 w-5" />
-              </div>
-              <span className="font-bold tracking-tight text-slate-950 dark:text-white">SurveyHQ</span>
-            </div>
+            {/* The name only where there is room for it. On a phone the
+                header's buttons ran over it; the logo says the same. */}
+            <Link
+              to="/"
+              className={`flex items-center gap-2.5 ${HOME_LINK}`}
+              title="Go to the overview"
+              aria-label="SurveyHQ, go to the overview"
+            >
+              <Logo size={34} />
+              <span className="hidden font-bold tracking-tight text-slate-950 dark:text-white sm:inline">
+                SurveyHQ
+              </span>
+            </Link>
           </div>
 
           <div className="hidden min-w-0 lg:block">
