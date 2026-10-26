@@ -326,6 +326,9 @@ def _multiselect_result(ctx: DatasetContext, spec: dict[str, Any], filters: Filt
         percent_of=str(saved.get("percent_of") or "respondents"),
         sort=str(saved.get("sort") or "value_desc"),
         show=str(saved.get("show") or "both"),
+        view=str(saved.get("view") or "options"),
+        by=str(saved.get("by") or ""),
+        top=max(1, min(50, int(saved.get("top") or 10))),
     )
 
 
@@ -417,6 +420,12 @@ def visible_variables(db: DbSession, dashboard: Dashboard) -> Allowance:
                 ticked.update(
                     str(name) for name in (spec.get("multiselect") or {}).get("columns") or []
                 )
+                # A breakdown draws its groups by name, as any chart grouped
+                # on a variable does, so that variable is the page's to
+                # filter by like one.
+                saved = spec.get("multiselect") or {}
+                if saved.get("view") == "by_group" and saved.get("by"):
+                    names.add(str(saved["by"]))
             else:
                 names.update(_spec_variables(spec))
             continue

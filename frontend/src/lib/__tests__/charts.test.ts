@@ -21,6 +21,7 @@ import {
   buildChartOption,
   buildSparkline,
   themeColors,
+  twoLines,
 } from '@/lib/charts'
 import type { ChartType, QueryColumn, QueryResult } from '@/lib/types'
 
@@ -627,5 +628,144 @@ describe('a chart of categories', () => {
       { sort: 'label_asc' },
     )
     expect(categoriesOf(option)).toEqual(['Highland', 'Northern', 'Southern'])
+  })
+})
+
+// --- the other ways to draw a tick-all-that-apply question -------------------
+
+/** A share column, as the multiple-select views return one. */
+function shares(rows: [string, string, number | null][]): QueryResult {
+  return result(
+    [
+      column('option', 'dimension'),
+      column('group', 'dimension'),
+      { name: 'percent', label: '% of respondents', type: 'measure', data_type: 'percent' },
+    ],
+    rows,
+  )
+}
+
+describe('shares by group', () => {
+  const ten = shares(
+    ['Piped', 'Well'].flatMap((option) =>
+      Array.from({ length: 10 }, (_, i) => [option, `District ${i + 1}`, 40] as [string, string, number]),
+    ),
+  )
+
+  it('are never added up into an Other', () => {
+    // Forty per cent of one district plus forty of another is not eighty per
+    // cent of anything, so the ninth and tenth districts keep bars of their own.
+    const names = seriesOf(buildChartOption(ten, 'horizontal_bar')).map((s) => s.name)
+    expect(names).toHaveLength(10)
+    expect(names.some((name) => name?.startsWith('Other'))).toBe(false)
+  })
+
+  it('every group keeps a row on a heatmap', () => {
+    const option = buildChartOption(ten, 'heatmap', { transpose: true }) as any
+    expect(option.xAxis.data).toHaveLength(10)
+    expect(option.yAxis.data).toEqual(['Piped', 'Well'])
+  })
+})
+
+describe('a heatmap', () => {
+  const together = shares([
+    ['Piped', 'Piped', null],
+    ['Piped', 'Rain', 66.7],
+    ['Rain', 'Piped', 50],
+    ['Rain', 'Rain', null],
+  ])
+
+  it('draws no cell where the result left one empty', () => {
+    const cells = (seriesOf(buildChartOption(together, 'heatmap'))[0].data as any[]).map(
+      (cell) => cell.value,
+    )
+    expect(cells).toEqual([
+      [1, 0, 50],
+      [0, 1, 66.7],
+    ])
+  })
+
+  it('puts the first dimension down the side when transposed', () => {
+    const option = buildChartOption(together, 'heatmap', { transpose: true }) as any
+    expect(option.yAxis.data).toEqual(['Piped', 'Rain'])
+    // Piped's row, Rain's column: x is the second dimension now.
+    const cells = (option.series[0].data as any[]).map((cell) => cell.value)
+    expect(cells).toContainEqual([1, 0, 66.7])
+  })
+
+  it('still draws a combination that never occurred as a nought', () => {
+    // Absent from the result is "none", which is a count; only a cell the
+    // result itself left empty is left off the map.
+    const option = buildChartOption(
+      crosstab([
+        ['Northern', 'Primary', 4],
+        ['Southern', 'Secondary', 2],
+      ]),
+      'heatmap',
+    )
+    expect((seriesOf(option)[0].data as any[]).length).toBe(4)
+  })
+})
+
+describe('bar styles', () => {
+  const options = simple([
+    ['Piped', 50],
+    ['Rain', 66.7],
+    ['River', null],
+  ])
+
+  it('a lollipop is a thin stem and a dot at the same value', () => {
+    const [stem, dot] = seriesOf(buildChartOption(options, 'horizontal_bar', { barStyle: 'lollipop' })) as any[]
+    expect(stem.type).toBe('bar')
+    expect(stem.barWidth).toBe(2)
+    expect(dot.type).toBe('scatter')
+    expect(dot.data).toEqual([
+      { name: 'Piped', value: [50, 0] },
+      { name: 'Rain', value: [66.7, 1] },
+      null,
+    ])
+  })
+
+  it('a track runs to a hundred where every figure is a share', () => {
+    const option = buildChartOption(options, 'horizontal_bar', { barStyle: 'track' }) as any
+    expect(option.series[0].showBackground).toBe(true)
+    expect(option.xAxis.max).toBe(100)
+  })
+
+  it('a track over counts runs to the end of the axis instead', () => {
+    const counts = simple([
+      ['Piped', 300],
+      ['Rain', 120],
+    ])
+    const option = buildChartOption(counts, 'horizontal_bar', { barStyle: 'track' }) as any
+    expect(option.xAxis.max).toBeUndefined()
+  })
+
+  it('several series are plain bars whatever the style', () => {
+    const option = buildChartOption(
+      crosstab([
+        ['Northern', 'Primary', 4],
+        ['Northern', 'Secondary', 2],
+      ]),
+      'bar',
+      { barStyle: 'lollipop' },
+    )
+    expect(seriesOf(option).every((s: any) => s.type === 'bar')).toBe(true)
+  })
+})
+
+describe('a long name wrapped', () => {
+  it('stays on one line when it fits', () => {
+    expect(twoLines('None', 20)).toBe('None')
+  })
+
+  it('breaks between words onto a second line', () => {
+    expect(twoLines('Soap and single lever type tap', 18)).toBe('Soap and single\nlever type tap')
+  })
+
+  it('is cut after two lines, so it cannot run into the next', () => {
+    const shown = twoLines('Soap and single lever type tap + Liquid soap contained in a dispenser', 20)
+    expect(shown.split('\n')).toHaveLength(2)
+    expect(shown.endsWith('…')).toBe(true)
   })
 })

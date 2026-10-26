@@ -210,6 +210,33 @@ export interface BuildOptions {
   showValues?: boolean
   /** Stack to 100%, for reading composition rather than magnitude. */
   percentStack?: boolean
+  /**
+   * How one series of bars is drawn.
+   *
+   * - `bars`, the default.
+   * - `lollipop`: a dot on a thin stem. The same lengths with a tenth of the
+   *   ink, which is what keeps twenty options readable in a quarter tile.
+   * - `track`: each bar on a pale bar running the whole axis - to 100 where
+   *   the figures are percentages - so each is read as a share of everyone
+   *   rather than against the longest. That is the right reading of a "tick
+   *   all that apply" question, whose shares do not add to a whole.
+   *
+   * Several series, or a stack, are always plain bars: a lollipop per series
+   * is a cloud of dots, and a track per stack segment means nothing.
+   */
+  barStyle?: 'bars' | 'lollipop' | 'track'
+  /** A heatmap's first dimension down the side rather than along the bottom,
+   *  which is where long names - a question's options - have room. */
+  transpose?: boolean
+  /**
+   * Names down the side wrap onto a second line rather than being cut short.
+   *
+   * Cutting keeps the start of a name, which is the part that says least
+   * when several begin alike: three combinations that all start "Soap and
+   * single lever type tap + ..." were three identical labels. Past two lines
+   * the name is cut after all, so one long label cannot run into the next.
+   */
+  wrapLabels?: boolean
   smooth?: boolean
   valueTitle?: string
   valueMin?: number | null
@@ -370,8 +397,13 @@ function referenceLine(options: BuildOptions) {
  */
 const MAX_LABELLED = 24
 
-function markLabel(options: BuildOptions, position: 'top' | 'right' | 'inside', marks = 0) {
-  if (!options.showValues || marks > MAX_LABELLED) return { show: false }
+function markLabel(
+  options: BuildOptions,
+  position: 'top' | 'right' | 'inside',
+  marks = 0,
+  limit = MAX_LABELLED,
+) {
+  if (!options.showValues || marks > limit) return { show: false }
   return {
     show: true,
     position,
@@ -393,7 +425,7 @@ function markLabel(options: BuildOptions, position: 'top' | 'right' | 'inside', 
  * One dimension + N measures -> one series per measure.
  * Two dimensions + one measure -> one series per value of the second dimension.
  */
-function pivot(result: QueryResult) {
+function pivot(result: QueryResult, fold = true) {
   const dimensions = result.columns.filter((c) => c.type === 'dimension')
   const measures = result.columns.filter((c) => c.type === 'measure')
   const names = result.columns.map((c) => c.name)
@@ -413,6 +445,11 @@ function pivot(result: QueryResult) {
     const seenCategory = new Set<string>()
     const seenSeries = new Set<string>()
     const lookup = new Map<string, number>()
+    // The cells the result itself left empty, as against ones it never
+    // mentioned. Only a heatmap tells them apart: "nobody chose both" is a
+    // nought, and "of those who chose it, all chose it" is not a figure at
+    // all. Every other mark draws both as nothing, as it always has.
+    const blank = new Set<string>()
 
     for (const row of result.rows) {
       const category = formatCell(row[rowIndex])
@@ -425,6 +462,7 @@ function pivot(result: QueryResult) {
         seenSeries.add(seriesName)
         seriesNames.push(seriesName)
       }
+      if (row[valIndex] === null || row[valIndex] === undefined) blank.add(`${category}||${seriesName}`)
       lookup.set(`${category}||${seriesName}`, Number(row[valIndex] ?? 0))
     }
     // Folded, not sliced. The tail used to be cut off here, so a cross-tab of
@@ -442,7 +480,10 @@ function pivot(result: QueryResult) {
       name,
       data: categories.map((category) => valueOf(name, category)),
     }))
-    if (seriesNames.length > MAX_SERIES) {
+    // Not where the figures are shares, though. Adding up the ninth group's
+    // percentage and the tenth's gives a number that is a share of nothing,
+    // drawn as if it were one.
+    if (fold && seriesNames.length > MAX_SERIES) {
       const biggest = [...seriesNames].sort((a, b) => total(b) - total(a))
       const kept = new Set(biggest.slice(0, MAX_SERIES - 1))
       const rest = seriesNames.filter((name) => !kept.has(name))
@@ -471,6 +512,8 @@ function pivot(result: QueryResult) {
       series: drawn,
       valueLabel: measures[0].label || measures[0].name,
       categoryLabel: dimensions[0].label || dimensions[0].name,
+      seriesLabel: dimensions[1].label || dimensions[1].name,
+      blank,
     }
   }
 
@@ -489,6 +532,8 @@ function pivot(result: QueryResult) {
     })),
     valueLabel: measures.length === 1 ? measures[0].label || measures[0].name : '',
     categoryLabel: dimensions.length ? dimensions[0].label || dimensions[0].name : '',
+    seriesLabel: '',
+    blank: new Set<string>(),
   }
 }
 
@@ -738,7 +783,10 @@ function buildOption(
   const palette = options.seriesColors
     ? ordered.map((colour, index) => options.seriesColors![index] || colour)
     : ordered
-  const pivoted = pivot(result)
+  const shares = result.columns.find((c) => c.type === 'measure')?.data_type === 'percent'
+  // A heatmap colours by value rather than by series, so it has no palette to
+  // stay inside and every group keeps a row of its own.
+  const pivoted = pivot(result, chartType !== 'heatmap' && !shares)
   const valueLabelText = pivoted.valueLabel
   const { categories, series } = shape(
     pivoted.categories,
@@ -866,15 +914,38 @@ function buildOption(
     }
 
     case 'heatmap': {
+      const seriesNames = series.map((s) => s.name)
+      // Across the bottom and down the side. The first dimension goes along
+      // the bottom unless asked otherwise.
+      const across = options.transpose ? seriesNames : categories
+      const down = options.transpose ? categories : seriesNames
       const values: [number, number, number][] = []
       let max = 0
       series.forEach((entry, seriesIndex) => {
         entry.data.forEach((value, categoryIndex) => {
+          // Left empty by the result itself: drawn as no cell at all.
+          if (pivoted.blank.has(`${categories[categoryIndex]}||${entry.name}`)) return
           const numeric = Number(value ?? 0)
           max = Math.max(max, numeric)
-          values.push([categoryIndex, seriesIndex, numeric])
+          values.push(
+            options.transpose
+              ? [seriesIndex, categoryIndex, numeric]
+              : [categoryIndex, seriesIndex, numeric],
+          )
         })
       })
+      // Long names along the bottom are turned and cut, as an upright bar's
+      // are; the tooltip still carries the whole of each. Short ones - five
+      // district names - stand upright, where they are easier to read.
+      const crowded = across.length > 6 || across.some((name) => name.length > 12)
+      const bottomAxis = axisCommon(crowded ? 30 : 0)
+      const sideAxis = axisCommon(0)
+      const named = (label: string, value: string) =>
+        `${label ? `${escapeHtml(label)}: ` : ''}<b>${escapeHtml(value)}</b>`
+      // Each number sits inside its own cell, so they do not run into each
+      // other the way forty bar-end labels do; it takes a far larger map
+      // before the cells are too small to hold one.
+      const label = markLabel(options, 'inside', values.length, 300)
       return {
         ...common,
         legend: { show: false },
@@ -882,13 +953,39 @@ function buildOption(
         tooltip: {
           ...tooltipBase,
           trigger: 'item',
-          formatter: (params: any) =>
-            `${escapeHtml(categories[params.value[0]])} / ` +
-            `${escapeHtml(series[params.value[1]]?.name)}<br/>` +
-            `<b>${formatNumber(params.value[2])}</b>`,
+          formatter: (params: any) => {
+            const [x, y, v] = params.value
+            const category = options.transpose ? down[y] : across[x]
+            const seriesName = options.transpose ? across[x] : down[y]
+            return (
+              `${named(pivoted.categoryLabel, category)}<br/>` +
+              `${named(pivoted.seriesLabel, seriesName)}<br/>` +
+              `${valueLabelText ? `${escapeHtml(valueLabelText)}: ` : ''}<b>${formatNumber(v)}</b>`
+            )
+          },
         },
-        xAxis: { type: 'category', data: categories, ...axisCommon(0) },
-        yAxis: { type: 'category', data: series.map((s) => s.name), ...axisCommon(0) },
+        xAxis: {
+          type: 'category',
+          data: across,
+          ...bottomAxis,
+          axisLabel: {
+            ...bottomAxis.axisLabel,
+            ...(crowded ? { interval: 0, width: 110, overflow: 'truncate' as const } : {}),
+          },
+        },
+        yAxis: {
+          type: 'category',
+          data: down,
+          ...sideAxis,
+          // Read top to bottom in the order given, as a table is.
+          inverse: true,
+          axisLabel: {
+            ...sideAxis.axisLabel,
+            ...(options.wrapLabels
+              ? wrapped(options.maxLabelWidth ?? 180, options.fontSize)
+              : { width: options.maxLabelWidth ?? 180, overflow: 'truncate' as const }),
+          },
+        },
         visualMap: {
           min: 0,
           max: max || 1,
@@ -897,16 +994,24 @@ function buildOption(
           bottom: 0,
           itemWidth: 12,
           itemHeight: 90,
+          // What the ends of the ramp stand for; a key without numbers says
+          // only that darker is more.
+          text: [formatNumber(max || 1), '0'],
           textStyle: { color: INK.muted, ...BASE_TEXT },
           inRange: { color: SEQUENTIAL_RAMP },
         },
         series: [
           {
             type: 'heatmap',
-            data: values,
+            // White on the dark cells and ink on the pale ones: one colour
+            // for every cell left the numbers unreadable on half the ramp.
+            data: values.map((cell) => ({
+              value: cell,
+              label: { color: cell[2] / (max || 1) > 0.55 ? '#ffffff' : INK.primary },
+            })),
             // A heatmap's cells are large and few, so the number goes inside
             // rather than above. The count is cells, not categories.
-            label: markLabel(options, 'inside', values.length),
+            label,
             itemStyle: { borderColor: INK.surface, borderWidth: 2, borderRadius: 3 },
           },
         ],
@@ -1179,6 +1284,14 @@ function buildOption(
         chartType === 'stacked_bar' ||
         chartType === 'horizontal_stacked_bar' ||
         options.stacked
+      const style = series.length === 1 && !stacked ? (options.barStyle ?? 'bars') : 'bars'
+      // A track runs to a hundred where every figure is a share of a hundred,
+      // which is the point of it; otherwise to the end of the axis.
+      const toHundred =
+        style === 'track' &&
+        options.valueMax == null &&
+        series[0]?.data.every((value) => value === null || Number(value) <= 100)
+      const valueBounds = { ...bounds(options), ...(toHundred ? { max: 100 } : {}) }
       // Past eight categories the labels under an upright bar are turned on
       // their side, which is the axis' own answer to names that will not fit
       // beside each other.
@@ -1220,9 +1333,11 @@ function buildOption(
         axisLabel: {
           ...common_.axisLabel,
           ...(horizontal
-            ? options.maxLabelWidth
-              ? { width: options.maxLabelWidth, overflow: 'truncate' as const }
-              : {}
+            ? options.wrapLabels
+              ? wrapped(options.maxLabelWidth ?? 220, options.fontSize)
+              : options.maxLabelWidth
+                ? { width: options.maxLabelWidth, overflow: 'truncate' as const }
+                : {}
             : // Under the bars, what bounds a label is the slot its own bar
               // stands in. ECharts' answer to a label wider than that is to
               // drop it and every second one after it, which on a chart of
@@ -1273,7 +1388,11 @@ function buildOption(
           trigger: 'axis',
           axisPointer: { type: 'shadow' },
           formatter: (params: any) => {
-            const list = Array.isArray(params) ? params : [params]
+            // A lollipop is a stem and a dot under one name; said once.
+            const list = (Array.isArray(params) ? params : [params]).filter(
+              (p: any, at: number, all: any[]) =>
+                all.findIndex((q: any) => q.seriesName === p.seriesName) === at,
+            )
             const rows = list
               .filter((p: any) => p.value !== null && p.value !== undefined)
               .map(
@@ -1289,7 +1408,7 @@ function buildOption(
           },
         },
         xAxis: horizontal
-          ? { ...valueAxis(options.valueTitle ?? ''), ...bounds(options) }
+          ? { ...valueAxis(options.valueTitle ?? ''), ...valueBounds }
           : categoryAxis,
         yAxis: horizontal
           ? categoryAxis
@@ -1301,9 +1420,9 @@ function buildOption(
               // over a narrow axis of two-digit ticks hung off the left edge
               // of the widget and was cut to "of rows failing".
               nameTextStyle: { color: INK.muted, ...BASE_TEXT, align: 'left' },
-              ...bounds(options),
+              ...valueBounds,
             },
-        series: series.map((entry, index) => ({
+        series: style === 'lollipop' ? lollipop(series[0], categories, palette[0], Boolean(horizontal), options) : series.map((entry, index) => ({
           name: entry.name,
           type: 'bar',
           data:
@@ -1316,7 +1435,18 @@ function buildOption(
                 }))
               : entry.data,
           stack: stacked ? 'total' : undefined,
-          barMaxWidth: 42,
+          barMaxWidth: style === 'track' ? 18 : 42,
+          ...(style === 'track'
+            ? {
+                // The whole of the axis behind each bar, faint enough to read
+                // on a dark board as on a white one.
+                showBackground: true,
+                backgroundStyle: {
+                  color: 'rgba(137, 135, 129, 0.16)',
+                  borderRadius: horizontal ? [0, 4, 4, 0] : [4, 4, 0, 0],
+                },
+              }
+            : {}),
           label: markLabel(options, horizontal ? 'right' : 'top', categories.length),
           // 4px rounded data-end anchored to the baseline
           itemStyle: stacked
@@ -1329,6 +1459,95 @@ function buildOption(
       }
     }
   }
+}
+
+/**
+ * A category label wrapped to two lines of this width, and cut after them.
+ *
+ * Broken here rather than by ECharts, whose axis labels wrap to as many lines
+ * as a name needs: a third line runs into the next category, and the axis
+ * answers that by hiding every other label. The line length is estimated
+ * from the text size; each line is still truncated to the width in case a
+ * single word is longer than that.
+ */
+function wrapped(width: number, fontSize = 12) {
+  const perLine = Math.max(8, Math.floor(width / (fontSize * 0.56)))
+  return {
+    width,
+    overflow: 'truncate' as const,
+    lineHeight: Math.round(fontSize * 1.2),
+    formatter: (value: string) => twoLines(String(value), perLine),
+  }
+}
+
+/** The words of a name on at most two lines of about this many characters. */
+export function twoLines(text: string, perLine: number): string {
+  const lines: string[] = []
+  let line = ''
+  for (const word of text.split(/\s+/).filter(Boolean)) {
+    const next = line ? `${line} ${word}` : word
+    if (next.length <= perLine || !line) {
+      line = next
+      continue
+    }
+    lines.push(line)
+    line = word
+  }
+  if (line) lines.push(line)
+  if (lines.length <= 2) return lines.join('\n')
+  const second = lines.slice(1).join(' ')
+  return `${lines[0]}\n${second.slice(0, Math.max(1, perLine - 1)).trimEnd()}…`
+}
+
+/**
+ * A dot on a thin stem for each category: the stem is a bar two pixels wide,
+ * the dot a point at its end, both under the series' one name.
+ *
+ * The dot is placed by [value, category] rather than by position, because a
+ * point's own data is what a click and a label read, and a category axis on
+ * the side does not tell a bare number which row it belongs to.
+ */
+function lollipop(
+  entry: { name: string; data: (number | null)[] },
+  categories: string[],
+  colour: string,
+  horizontal: boolean,
+  options: BuildOptions,
+) {
+  const label = markLabel(options, horizontal ? 'right' : 'top', categories.length)
+  return [
+    {
+      name: entry.name,
+      type: 'bar' as const,
+      data: entry.data,
+      barWidth: 2,
+      itemStyle: { color: colour },
+      label: { show: false },
+    },
+    {
+      name: entry.name,
+      type: 'scatter' as const,
+      symbolSize: 12,
+      z: 3,
+      itemStyle: { color: colour, borderColor: INK.surface, borderWidth: 1.5 },
+      data: entry.data.map((value, at) =>
+        value === null
+          ? null
+          : { name: categories[at], value: horizontal ? [value, at] : [at, value] },
+      ),
+      label: label.show
+        ? {
+            ...label,
+            distance: 8,
+            formatter: (params: any) =>
+              formatNumber(
+                Number(horizontal ? params.value[0] : params.value[1]),
+                options.decimals ?? 0,
+              ),
+          }
+        : label,
+    },
+  ]
 }
 
 /** Sparkline used inside indicator tiles. */

@@ -14,6 +14,7 @@ import type {
   FilterGroup,
   MultiSelectGroup,
   MultiSelectRequest,
+  MultiSelectView,
   QueryResult,
 } from "@/lib/types";
 
@@ -41,6 +42,83 @@ export const MULTISELECT_CHARTS: { value: ChartType; label: string }[] = [
   { value: "pie", label: "Pie" },
   { value: "table", label: "Table" },
 ];
+
+/**
+ * The ways one question can be read, and what each is drawn with.
+ *
+ * One bar per option says what was chosen. The same columns also say how the
+ * choices differ between groups, which go together, and how many each
+ * respondent ticked - and each of those is its own chart. The first chart
+ * listed is the one a view starts on.
+ */
+export const MULTISELECT_VIEWS: {
+  value: MultiSelectView;
+  label: string;
+  hint: string;
+  charts: { value: ChartType; label: string }[];
+}[] = [
+  {
+    value: "options",
+    label: "How many chose each option",
+    hint: "One bar per option. The shares add to more than 100: more than one may be ticked.",
+    charts: MULTISELECT_CHARTS,
+  },
+  {
+    value: "by_group",
+    label: "Each option, by a group",
+    hint: "Each option's share within each group - by district, by sex, urban and rural. Shares are of each group's own respondents, so groups of different sizes compare.",
+    charts: [
+      { value: "heatmap", label: "Heatmap" },
+      { value: "horizontal_bar", label: "Grouped bars, horizontal" },
+      { value: "bar", label: "Grouped bars, vertical" },
+      { value: "table", label: "Table" },
+    ],
+  },
+  {
+    value: "combinations",
+    label: "The combinations chosen",
+    hint: "The sets of options chosen together, most common first. Each respondent has exactly one, so these do add to 100%.",
+    charts: [
+      { value: "horizontal_bar", label: "Horizontal bar" },
+      { value: "donut", label: "Donut" },
+      { value: "table", label: "Table" },
+    ],
+  },
+  {
+    value: "how_many",
+    label: "How many options each chose",
+    hint: "Respondents by the number of options they ticked: none, one, two and so on.",
+    charts: [
+      { value: "bar", label: "Vertical bar" },
+      { value: "horizontal_bar", label: "Horizontal bar" },
+      { value: "table", label: "Table" },
+    ],
+  },
+  {
+    value: "together",
+    label: "Which options go together",
+    hint: "Read across a row: of those who chose that option, the share who also chose each of the others.",
+    charts: [
+      { value: "heatmap", label: "Heatmap" },
+      { value: "table", label: "Table" },
+    ],
+  },
+];
+
+const BAR_STYLES: { value: NonNullable<BuildOptions["barStyle"]>; label: string }[] = [
+  { value: "bars", label: "Bars" },
+  { value: "lollipop", label: "Lollipops" },
+  { value: "track", label: "Bars on a 100% track" },
+];
+
+/** What a saved chart of each view is called until it is named. */
+function viewSuffix(view: MultiSelectView, byLabel: string): string {
+  if (view === "by_group") return byLabel ? ` by ${byLabel}` : " by group";
+  if (view === "combinations") return " - combinations";
+  if (view === "how_many") return " - how many chosen";
+  if (view === "together") return " - chosen together";
+  return "";
+}
 
 /**
  * A "tick all that apply" question, charted from the columns it arrived as.
@@ -72,6 +150,9 @@ export function MultiSelectBuilder({
   const [sort, setSort] = useState<MultiSelectRequest["sort"]>("value_desc");
   const [show, setShow] = useState<MultiSelectRequest["show"]>("count");
   const [chartType, setChartType] = useState<ChartType>("horizontal_bar");
+  const [view, setView] = useState<MultiSelectView>("options");
+  const [by, setBy] = useState("");
+  const [top, setTop] = useState(10);
   const [display, setDisplay] = useState<BuildOptions>({ sort: "none" });
   const [filters, setFilters] = useState<FilterGroup>(emptyFilter());
   const [result, setResult] = useState<QueryResult | null>(null);
@@ -105,6 +186,9 @@ export function MultiSelectBuilder({
     setPercentOf(saved.percent_of ?? "respondents");
     setSort(saved.sort ?? "value_desc");
     setShow(saved.show ?? "count");
+    setView(saved.view ?? "options");
+    setBy(saved.by ?? "");
+    setTop(saved.top ?? 10);
     setFilters(saved.filters ?? emptyFilter());
     setChartType(editing?.chart_type as ChartType);
     setDisplay((editing?.spec?.options as BuildOptions) ?? { sort: "none" });
@@ -117,6 +201,48 @@ export function MultiSelectBuilder({
     percent_of: percentOf,
     sort,
     show,
+    view,
+    by,
+    top,
+  };
+  const viewing =
+    MULTISELECT_VIEWS.find((entry) => entry.value === view) ?? MULTISELECT_VIEWS[0];
+  // A heatmap here always has the options down the side, where their names
+  // have room; the groups, or the other options, go along the bottom.
+  // Option names are long, and several often begin alike, so they wrap
+  // rather than being cut to the part they share.
+  const drawn: BuildOptions = {
+    ...display,
+    transpose: chartType === "heatmap",
+    wrapLabels: true,
+  };
+  const byLabel =
+    allVariables.find((variable) => variable.name === by)?.label || by;
+  const barred =
+    (chartType === "horizontal_bar" || chartType === "bar") &&
+    view !== "by_group";
+
+  // A view starts on its own first chart and on the number it reads best by:
+  // a breakdown or a pairing compares shares, since groups differ in size.
+  const chooseView = (next: MultiSelectView) => {
+    const entry = MULTISELECT_VIEWS.find((one) => one.value === next)!;
+    setView(next);
+    setResult(null);
+    setChartType(entry.charts[0].value);
+    const shown =
+      next === "by_group" || next === "together"
+        ? "percent"
+        : show === "both"
+          ? "count"
+          : show;
+    setShow(shown);
+    // A heatmap is read by its figures - the colour only says where to look -
+    // so the views that start on one print them.
+    setDisplay({
+      ...display,
+      decimals: shown === "percent" ? 1 : 0,
+      showValues: entry.charts[0].value === "heatmap" ? true : display.showValues,
+    });
   };
 
   const run = useMutation({
@@ -350,7 +476,72 @@ export function MultiSelectBuilder({
         </Card>
 
         <Card title="Display">
-          <Field label="Chart type">
+          <Field label="What to show" hint={viewing.hint}>
+            <select
+              className="input py-1.5 text-xs"
+              value={view}
+              onChange={(event) =>
+                chooseView(event.target.value as MultiSelectView)
+              }
+            >
+              {MULTISELECT_VIEWS.map((entry) => (
+                <option key={entry.value} value={entry.value}>
+                  {entry.label}
+                </option>
+              ))}
+            </select>
+          </Field>
+          {view === "by_group" && (
+            <Field
+              label="Break down by"
+              hint="A variable with a few groups: district, sex, urban or rural."
+            >
+              <select
+                className={`input py-1.5 text-xs ${by ? "" : "border-amber-500"}`}
+                value={by}
+                onChange={(event) => {
+                  setBy(event.target.value);
+                  setResult(null);
+                }}
+              >
+                <option value="">Choose a variable</option>
+                {allVariables
+                  .filter((variable) => !columns.includes(variable.name))
+                  .map((variable) => (
+                    <option key={variable.name} value={variable.name}>
+                      {variable.label
+                        ? `${variable.label} - ${variable.name}`
+                        : variable.name}
+                    </option>
+                  ))}
+              </select>
+            </Field>
+          )}
+          {view === "combinations" && (
+            <Field
+              label="Name the most common"
+              hint="The rest are one bar, so the whole still adds to 100%."
+            >
+              <input
+                className="input py-1.5 text-xs"
+                type="number"
+                min={1}
+                max={50}
+                value={top}
+                onChange={(event) =>
+                  setTop(Math.max(1, Math.min(50, Number(event.target.value) || 1)))
+                }
+              />
+            </Field>
+          )}
+          <Field
+            label="Chart type"
+            hint={
+              view === "options" && (chartType === "pie" || chartType === "donut")
+                ? "A pie makes the options parts of a whole, which they are not: one respondent can be in several slices. Each slice is that option's share of all the ticks."
+                : undefined
+            }
+          >
             <select
               className="input py-1.5 text-xs"
               value={chartType}
@@ -363,20 +554,50 @@ export function MultiSelectBuilder({
                 if (next !== "table" && show === "both") setShow("count");
               }}
             >
-              {MULTISELECT_CHARTS.map((type) => (
+              {viewing.charts.map((type) => (
                 <option key={type.value} value={type.value}>
                   {type.label}
                 </option>
               ))}
             </select>
           </Field>
+          {barred && (
+            <Field
+              label="Draw the bars as"
+              hint={
+                display.barStyle === "track" && show !== "percent"
+                  ? "The track runs to 100 when the shares are shown; with counts it runs to the end of the axis."
+                  : undefined
+              }
+            >
+              <select
+                className="input py-1.5 text-xs"
+                value={display.barStyle ?? "bars"}
+                onChange={(event) =>
+                  setDisplay({
+                    ...display,
+                    barStyle: event.target.value as BuildOptions["barStyle"],
+                  })
+                }
+              >
+                {BAR_STYLES.map((style) => (
+                  <option key={style.value} value={style.value}>
+                    {style.label}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          )}
           <Field label="Show">
             <select
               className="input py-1.5 text-xs"
               value={show}
-              onChange={(event) =>
-                setShow(event.target.value as MultiSelectRequest["show"])
-              }
+              onChange={(event) => {
+                const next = event.target.value as MultiSelectRequest["show"];
+                setShow(next);
+                // A share is read to a decimal place, a count is not.
+                setDisplay({ ...display, decimals: next === "percent" ? 1 : 0 });
+              }}
             >
               <option value="count">How many chose it</option>
               <option value="percent">Percent</option>
@@ -402,20 +623,23 @@ export function MultiSelectBuilder({
               <option value="rows">Every row in the dataset</option>
             </select>
           </Field>
-          <Field label="Order">
-            <select
-              className="input py-1.5 text-xs"
-              value={sort}
-              onChange={(event) =>
-                setSort(event.target.value as MultiSelectRequest["sort"])
-              }
-            >
-              <option value="value_desc">Most chosen first</option>
-              <option value="value_asc">Least chosen first</option>
-              <option value="label_asc">By option name (A-Z)</option>
-              <option value="none">In the order the columns come</option>
-            </select>
-          </Field>
+          {/* How many is a count, read in order whatever is asked. */}
+          {view !== "how_many" && (
+            <Field label="Order">
+              <select
+                className="input py-1.5 text-xs"
+                value={sort}
+                onChange={(event) =>
+                  setSort(event.target.value as MultiSelectRequest["sort"])
+                }
+              >
+                <option value="value_desc">Most chosen first</option>
+                <option value="value_asc">Least chosen first</option>
+                <option value="label_asc">By option name (A-Z)</option>
+                <option value="none">In the order the columns come</option>
+              </select>
+            </Field>
+          )}
           <label className="mb-3 flex items-center gap-2 text-xs text-ink-700">
             <input
               type="checkbox"
@@ -429,7 +653,7 @@ export function MultiSelectBuilder({
           <button
             className="btn-primary w-full"
             onClick={() => run.mutate()}
-            disabled={run.isPending || !columns.length}
+            disabled={run.isPending || !columns.length || (view === "by_group" && !by)}
           >
             {run.isPending && <Spinner className="h-4 w-4 text-white" />}
             Count the answers
@@ -438,10 +662,10 @@ export function MultiSelectBuilder({
       </div>
 
       <Card
-        title={group?.label || "Tick all that apply"}
+        title={`${group?.label || "Tick all that apply"}${viewSuffix(view, byLabel)}`}
         subtitle={
           result
-            ? `${result.row_count} option${result.row_count === 1 ? "" : "s"}, out of ` +
+            ? `${describeResult(result, view)}, out of ` +
               `${formatNumber(result.total_rows_scanned ?? 0)} ${
                 percentOf === "respondents" ? "who were asked" : "rows"
               }`
@@ -473,8 +697,8 @@ export function MultiSelectBuilder({
           <ChartCard
             result={result}
             chartType={chartType}
-            height={Math.max(320, Math.min(720, result.row_count * 28 + 120))}
-            display={display}
+            height={chartHeight(result, chartType, view)}
+            display={drawn}
           />
         )}
       </Card>
@@ -485,9 +709,9 @@ export function MultiSelectBuilder({
         datasetId={datasetId}
         datasetName={datasetName}
         chartType={chartType}
-        display={display}
+        display={drawn}
         request={body}
-        defaultName={group?.label || group?.stem || "Tick all that apply"}
+        defaultName={`${group?.label || group?.stem || "Tick all that apply"}${viewSuffix(view, byLabel)}`}
         editing={editing}
       />
 
@@ -500,6 +724,45 @@ export function MultiSelectBuilder({
       )}
     </div>
   );
+}
+
+/** The result in a few words, for the line under the chart's title. */
+function describeResult(result: QueryResult, view: MultiSelectView): string {
+  const firsts = new Set(result.rows.map((row) => String(row[0])));
+  const seconds = new Set(result.rows.map((row) => String(row[1])));
+  if (view === "by_group") {
+    return `${firsts.size} options across ${seconds.size} group${seconds.size === 1 ? "" : "s"}`;
+  }
+  if (view === "together") return `${firsts.size} options, each against the others`;
+  if (view === "combinations") {
+    return `${result.row_count} combination${result.row_count === 1 ? "" : "s"}`;
+  }
+  if (view === "how_many") {
+    // The average from the counts where they are shown, and from the shares
+    // where only those are - the column after the number of options either
+    // way, and either weighs each number of options the same.
+    let total = 0;
+    let people = 0;
+    for (const row of result.rows) {
+      const n = Number(row[1] ?? 0);
+      total += Number(row[0]) * n;
+      people += n;
+    }
+    return people
+      ? `${formatNumber(total / people, 1)} options chosen on average`
+      : "Nobody answered";
+  }
+  return `${result.row_count} option${result.row_count === 1 ? "" : "s"}`;
+}
+
+/** Room for every row of what is drawn, and no more than a screen. */
+function chartHeight(result: QueryResult, chartType: ChartType, view: MultiSelectView): number {
+  const lines = new Set(result.rows.map((row) => String(row[0]))).size;
+  if (chartType === "heatmap") return Math.max(320, Math.min(900, lines * 34 + 150));
+  if (view === "by_group" && chartType === "horizontal_bar") {
+    return Math.max(320, Math.min(900, result.row_count * 18 + 140));
+  }
+  return Math.max(320, Math.min(720, lines * 28 + 120));
 }
 
 /**

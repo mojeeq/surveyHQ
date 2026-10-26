@@ -1324,6 +1324,45 @@ the same respondents, so leaving a bar out does not inflate the rest.
 them. Anything holding 1 and 0 works, and so does Yes/No, since a CSV round
 trip turns one into the other often enough.
 
+#### Other ways to read the question
+
+One bar per option says what was chosen. **What to show** reads the same
+columns other ways, each with the charts that suit it:
+
+- **How many chose each option** - the bar chart above. Draw the bars as
+  **Bars**, **Lollipops** (a dot on a thin stem: the same lengths with less
+  ink, which keeps twenty options readable in a small tile) or **Bars on a
+  100% track**, where each bar sits on a pale bar running to 100, so it reads
+  as a share of everyone rather than against the longest. A pie or donut is
+  still offered, with a warning: it makes the options parts of a whole, which
+  they are not, so each slice is that option's share of all the ticks.
+- **Each option, by a group** - each option's share within each group of
+  another variable: district, sex, urban and rural. Pick it under **Break down
+  by**. The shares are of each group's own respondents, so a small district
+  is not made to look as if it used everything less. Drawn as a **heatmap**
+  (options down the side, groups along the bottom, the figure in each cell),
+  as grouped bars, or as a table. Up to forty groups.
+- **The combinations chosen** - the sets of options respondents ticked
+  together: *Piped + Rain*, *Well only*, *None of these*. Every respondent has
+  exactly one combination, so unlike the options these do add to 100%, and a
+  donut is honest here. **Name the most common** sets how many are listed;
+  the rest are one bar, *Other combinations*, so the whole still adds up.
+- **How many options each chose** - respondents by the number of options they
+  ticked, none, one, two and so on, with the average under the title. Always
+  in order, whatever the order setting says.
+- **Which options go together** - a heatmap read across a row: of those who
+  chose that option, the share who also chose each other one. It is not the
+  same both ways - most of those who chose a rare option may have chosen a
+  common one too, and not the reverse - which is why it is read from the
+  side. A row's own option is left empty. Up to thirty options.
+
+Long option names wrap onto a second line rather than being cut to the part
+they share, and a heatmap prints its figures in the cells. Every view saves
+as a chart and goes on a dashboard like the plain one, and the page's filters
+reach it: filtering to one province recounts the groups, the combinations
+and the pairs for that province. In a breakdown, the variable it is broken
+down by can be filtered from a shared link like any chart's.
+
 #### What the options are called
 
 The bars carry the option's own words wherever the file has them, which is

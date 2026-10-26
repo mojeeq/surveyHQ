@@ -153,6 +153,9 @@ def multiselect_tabulate(
             percent_of=payload.percent_of,
             sort=payload.sort,
             show=payload.show,
+            view=payload.view,
+            by=payload.by,
+            top=payload.top,
         )
     except QueryError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

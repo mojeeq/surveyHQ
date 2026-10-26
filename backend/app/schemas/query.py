@@ -210,6 +210,14 @@ class MultiSelectRequest(BaseModel):
     # count and a percentage on one axis is two scales pretending to be one -
     # while a table is usually asked for both.
     show: Literal["count", "percent", "both"] = "both"
+    # How the question is read; see multiselect.VIEWS. One bar per option is
+    # the default and what every chart saved before the others existed is.
+    view: Literal["options", "by_group", "combinations", "how_many", "together"] = "options"
+    # The variable a by_group view splits the respondents by.
+    by: str = ""
+    # How many combinations a combinations view names before the rest are
+    # one bar.
+    top: int = Field(default=10, ge=1, le=50)
 
 
 class CrosstabRequest(BaseModel):
