@@ -1005,7 +1005,13 @@ function buildOption(
             type: 'heatmap',
             // White on the dark cells and ink on the pale ones: one colour
             // for every cell left the numbers unreadable on half the ramp.
+            //
+            // Each cell carries the category it belongs to by name, which is
+            // what a click filters by. Looked up by the cell's place in this
+            // list instead, it named some other row of the result: the list
+            // runs series by series, and leaves the blank cells out.
             data: values.map((cell) => ({
+              name: options.transpose ? down[cell[1]] : across[cell[0]],
               value: cell,
               label: { color: cell[2] / (max || 1) > 0.55 ? '#ffffff' : INK.primary },
             })),
@@ -1285,12 +1291,11 @@ function buildOption(
         chartType === 'horizontal_stacked_bar' ||
         options.stacked
       const style = series.length === 1 && !stacked ? (options.barStyle ?? 'bars') : 'bars'
-      // A track runs to a hundred where every figure is a share of a hundred,
-      // which is the point of it; otherwise to the end of the axis.
-      const toHundred =
-        style === 'track' &&
-        options.valueMax == null &&
-        series[0]?.data.every((value) => value === null || Number(value) <= 100)
+      // A track runs to a hundred where the figures are shares of a hundred,
+      // which is the point of it; otherwise to the end of the axis. Read off
+      // what the result says its numbers are, not off their size: counts of
+      // 3 and 6 are not out of a hundred because none of them passed it.
+      const toHundred = style === 'track' && shares && options.valueMax == null
       const valueBounds = { ...bounds(options), ...(toHundred ? { max: 100 } : {}) }
       // Past eight categories the labels under an upright bar are turned on
       // their side, which is the axis' own answer to names that will not fit

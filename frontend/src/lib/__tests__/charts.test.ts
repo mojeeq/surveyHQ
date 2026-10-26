@@ -685,6 +685,15 @@ describe('a heatmap', () => {
     ])
   })
 
+  it('names each cell by its own category, which is what a click filters by', () => {
+    // The first cell drawn is Rain's, not the first row of the result.
+    for (const transpose of [false, true]) {
+      const cells = (seriesOf(buildChartOption(together, 'heatmap', { transpose }))[0]
+        .data as any[]).map((cell) => cell.name)
+      expect(cells).toEqual(['Rain', 'Piped'])
+    }
+  })
+
   it('puts the first dimension down the side when transposed', () => {
     const option = buildChartOption(together, 'heatmap', { transpose: true }) as any
     expect(option.yAxis.data).toEqual(['Piped', 'Rain'])
@@ -726,18 +735,30 @@ describe('bar styles', () => {
     ])
   })
 
-  it('a track runs to a hundred where every figure is a share', () => {
-    const option = buildChartOption(options, 'horizontal_bar', { barStyle: 'track' }) as any
+  it('a track runs to a hundred where the figures are shares', () => {
+    const percents = result(
+      [
+        column('option', 'dimension'),
+        { name: 'percent', label: '% of respondents', type: 'measure', data_type: 'percent' },
+      ],
+      [
+        ['Piped', 50],
+        ['Rain', 66.7],
+      ],
+    )
+    const option = buildChartOption(percents, 'horizontal_bar', { barStyle: 'track' }) as any
     expect(option.series[0].showBackground).toBe(true)
     expect(option.xAxis.max).toBe(100)
   })
 
-  it('a track over counts runs to the end of the axis instead', () => {
+  it('a track over counts runs to the end of the axis, however small they are', () => {
+    // Counts of 3 and 6 are not out of a hundred because neither passed it.
     const counts = simple([
-      ['Piped', 300],
-      ['Rain', 120],
+      ['Piped', 3],
+      ['Rain', 6],
     ])
     const option = buildChartOption(counts, 'horizontal_bar', { barStyle: 'track' }) as any
+    expect(option.series[0].showBackground).toBe(true)
     expect(option.xAxis.max).toBeUndefined()
   })
 
