@@ -227,6 +227,8 @@ export type FilterOperator =
   | 'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte' | 'in' | 'not_in'
   | 'contains' | 'not_contains' | 'starts_with' | 'ends_with'
   | 'between' | 'is_null' | 'is_not_null'
+  // A date on or after a day, and before one: a dashboard's date range.
+  | 'on_or_after' | 'before'
   // A tick-all-that-apply option: the column was ticked, or was not. Neither
   // takes a value - the column is the answer.
   | 'selected' | 'not_selected'
@@ -742,6 +744,8 @@ export interface Indicator {
   unit: string
   value_format: string
   target_value: number | null
+  /** The day the target is meant to be met by, if any. */
+  target_date?: string | null
   warning_threshold: number | null
   critical_threshold: number | null
   direction: Direction
@@ -788,6 +792,10 @@ export interface IndicatorValue {
   computed_at: string | null
   error: string | null
   trend: { t: string; v: number | null }[]
+  target_date?: string | null
+  /** Since yesterday, since last week, the pace and where it leads; read off
+   *  the stored history and empty until there is some. See lib/movement. */
+  movement?: import('@/lib/movement').Movement
 }
 
 export interface AlertRule {

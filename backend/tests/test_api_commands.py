@@ -244,7 +244,7 @@ def test_a_command_that_is_not_understood_says_which_part(client, auth_headers, 
     assert response.status_code == 422
     assert "'height' is not a variable" in response.json()["detail"]
 
-    response = command(client, auth_headers, workbench, "summarize age")
+    response = command(client, auth_headers, workbench, "xtile band = age, nq(4)")
     assert response.status_code == 422
     assert "not a command" in response.json()["detail"]
 

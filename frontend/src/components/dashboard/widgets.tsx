@@ -20,6 +20,7 @@ import {
   type BreakdownOrder,
 } from '@/lib/breakdown-order';
 import { BreakdownTable } from '@/components/dashboard/BreakdownTable';
+import IndicatorMovement from "@/components/monitoring/IndicatorMovement";
 
 import {
   CHARTED_VIEWS,
@@ -736,6 +737,14 @@ export function IndicatorWidget({
           lowerIsBetter={lowerIsBetter}
         />
       )}
+      {/* Since yesterday, this week, and when the pace gets it there. */}
+      <IndicatorMovement
+        movement={payload.movement}
+        format={payload.value_format}
+        unit={payload.unit}
+        direction={payload.direction}
+        target={payload.target_value}
+      />
       {/* Neutral on purpose. The status colour beside a variance that says
           the opposite - a green line under "283 behind target" - reads as a
           contradiction, and the shape of the line is the message anyway. */}

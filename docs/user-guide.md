@@ -734,6 +734,16 @@ project. Anyone who can see a project can open its script, read-only.
 | `rename` | A new name, carried to everything built on the old one. |
 | `destring` | Text that holds numbers made into numbers, with `replace` or `generate()`. |
 | `drop` / `keep` | Variables, or rows with `if`. |
+| `recode` | Old values into new ones by rules, in place or into new variables. |
+| `by` / `bysort` | Run `gen`, `replace`, `egen`, `keep`, `drop` or `assert` within groups, where `_n` and `_N` count. |
+| `duplicates report` / `tag` / `drop` | Rows that repeat on some variables, or on all of them. |
+| `reshape long` / `wide` | Columns like `inc2019 inc2020` into rows of `inc` by year, and back. |
+| `encode` / `decode` | Text as labelled codes, and labelled codes as their text. |
+| `tostring` | Numbers as text. |
+| `sort` / `gsort` / `order` | Rows in order, up or down; columns moved. |
+| `assert` | Stop the script unless a condition holds on every row. |
+| `count` / `summarize` / `tabulate` | Look at the data without changing it. |
+| `foreach` / `forvalues` | Run the lines up to a `}` once for each item. |
 | `local` / `global` | Name a piece of script text and use it by name. |
 
 `destring` follows Stata's rule for when a variable converts: only when every
@@ -747,6 +757,139 @@ variables named it goes over every one, passing over those already numeric.
 A comparison is a number, as it is in Stata: `gen adult = age >= 18` gives 1
 and 0, not true and false, so `egen total = sum(adult)` and
 `collapse (sum) adult` are arithmetic and a chart of it is a chart of a count.
+
+#### Recoding by rules
+
+`recode` turns old values into new ones by rules in brackets, and takes the
+first rule a value fits, as Stata does:
+
+    recode q5 (1 2 = 1 "Agree") (3 = 0 "Neutral") (4 5 = -1 "Disagree"), gen(view)
+    recode age (min/14 = 1) (15/64 = 2) (65/max = 3), gen(age_band)
+    recode income (-99 -98 = .)
+
+A rule's left side takes numbers, ranges like `15/64` (both ends included),
+`min` and `max` for the variable's smallest and largest value, `.` or
+`missing` for missing, `nonmissing`, and `else` (or `*`) for everything no
+earlier rule took. `else`, `missing` and `nonmissing` mean "every other", so
+they go last. A label in quotes after the new value labels it, and the
+labels become the new variable's value set. Without `generate()` or
+`prefix()` the variables are changed in place; the log says how many values
+changed. A value no rule fits is left as it was, and with an `if`, the rows
+outside it keep their value in place or are missing in a new variable.
+`recode` works on numbers; for text, use `replace`, or `encode` first.
+
+#### Within groups: by, bysort, _n and _N
+
+A `by` prefix runs one command inside each group:
+
+    bysort hhid: gen members = _N
+    bysort hhid (age): gen eldest = _n == _N
+    bysort hhid (line): keep if _n == 1
+    by hhid: gen previous = visit[_n-1]
+
+In an expression, `_n` is the row's number - counted from one in each group
+under a `by` - and `_N` is how many rows there are. `x[_n-1]` is the row
+before's `x` and `x[_n+1]` the row after's, missing at the edges of a group;
+`x[1]` is the group's first and `x[_N]` its last. `bysort` sorts the data by
+the groups first, then by what is in brackets, and leaves it sorted; `by`
+takes the rows in the order they are in, ordered within each group by the
+bracketed part if one is given. Ties keep the order they had. The prefix
+works in front of `gen`, `replace`, `egen`, `keep`, `drop` and `assert`; in
+front of `egen` it means what `by()` after it does. Without a prefix, `_n`
+and `_N` count the whole data: `gen id = _n` numbers the rows.
+
+#### Duplicates, order and checks
+
+`duplicates report hhid` says how many rows repeat a value of `hhid`, and
+how often; `duplicates tag hhid line, generate(dup)` makes `dup`, how many
+other rows each one shares its values with; `duplicates drop` keeps the first
+of each set. With no variables named it compares whole rows. Dropping on some
+variables only needs `force`, as in Stata - `duplicates drop hhid, force` -
+because it loses what the dropped rows held in everything else. Missing
+counts as equal to missing.
+
+`sort hhid line` puts the rows in order; `gsort province -income` sorts with
+a minus for largest first. A missing number sorts last, as in Stata. `order
+hhid line` moves variables to the front; `, last`, `before(age)` and
+`after(age)` put them elsewhere.
+
+`assert age >= 0 & age <= 120` stops the script unless the condition holds on
+every row, naming how many rows fail it and the first of them - so a script
+that builds on a wrong assumption halts on the line that checks it rather than
+saving a bad file. With `if`, only those rows are checked; with `bysort hhid:`
+in front, `_N` and `_n` count within each household.
+
+#### Looking at the data
+
+`count`, `summarize` and `tabulate` change nothing; their answer is in the
+**Output** panel, as a table laid out the way Stata prints one:
+
+    count if age >= 18
+    summarize age income
+    summarize income, detail
+    tabulate province
+    tab province sex
+    tab q1, missing
+
+`summarize` gives the count, mean, standard deviation, smallest and largest of
+each numeric variable, or of every one when none are named; `detail` adds the
+quartiles and the median. `tabulate` gives each value's count, percent and
+cumulative percent, under its label where it has one; two variables make a
+cross-table with totals. Missing is left out unless `missing` says to count it.
+All three take an `if`. Run from a dataset's own command box, they are not
+recorded, since a newer export has no need of them.
+
+#### Text and codes
+
+`encode province, generate(province_code)` numbers each different text
+alphabetically from 1 and labels the number with it, so the variable sums and
+compares as a code and still charts by its words; `label(places)` uses a label
+set that exists, keeping its codes and numbering new texts after them.
+`decode q1, generate(q1_text)` writes a labelled code as its label; a value
+with no label is missing, and the log says how many. `tostring hhid, replace`
+writes numbers as text, a whole number without a decimal point, and leaves
+missing as missing rather than writing `.`.
+
+#### Reshaping
+
+    reshape long inc, i(hhid) j(year)
+    reshape wide inc, i(hhid) j(year)
+
+`reshape long` turns `inc2019 inc2020 inc2021` into one `inc` column and a
+`year` column, a row for each household and year; the other variables are
+carried onto every row. `i()` has to identify the rows - a household listed
+twice is refused, since there would be no telling whose income is whose - and
+the suffixes have to be numbers unless `string` says otherwise. `reshape wide`
+goes back: one row per `i()`, a column for each value of `j()`. Every other
+variable has to be the same on all of a household's rows, or it is refused by
+name, because only one of its values could survive. Like `collapse`, the
+result is no longer the dataset it was loaded from, so `save as` gives it a
+name.
+
+#### Loops
+
+    foreach v of varlist q1-q5 {
+        replace `v' = . if `v' == -99
+    }
+    forvalues i = 1/4 {
+        gen visit`i' = visit == `i'
+    }
+
+The lines between a loop's `{` and its `}` run once for each item, with the
+loop's name standing for it as a local: `` `v' ``. `foreach` goes over words
+(`foreach x in water power road {`), the variables of a varlist - names,
+ranges like `q1-q5`, and wildcards like `inc*` - (`of varlist`), the words of
+a macro (`of local` and `of global`), names for variables not made yet (`of
+newlist`), or numbers (`of numlist 1/5 10(10)50`). `forvalues` counts: `1/10`,
+or `0(5)100` in fives. Loops nest. The `{` ends the loop's first line, and
+the `}` stands on a line of its own.
+
+A loop's list is read when the loop is reached, so a varlist after a `gen`
+sees what it made. A line that fails inside a loop stops the script there,
+and the message says which time round: *Line 3 (replace `v' = ...): ... (where
+v is height)*. A loop goes round at most a thousand times. In a dataset's
+command box, each line a loop ran is recorded as it ran, so a newer export
+replays the commands without the loop.
 
 #### Seeing every script at once
 
@@ -1092,7 +1235,8 @@ weight** picker appears. Unweighted, a cell counts interviews; weighted, it
 estimates the population those interviews stand for, which is what a labour
 force or census table is normally quoting. A weighted count is headed
 "Estimated total" rather than "Count", because the two must not be read as the
-same kind of number or added together.
+same kind of number or added together. A count of a variable, weighted or not,
+takes in only the rows that answered it: weighted, it adds up their weights.
 
 No chi-square is reported for a weighted table. Pearson's test counts
 observations, so feeding it a population estimate claims a sample the size of
@@ -1770,6 +1914,19 @@ carries on the dashboard. It starts from the variable's own label, or its
 column name where the data has none, and can be typed over - a board built for
 a minister should say "Province", not `hh_prov_cd`.
 
+**A date range.** A date variable is listed apart, under **As a date range**:
+two hundred interview days make a dropdown nobody can use, and a fieldwork
+board wants today's interviews or this week's, not one particular Tuesday.
+Ticked, it gives readers **Today**, **Yesterday**, **Last 7 days**, **Last 30
+days**, **This week** (from Monday), **This month**, **Last month**, or
+**Choose dates…** for two days of their own; either end can be left open. A
+range takes in the whole of its last day, so an interview at a quarter to six
+on the 15th is inside "up to the 15th". A date kept as text, the way an export
+often writes it, is read as a date. A saved view keeps a named range as a name,
+so "Last 7 days" is the last seven days whenever the view is opened; a file
+made from that view is narrowed to the range on the day it is made, and says
+which days under its title.
+
 Filters belong to **the page they are on**, so a "Fieldwork" page can filter by
 interviewer while a "Coverage" page filters by district. A control only applies
 to widgets whose dataset actually has that variable; widgets that cannot answer
@@ -2096,6 +2253,21 @@ while you are writing it rather than as a blank tile the week after.
 **Report it as** says only how the number is printed: a rate written with a
 hundred in it is a percentage, a ratio is not.
 
+**A survey weight.** Unweighted, an indicator counts interviews; a published
+rate is about the population they stand for. Pick the weight variable under
+**Survey weight** and the count, share, sum or mean is worked out with it: a
+weighted count adds up the weights of the rows it counts, a weighted share
+divides that by the weights of the rows it is a share of, and a weighted mean
+is the weighted sum over the weighted count. A weighted count of a variable
+adds the weights only where the variable was answered, so "of those who
+answered" stays the population that answered. A median or a distinct count has
+no weighted form here, so a formula with one of those among its parts cannot
+be weighted; the field says which part is in the way. In a formula every part
+is weighted the same way, because a rate whose top and bottom were weighted
+differently is not a rate of anything. The card says **Weighted by …** under
+its number, and the exported web page and Word report give the same weighted
+figure.
+
 A formula is the whole definition of its indicator: the single measure and the
 *percent of* setting above it are not consulted at all. It answers the same way
 everywhere else - the breakdown asks the same sum of each group, against that
@@ -2108,6 +2280,35 @@ and work the same sum out again, so all three agree.
 The formula is read rather than run. It understands part names, numbers, the
 four operators and brackets, and nothing else - there is no way to write
 something in that box that does anything but arithmetic.
+
+**A date to reach it by.** With a target set, **Reach it by** takes the day it
+is due - the end of fieldwork, say. The tile then works out, from the
+indicator's own history, how fast it is moving and when that pace reaches the
+target:
+
+- *At 190 a day, reaches 15,040 on 18 Nov, in time* - or *after 30 Nov*, in
+  red, where the pace does not make it;
+- *Needs 240 a day to make 30 Nov*, said only when the current pace will not
+  do it;
+- *Not moving towards the target this week*, where there is history and none
+  of it is progress;
+- *The target date, 30 Nov, has passed*, once it has.
+
+The pace is the average daily change over the last week of stored values, so
+it needs a day of history before it says anything. "Lower is better" projects
+downwards towards its ceiling the same way; a neutral indicator has no
+direction to project in, so it gets no projection. Without a date the
+projection is still made, without the "in time" verdict, and an indicator with
+no target says only its average a day.
+
+**What it has done lately.** Every tile says how it has moved: *+212 since
+yesterday · +1,340 in a week*, coloured by whether that is good news for the
+indicator's direction. Each is against the last stored value at least a day,
+or a week, old, so a new indicator says nothing until it has one. A percentage
+moves in points - a rate going from 40% to 42% went up two points, not 2%.
+These lines appear on the dashboard tile, on the Indicators page and on the
+Overview. A tile narrowed by the page's filters leaves them out, because the
+stored history is of the whole indicator, not of the rows you are looking at.
 
 **✎ on an indicator** edits all of it - the measure, the filters, the target and
 thresholds, the breakdown, even which dataset it reads. A threshold set before

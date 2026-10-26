@@ -25,6 +25,7 @@ import type {
 import {
   controlKey,
   controlsForPage,
+  dateVariables,
   filterableVariables,
   useDashboardDatasets,
   type FilterControl,
@@ -846,7 +847,7 @@ export function FilterControlsModal({
   const offered = useMemo(() => {
     const keys = new Set<string>();
     for (const dataset of details.data ?? []) {
-      for (const variable of filterableVariables(dataset)) {
+      for (const variable of [...filterableVariables(dataset), ...dateVariables(dataset)]) {
         keys.add(
           controlKey({ dataset_id: dataset.id, variable: variable.name }),
         );
@@ -894,6 +895,7 @@ export function FilterControlsModal({
         <div className="space-y-4">
           {details.data.map((dataset) => {
             const options = filterableVariables(dataset);
+            const dated = dateVariables(dataset);
             return (
               <div key={dataset.id}>
                 <p className="text-xs font-semibold uppercase tracking-wide text-ink-500">
@@ -915,6 +917,26 @@ export function FilterControlsModal({
                         onRelabel={relabel}
                       />
                     ))}
+                  </div>
+                )}
+                {dated.length > 0 && (
+                  // Dates get a range rather than a list: today, this week,
+                  // or two days of the reader's choosing.
+                  <div className="mt-2">
+                    <p className="text-[11px] font-medium text-ink-500">As a date range</p>
+                    <div className="mt-1 grid gap-1 sm:grid-cols-2">
+                      {dated.map((variable) => (
+                        <FilterChoice
+                          key={variable.name}
+                          variable={variable}
+                          datasetId={dataset.id}
+                          chosen={chosen}
+                          onToggle={toggle}
+                          onRelabel={relabel}
+                          kind="dates"
+                        />
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
@@ -973,17 +995,21 @@ export function FilterChoice({
   chosen,
   onToggle,
   onRelabel,
+  kind,
 }: {
   variable: { name: string; label?: string; n_unique: number };
   datasetId: string;
   chosen: FilterControl[];
   onToggle: (control: FilterControl) => void;
   onRelabel: (control: FilterControl, label: string) => void;
+  /** A date range rather than a dropdown of values. */
+  kind?: "dates";
 }) {
   const control: FilterControl = {
     variable: variable.name,
     dataset_id: datasetId,
     label: variable.label || variable.name,
+    ...(kind ? { kind } : {}),
   };
   const key = controlKey(control);
   const picked = chosen.find((c) => controlKey(c) === key);
@@ -1000,7 +1026,9 @@ export function FilterChoice({
           {variable.label
             ? `${variable.name} - ${variable.label}`
             : variable.name}
-          <span className="text-ink-400"> ({variable.n_unique})</span>
+          {kind !== "dates" && (
+            <span className="text-ink-400"> ({variable.n_unique})</span>
+          )}
         </span>
       </label>
       {picked && (

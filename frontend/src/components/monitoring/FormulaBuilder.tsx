@@ -17,7 +17,7 @@ import { useEffect, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
 import FilterBuilder, { emptyFilter } from '@/components/FilterBuilder'
-import { measurable } from '@/lib/measures'
+import { measurable, weighted } from '@/lib/measures'
 import { api } from '@/lib/api'
 import { formatNumber, formatValue } from '@/lib/format'
 import type { Aggregation, FormulaPart, Variable } from '@/lib/types'
@@ -102,6 +102,7 @@ export function FormulaBuilder({
   parts,
   expression,
   format,
+  weight = '',
   onParts,
   onExpression,
 }: {
@@ -111,6 +112,9 @@ export function FormulaBuilder({
   expression: string
   /** How the tile will print the answer, so the trial reads the same way. */
   format: string
+  /** The indicator's survey weight, so the trial is weighted as the tile
+   *  will be. */
+  weight?: string
   onParts: (next: FormulaPart[]) => void
   onExpression: (next: string) => void
 }) {
@@ -123,8 +127,9 @@ export function FormulaBuilder({
     return () => clearTimeout(timer)
   }, [expression])
 
+  const asked = parts.map((part) => ({ ...part, measure: weighted(part.measure, weight) }))
   const check = useQuery({
-    queryKey: ['formula-preview', datasetId, settled, JSON.stringify(parts)],
+    queryKey: ['formula-preview', datasetId, settled, JSON.stringify(asked)],
     queryFn: () =>
       api.post<{
         value: number | null
@@ -132,7 +137,7 @@ export function FormulaBuilder({
         error: string | null
       }>('/monitoring/formula-preview', {
         dataset_id: datasetId,
-        formula: { expression: settled, parts },
+        formula: { expression: settled, parts: asked },
       }),
     // A part whose variable has not been chosen cannot be counted, and asking
     // anyway answers with a validation error about an empty variable - which

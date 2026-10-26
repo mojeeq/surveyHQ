@@ -47,6 +47,16 @@ const vocabulary: Vocabulary = {
     { name: 'rename', aliases: ['ren'], syntax: 'rename <old> <new>', summary: 'Rename.', options: [] },
     { name: 'drop', aliases: [], syntax: 'drop <variables>', summary: 'Remove.', options: [] },
     { name: 'local', aliases: [], syntax: 'local <name> <text>', summary: 'Name text.', options: [] },
+    { name: 'by', aliases: [], syntax: 'by <variables>: <command>', summary: 'In groups.', options: [] },
+    { name: 'bysort', aliases: ['bys'], syntax: 'bysort <variables>: <command>', summary: 'Sort, then in groups.', options: [] },
+    { name: 'keep', aliases: [], syntax: 'keep <variables>', summary: 'Keep.', options: [] },
+    { name: 'duplicates', aliases: [], syntax: 'duplicates drop', summary: 'Repeats.', options: [] },
+    { name: 'reshape', aliases: [], syntax: 'reshape long', summary: 'Long or wide.', options: [] },
+    { name: 'foreach', aliases: [], syntax: 'foreach v in a b {', summary: 'Loop.', options: [] },
+    { name: 'forvalues', aliases: [], syntax: 'forvalues i = 1/5 {', summary: 'Count.', options: [] },
+    { name: 'assert', aliases: [], syntax: 'assert <expression>', summary: 'Check.', options: [] },
+    { name: 'recode', aliases: [], syntax: 'recode <variables> (rule)', summary: 'By rules.', options: [] },
+    { name: 'encode', aliases: [], syntax: 'encode <variable>, generate()', summary: 'Number text.', options: [] },
   ],
   functions: [
     { name: 'round', syntax: 'round(x)', summary: 'Round it.' },
@@ -61,6 +71,13 @@ const vocabulary: Vocabulary = {
   ],
   merge_shapes: ['1:1', 'm:1', '1:m'],
   merge_keep: [{ name: 'master', summary: '' }, { name: 'using', summary: '' }, { name: 'match', summary: '' }],
+  subcommands: {
+    duplicates: [{ name: 'report', summary: '' }, { name: 'tag', summary: '' }, { name: 'drop', summary: '' }],
+    reshape: [{ name: 'long', summary: '' }, { name: 'wide', summary: '' }],
+  },
+  loop_words: ['in', 'of', 'varlist', 'newlist', 'local', 'global', 'numlist'].map((name) => ({ name, summary: '' })),
+  row_names: [{ name: '_n', summary: 'This row.' }, { name: '_N', summary: 'How many.' }],
+  by_able: ['assert', 'drop', 'egen', 'gen', 'keep', 'replace'],
 }
 
 const names: ScriptNames = {
@@ -156,6 +173,24 @@ describe('colouring', () => {
     expect(collapse).toContainEqual(['by', 'propertyName'])
   })
 
+  it('reads what follows a by prefix as a command of its own', () => {
+    const [line] = tokens('bysort hhid (age): gen first = _n == 1 & age[_n-1] != .')
+    expect(line.slice(0, 3)).toEqual([['bysort', 'keyword'], ['hhid', 'variableName'], ['(', 'punctuation']])
+    expect(line).toContainEqual(['gen', 'keyword'])
+    expect(line).toContainEqual(['_n', 'atom'])
+  })
+
+  it('reads a loop\'s first line, and the form after duplicates and reshape', () => {
+    const [loop, duplicates, reshape] = tokens(
+      'foreach v of varlist age hhid {\nduplicates drop hhid\nreshape long inc, i(hhid) j(year)',
+    )
+    expect(loop.slice(0, 4)).toEqual([
+      ['foreach', 'keyword'], ['v', 'macroName'], ['of', 'keyword'], ['varlist', 'keyword'],
+    ])
+    expect(duplicates[1]).toEqual(['drop', 'keyword'])
+    expect(reshape[1]).toEqual(['long', 'keyword'])
+  })
+
   it('reads macros', () => {
     expect(tokens('drop if `adult\' & $wave')[0]).toEqual([
       ['drop', 'keyword'], ['if', 'keyword'], ["`adult'", 'macroName'], ['&', 'operator'], ['$wave', 'macroName'],
@@ -248,6 +283,33 @@ describe('what is offered', () => {
     expect(offered('use people\nlabel |')).toEqual(['variable', 'define', 'values'])
   })
 
+  it('offers the commands a by prefix can run, and what fits after it', () => {
+    const after = offered('use people\nbysort hhid: |')
+    expect(after).toContain('gen')
+    expect(after).not.toContain('merge')
+    expect(offered('use people\nby hhid: gen n = |')).toEqual(expect.arrayContaining(['_n', '_N', 'age']))
+  })
+
+  it('offers the forms of duplicates and reshape, and a loop\'s words', () => {
+    expect(offered('use people\nduplicates |')).toEqual(['report', 'tag', 'drop'])
+    expect(offered('use people\nreshape |')).toEqual(['long', 'wide'])
+    expect(offered('use people\nforeach v |')).toEqual(['in', 'of'])
+    expect(offered('use people\nforeach v of |')).toEqual(['varlist', 'newlist', 'local', 'global', 'numlist'])
+    expect(offered('use people\nforeach v of varlist |')).toContain('age')
+    expect(offered('use people\nforeach v in |')).toEqual([])
+  })
+
+  it('offers a loop\'s name as a local inside it', () => {
+    expect(offered('foreach v in a b {\n  gen `|')).toContain('v')
+  })
+
+  it('follows what by-prefixed and new commands make', () => {
+    const known = (text: string) => variablesAt(text, text.length, index)?.map((one) => one.name) ?? []
+    expect(known('use people\nbysort hhid: gen n = _n\n')).toContain('n')
+    expect(known('use people\nrecode age (0/17 = 0), gen(adult)\n')).toContain('adult')
+    expect(known('use "Household roster"\nencode province, gen(pcode)\n')).toContain('pcode')
+  })
+
   it('offers macros defined above', () => {
     expect(offered('local adult age >= 18\nuse people\ndrop if `|')).toEqual(['adult'])
   })
@@ -276,6 +338,13 @@ describe('what a word is', () => {
     expect(at('merge 1:1 hhid using people, no|gen')?.body).toBe('No _merge.')
     expect(at('use peo|ple')?.body).toContain('1,200 rows')
     expect(at('drop a|ge')?.body).toContain('Age in years')
+  })
+
+  it('describes _n, a by-prefixed command and a form of reshape', () => {
+    const doc = 'use people\nbysort hhid: gen n = _n\nreshape long inc, i(hhid) j(year)'
+    expect(describeAt(doc, doc.indexOf('_n') + 1, index)?.title).toBe('_n')
+    expect(describeAt(doc, doc.indexOf('gen') + 1, index)?.title).toBe('gen <name> = <expression>')
+    expect(describeAt(doc, doc.indexOf('long') + 1, index)?.title).toBe('reshape long')
   })
 
   it('says nothing about a comment', () => {

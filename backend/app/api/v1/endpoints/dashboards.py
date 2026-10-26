@@ -119,6 +119,7 @@ from app.services.monitoring import (
     evaluate_indicator,
     indicator_status,
     label_map,
+    movement,
     progress_percent,
 )
 from app.services.projects import (
@@ -2677,6 +2678,10 @@ def _render_widget(
                 if narrowed is not None or not (widget.config or {}).get("show_trend")
                 else _indicator_trend(db, indicator)
             ),
+            # Since yesterday, since last week, the pace and where it leads.
+            # From the same stored values as the sparkline, so never beside a
+            # filtered number, for the same reason.
+            "movement": {} if narrowed is not None else movement(db, indicator, value),
             "unit": indicator.unit,
             "value_format": indicator.value_format,
             "target_value": indicator.target_value,

@@ -354,10 +354,18 @@ def _denominator_spec(
             keep = FilterGroup(conditions=[Condition(variable=measured, operator="is_not_null")])
     return QuerySpec(
         dimensions=[],
-        measures=[Measure(agg=Aggregation.count, alias="value")],
+        # Weighted as the count is: a weighted count over an unweighted total
+        # is an estimated population divided by a number of interviews, which
+        # is no share of anything.
+        measures=[Measure(agg=Aggregation.count, alias="value", weight=weight_of(spec))],
         filters=and_also(keep, filters),
         limit=1,
     )
+
+
+def weight_of(spec: QuerySpec) -> str | None:
+    """The survey weight an indicator is measured with, if any."""
+    return next((m.weight for m in spec.measures if m.weight), None)
 
 
 def _as_percentages(
@@ -605,6 +613,104 @@ def breakdown_progress(
             "status": _status_against(indicator, value, target),
         }
     return report
+
+
+DAY = dt.timedelta(days=1)
+#: How far back the pace is averaged over. A week smooths out the day nobody
+#: synced and the Monday everybody did, and is short enough to notice a team
+#: that has slowed down.
+PACE_WINDOW = dt.timedelta(days=7)
+
+
+def _aware(moment: dt.datetime) -> dt.datetime:
+    # SQLite hands back the stored moment without its zone; it was UTC.
+    return moment if moment.tzinfo else moment.replace(tzinfo=dt.UTC)
+
+
+def _stored(db: Session, indicator_id: str, *, at_or_before: dt.datetime | None = None,
+            from_moment: dt.datetime | None = None) -> tuple[float, dt.datetime] | None:
+    """One stored value: the last at or before a moment, or the first from one."""
+    statement = select(IndicatorSnapshot.value, IndicatorSnapshot.computed_at).where(
+        IndicatorSnapshot.indicator_id == indicator_id, IndicatorSnapshot.value.is_not(None)
+    )
+    if at_or_before is not None:
+        statement = statement.where(IndicatorSnapshot.computed_at <= at_or_before).order_by(
+            IndicatorSnapshot.computed_at.desc()
+        )
+    else:
+        statement = statement.where(IndicatorSnapshot.computed_at >= from_moment).order_by(
+            IndicatorSnapshot.computed_at.asc()
+        )
+    row = db.execute(statement.limit(1)).first()
+    return (float(row[0]), _aware(row[1])) if row else None
+
+
+def movement(
+    db: Session, indicator: Indicator, value: float | None, now: dt.datetime | None = None
+) -> dict[str, Any]:
+    """How an indicator has moved, and where that is taking it.
+
+    A tile showed the number, how far it was from its target and the shape of
+    its recent history - and left the two questions a field manager asks every
+    morning to arithmetic on a sparkline: how much did we do since yesterday,
+    and at this rate, when do we finish?
+
+    All of it is read off the stored values, the same series the sparkline
+    draws, so it describes the indicator over the whole dataset and is never
+    set beside a filtered value. Every figure is left out where the history
+    cannot support it: no change since last week on an indicator a day old,
+    no pace from an afternoon's values, no finishing date at a pace going the
+    wrong way.
+
+    The pace is the plain average over the last week - what it went up by,
+    divided by the days that took - rather than a fitted line, so that "at 190
+    a day" is a figure anybody can check against the counts.
+    """
+    now = now or utcnow()
+    out: dict[str, Any] = {
+        "target_date": indicator.target_date.isoformat() if indicator.target_date else None,
+    }
+    if value is None:
+        return out
+    yesterday = _stored(db, indicator.id, at_or_before=now - DAY)
+    last_week = _stored(db, indicator.id, at_or_before=now - 7 * DAY)
+    out["change_day"] = round(value - yesterday[0], 4) if yesterday else None
+    out["change_week"] = round(value - last_week[0], 4) if last_week else None
+
+    pace: float | None = None
+    first = _stored(db, indicator.id, from_moment=now - PACE_WINDOW)
+    if first is not None:
+        days = (now - first[1]).total_seconds() / 86400
+        # Less than a day of history is not a pace: the hours after the
+        # morning sync say nothing about a whole day.
+        if days >= 1:
+            pace = (value - first[0]) / days
+            out["pace_days"] = round(days, 1)
+    out["pace_per_day"] = round(pace, 4) if pace is not None else None
+
+    target = indicator.target_value
+    # A neutral indicator has no way it is meant to go, so nothing to reach.
+    if target is None or indicator.direction == Direction.neutral:
+        return out
+    rising = indicator.direction == Direction.higher_is_better
+    remaining = (target - value) if rising else (value - target)
+    if remaining <= 0:
+        out["reached"] = True
+        return out
+    toward = None if pace is None else (pace if rising else -pace)
+    if toward is not None and toward > 0:
+        projected = now + dt.timedelta(days=remaining / toward)
+        out["projected_at"] = projected.isoformat()
+        if indicator.target_date:
+            out["on_course"] = projected.date() <= indicator.target_date
+    if indicator.target_date:
+        # Counting the day itself: a target "by the 30th" can still be worked
+        # towards on the 30th.
+        days_left = (indicator.target_date - now.date()).days + 1
+        out["days_left"] = days_left
+        if days_left > 0:
+            out["needed_per_day"] = round(remaining / days_left, 4)
+    return out
 
 
 def refresh_indicator(db: Session, indicator: Indicator, store_snapshot: bool = True) -> dict:

@@ -31,6 +31,23 @@ export interface Vocabulary {
   label_kinds: { name: string; summary: string }[]
   merge_shapes: string[]
   merge_keep: { name: string; summary: string }[]
+  /** The word after a command saying which form it is: duplicates drop. */
+  subcommands?: Record<string, { name: string; summary: string }[]>
+  /** What a loop's first line is written with: in, of, varlist... */
+  loop_words?: { name: string; summary: string }[]
+  /** _n and _N. */
+  row_names?: { name: string; summary: string }[]
+  /** The commands a by prefix can stand in front of. */
+  by_able?: string[]
+}
+
+/** `by hhid:` or `bysort hhid (age):` at the start of a command, which the
+ *  engine reads as a prefix: what follows the colon is a command of its own. */
+export const BY_PREFIX = /^\s*(?:by|bys|byso|bysor|bysort)\s+[^:]*:\s*/i
+
+function withoutPrefix(text: string): string {
+  const prefixed = BY_PREFIX.exec(text)
+  return prefixed ? text.slice(prefixed[0].length) : text
 }
 
 export interface ScriptNames {
@@ -67,6 +84,10 @@ export const EMPTY_VOCABULARY: Vocabulary = {
   label_kinds: [],
   merge_shapes: [],
   merge_keep: [],
+  subcommands: {},
+  loop_words: [],
+  row_names: [],
+  by_able: [],
 }
 
 export function indexLanguage(vocabulary: Vocabulary, names: ScriptNames | undefined): LanguageIndex {
@@ -110,8 +131,11 @@ export interface LineState {
   depth: number
   /** What the next word is: a dataset to read, or a name being given. */
   expect: 'dataset' | 'new-dataset' | null
-  /** Just after `label`, so the next word says which kind. */
+  /** Just after `label`, `duplicates` or `reshape`, so the next word says
+   *  which form of the command this is. */
   labelKind: boolean
+  /** Just after `foreach` or `forvalues`: the next word is the loop's name. */
+  loopName: boolean
 }
 
 function freshState(): LineState {
@@ -123,6 +147,7 @@ function freshState(): LineState {
     depth: 0,
     expect: null,
     labelKind: false,
+    loopName: false,
   }
 }
 
@@ -148,6 +173,12 @@ export function scriptParser(index: LanguageIndex): StreamParser<LineState> {
     new Set((verb ? index.verbs.get(verb)?.options ?? [] : []).map((one) => one.name))
   const keepWords = new Set(index.vocabulary.merge_keep.map((one) => one.name))
   const labelKinds = index.vocabulary.label_kinds.map((one) => one.name)
+  const forms = (verb: string | null) =>
+    verb === 'label'
+      ? labelKinds
+      : (index.vocabulary.subcommands?.[verb ?? ''] ?? []).map((one) => one.name)
+  const loopWords = new Set((index.vocabulary.loop_words ?? []).map((one) => one.name))
+  const rowNames = new Set((index.vocabulary.row_names ?? []).map((one) => one.name))
 
   const token = (stream: StringStream, state: LineState): Token | null => {
     if (stream.sol()) {
@@ -204,13 +235,26 @@ export function scriptParser(index: LanguageIndex): StreamParser<LineState> {
         }
         state.verb = command.name
         if (command.name === 'use') state.expect = 'dataset'
-        if (command.name === 'label') state.labelKind = true
+        if (forms(command.name).length) state.labelKind = true
+        if (command.name === 'foreach' || command.name === 'forvalues') state.loopName = true
         return 'keyword'
       }
       if (state.labelKind) {
         state.labelKind = false
-        if (labelKinds.some((kind) => kind.startsWith(lower))) return 'keyword'
+        // label's kinds go by their first letters too; the others in full.
+        const kinds = forms(state.verb)
+        if (state.verb === 'label' ? kinds.some((kind) => kind.startsWith(lower)) : kinds.includes(lower)) {
+          return 'keyword'
+        }
       }
+      if (state.loopName) {
+        // The name the loop sets, as `name' inside it.
+        state.loopName = false
+        return 'macroName'
+      }
+      if (state.verb === 'foreach' && state.depth === 0 && loopWords.has(lower)) return 'keyword'
+      // Case matters, as in the engine: _n and _N, not _N and _n.
+      if (rowNames.has(word)) return 'atom'
       if (state.expect) {
         state.expect = null
         return 'typeName'
@@ -241,6 +285,11 @@ export function scriptParser(index: LanguageIndex): StreamParser<LineState> {
     }
 
     const character = stream.next()
+    if (character === ':' && state.depth === 0 && (state.verb === 'by' || state.verb === 'bysort')) {
+      // The prefix ends here; what follows is the command it runs.
+      Object.assign(state, { ...freshState(), continued: state.continued })
+      return 'punctuation'
+    }
     if (character === '(') state.depth += 1
     else if (character === ')') state.depth = Math.max(0, state.depth - 1)
     else if (character === ',' && state.depth === 0) {
@@ -354,9 +403,10 @@ export function variablesAt(
   }
   for (const command of commandsOf(doc)) {
     if (command.line >= lineNumber) break
-    const [verbWord = '', ...rest] = command.text.split(/\s+/)
+    const commandText = withoutPrefix(command.text)
+    const [verbWord = '', ...rest] = commandText.split(/\s+/)
     const verb = index.verbs.get(verbWord.toLowerCase().replace(/,$/, ''))?.name
-    const body = command.text.slice(verbWord.length).trim()
+    const body = commandText.slice(verbWord.length).trim()
     const { comma } = shape(body)
     const main = comma >= 0 ? body.slice(0, comma) : body
     const options = comma >= 0 ? body.slice(comma + 1) : ''
@@ -397,9 +447,27 @@ export function variablesAt(
       for (const name of words(main)) next.set(name, scope.get(name) ?? { label: '', from: 'this script' })
       next.set('_freq', { label: 'How many rows', from: 'contract' })
       scope = next
-    } else if (verb === 'destring') {
+    } else if (['destring', 'recode', 'duplicates', 'tostring', 'encode', 'decode'].includes(verb ?? '')) {
       const made = /\b(?:generate|gen|g)\s*\(([^)]*)\)/i.exec(options)
       for (const name of words(made?.[1] ?? '')) scope.set(name, { label: '', from: 'this script' })
+      const prefix = verb === 'recode' ? /\bprefix\s*\(([^)]*)\)/i.exec(options)?.[1]?.trim() : ''
+      if (prefix) {
+        const recoded = words(main.split('(')[0])
+        for (const name of recoded) scope.set(`${prefix}${name}`, { label: '', from: 'this script' })
+      }
+    } else if (verb === 'reshape') {
+      const [direction = '', ...stubs] = words(main)
+      const j = /(?<![\w])j\s*\(\s*([A-Za-z_]\w*)/i.exec(options)?.[1]
+      if (direction.toLowerCase() === 'long') {
+        for (const name of [...scope.keys()]) {
+          if (stubs.some((stub) => name.startsWith(stub) && name.length > stub.length)) scope.delete(name)
+        }
+        for (const name of [...stubs, ...(j ? [j] : [])]) scope.set(name, { label: '', from: 'this script' })
+      } else {
+        // The new columns are named by the values of j, which the text does
+        // not say; what goes is the stubs and j.
+        for (const name of [...stubs, ...(j ? [j] : [])]) scope.delete(name)
+      }
     }
   }
   if (!scope) return null
@@ -470,13 +538,22 @@ function datasetSuggestions(index: LanguageIndex, quoted: boolean): Suggestion[]
 function macroNames(doc: string, pos: number, kind: 'local' | 'global'): string[] {
   const above = doc.slice(0, pos)
   const pattern = new RegExp(`^\\s*${kind}\\s+([A-Za-z_][A-Za-z0-9_]*)`, 'gim')
-  return [...new Set([...above.matchAll(pattern)].map((match) => match[1]))]
+  const found = [...above.matchAll(pattern)].map((match) => match[1])
+  if (kind === 'local') {
+    // A loop's name is a local inside it.
+    const loops = /^\s*(?:foreach|forvalues|forval|forv)\s+([A-Za-z_][A-Za-z0-9_]*)/gim
+    found.push(...[...above.matchAll(loops)].map((match) => match[1]))
+  }
+  return [...new Set(found)]
 }
 
 /** What to offer at the caret, or null for nothing. */
 export function completeAt(doc: string, pos: number, index: LanguageIndex): Completion | null {
-  const { text: before, comment } = commandBefore(doc, pos)
+  const { text: whole, comment } = commandBefore(doc, pos)
   if (comment) return null
+  // After `by hhid:`, the command it runs starts again.
+  const prefixed = BY_PREFIX.test(whole)
+  const before = withoutPrefix(whole)
   const word = /[A-Za-z_][A-Za-z0-9_]*$/.exec(before)?.[0] ?? ''
   const from = pos - word.length
   const head = before.slice(0, before.length - word.length)
@@ -502,10 +579,12 @@ export function completeAt(doc: string, pos: number, index: LanguageIndex): Comp
     return null
   }
 
-  // The first word: a command.
+  // The first word: a command - after a by prefix, one that can run in groups.
   if (!head.trim()) {
     const options: Suggestion[] = []
+    const able = new Set(index.vocabulary.by_able ?? [])
     for (const command of index.vocabulary.commands) {
+      if (prefixed && able.size && !able.has(command.name)) continue
       options.push({ label: command.name, type: 'keyword', detail: command.syntax, info: command.summary, boost: 2 })
       for (const alias of command.aliases) {
         if (alias.length > 2) options.push({ label: alias, type: 'keyword', detail: `as ${command.name}`, info: command.summary, boost: -1 })
@@ -522,6 +601,27 @@ export function completeAt(doc: string, pos: number, index: LanguageIndex): Comp
 
   if (command.name === 'label' && onlyVerb) {
     return { from, validFor, eager: true, options: index.vocabulary.label_kinds.map((one) => ({ label: one.name, type: 'keyword' as const, info: one.summary })) }
+  }
+  const subcommands = index.vocabulary.subcommands?.[command.name]
+  if (subcommands?.length && onlyVerb) {
+    return { from, validFor, eager: true, options: subcommands.map((one) => ({ label: one.name, type: 'keyword' as const, info: one.summary })) }
+  }
+  if (command.name === 'forvalues') return null
+  if (command.name === 'foreach') {
+    // foreach <name> in|of <kind> <list> {
+    const parts = afterVerb.trim().split(/\s+/).filter(Boolean)
+    const ended = /\s$/.test(head)
+    const words = index.vocabulary.loop_words ?? []
+    const keyword = (names: string[]) =>
+      words.filter((one) => names.includes(one.name)).map((one) => ({ label: one.name, type: 'keyword' as const, info: one.summary }))
+    if (parts.length === 1 && ended) return { from, validFor, eager: true, options: keyword(['in', 'of']) }
+    if (parts.length === 2 && parts[1] === 'of' && ended) {
+      return { from, validFor, eager: true, options: keyword(['varlist', 'newlist', 'local', 'global', 'numlist']) }
+    }
+    if (parts.length === 3 && parts[1] === 'of' && (parts[2] === 'local' || parts[2] === 'global') && ended) {
+      return { from, validFor, eager: true, options: macroNames(doc, pos, parts[2]).map((name) => ({ label: name, type: 'constant' as const })) }
+    }
+    if (!(parts[1] === 'of' && parts[2] === 'varlist')) return null
   }
   if (command.name === 'merge' && onlyVerb) {
     const typed = /[\w:]*$/.exec(before)?.[0] ?? ''
@@ -614,13 +714,17 @@ export function completeAt(doc: string, pos: number, index: LanguageIndex): Comp
     (command.name === 'drop' || command.name === 'keep') && onlyVerb
       ? [{ label: 'if', type: 'keyword', info: 'Rows where the condition holds', boost: 3 }]
       : []
-  const withFunctions = equals >= 0 || /\bif\b/i.test(head)
+  const withFunctions = equals >= 0 || /\bif\b/i.test(head) || command.name === 'assert'
+  const rowNames = withFunctions
+    ? (index.vocabulary.row_names ?? []).map((one) => ({ label: one.name, type: 'constant' as const, info: one.summary }))
+    : []
   return {
     from,
     validFor,
     options: [
       ...conditionWords,
       ...variableSuggestions(doc, pos, index),
+      ...rowNames,
       ...(withFunctions ? functionSuggestions(index) : []),
     ],
   }
@@ -648,13 +752,23 @@ export function describeAt(doc: string, pos: number, index: LanguageIndex): Desc
   const lower = word.toLowerCase()
   const { text: before, comment } = commandBefore(doc, lineStart + start)
   if (comment) return null
-  const head = before
+  const head = withoutPrefix(before)
   const first = !head.trim()
   const verb = index.verbs.get(head.trim().split(/\s+/)[0]?.replace(/,$/, '').toLowerCase() ?? '')
 
   if (first) {
     const command = index.verbs.get(lower)
     return command ? { title: command.syntax, body: command.summary } : null
+  }
+  const row = index.vocabulary.row_names?.find((one) => one.name === word)
+  if (row) return { title: row.name, body: row.summary }
+  if (verb && head.trim().split(/\s+/).length === 1) {
+    const form = index.vocabulary.subcommands?.[verb.name]?.find((one) => one.name === lower)
+    if (form) return { title: `${verb.name} ${form.name}`, body: form.summary }
+  }
+  if (verb?.name === 'foreach') {
+    const loopWord = index.vocabulary.loop_words?.find((one) => one.name === lower)
+    if (loopWord) return { title: `foreach ... ${loopWord.name}`, body: loopWord.summary }
   }
   const { comma } = shape(head)
   if (comma >= 0 && verb) {

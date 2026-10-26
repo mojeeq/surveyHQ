@@ -861,12 +861,17 @@ export function ProjectScript({
                         {entry.command && (
                           <div className="text-ink-700 dark:text-dark-700">. {entry.command}</div>
                         )}
+                        {/* Kept as written: tabulate and summarize answer
+                            with a table whose columns line up by spaces, which
+                            scrolls rather than wraps so they stay lined up. */}
                         <div
-                          className={
+                          className={`overflow-x-auto ${
+                            entry.message.includes('\n') ? 'whitespace-pre' : 'whitespace-pre-wrap'
+                          } ${
                             entry.ok
                               ? 'text-green-700 dark:text-green-400'
                               : 'text-red-700 dark:text-red-300'
-                          }
+                          }`}
                         >
                           {entry.message}
                         </div>

@@ -53,6 +53,57 @@ const SECTIONS: Section[] = [
     ],
   },
   {
+    title: 'Cleaning',
+    blurb:
+      'recode takes the first rule a value fits, as in Stata, and leaves a value no rule fits as it was. An assert that fails stops the script on its line, before anything wrong is saved.',
+    examples: [
+      { line: 'recode q5 (1 2 = 1 "Agree") (3 = 0 "Neutral") (4 5 = -1 "Disagree"), gen(view)', note: 'Old values into new by rules, labelled as it goes' },
+      { line: 'recode age (min/14 = 1) (15/64 = 2) (65/max = 3), gen(age_band)', note: 'Ranges into bands' },
+      { line: 'recode income (-99 -98 = .)', note: 'Don’t-know codes made missing, in place' },
+      { line: 'duplicates report interview__key', note: 'How many rows repeat a key' },
+      { line: 'duplicates tag hhid line, gen(dup)', note: 'Mark the repeats rather than dropping them' },
+      { line: 'duplicates drop interview__key, force', note: 'Keep the first of each; force says the rest may go' },
+      { line: 'assert age >= 0 & age <= 120', note: 'Stop here unless this holds on every row' },
+      { line: 'encode province, gen(province_code)', note: 'Text as numbered codes, labelled with the text' },
+      { line: 'decode q1, gen(q1_text)', note: 'A labelled code as its label’s text' },
+      { line: 'tostring hhid, replace', note: 'Numbers as text: 3, not 3.0' },
+      { line: 'sort hhid line', note: 'The rows in order' },
+      { line: 'gsort province -income', note: 'Largest first, with a minus' },
+      { line: 'order hhid line, first', note: 'Columns to the front' },
+    ],
+  },
+  {
+    title: 'Within groups',
+    blurb:
+      'A by prefix runs gen, replace, egen, keep, drop or assert inside each group: _n counts the rows from one in every group and _N is how many it has. bysort sorts by the groups first, and the bracketed part orders the rows inside them.',
+    examples: [
+      { line: 'bysort hhid: gen members = _N', note: 'How many rows each household has' },
+      { line: 'bysort hhid (age): gen eldest = _n == _N', note: '1 on the oldest member, by the bracketed order' },
+      { line: 'bysort hhid (line): keep if _n == 1', note: 'One row per household: its first' },
+      { line: 'by hhid: gen previous = visit[_n-1]', note: 'The row before’s value, in the same group' },
+    ],
+  },
+  {
+    title: 'Loops',
+    blurb:
+      'The lines between the { and the } run once for each item, with the loop’s name standing for it. A loop’s list is read when the loop is reached, so a varlist sees what the lines above it made.',
+    examples: [
+      { line: 'foreach v of varlist q1-q5 {\n    replace `v\' = . if `v\' == -99\n}', note: 'Once for each variable, as `v\'' },
+      { line: 'forvalues i = 1/4 {\n    gen visit`i\' = visit == `i\'\n}', note: 'Once for each number' },
+      { line: 'foreach x in water power road {\n    label variable has_`x\' "Has `x\'"\n}', note: 'Once for each word' },
+    ],
+  },
+  {
+    title: 'Looking at the data',
+    blurb: 'These change nothing. Their answer is in the output beside the script.',
+    examples: [
+      { line: 'count if age >= 18', note: 'How many rows meet a condition' },
+      { line: 'summarize age income', note: 'Count, mean, spread, smallest and largest' },
+      { line: 'tabulate province', note: 'How often each value appears' },
+      { line: 'tab province sex', note: 'A cross-table of two' },
+    ],
+  },
+  {
     title: 'Naming a condition',
     blurb:
       'A long recode says the same thing over and over, and changing it means finding every copy - which is how a cascade comes to disagree with itself. Name it once and the name is replaced by its text before the command is parsed, so a macro can hold a condition, a variable list, an operator or the command itself. A mistyped name is refused rather than quietly standing for nothing, which is what Stata does and how a do-file returns a wrong answer with no error in it.',
@@ -87,13 +138,15 @@ const SECTIONS: Section[] = [
     ],
   },
   {
-    title: 'Summarising',
+    title: 'Summarising and reshaping',
     blurb:
-      'Both replace what is in memory rather than adding to it, exactly as in Stata: a person-level file becomes a province-level one. Give the result a name of its own with save as.',
+      'These replace what is in memory rather than adding to it, exactly as in Stata: a person-level file becomes a province-level one. Give the result a name of its own with save as.',
     examples: [
       { line: 'collapse (mean) wage (sum) hours, by(province)', note: 'One row per group' },
       { line: 'collapse (count) person_id (sum) adult, by(hhid)', note: 'Counts and totals per household' },
       { line: 'contract province sex', note: 'How many rows each combination has, counted into _freq' },
+      { line: 'reshape long inc, i(hhid) j(year)', note: 'inc2019 inc2020 into rows of inc, one per year' },
+      { line: 'reshape wide inc, i(hhid) j(year)', note: 'And back into columns' },
     ],
   },
 ]
@@ -124,6 +177,10 @@ const VOCABULARY: { label: string; items: string }[] = [
   {
     label: 'and these',
     items: 'missing(x), mi(x), inlist(x, 1, 2), inrange(x, 0, 9), cond(c, a, b), string(x), real(s)',
+  },
+  {
+    label: 'counting rows',
+    items: '_n, _N, x[_n-1], x[_n+1], x[1], x[_N]',
   },
 ]
 
@@ -221,7 +278,7 @@ export function ScriptHelp({ onInsert }: { onInsert?: (line: string) => void }) 
 function ExampleLine({ example }: { example: Example }) {
   return (
     <>
-      <code className="block font-mono text-xs text-ink-800 dark:text-dark-800">
+      <code className="block whitespace-pre-wrap font-mono text-xs text-ink-800 dark:text-dark-800">
         {example.line}
       </code>
       <span className="text-xs text-ink-500 dark:text-dark-600">{example.note}</span>
