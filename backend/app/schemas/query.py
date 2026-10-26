@@ -57,6 +57,13 @@ class FilterOperator(str, enum.Enum):
     # clicking a bar agrees with the bar it was clicked on.
     selected = "selected"
     not_selected = "not_selected"
+    # A date on or after a day, and before one: what a dashboard's date-range
+    # filter is made of. Separate from gte and lt because a date is often kept
+    # as text - an export's "2026-11-04T10:12:00" - and these read the column
+    # as a moment whatever it is stored as, where a plain comparison would
+    # compare the text.
+    on_or_after = "on_or_after"
+    before = "before"
 
 
 class Dimension(BaseModel):

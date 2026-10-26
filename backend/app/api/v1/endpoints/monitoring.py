@@ -60,6 +60,7 @@ from app.services.monitoring import (
     evaluate_alert_rule,
     indicator_status,
     label_map,
+    movement,
     preview_formula,
     progress_percent,
     refresh_indicator,
@@ -129,6 +130,7 @@ def create_indicator(
         unit=payload.unit,
         value_format=payload.value_format,
         target_value=payload.target_value,
+        target_date=payload.target_date,
         warning_threshold=payload.warning_threshold,
         critical_threshold=payload.critical_threshold,
         direction=payload.direction,
@@ -256,6 +258,8 @@ def indicator_values(
                 computed_at=indicator.last_computed_at,
                 error=error,
                 trend=trend,
+                target_date=indicator.target_date,
+                movement=movement(db, indicator, indicator.last_value),
             )
         )
     if refresh:

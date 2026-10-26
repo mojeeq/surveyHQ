@@ -416,10 +416,11 @@ def test_a_weighted_count_is_not_withheld_over_a_variable_it_never_reads(
 ):
     """Which records count is decided by the SQL, not by the request's fields.
 
-    A weighted count is SUM(weight) and never mentions the variable, so a
-    sparsely answered optional question carried alongside it must not withhold
-    a cell backed by fifty weighted households. Over-withholding is not the
-    safe direction to err in: it teaches readers that the stars mean nothing.
+    A weighted count of records is SUM(weight) and never mentions a variable,
+    so a sparsely answered optional question carried alongside it must not
+    withhold a cell backed by fifty weighted households. Over-withholding is
+    not the safe direction to err in: it teaches readers that the stars mean
+    nothing.
     """
     frame = pd.DataFrame(
         {
@@ -449,10 +450,22 @@ def test_a_weighted_count_is_not_withheld_over_a_variable_it_never_reads(
         dataset,
         row_variable="province",
         # `variable` is ignored by a weighted count, and the API accepts one.
-        measure={"agg": "count", "variable": "wage", "weight": "wt"},
+        measure={"agg": "count", "weight": "wt"},
     )
     assert hidden(counted)["Northern"] == [False], "fifty weighted households"
     assert cells(counted)["Northern"] == [625]
+
+    # A weighted count *of* wage is the weight of those who answered it, as
+    # the unweighted count of wage is how many answered: one household here,
+    # so it is withheld like the one answer it is.
+    answered = table(
+        client,
+        auth_headers,
+        dataset,
+        row_variable="province",
+        measure={"agg": "count", "variable": "wage", "weight": "wt"},
+    )
+    assert hidden(answered)["Northern"] == [True], "one weighted household, not fifty"
 
     # The mean of the same sparse variable still is withheld: that one reads
     # the variable, and one answer is one person's answer.

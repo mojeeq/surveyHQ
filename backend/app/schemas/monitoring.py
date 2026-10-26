@@ -98,6 +98,15 @@ class Formula(BaseModel):
             raise ValueError(
                 f"the formula uses {missing[0]!r}, which is not one of its parts"
             )
+        # All weighted alike or none of them. A weighted count over an
+        # unweighted one divides an estimated population by a number of
+        # interviews, which comes out as a figure and means nothing.
+        weights = {part.measure.weight or "" for part in self.parts}
+        if len(weights) > 1:
+            raise ValueError(
+                "some parts are weighted and some are not, or by different "
+                "weights; a formula's parts have to be weighted the same way"
+            )
         return self
 
 
@@ -128,6 +137,7 @@ class IndicatorCreate(BaseModel):
     unit: str = ""
     value_format: str = "number"
     target_value: float | None = None
+    target_date: dt.date | None = None
     warning_threshold: float | None = None
     critical_threshold: float | None = None
     direction: Direction = Direction.higher_is_better
@@ -153,6 +163,7 @@ class IndicatorUpdate(BaseModel):
     unit: str | None = None
     value_format: str | None = None
     target_value: float | None = None
+    target_date: dt.date | None = None
     warning_threshold: float | None = None
     critical_threshold: float | None = None
     direction: Direction | None = None
@@ -178,6 +189,7 @@ class IndicatorOut(BaseModel):
     unit: str = ""
     value_format: str = "number"
     target_value: float | None = None
+    target_date: dt.date | None = None
     warning_threshold: float | None = None
     critical_threshold: float | None = None
     direction: Direction
@@ -201,6 +213,7 @@ class IndicatorValue(BaseModel):
     unit: str = ""
     value_format: str = "number"
     target_value: float | None = None
+    target_date: dt.date | None = None
     progress_percent: float | None = None
     status: str = "unknown"
     direction: Direction = Direction.higher_is_better
@@ -215,6 +228,10 @@ class IndicatorValue(BaseModel):
     computed_at: dt.datetime | None = None
     error: str | None = None
     trend: list[dict[str, Any]] = Field(default_factory=list)
+    # How it has moved and where it is heading: the change since yesterday
+    # and since last week, the pace, and when that pace reaches the target.
+    # Read off the stored history, so empty until there is some.
+    movement: dict[str, Any] = Field(default_factory=dict)
 
 
 class TargetSetCreate(BaseModel):

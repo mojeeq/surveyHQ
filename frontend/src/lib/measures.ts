@@ -20,7 +20,7 @@
  * in the dataset and always has.
  */
 
-import type { Variable } from '@/lib/types'
+import type { Aggregation, Measure, Variable } from '@/lib/types'
 
 /**
  * Stored types that hold a number, in both vocabularies that reach us: a
@@ -76,4 +76,22 @@ export function measurable(variables: readonly Variable[]): Variable[] {
     ...offered.filter((one) => one.var_type === 'numeric'),
     ...offered.filter((one) => one.var_type !== 'numeric'),
   ]
+}
+
+/**
+ * What a survey weight can be applied to. A weighted count, total, share or
+ * mean is the same arithmetic with a multiplier in it; a weighted median or
+ * distinct count is a different calculation, and the server refuses a weight
+ * on one rather than quietly ignoring it.
+ */
+export const WEIGHTABLE: ReadonlySet<Aggregation> = new Set<Aggregation>(['count', 'share', 'sum', 'mean'])
+
+/** The measure with the weight on it where it can take one, and off it where not. */
+export function weighted(measure: Measure, weight: string): Measure {
+  return { ...measure, weight: weight && WEIGHTABLE.has(measure.agg) ? weight : null }
+}
+
+/** The weight an indicator is measured with: its measure's, or its parts'. */
+export function weightOf(measures: (Measure | undefined)[]): string {
+  return measures.find((one) => one?.weight)?.weight ?? ''
 }

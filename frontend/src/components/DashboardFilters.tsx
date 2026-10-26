@@ -1,6 +1,17 @@
 import { useQuery } from '@tanstack/react-query'
 import { api } from '@/lib/api'
-import type { Dataset, FilterGroup } from '@/lib/types'
+import {
+  choiceOf,
+  dateConditions,
+  dayOf,
+  DATE_PREFIX,
+  DATE_PRESETS,
+  iso,
+  isPreset,
+  rangeParts,
+  rangeValue,
+} from '@/lib/date-range'
+import type { Condition, Dataset, FilterGroup } from '@/lib/types'
 
 export interface FilterControl {
   /** The variable every widget that has it will be filtered on. */
@@ -14,6 +25,9 @@ export interface FilterControl {
    * filters were per page; those belong to the first page.
    */
   page?: number
+  /** A dropdown of the variable's values, or a range of days for a date.
+   *  Absent on every control saved before there were date ranges. */
+  kind?: 'values' | 'dates'
 }
 
 /**
@@ -53,16 +67,26 @@ export default function DashboardFilters({
       className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-card border border-ink-200 px-2.5 py-1.5"
       style={{ backgroundColor: background || '#ffffff' }}
     >
-      {controls.map((control) => (
-        <FilterControlInput
-          key={controlKey(control)}
-          control={control}
-          basePath={basePath}
-          labelColor={labelColor}
-          value={value[control.variable] ?? ''}
-          onChange={(next) => onChange({ ...value, [control.variable]: next })}
-        />
-      ))}
+      {controls.map((control) =>
+        control.kind === 'dates' ? (
+          <DateRangeInput
+            key={controlKey(control)}
+            control={control}
+            labelColor={labelColor}
+            value={value[control.variable] ?? ''}
+            onChange={(next) => onChange({ ...value, [control.variable]: next })}
+          />
+        ) : (
+          <FilterControlInput
+            key={controlKey(control)}
+            control={control}
+            basePath={basePath}
+            labelColor={labelColor}
+            value={value[control.variable] ?? ''}
+            onChange={(next) => onChange({ ...value, [control.variable]: next })}
+          />
+        ),
+      )}
       {Object.values(value).some(Boolean) && (
         <button
           className="btn-ghost btn-xs text-ink-500"
@@ -130,25 +154,109 @@ function FilterControlInput({
   )
 }
 
+/**
+ * A date variable's control: a named range, or two days of the reader's own.
+ *
+ * One select rather than a calendar, because the ranges a fieldwork board is
+ * read by are a handful - today, this week - and the two date boxes appear
+ * only for the occasional range that is none of them.
+ */
+function DateRangeInput({
+  control,
+  labelColor,
+  value,
+  onChange,
+}: {
+  control: FilterControl
+  labelColor?: string
+  value: string
+  onChange: (value: string) => void
+}) {
+  const name = control.label || control.variable
+  const custom = Boolean(value) && !isPreset(value)
+  const { from, to } = rangeParts(value)
+  return (
+    <div className="flex flex-wrap items-center gap-1.5 text-xs text-ink-600">
+      <span
+        className="whitespace-nowrap font-medium"
+        style={labelColor ? { color: labelColor } : undefined}
+      >
+        {name}
+      </span>
+      <select
+        className="input input-sm w-36"
+        aria-label={name}
+        value={custom ? 'custom' : choiceOf(value)}
+        onChange={(event) => {
+          const next = event.target.value
+          // Choosing your own range opens the two boxes on today, so the bar
+          // keeps showing something rather than nothing while they are filled.
+          if (next === 'custom') {
+            const today = iso(dayOf(new Date()))
+            onChange(rangeValue(today, today))
+          } else {
+            onChange(next ? `${DATE_PREFIX}${next}` : '')
+          }
+        }}
+      >
+        <option value="">All dates</option>
+        {DATE_PRESETS.map((preset) => (
+          <option key={preset.value} value={preset.value}>
+            {preset.label}
+          </option>
+        ))}
+        <option value="custom">Choose dates…</option>
+      </select>
+      {custom && (
+        <>
+          <input
+            type="date"
+            className="input input-sm w-36"
+            aria-label={`${name} from`}
+            value={from}
+            max={to || undefined}
+            onChange={(event) => onChange(rangeValue(event.target.value, to))}
+          />
+          <span>to</span>
+          <input
+            type="date"
+            className="input input-sm w-36"
+            aria-label={`${name} to`}
+            value={to}
+            min={from || undefined}
+            onChange={(event) => onChange(rangeValue(from, event.target.value))}
+          />
+        </>
+      )}
+    </div>
+  )
+}
+
 /** Turn the bar's selections into the filter the render endpoint expects. */
 export function toFilterGroup(
   controls: FilterControl[],
   value: Record<string, string>,
+  today: Date = new Date(),
 ): FilterGroup {
-  return {
-    op: 'and',
-    conditions: controls
-      .filter((control) => value[control.variable])
-      .map((control) => ({
+  const conditions: Condition[] = []
+  for (const control of controls) {
+    const chosen = value[control.variable]
+    if (!chosen) continue
+    if (control.kind === 'dates') {
+      // Worked out here, in the reader's browser, so "today" is their today.
+      conditions.push(...dateConditions(control.variable, chosen, dayOf(today)))
+    } else {
+      conditions.push({
         variable: control.variable,
         operator: 'eq',
         // Compare against the label shown in the dropdown, since that is what
         // the values endpoint returns and what the user picked.
-        value: value[control.variable],
+        value: chosen,
         use_label: true,
-      })),
-    groups: [],
+      })
+    }
   }
+  return { op: 'and', conditions, groups: [] }
 }
 
 /** The controls belonging to one page. A control saved before filters were
@@ -186,6 +294,11 @@ export function filterableVariables(dataset: Dataset | undefined) {
   return (dataset?.variables ?? []).filter(
     (v) => !v.is_hidden && v.var_type !== 'datetime' && v.n_unique <= 200,
   )
+}
+
+/** The variables a date range can be put on: the ones holding dates. */
+export function dateVariables(dataset: Dataset | undefined) {
+  return (dataset?.variables ?? []).filter((v) => !v.is_hidden && v.var_type === 'datetime')
 }
 
 export function useDashboardDatasets(ids: string[]) {

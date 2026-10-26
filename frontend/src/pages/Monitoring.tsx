@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import ReactECharts from '@/components/ReactECharts'
-import { measurable } from '@/lib/measures'
+import { measurable, weighted, weightOf, WEIGHTABLE } from '@/lib/measures'
 import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { useDialog } from '@/hooks/useDialog'
@@ -25,6 +25,7 @@ import ChartCard from '@/components/ChartCard'
 import ProjectFilter, { datasetProjectParam, projectParam } from '@/components/ProjectFilter'
 import FilterBuilder, { emptyFilter } from '@/components/FilterBuilder'
 import { allReady, FormulaBuilder } from '@/components/monitoring/FormulaBuilder'
+import IndicatorMovement from '@/components/monitoring/IndicatorMovement'
 import type { BadgeTone } from '@/components/ui'
 import {
   Badge,
@@ -187,6 +188,12 @@ function IndicatorCard({
   onDelete: () => void
 }) {
   const [expanded, setExpanded] = useState(false)
+  const weightedBy = definition
+    ? weightOf([
+        definition.spec?.measures?.[0],
+        ...((definition.formula as Formula | undefined)?.parts ?? []).map((part) => part.measure),
+      ])
+    : ''
   const state = STATE[value.status] ?? STATE.unknown
   const color = STATUS_COLORS[value.status] ?? STATUS_COLORS.unknown
 
@@ -233,6 +240,18 @@ function IndicatorCard({
       <p className="text-3xl font-semibold tabular-nums text-ink-900">
         {formatValue(value.value, value.value_format, value.unit)}
       </p>
+      {weightedBy && (
+        // Said beside the number: an estimate of a population and a count of
+        // interviews look alike, and must not be read as the same thing.
+        <p className="mt-0.5 text-xs text-ink-500 dark:text-dark-500">Weighted by {weightedBy}</p>
+      )}
+      <IndicatorMovement
+        movement={value.movement}
+        format={value.value_format}
+        unit={value.unit}
+        direction={value.direction}
+        target={value.target_value}
+      />
 
       {value.target_value !== null && (
         <>
@@ -468,6 +487,15 @@ function IndicatorModal({
     indicator?.spec?.filters ?? emptyFilter(),
   )
   const [percentOf, setPercentOf] = useState<PercentOf>(indicator?.percent_of ?? '')
+  // One survey weight for the whole indicator - its measure, or every part
+  // of its formula - because a rate whose halves are weighted differently is
+  // a number about nothing.
+  const [weight, setWeight] = useState(() =>
+    weightOf([
+      indicator?.spec?.measures?.[0],
+      ...((indicator?.formula as Formula | undefined)?.parts ?? []).map((part) => part.measure),
+    ]),
+  )
   // The parts of a formula and the sum over them, where the indicator is
   // written that way. Kept beside the single measure rather than instead of
   // it, so switching back and forth does not throw either away.
@@ -489,6 +517,7 @@ function IndicatorModal({
       ? ''
       : String(indicator.target_value),
   )
+  const [targetDate, setTargetDate] = useState(indicator?.target_date ?? '')
   const [warning, setWarning] = useState(
     indicator?.warning_threshold === null || indicator?.warning_threshold === undefined
       ? ''
@@ -576,6 +605,12 @@ function IndicatorModal({
   // not a portion of anything, and dividing it by a row count says nothing.
   const canBePercent = kind === 'records' || kind === 'answered'
 
+  // A weight goes on counts, totals and means. A median or a distinct count
+  // weighted is a different calculation the server does not offer.
+  const canWeigh = usingFormula ? parts.length > 0 : WEIGHTABLE.has(measure.agg)
+  const unweighable = usingFormula ? parts.filter((part) => !WEIGHTABLE.has(part.measure.agg)) : []
+  const weightBlocked = Boolean(weight) && unweighable.length > 0
+
   const create = useMutation({
     mutationFn: () => {
       const body = {
@@ -584,11 +619,14 @@ function IndicatorModal({
         spec: {
           dimensions: [],
           measures: [
-            {
-              agg: measure.agg,
-              variable: measure.needsVariable ? variable : null,
-              alias: 'value',
-            },
+            weighted(
+              {
+                agg: measure.agg,
+                variable: measure.needsVariable ? variable : null,
+                alias: 'value',
+              },
+              usingFormula ? '' : weight,
+            ),
           ],
           filters: where,
           sort: [],
@@ -600,7 +638,7 @@ function IndicatorModal({
         // leaves the indicator defined by the single measure above, and
         // clears one that was there.
         formula: usingFormula
-          ? { expression, parts }
+          ? { expression, parts: parts.map((part) => ({ ...part, measure: weighted(part.measure, weight) })) }
           : { expression: '', parts: [] },
         // A percentage says so in how it is written, rather than in a unit
         // typed by hand that the tile would then print twice.
@@ -612,6 +650,8 @@ function IndicatorModal({
             ? 'percent'
             : 'number',
         target_value: target ? Number(target) : null,
+        // Only with a target: a date with nothing to reach by it says nothing.
+        target_date: target && targetDate ? targetDate : null,
         // Only the categories actually given a quota. An empty box means the
         // category falls back to the headline target, which is not the same
         // as a quota of zero.
@@ -643,6 +683,7 @@ function IndicatorModal({
   const ready =
     name &&
     datasetId &&
+    !weightBlocked &&
     (usingFormula
       ? Boolean(expression.trim()) && parts.length > 0 && allReady(parts)
       : !measure.needsVariable || Boolean(variable))
@@ -732,6 +773,29 @@ function IndicatorModal({
             </select>
           </Field>
         )}
+        {datasetId && canWeigh && (
+          <Field
+            label="Survey weight"
+            hint={
+              weightBlocked
+                ? `A median or a distinct count cannot be weighted, and ${unweighable.map((part) => part.name).join(', ')} is one. Change ${unweighable.length === 1 ? 'that part' : 'those parts'} or leave the weight off.`
+                : 'Optional. Unweighted, it counts interviews; weighted, it estimates the population they stand for - what a published rate quotes.'
+            }
+          >
+            <select
+              className={`input ${weightBlocked ? 'border-amber-500' : ''}`}
+              value={weight}
+              onChange={(event) => setWeight(event.target.value)}
+            >
+              <option value="">Not weighted</option>
+              {numeric.map((v) => (
+                <option key={v.name} value={v.name}>
+                  {v.label ? `${v.name} - ${v.label}` : v.name}
+                </option>
+              ))}
+            </select>
+          </Field>
+        )}
       </div>
 
       {usingFormula ? (
@@ -746,6 +810,7 @@ function IndicatorModal({
               parts={parts}
               expression={expression}
               format={formulaPercent ? 'percent' : 'number'}
+              weight={weight}
               onParts={setParts}
               onExpression={setExpression}
             />
@@ -832,6 +897,19 @@ function IndicatorModal({
             onChange={(event) => setTarget(event.target.value)}
           />
         </Field>
+        {target && (
+          <Field
+            label="Reach it by"
+            hint="Optional - the end of fieldwork, say. The tile then says how many a day it takes, and whether the current pace gets there in time."
+          >
+            <input
+              className="input"
+              type="date"
+              value={targetDate}
+              onChange={(event) => setTargetDate(event.target.value)}
+            />
+          </Field>
+        )}
         {breakdown && (
           <Field
             label="Where the quotas come from"

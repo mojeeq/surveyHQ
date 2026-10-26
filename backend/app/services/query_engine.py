@@ -243,6 +243,16 @@ class SQLBuilder:
             weight_col = quote_ident(weight_info.name)
 
         if agg in (Aggregation.count, Aggregation.share):
+            if weight_col and measure.variable:
+                # The weight of the rows that answered, as the unweighted count
+                # of a variable counts only those. Summed over every row it was
+                # the population of the whole file, so "a percentage of those
+                # who answered" came out the same as "of every record" the
+                # moment it was weighted.
+                col = quote_ident(self.ctx.require(measure.variable).name)
+                return (
+                    f"COALESCE(SUM(CASE WHEN {col} IS NULL THEN NULL ELSE {weight_col} END), 0)"
+                )
             if weight_col:
                 return f"COALESCE(SUM({weight_col}), 0)"
             if measure.variable:
@@ -346,6 +356,16 @@ class SQLBuilder:
             return ticked_sql(col)
         if op == FilterOperator.not_selected:
             return f"NOT {ticked_sql(col)}"
+
+        if op in (FilterOperator.on_or_after, FilterOperator.before):
+            # The column as a moment, whatever it is stored as: a date kept as
+            # text compared as text would put "2026-11-04T10:00" before
+            # "2026-11-4" and after "2026-11-04". Unreadable values drop out
+            # rather than failing the query.
+            moment = col if info.is_datetime else f"try_cast({col} AS TIMESTAMP)"
+            self.params.append(str(value))
+            sign = ">=" if op == FilterOperator.on_or_after else "<"
+            return f"{moment} {sign} CAST(? AS TIMESTAMP)"
 
         if op in (FilterOperator.in_, FilterOperator.not_in):
             values = value if isinstance(value, list) else [value]
@@ -998,17 +1018,18 @@ def _contributing_columns(measure: Measure) -> list[str]:
 
     This decides which records count towards disclosure, so it has to match
     `SQLBuilder.measure_expr` rather than the request's fields. A weighted
-    count is `SUM(weight)` and never mentions the variable, so requiring the
+    count of records is `SUM(weight)` and never mentions a variable, so a
     variable there would withhold a cell backed by hundreds of weighted
     households because some optional question beside them went unanswered.
+    A weighted count *of a variable* sums the weights of the rows that
+    answered it, so it reads both: a cell of 12.5 from the one household that
+    answered is one household's answer, however the weight dresses it up.
 
     Everything else reads its variable, and reads the weight too when it has
     one - `SUM(col * weight)` is null if either side is.
     """
     if measure.agg in (Aggregation.count, Aggregation.share):
-        if measure.weight:
-            return [measure.weight]
-        return [measure.variable] if measure.variable else []
+        return [name for name in (measure.variable, measure.weight) if name]
     return [name for name in (measure.variable, measure.weight) if name]
 
 

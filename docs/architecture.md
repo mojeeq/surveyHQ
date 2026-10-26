@@ -542,6 +542,7 @@ backend/app/
                   staged_uploads.py   a large upload sent in pieces
                   project_overview.py a project read as its pipeline
                   freshness.py        how recent a dataset's data is
+                  date_ranges.py      a date filter's choice, as conditions
 
                 preparing it
                   stata.py            the command engine for a project script

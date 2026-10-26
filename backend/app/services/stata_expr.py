@@ -103,7 +103,7 @@ TOKEN = re.compile(
     (?P<string>"[^"]*")
   | (?P<number>\d+\.\d*|\.\d+|\d+)
   | (?P<name>[A-Za-z_][A-Za-z0-9_]*)
-  | (?P<op>==|~=|!=|>=|<=|[-+*/^&|!~<>=(),])
+  | (?P<op>==|~=|!=|>=|<=|[-+*/^&|!~<>=(),\[\]])
   | (?P<dot>\.)
   | (?P<space>\s+)
     """,
@@ -113,6 +113,37 @@ TOKEN = re.compile(
 
 class ExpressionError(ValueError):
     """The expression says something this cannot translate."""
+
+
+@dataclass(frozen=True)
+class Window:
+    """The rows an expression's `_n`, `_N` and `x[_n-1]` are counted over.
+
+    Stata numbers the rows of the data as it stands - within each group,
+    under a `by` prefix - and an expression can name a row by its number:
+    `_n` is this row's, `_N` how many there are, `x[_n-1]` the row before's x.
+    In SQL those are window functions, and this is their window: the groups
+    as PARTITION BY and the order of the rows within them as ORDER BY, which
+    always ends on the data's own row order so that ties keep their places.
+    Both are quoted SQL.
+    """
+
+    partition: tuple[str, ...]
+    order: tuple[str, ...]
+
+    def over(self, whole: bool = False) -> str:
+        parts = []
+        if self.partition:
+            parts.append(f"PARTITION BY {', '.join(self.partition)}")
+        parts.append(f"ORDER BY {', '.join(self.order)}")
+        if whole:
+            # For the first or last row of a group, every row in it: an
+            # ordered window otherwise stops at the current row.
+            parts.append("ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING")
+        return f"OVER ({' '.join(parts)})"
+
+    def everyone(self) -> str:
+        return f"OVER (PARTITION BY {', '.join(self.partition)})" if self.partition else "OVER ()"
 
 
 @dataclass
@@ -156,7 +187,9 @@ def tokenize(expression: str) -> list[Token]:
     return tokens
 
 
-def translate(expression: str, columns: object, quote: object) -> str:
+def translate(
+    expression: str, columns: object, quote: object, window: Window | None = None
+) -> str:
     """Turn a Stata expression into SQL over the given columns.
 
     `columns` is the variables the expression may name. Pass a mapping of name
@@ -166,12 +199,15 @@ def translate(expression: str, columns: object, quote: object) -> str:
 
     `quote` is the identifier quoter, passed in so this module stays free of
     the query engine and can be tested on its own.
+
+    `window` is the rows `_n`, `_N` and subscripts are counted over. Without
+    one they are refused, since there is no order of rows to count in.
     """
     tokens = tokenize(expression)
     if not tokens:
         raise ExpressionError("The expression is empty")
 
-    parser = _Parser(tokens, _kinds(columns), _spellings(columns), quote)
+    parser = _Parser(tokens, _kinds(columns), _spellings(columns), quote, window)
     value = parser.expression()
     if not parser.done:
         raise ExpressionError(
@@ -351,11 +387,13 @@ class _Parser:
         kinds: dict[str, str],
         spellings: dict[str, str],
         quote: object,
+        window: Window | None = None,
     ):
         self.tokens = tokens
         self.kinds = kinds
         self.spellings = spellings
         self.quote = quote
+        self.window = window
         self.at = 0
 
     # --- the token stream ---
@@ -555,14 +593,63 @@ class _Parser:
             kind = TEXT if key in TEXT_FUNCTIONS else NUMBER
             inside = ", ".join(one.sql for one in args)
             return Value(f"{FUNCTIONS[key]}({inside})", kind)
-        if key in ("_n", "_N"):
-            raise ExpressionError(
-                "_n and _N are not available here; use egen with by() for row numbers"
-            )
+        if name in ("_n", "_N"):
+            # Case matters here, as in Stata: _n is this row's number, _N how
+            # many rows there are, and a variable called _N would be neither.
+            window = self._window(name)
+            if name == "_n":
+                return Value(f"ROW_NUMBER() {window.over()}", NUMBER, nullable=False)
+            return Value(f"COUNT(*) {window.everyone()}", NUMBER, nullable=False)
         if key in self.kinds:
             stored = self.spellings[key]
-            return Value(str(self.quote(stored)), self.kinds[key])  # type: ignore[operator]
+            column = Value(str(self.quote(stored)), self.kinds[key])  # type: ignore[operator]
+            if self.peek() == "[":
+                return self._subscript(name, column)
+            return column
         raise ExpressionError(f"'{name}' is not a variable in this dataset")
+
+    def _window(self, what: str) -> Window:
+        if self.window is None:
+            raise ExpressionError(
+                f"{what} counts rows, and there are no rows to count here"
+            )
+        return self.window
+
+    def _subscript(self, name: str, column: Value) -> Value:
+        """`x[_n-1]`, `x[_n+1]`, `x[1]`, `x[_N]`: another row's value.
+
+        The forms a do-file actually uses - the row before, the row after,
+        the first and last of the group - rather than any expression in the
+        brackets. Read by position inside the group, in the data's order.
+        """
+        window = self._window(f"{name}[...]")
+        self.take()  # [
+        pieces: list[str] = []
+        while not self.done and self.peek() != "]":
+            pieces.append(self.take().text)
+        if not self.eat("]"):
+            raise ExpressionError(f"The subscript on {name} is not closed with ]")
+        inside = "".join(pieces)
+        found = re.fullmatch(r"_n(?:([+-])(\d+))?", inside)
+        if found:
+            if not found.group(1):
+                return column
+            steps = int(found.group(2))
+            function = "LAG" if found.group(1) == "-" else "LEAD"
+            return Value(f"{function}({column.sql}, {steps}) {window.over()}", column.kind)
+        if inside == "_N":
+            return Value(f"LAST_VALUE({column.sql}) {window.over(whole=True)}", column.kind)
+        if inside.isdigit() and int(inside) >= 1:
+            position = int(inside)
+            function = (
+                f"FIRST_VALUE({column.sql})" if position == 1
+                else f"NTH_VALUE({column.sql}, {position})"
+            )
+            return Value(f"{function} {window.over(whole=True)}", column.kind)
+        raise ExpressionError(
+            f"'{name}[{inside}]' is not a subscript this understands. "
+            "It takes [_n-1], [_n+1], [1], [_N] and the like"
+        )
 
     def _arguments(self) -> list[Value]:
         """A bracketed, comma-separated argument list."""

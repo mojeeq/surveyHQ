@@ -9,6 +9,7 @@ from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
+    Date,
     DateTime,
     Enum,
     Float,
@@ -74,6 +75,10 @@ class Indicator(UUIDMixin, TimestampMixin, Base):
     unit: Mapped[str] = mapped_column(String(40), default="")
     value_format: Mapped[str] = mapped_column(String(40), default="number")
     target_value: Mapped[float | None] = mapped_column(Float)
+    # The day the target is meant to be met by, if there is one: the end of
+    # fieldwork. With it the tile can say how many a day it now takes, which
+    # is the figure a field manager plans the week around.
+    target_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
     warning_threshold: Mapped[float | None] = mapped_column(Float)
     critical_threshold: Mapped[float | None] = mapped_column(Float)
     direction: Mapped[Direction] = mapped_column(

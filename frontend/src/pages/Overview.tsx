@@ -7,6 +7,7 @@ import { buildSparkline, STATUS_COLORS } from '@/lib/charts'
 import { formatNumber, formatValue, relativeTime } from '@/lib/format'
 import type { Alert, Dataset, IndicatorValue, MonitoringSummary, Page } from '@/lib/types'
 import ProjectFilter, { projectParam } from '@/components/ProjectFilter'
+import IndicatorMovement from '@/components/monitoring/IndicatorMovement'
 import type { BadgeTone } from '@/components/ui'
 import { Badge, Card, EmptyState, ErrorNote, Loading, PageHeader, Stat } from '@/components/ui'
 
@@ -219,6 +220,13 @@ function IndicatorTile({ indicator }: { indicator: IndicatorValue }) {
       <p className="mt-1 text-2xl font-semibold tabular-nums text-ink-900">
         {formatValue(indicator.value, indicator.value_format, indicator.unit)}
       </p>
+      <IndicatorMovement
+        movement={indicator.movement}
+        format={indicator.value_format}
+        unit={indicator.unit}
+        direction={indicator.direction}
+        target={indicator.target_value}
+      />
       {indicator.target_value !== null && (
         <>
           <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-ink-100">

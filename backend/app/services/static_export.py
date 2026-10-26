@@ -46,9 +46,9 @@ from app.schemas.query import (
     Measure,
     QuerySpec,
 )
-from app.services import export_appearance, export_fonts, export_lib, preferences
+from app.services import date_ranges, export_appearance, export_fonts, export_lib, preferences
 from app.services.datasets import dataset_is_queryable
-from app.services.monitoring import COUNTED, formula_of, part_spec
+from app.services.monitoring import COUNTED, formula_of, part_spec, weight_of
 from app.services.query_engine import (
     DatasetContext,
     QueryError,
@@ -105,15 +105,25 @@ def _recipe(measures: list[Measure]) -> tuple[list[Measure], list[dict[str, Any]
             raise NotExportable(
                 f"a {measure.agg.value} cannot be worked out again from grouped totals"
             )
-        if measure.weight and measure.agg == Aggregation.mean:
-            raise NotExportable("a weighted mean cannot be worked out again from group totals")
         name = measure.output_name
         if measure.agg == Aggregation.mean:
+            # Weighted, the same two halves with the weight in both: the
+            # weighted total of the values, and the weight of the rows that
+            # have one. Their ratio is the weighted mean for any combination
+            # of groups, as the plain total and count are for the plain mean.
             total = f"__x{index}_total"
             count = f"__x{index}_count"
-            asked.append(Measure(agg=Aggregation.sum, variable=measure.variable, alias=total))
             asked.append(
-                Measure(agg=Aggregation.count, variable=measure.variable, alias=count)
+                Measure(
+                    agg=Aggregation.sum, variable=measure.variable, alias=total,
+                    weight=measure.weight,
+                )
+            )
+            asked.append(
+                Measure(
+                    agg=Aggregation.count, variable=measure.variable, alias=count,
+                    weight=measure.weight,
+                )
             )
             recipes.append(
                 {"name": name, "label": _label(measure), "how": "mean", "parts": [total, count]}
@@ -148,15 +158,10 @@ def _narrowed(
     ordinary control leaves such a widget alone instead of emptying it.
     """
     extra = [
-        # use_label, because the values come from _values_for, which asks for
-        # them labelled - the dropdown offers "Lowland", not the code stored
-        # under it. Without this the comparison reaches DuckDB as
-        # CAST('Lowland' AS DOUBLE) against a coded column and the widget
-        # fails with a conversion error. A plain text column has no value
-        # labels, so the flag changes nothing there.
-        Condition(variable=name, operator="eq", value=value, use_label=True)
+        condition
         for name, value in pinned.items()
         if name in ctx.variables
+        for condition in _pin(name, value)
     ]
     if not extra:
         return filters
@@ -246,6 +251,11 @@ def _filters_for(dashboard: Dashboard) -> list[dict[str, Any]]:
             continue
         variable = str(raw.get("variable") or "")
         if not variable:
+            continue
+        # A date range is not a dropdown, and a file cannot carry every day's
+        # numbers to filter by. A saved view's range still narrows the file:
+        # see _pin.
+        if raw.get("kind") == "dates":
             continue
         controls.append(
             {
@@ -514,7 +524,7 @@ def _indicator_widget(
         # the national total.
         keep = QuerySpec(
             dimensions=[Dimension(variable=breakdown)] if breakdown else [],
-            measures=[Measure(agg=Aggregation.count, alias="value")],
+            measures=[Measure(agg=Aggregation.count, alias="value", weight=weight_of(spec))],
             filters=_denominator_filters(indicator, spec),
             limit=MAX_CUBE_ROWS + 1,
         )
@@ -606,10 +616,27 @@ def pinned_filters(pinned: dict[str, str] | None) -> FilterGroup | None:
     return FilterGroup(
         op="and",
         conditions=[
-            Condition(variable=name, operator="eq", value=value, use_label=True)
-            for name, value in pinned.items()
+            condition for name, value in pinned.items() for condition in _pin(name, value)
         ],
     )
+
+
+def _pin(name: str, value: str) -> list[Condition]:
+    """One pinned choice as conditions.
+
+    A dropdown's choice is one value, matched by its label: the values come
+    from _values_for, which asks for them labelled - the dropdown offers
+    "Lowland", not the code stored under it - and compared without the label
+    the value reaches DuckDB as CAST('Lowland' AS DOUBLE) against a coded
+    column. A plain text column has no labels, so the flag changes nothing.
+
+    A date range's choice is a span of days, fixed on the day the file is
+    made: a view saved as "Last 7 days" makes a file of the seven days before
+    it was exported.
+    """
+    if date_ranges.is_selection(value):
+        return date_ranges.conditions(name, value, utcnow().date())
+    return [Condition(variable=name, operator="eq", value=value, use_label=True)]
 
 
 #: What a widget is, where it says nothing. The same defaults the board uses.
@@ -747,6 +774,20 @@ def build_payload(
                 }
             )
     controls = [control for control in controls if control["variable"] not in pinned]
+    # A date range has no control in the file, so its pinned choice is said
+    # here or nowhere: the days the file covers, under its title.
+    for raw in dashboard.filters or []:
+        if not isinstance(raw, dict) or raw.get("kind") != "dates":
+            continue
+        name = str(raw.get("variable") or "")
+        if name in pinned and not any(one["variable"] == name for one in chosen):
+            chosen.append(
+                {
+                    "variable": name,
+                    "label": str(raw.get("label") or name),
+                    "value": date_ranges.describe(pinned[name], utcnow().date()),
+                }
+            )
 
     widgets: list[dict[str, Any]] = []
     for widget in sorted(dashboard.widgets, key=lambda w: (w.page or 0, w.position or 0)):

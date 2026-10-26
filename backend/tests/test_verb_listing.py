@@ -53,10 +53,10 @@ def test_the_refusal_names_the_commands(db_session):
     expander reads the run's two dictionaries to do it.
     """
     with pytest.raises(CommandError) as raised:
-        stata.apply(stata.Run(db=db_session), "recode sex (1 = 2)")
+        stata.apply(stata.Run(db=db_session), "xtile band = age, nq(5)")
 
     said = str(raised.value)
-    assert "'recode' is not a command" in said
+    assert "'xtile' is not a command" in said
     for name in ("collapse", "contract", "merge", "append", "gen", "egen", "local"):
         assert name in said, f"the refusal does not mention '{name}': {said}"
 
@@ -64,7 +64,7 @@ def test_the_refusal_names_the_commands(db_session):
 def test_a_macro_can_hold_the_command_itself(db_session):
     """Which is why expansion comes before the verb is looked up."""
     run = stata.Run(db=db_session)
-    stata.apply(run, "local verb recode")
+    stata.apply(run, "local verb xtile")
     with pytest.raises(CommandError) as raised:
-        stata.apply(run, "`verb' sex (1 = 2)")
-    assert "'recode' is not a command" in str(raised.value)
+        stata.apply(run, "`verb' band = age, nq(5)")
+    assert "'xtile' is not a command" in str(raised.value)

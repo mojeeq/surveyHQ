@@ -66,6 +66,66 @@ COMMANDS: dict[str, tuple[str, str]] = {
         '[force ignore("<chars>") percent dpcomma]',
         "Turn text that holds numbers into numbers.",
     ),
+    "recode": (
+        "recode <variables> (<old> = <new>) [(...)...] [if <condition>] "
+        "[, generate(<names>) prefix(<text>)]",
+        "Turn old values into new ones by rules: (1 2 = 0) (3/5 = 1) (else = .).",
+    ),
+    "duplicates": (
+        "duplicates report|tag|drop [<variables>] [, generate(<name>) force]",
+        "Find rows that repeat, mark them, or keep only the first of each.",
+    ),
+    "reshape": (
+        "reshape long|wide <stubs>, i(<ids>) j(<name>) [string]",
+        "Turn inc2019 inc2020 into rows of inc by year, or back into columns.",
+    ),
+    "tostring": (
+        "tostring <variables>, replace | generate(<names>)",
+        "Write numbers as text.",
+    ),
+    "encode": (
+        "encode <variable>, generate(<name>) [label(<set>)]",
+        "Number the values of a text variable, labelled with their text.",
+    ),
+    "decode": (
+        "decode <variable>, generate(<name>)",
+        "Write a labelled code as its label's text.",
+    ),
+    "sort": ("sort <variables>", "Put the rows in order of these, smallest first."),
+    "gsort": ("gsort [-]<variable> ...", "Sort, with - in front of a variable for largest first."),
+    "order": (
+        "order <variables> [, first | last | before(<variable>) | after(<variable>)]",
+        "Move variables to the front, the end, or beside another.",
+    ),
+    "assert": (
+        "assert <expression> [if <condition>]",
+        "Stop the script unless this holds on every row.",
+    ),
+    "count": ("count [if <condition>]", "How many rows, or how many meet a condition."),
+    "summarize": (
+        "summarize [<variables>] [if <condition>] [, detail]",
+        "Count, mean, spread, smallest and largest of numeric variables.",
+    ),
+    "tabulate": (
+        "tabulate <variable> [<variable>] [if <condition>] [, missing]",
+        "How often each value appears, or a cross-table of two.",
+    ),
+    "by": (
+        "by <variables>: <command>",
+        "Run gen, replace, egen, keep, drop or assert within each group; _n and _N count in it.",
+    ),
+    "bysort": (
+        "bysort <variables> [(<order>)]: <command>",
+        "Sort by the groups first, then run the command within each.",
+    ),
+    "foreach": (
+        "foreach <name> in <words> | of varlist|local|global|numlist <list> {",
+        "Run the lines up to } once for each item, as `name'.",
+    ),
+    "forvalues": (
+        "forvalues <name> = <start>/<end> | <start>(<step>)<end> {",
+        "Run the lines up to } once for each number, as `name'.",
+    ),
     "local": ("local <name> <text>", "Name a piece of script text, used as `name'."),
     "global": ("global <name> <text>", "Name a piece of script text, used as $name."),
 }
@@ -92,11 +152,58 @@ OPTION_NOTES: dict[str, dict[str, str]] = {
     },
     "egen": {"by": "Work within each group of these variables."},
     "save": {"replace": "Write over a dataset that exists."},
+    "recode": {
+        "generate": "Put the new values in new variables, named here.",
+        "gen": "Put the new values in new variables, named here.",
+        "g": "Put the new values in new variables, named here.",
+        "prefix": "Put the new values in new variables, named with this in front.",
+    },
+    "duplicates": {
+        "generate": "With tag: the new variable counting each row's duplicates.",
+        "gen": "With tag: the new variable counting each row's duplicates.",
+        "g": "With tag: the new variable counting each row's duplicates.",
+        "force": "With drop on some variables: lose what the dropped rows held.",
+    },
+    "reshape": {
+        "i": "The variables that identify a row of the wide data.",
+        "j": "The variable that holds the suffix: year in inc2019.",
+        "string": "The suffixes are text, not numbers.",
+    },
+    "tostring": {
+        "replace": "Write the text over the numbers.",
+        "generate": "Put the text in new variables, named here.",
+        "gen": "Put the text in new variables, named here.",
+        "g": "Put the text in new variables, named here.",
+        "force": "Accepted for Stata's sake; nothing is lost here without it.",
+    },
+    "encode": {
+        "generate": "The new variable holding the codes.",
+        "gen": "The new variable holding the codes.",
+        "g": "The new variable holding the codes.",
+        "label": "The label set to use, or make; codes already in it are kept.",
+    },
+    "decode": {
+        "generate": "The new variable holding the text.",
+        "gen": "The new variable holding the text.",
+        "g": "The new variable holding the text.",
+    },
+    "sort": {"stable": "Always so here: rows that tie keep their order."},
+    "order": {
+        "first": "To the front (the default).",
+        "last": "To the end.",
+        "before": "Just before this variable.",
+        "after": "Just after this variable.",
+    },
+    "summarize": {"detail": "Add the quartiles and median."},
+    "tabulate": {"missing": "Count missing as a value of its own."},
 }
 
 # Options written with brackets after them, so the editor can put the cursor
 # between them. The rest are words on their own.
-TAKES_ARGUMENT = {"keep", "keepusing", "by", "generate", "gen", "g", "ignore"}
+TAKES_ARGUMENT = {
+    "keep", "keepusing", "by", "generate", "gen", "g", "ignore", "prefix", "i", "j",
+    "label", "before", "after",
+}
 
 # Functions, by the name the expression language takes.
 FUNCTIONS: dict[str, tuple[str, str]] = {
@@ -178,6 +285,38 @@ MERGE_KEEP: dict[str, str] = {
     "match": "Rows in both.",
 }
 
+# The word that comes straight after a command and says which of its forms
+# this is. label's are LABEL_KINDS, above, kept under their own name for the
+# editor that already reads them.
+SUBCOMMANDS: dict[str, dict[str, str]] = {
+    "duplicates": {
+        "report": "How many rows repeat, and how often.",
+        "tag": "A new variable counting each row's duplicates.",
+        "drop": "Keep only the first row of each set of duplicates.",
+    },
+    "reshape": {
+        "long": "Columns like inc2019 inc2020 into rows, one per year.",
+        "wide": "Rows, one per year, into columns like inc2019 inc2020.",
+    },
+}
+
+# The words a loop's first line is written with: `foreach v of varlist`.
+LOOP_WORDS: dict[str, str] = {
+    "in": "The words that follow, one at a time.",
+    "of": "Items of the kind that follows.",
+    "varlist": "Variables in the data: names, q1-q5, inc*.",
+    "newlist": "Names for variables not made yet.",
+    "local": "The words of a local macro.",
+    "global": "The words of a global macro.",
+    "numlist": "Numbers: 1/5, 0(10)50, 2 4 8.",
+}
+
+# What an expression can count rows with, under a by or not.
+ROW_NAMES: dict[str, str] = {
+    "_n": "This row's number, counted within the by group.",
+    "_N": "How many rows there are, or in the by group.",
+}
+
 
 def _aliases() -> dict[str, list[str]]:
     """Every other spelling of each command, read off the engine's table."""
@@ -224,6 +363,13 @@ def language() -> dict[str, Any]:
             {"name": name, "summary": COLLAPSE[name]} for name in stata.COLLAPSE_STATS
         ],
         "label_kinds": [{"name": name, "summary": text} for name, text in LABEL_KINDS.items()],
+        "subcommands": {
+            command: [{"name": name, "summary": text} for name, text in forms.items()]
+            for command, forms in SUBCOMMANDS.items()
+        },
+        "loop_words": [{"name": name, "summary": text} for name, text in LOOP_WORDS.items()],
+        "row_names": [{"name": name, "summary": text} for name, text in ROW_NAMES.items()],
+        "by_able": sorted(stata.BY_ABLE),
         "merge_shapes": list(stata.MERGE_SHAPES),
         "merge_keep": [{"name": name, "summary": text} for name, text in MERGE_KEEP.items()],
     }
