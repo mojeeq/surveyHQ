@@ -99,6 +99,19 @@ def test_a_pace_going_the_wrong_way_finishes_never(db_session, indicator):
     assert "projected_at" not in moved
 
 
+def test_a_finish_too_far_off_to_be_a_date_is_said_so(db_session, indicator):
+    """A target of a million moving by one a week: no projected date, and no
+    failure trying to hold one past the year 9999."""
+    indicator.target_value = 1_000_000
+    indicator.target_date = (NOW + 30 * DAY).date()
+    stored(db_session, indicator, (6 * DAY, 0))
+    moved = movement(db_session, indicator, 1, now=NOW)
+    assert "projected_at" not in moved
+    assert moved["projected_beyond"] is True
+    assert moved["on_course"] is False
+    assert moved["needed_per_day"] > 0
+
+
 def test_a_target_met_is_said_and_not_projected(db_session, indicator):
     stored(db_session, indicator, (3 * DAY, 800))
     moved = movement(db_session, indicator, 1200, now=NOW)

@@ -50,7 +50,7 @@ from app.services.query_engine import (
     quote_ident,
     run_sql,
 )
-from app.services.stata_expr import ExpressionError, Window, translate
+from app.services.stata_expr import ExpressionError, Window, reads_back, translate
 from app.services.stata_frame import (
     Frame,
     FrameError,
@@ -957,6 +957,8 @@ def _replace(run: Run, rest: str) -> CommandResult:
     if name not in ctx.variables:
         raise CommandError(f"'{name}' is not a variable in the data. Use gen to create it.")
     window = _window(run)
+    if reads_back(expression, name) or reads_back(condition, name):
+        return _fill_down(run, name, expression, condition, window)
     value = translate(expression, _expression_kinds(frame), quote_ident, window)
     where = _condition_sql(frame, condition, window)
     column = f"CASE WHEN {where} THEN {value} ELSE {quote_ident(name)} END" if where else value
@@ -968,6 +970,50 @@ def _replace(run: Run, rest: str) -> CommandResult:
         command="",
         message=f"Replaced {name} in {affected:,} row(s)",
         changed_rows=affected,
+        data_changed=True,
+    )
+
+
+def _fill_down(
+    run: Run, name: str, expression: str, condition: str, window: Window
+) -> CommandResult:
+    """`replace x = x[_n-1] if missing(x)` - each gap takes the value above it.
+
+    Stata replaces one row at a time, top to bottom, so a row reading the row
+    above sees it already replaced: a run of three gaps under a 5 becomes
+    three 5s. Every row worked out at once from the column as it was - which
+    is what a subscript is everywhere else - fills only the first gap. So the
+    carry-forward idiom is recognised and done as what it means, the last
+    value above that is not missing, within the by group where there is one.
+
+    Anything else that reads the variable on an earlier row while changing it
+    is a recurrence, which is refused rather than given a different answer
+    from the do-file it came from.
+    """
+    frame, work = run.data, run.work
+    plain = expression.replace(" ", "")
+    gap = condition.replace(" ", "")
+    tests = {f"missing({name})", f"mi({name})", f"{name}==.", f"{name}>=.", f'{name}==""'}
+    if plain != f"{name}[_n-1]" or gap not in tests:
+        raise CommandError(
+            f"This replace reads {name} on an earlier row while changing it. Stata does "
+            f"that one row at a time, each row seeing the one above already changed, and "
+            f"that is not how it would run here, so it is refused rather than giving a "
+            f"different answer. To fill gaps from the row above, write "
+            f"replace {name} = {name}[_n-1] if missing({name}); otherwise make the result "
+            f"a new variable with gen"
+        )
+    column = quote_ident(name)
+    text = _expression_kinds(frame).get(name) == "text"
+    present = f"NULLIF({column}, '')" if text else column
+    above = f"LAST_VALUE({present} IGNORE NULLS) {window.running()}"
+    filled = f"COALESCE({present}, {above}, {column})" if text else f"COALESCE({column}, {above})"
+    changed = _count_matching(frame, f"({present}) IS NULL AND ({above}) IS NOT NULL")
+    write(work, frame, _select_sql(frame, frame.context, replace={name: filled}))
+    return CommandResult(
+        command="",
+        message=f"Filled {changed:,} gap(s) in {name} from the row above",
+        changed_rows=changed,
         data_changed=True,
     )
 
@@ -3170,6 +3216,15 @@ def _reshape_long(
     spread = {name for found in sources.values() for name in found.values()}
     dropped = spread | {name + MISSING_TAG_SUFFIX for name in spread}
     carried = [name for name in ctx.variables if name not in ids and name not in dropped]
+    # Which of the stubs carry a .a or .b somewhere. The reason a value is
+    # missing lives in a companion column beside it, and goes where the value
+    # goes - left behind, a round trip through long and back would turn every
+    # "refused" and "don't know" into a plain blank.
+    tagged = {
+        stub
+        for stub in stubs
+        if any(name + MISSING_TAG_SUFFIX in ctx.variables for name in sources[stub].values())
+    }
     parts = []
     for suffix in suffixes:
         selected = [quote_ident(name) for name in ids]
@@ -3183,6 +3238,13 @@ def _reshape_long(
                 if source
                 else f"NULL AS {quote_ident(stub)}"
             )
+            if stub in tagged:
+                companion = f"{source}{MISSING_TAG_SUFFIX}" if source else ""
+                selected.append(
+                    f"{quote_ident(companion)} AS {quote_ident(stub + MISSING_TAG_SUFFIX)}"
+                    if companion in ctx.variables
+                    else f"CAST(NULL AS VARCHAR) AS {quote_ident(stub + MISSING_TAG_SUFFIX)}"
+                )
         selected += [quote_ident(name) for name in carried]
         parts.append(f"SELECT {', '.join(selected)} FROM read_parquet({path})")
     ordering = ", ".join([*_order_terms(frame, [(name, False) for name in ids]), quote_ident(j)])
@@ -3264,11 +3326,18 @@ def _reshape_wide(run: Run, stubs: list[str], ids: list[str], j: str) -> Command
     selected = [quote_ident(name) for name in ids]
     selected += [f"ANY_VALUE({quote_ident(name)}) AS {quote_ident(name)}" for name in carried]
     for stub in stubs:
+        # The reasons for its missing values, spread out beside it.
+        companion = stub + MISSING_TAG_SUFFIX if stub + MISSING_TAG_SUFFIX in ctx.variables else ""
         for value, suffix in zip(values, suffixes, strict=True):
             test = f"{column} = {_text_sql(str(value)) if textual else _number_sql(float(value))}"
             selected.append(
                 f"MAX({quote_ident(stub)}) FILTER (WHERE {test}) AS {quote_ident(stub + suffix)}"
             )
+            if companion:
+                selected.append(
+                    f"MAX({quote_ident(companion)}) FILTER (WHERE {test}) "
+                    f"AS {quote_ident(stub + suffix + MISSING_TAG_SUFFIX)}"
+                )
     grouped = ", ".join(quote_ident(name) for name in ids)
     ordering = ", ".join(_order_terms(frame, [(name, False) for name in ids]))
     sql = (

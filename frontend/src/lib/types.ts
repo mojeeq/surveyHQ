@@ -313,7 +313,16 @@ export interface MultiSelectRequest {
   sort: 'value_desc' | 'value_asc' | 'label_asc' | 'none'
   /** A chart draws one number; a table is the case that wants both. */
   show: 'count' | 'percent' | 'both'
+  /** How the question is read. Absent on a chart saved before there was a
+   *  choice, which is one bar per option. */
+  view?: MultiSelectView
+  /** The variable a by_group view splits the respondents by. */
+  by?: string
+  /** How many combinations are named before the rest are one bar. */
+  top?: number
 }
+
+export type MultiSelectView = 'options' | 'by_group' | 'combinations' | 'how_many' | 'together'
 
 /** A set of columns in a dataset that together look like one question. */
 export interface MultiSelectGroup {

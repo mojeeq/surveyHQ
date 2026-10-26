@@ -447,3 +447,74 @@ def test_the_editor_is_told_about_the_new_vocabulary():
     assert {"long", "wide"} == {one["name"] for one in served["subcommands"]["reshape"]}
     assert {"_n", "_N"} == {one["name"] for one in served["row_names"]}
     assert "assert" in served["by_able"]
+
+
+# --- what review found ------------------------------------------------------
+
+
+def test_filling_down_carries_through_a_run_of_gaps(db_session, project):
+    """Stata replaces top to bottom, so each gap sees the one above it filled:
+    two gaps under a 40 are two 40s, not a 40 and a blank."""
+    data = built(
+        db_session,
+        project,
+        "use people\nreplace age = . if inlist(_n, 2, 3)\nreplace age = age[_n-1] if missing(age)",
+    )
+    assert column(data, "age") == [40, 40, 40, 31, 4, 25]
+
+
+def test_by_fills_down_within_each_group_only(db_session, project):
+    data = built(
+        db_session,
+        project,
+        "use people\nreplace age = . if inlist(_n, 2, 3, 5)\n"
+        "by hhid: replace age = age[_n-1] if missing(age)",
+    )
+    # Household 2's first row has nothing above it in its own household.
+    assert column(data, "age") == [40, 40, None, 31, 31, 25]
+
+
+def test_a_recurrence_on_rows_above_is_refused_not_answered_differently(db_session, project):
+    with pytest.raises(ScriptError, match="reads age on an earlier row"):
+        script(db_session, project, "use people\nreplace age = age[_n-1] + 1 if _n > 1")
+    # The row below has not been replaced yet when Stata reaches this one, so
+    # reading it gives the same answer either way, and is allowed.
+    data = built(
+        db_session,
+        project,
+        "use people\nreplace age = . if _n == 2\nreplace age = age[_n+1] if missing(age)",
+    )
+    assert column(data, "age") == [40, 33, 33, 31, 4, 25]
+
+
+def test_reshape_keeps_the_reason_each_value_is_missing(db_session, project):
+    """A .a and a .b live in a companion column beside the value; reshape
+    moves them with it, there and back."""
+    from sqlalchemy import select
+
+    from app.models import Dataset, Variable, VariableType
+
+    incomes = db_session.execute(
+        select(Dataset).where(Dataset.project_id == project["id"], Dataset.name == "incomes")
+    ).scalar_one()
+    stored = pd.read_parquet(incomes.storage_path)
+    stored.loc[1, "inc2019"] = None
+    stored.loc[2, "inc2020"] = None
+    stored["inc2019__mv"] = [None, ".a", None]
+    stored["inc2020__mv"] = [None, None, ".b"]
+    stored.to_parquet(incomes.storage_path, index=False)
+    for offset, name in enumerate(("inc2019__mv", "inc2020__mv")):
+        db_session.add(Variable(dataset_id=incomes.id, name=name, var_type=VariableType.text,
+                                position=len(stored.columns) + offset, is_hidden=True))
+    db_session.flush()
+
+    long = built(db_session, project, "use incomes\nreshape long inc, i(hhid) j(year)")
+    assert column(long, "inc__mv") == [None, None, ".a", None, None, ".b"]
+
+    wide = built(
+        db_session,
+        project,
+        "use incomes\nreshape long inc, i(hhid) j(year)\nreshape wide inc, i(hhid) j(year)",
+    )
+    assert column(wide, "inc2019__mv") == [None, ".a", None]
+    assert column(wide, "inc2020__mv") == [None, None, ".b"]
