@@ -620,6 +620,8 @@ DAY = dt.timedelta(days=1)
 #: synced and the Monday everybody did, and is short enough to notice a team
 #: that has slowed down.
 PACE_WINDOW = dt.timedelta(days=7)
+#: Past this a projected finish is not a date, it is "not at this rate".
+PROJECTION_HORIZON = dt.timedelta(days=3650)
 
 
 def _aware(moment: dt.datetime) -> dt.datetime:
@@ -699,10 +701,18 @@ def movement(
         return out
     toward = None if pace is None else (pace if rising else -pace)
     if toward is not None and toward > 0:
-        projected = now + dt.timedelta(days=remaining / toward)
-        out["projected_at"] = projected.isoformat()
-        if indicator.target_date:
-            out["on_course"] = projected.date() <= indicator.target_date
+        if remaining / toward > PROJECTION_HORIZON.days:
+            # Moving, but so slowly that the date it gets there is no date
+            # anybody plans by - and a million days on is past the last date
+            # Python can hold, which failed every tile on the page with it.
+            out["projected_beyond"] = True
+            if indicator.target_date:
+                out["on_course"] = False
+        else:
+            projected = now + dt.timedelta(days=remaining / toward)
+            out["projected_at"] = projected.isoformat()
+            if indicator.target_date:
+                out["on_course"] = projected.date() <= indicator.target_date
     if indicator.target_date:
         # Counting the day itself: a target "by the 30th" can still be worked
         # towards on the 30th.

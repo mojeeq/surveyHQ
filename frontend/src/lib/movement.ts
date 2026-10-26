@@ -17,6 +17,8 @@ export interface Movement {
   /** How many days the pace was averaged over. */
   pace_days?: number
   projected_at?: string
+  /** Moving towards the target, but more than ten years from it. */
+  projected_beyond?: boolean
   /** Whether the projection lands on or before the target date. */
   on_course?: boolean
   target_date?: string | null
@@ -110,6 +112,11 @@ export function movementLines(movement: Movement | undefined, shape: Shape): Mov
       projectionTone = movement.on_course ? 'good' : 'bad'
     }
     lines.push({ text, tone: projectionTone })
+  } else if (movement.projected_beyond && typeof pace === 'number') {
+    lines.push({
+      text: `At ${amount(Math.abs(pace), format, unit)} a day, ${goal} is more than ten years away`,
+      tone: 'bad',
+    })
   } else if (typeof pace === 'number' && direction !== 'neutral') {
     lines.push({ text: 'Not moving towards the target this week', tone: 'bad' })
   }

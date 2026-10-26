@@ -798,6 +798,17 @@ works in front of `gen`, `replace`, `egen`, `keep`, `drop` and `assert`; in
 front of `egen` it means what `by()` after it does. Without a prefix, `_n`
 and `_N` count the whole data: `gen id = _n` numbers the rows.
 
+Filling gaps from the row above works as it does in Stata:
+`replace visit = visit[_n-1] if missing(visit)` fills a run of three blanks
+under a 5 with three 5s, each blank taking the value above it as already
+filled, and `by hhid:` in front keeps it inside each household. That idiom is
+recognised and done exactly. Any other `replace` that reads the variable it
+is changing on an earlier row - `replace x = x[_n-1] + 1` - is refused rather
+than run: Stata works through such a line one row at a time, each row seeing
+the one above already changed, and an answer worked out differently would
+differ from the do-file's without saying so. Reading the row below,
+`x[_n+1]`, is allowed, because Stata has not reached it yet either.
+
 #### Duplicates, order and checks
 
 `duplicates report hhid` says how many rows repeat a value of `hhid`, and
@@ -862,7 +873,9 @@ twice is refused, since there would be no telling whose income is whose - and
 the suffixes have to be numbers unless `string` says otherwise. `reshape wide`
 goes back: one row per `i()`, a column for each value of `j()`. Every other
 variable has to be the same on all of a household's rows, or it is refused by
-name, because only one of its values could survive. Like `collapse`, the
+name, because only one of its values could survive. A `.a` or `.b` goes with
+its value both ways, so a round trip through long and back keeps every
+"refused" and "don't know" it started with. Like `collapse`, the
 result is no longer the dataset it was loaded from, so `save as` gives it a
 name.
 
@@ -2338,7 +2351,8 @@ it needs a day of history before it says anything. "Lower is better" projects
 downwards towards its ceiling the same way; a neutral indicator has no
 direction to project in, so it gets no projection. Without a date the
 projection is still made, without the "in time" verdict, and an indicator with
-no target says only its average a day.
+no target says only its average a day. A pace so slow that the target is more
+than ten years off is said that way rather than as a date.
 
 **What it has done lately.** Every tile says how it has moved: *+212 since
 yesterday · +1,340 in a week*, coloured by whether that is good news for the

@@ -145,6 +145,40 @@ class Window:
     def everyone(self) -> str:
         return f"OVER (PARTITION BY {', '.join(self.partition)})" if self.partition else "OVER ()"
 
+    def running(self) -> str:
+        """From the first row of the group to this one, in order."""
+        parts = [f"PARTITION BY {', '.join(self.partition)}"] if self.partition else []
+        parts.append(f"ORDER BY {', '.join(self.order)}")
+        parts.append("ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW")
+        return f"OVER ({' '.join(parts)})"
+
+
+def reads_back(expression: str, name: str) -> bool:
+    """Whether the expression reads this variable on an earlier row.
+
+    `x[_n-1]` and `x[1]` name rows above this one, which Stata - replacing top
+    to bottom, one row at a time - has already changed by the time it reaches
+    this row. `x[_n+1]` and `x[_N]` name rows it has not reached yet, which
+    read the same whichever way the rows are taken.
+    """
+    if not expression:
+        return False
+    tokens = tokenize(expression)
+    for at, token in enumerate(tokens):
+        if token.kind != "name" or token.text.lower() != name.lower():
+            continue
+        if at + 1 >= len(tokens) or tokens[at + 1].text != "[":
+            continue
+        inside: list[str] = []
+        for later in tokens[at + 2 :]:
+            if later.text == "]":
+                break
+            inside.append(later.text)
+        written = "".join(inside)
+        if re.fullmatch(r"_n-\d+", written) or written.isdigit():
+            return True
+    return False
+
 
 @dataclass
 class Token:

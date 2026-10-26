@@ -86,6 +86,17 @@ describe('where it is heading', () => {
     ])
   })
 
+  it('says a target too far off to be a date is more than ten years away', () => {
+    const lines = movementLines(
+      { pace_per_day: 0.2, projected_beyond: true, on_course: false },
+      count,
+    )
+    expect(lines[0]).toEqual({
+      text: 'At 0.2 a day, 15,040 is more than ten years away',
+      tone: 'bad',
+    })
+  })
+
   it('projects nothing past the target, and only a pace where there is none', () => {
     expect(movementLines({ reached: true, pace_per_day: 50 }, count)).toEqual([])
     expect(movementLines({ pace_per_day: 50 }, { ...count, target: null })).toEqual([
