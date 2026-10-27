@@ -42,10 +42,14 @@ def _iso(moment: Any) -> str | None:
 def overview(db: Session, project_id: str) -> dict[str, Any]:
     datasets = list(db.scalars(select(Dataset).where(Dataset.project_id == project_id)).all())
     by_id = {dataset.id: dataset for dataset in datasets}
-    script = db.scalars(
-        select(ProjectScript).where(ProjectScript.project_id == project_id)
-    ).first()
-    written = set(script.writes or []) if script is not None else set()
+    scripts = list(
+        db.scalars(
+            select(ProjectScript)
+            .where(ProjectScript.project_id == project_id)
+            .order_by(ProjectScript.created_at, ProjectScript.id)
+        ).all()
+    )
+    written = {one for script in scripts for one in script.writes or []}
     attention: list[dict[str, str]] = []
 
     # In: the connections feeding the project, and what they bring.
@@ -130,36 +134,45 @@ def overview(db: Session, project_id: str) -> dict[str, Any]:
                 }
             )
 
-    # Prepared: the script, and whether the next import will run it.
-    prepared: dict[str, Any] = {"exists": False}
-    if script is not None and (script.text.strip() or script.last_run_at is not None):
+    # Prepared: the scripts, and whether the next import will run each.
+    prepared: list[dict[str, Any]] = []
+    for script in scripts:
         saved = bool(script.text.strip())
-        prepared = {
-            "exists": True,
-            "saved": saved,
-            "commands": len(stata.commands(script.text if saved else script.last_run_text or "")),
-            "last_run_at": _iso(script.last_run_at),
-            "last_error": script.last_error or "",
-            "reads": [by_id[i].name for i in script.reads or [] if i in by_id],
-            "writes": [by_id[i].name for i in script.writes or [] if i in by_id],
-            "runs_on_import": saved and bool(script.reads),
-        }
+        link = f"/scripts?script={script.id}"
+        prepared.append(
+            {
+                "id": script.id,
+                "name": script.name,
+                "saved": saved,
+                "commands": len(
+                    stata.commands(script.text if saved else script.last_run_text or "")
+                ),
+                "last_run_at": _iso(script.last_run_at),
+                "last_error": script.last_error or "",
+                "reads": [by_id[i].name for i in script.reads or [] if i in by_id],
+                "writes": [by_id[i].name for i in script.writes or [] if i in by_id],
+                "runs_on_import": saved and bool(script.reads),
+            }
+        )
         if script.last_error:
             attention.append(
                 {
                     "kind": "script",
-                    "title": "The script's last run failed",
+                    "title": f"The last run of '{script.name}' failed",
                     "detail": script.last_error,
-                    "link": f"/scripts?project={project_id}",
+                    "link": link,
                 }
             )
         elif not saved and script.reads:
             attention.append(
                 {
                     "kind": "script",
-                    "title": "The script has run but was never saved, so imports do not re-run it",
+                    "title": (
+                        f"'{script.name}' has run but was never saved, so imports "
+                        "do not re-run it"
+                    ),
                     "detail": "Open it and run it once, or save it.",
-                    "link": f"/scripts?project={project_id}",
+                    "link": link,
                 }
             )
 
@@ -240,10 +253,10 @@ def overview(db: Session, project_id: str) -> dict[str, Any]:
         "imports": imports,
         "sources": sources,
         "merges": merges,
-        "script": prepared,
+        "scripts": prepared,
         "outputs": [
             {"id": i, "name": by_id[i].name, "rows": by_id[i].row_count or 0}
-            for i in (script.writes or [] if script is not None else [])
+            for i in dict.fromkeys(one for script in scripts for one in script.writes or [])
             if i in by_id
         ],
         "dashboards": boards,

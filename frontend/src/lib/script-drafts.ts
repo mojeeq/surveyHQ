@@ -50,7 +50,7 @@ export interface LogLine {
 const PREFIX = 'surveyhq.scriptDraft.'
 const LAST_OPEN = 'surveyhq.scripts.open.'
 
-/** Keyed `<account>.<project>`, both of them ids with no dots in. */
+/** Keyed `<account>.<script>`, both of them ids with no dots in. */
 const drafts = new Map<string, Draft>()
 const logs = new Map<string, LogLine[]>()
 const listeners = new Set<() => void>()
@@ -58,7 +58,7 @@ const listeners = new Set<() => void>()
 let version = 0
 const listed = new Map<string, { version: number; ids: ReadonlySet<string> }>()
 
-const keyOf = (owner: string, projectId: string) => `${owner}.${projectId}`
+const keyOf = (owner: string, scriptId: string) => `${owner}.${scriptId}`
 
 function storage(): Storage | null {
   try {
@@ -120,18 +120,18 @@ export function draftFrom(previous: Draft | null, text: string, opening: string,
   return { text, base: previous ? previous.base : opening, at }
 }
 
-export function readDraft(owner: string, projectId: string): Draft | null {
+export function readDraft(owner: string, scriptId: string): Draft | null {
   if (!owner) return null
   load()
-  return drafts.get(keyOf(owner, projectId)) ?? null
+  return drafts.get(keyOf(owner, scriptId)) ?? null
 }
 
 /** Keep a draft. False when only the memory copy could be kept, so it will
  *  not outlive the tab - or, with nobody signed in, when nothing was kept. */
-export function writeDraft(owner: string, projectId: string, draft: Draft): boolean {
+export function writeDraft(owner: string, scriptId: string, draft: Draft): boolean {
   if (!owner) return false
   load()
-  const key = keyOf(owner, projectId)
+  const key = keyOf(owner, scriptId)
   const isNew = !drafts.has(key)
   drafts.set(key, draft)
   // Only a script gaining or losing a draft redraws the list; a keystroke in
@@ -147,10 +147,26 @@ export function writeDraft(owner: string, projectId: string, draft: Draft): bool
   }
 }
 
-export function clearDraft(owner: string, projectId: string) {
+/** Move a draft kept under one id to another, unless that one has its own.
+ *
+ *  Drafts were kept by project while a project could only have one script.
+ *  The id a draft is kept under is a script's now, and a draft from before
+ *  belongs to the script that was the project's - its oldest - so the page
+ *  hands it over rather than leaving somebody's unsaved work under a key
+ *  nothing reads any more.
+ */
+export function adoptDraft(owner: string, fromId: string, toId: string) {
+  if (!owner || fromId === toId) return
+  const draft = readDraft(owner, fromId)
+  if (!draft) return
+  if (!readDraft(owner, toId)) writeDraft(owner, toId, draft)
+  clearDraft(owner, fromId)
+}
+
+export function clearDraft(owner: string, scriptId: string) {
   if (!owner) return
   load()
-  const key = keyOf(owner, projectId)
+  const key = keyOf(owner, scriptId)
   const had = drafts.delete(key)
   try {
     storage()?.removeItem(PREFIX + key)
@@ -188,13 +204,13 @@ export function useDrafts(owner: string): ReadonlySet<string> {
   return useSyncExternalStore(subscribe, snapshot)
 }
 
-export function recallLog(owner: string, projectId: string): LogLine[] {
-  return logs.get(keyOf(owner, projectId)) ?? []
+export function recallLog(owner: string, scriptId: string): LogLine[] {
+  return logs.get(keyOf(owner, scriptId)) ?? []
 }
 
-export function rememberLog(owner: string, projectId: string, log: LogLine[]) {
-  if (log.length) logs.set(keyOf(owner, projectId), log)
-  else logs.delete(keyOf(owner, projectId))
+export function rememberLog(owner: string, scriptId: string, log: LogLine[]) {
+  if (log.length) logs.set(keyOf(owner, scriptId), log)
+  else logs.delete(keyOf(owner, scriptId))
 }
 
 /** The script this account had open last, so the page comes back to it. */
@@ -207,10 +223,10 @@ export function lastOpen(owner: string): string | null {
   }
 }
 
-export function rememberOpen(owner: string, projectId: string) {
+export function rememberOpen(owner: string, scriptId: string) {
   if (!owner) return
   try {
-    storage()?.setItem(LAST_OPEN + owner, projectId)
+    storage()?.setItem(LAST_OPEN + owner, scriptId)
   } catch {
     // Opening on the first script instead is no loss.
   }

@@ -1,4 +1,4 @@
-"""A project's do-file: where it is kept, and when it runs again.
+"""A project's do-files: where they are kept, and when they run again.
 
 The script is the recipe, not a one-off. A survey is exported again every
 night, and a dataset the script read is replaced under it; the datasets the
@@ -15,6 +15,10 @@ A re-run is the whole script from the top, which is the only version of this
 that is honest. A script is a sequence - read these, join them, collapse that -
 and re-running half of it would leave the other half describing data that no
 longer exists.
+
+A project can have several scripts, each with a name. A script is known by its
+own id; the project id still finds the project's first script, for the
+endpoints and callers from when there could only be one.
 """
 
 from __future__ import annotations
@@ -41,34 +45,109 @@ class Rerun:
     ran: bool
     error: str = ""
     written: list[str] = field(default_factory=list)
+    script_id: str = ""
+    script_name: str = ""
+
+
+#: What a script is called until somebody names it, and what the script a
+#: project had before there could be several is called.
+DEFAULT_NAME = "Main script"
+NAME_LIMIT = 120
+
+
+def first_script(db: Session, project_id: str) -> ProjectScript | None:
+    """The project's oldest script, which is what "the project's script" means
+    to anything written when a project could only have one."""
+    return db.scalars(
+        select(ProjectScript)
+        .where(ProjectScript.project_id == project_id)
+        .order_by(ProjectScript.created_at, ProjectScript.id)
+    ).first()
 
 
 def script_for(db: Session, project_id: str) -> ProjectScript:
-    """The project's script, made on first sight so callers never see None."""
-    found = db.scalars(
-        select(ProjectScript).where(ProjectScript.project_id == project_id)
-    ).first()
+    """The project's first script, made if it has none.
+
+    For the one-script endpoints, which save and run "the project's script"
+    and had it made on first sight. Nothing else makes a script without being
+    asked to: `create` is how one is started now.
+    """
+    found = first_script(db, project_id)
     if found is not None:
         return found
-    made = ProjectScript(project_id=project_id, text="", reads=[], writes=[])
+    made = ProjectScript(
+        project_id=project_id, name=DEFAULT_NAME, text="", reads=[], writes=[]
+    )
     db.add(made)
     db.flush()
     return made
 
 
-def run(db: Session, project_id: str, text: str | None = None) -> stata.ScriptOutcome:
-    """Run the project's script and remember what it touched.
+def clean_name(name: str) -> str:
+    """A script's name as kept: spaces run together, and something in it."""
+    cleaned = " ".join((name or "").split())
+    if not cleaned:
+        raise ValueError("A script needs a name")
+    if len(cleaned) > NAME_LIMIT:
+        raise ValueError(f"A script's name can be {NAME_LIMIT} characters at most")
+    return cleaned
+
+
+def name_taken(db: Session, project_id: str, name: str, but: str | None = None) -> bool:
+    """Whether another script in the project goes by this name, in any case."""
+    wanted = name.casefold()
+    return any(
+        script.name.casefold() == wanted
+        for script in db.scalars(
+            select(ProjectScript).where(ProjectScript.project_id == project_id)
+        ).all()
+        if script.id != but
+    )
+
+
+def free_name(db: Session, project_id: str, name: str = DEFAULT_NAME) -> str:
+    """This name, or this name numbered, whichever the project has not used."""
+    if not name_taken(db, project_id, name):
+        return name
+    number = 2
+    while name_taken(db, project_id, f"{name} {number}"):
+        number += 1
+    return f"{name} {number}"
+
+
+def create(db: Session, project_id: str, name: str, text: str = "") -> ProjectScript:
+    """Start a script in a project, under a name the project has not used."""
+    cleaned = clean_name(name)
+    if name_taken(db, project_id, cleaned):
+        raise ValueError(f"This project already has a script called '{cleaned}'")
+    made = ProjectScript(
+        project_id=project_id, name=cleaned, text=text, reads=[], writes=[]
+    )
+    db.add(made)
+    db.flush()
+    return made
+
+
+def run(
+    db: Session, target: ProjectScript | str, text: str | None = None
+) -> stata.ScriptOutcome:
+    """Run a script and remember what it touched.
+
+    `target` is the script, or a project id for that project's first script -
+    the shape of every call from before a project could have several.
 
     `text` runs something other than what is stored, which is what the editor
     does. A run of it that goes through keeps it - see `_keep` - and one that
     stops on a line does not, so a broken draft never replaces a working script.
     """
-    script = script_for(db, project_id)
+    script = script_for(db, target) if isinstance(target, str) else target
     source = script.text if text is None else text
     try:
-        # What the last run built is what this one may rebuild.
+        # What the last run of this script built is what this one may
+        # rebuild - this script's, not every script's in the project. A second
+        # script writing over the first one's output says so with `replace`.
         outcome = stata.run_project_script(
-            db, project_id, source, owns=set(script.writes or [])
+            db, script.project_id, source, owns=set(script.writes or [])
         )
     except ScriptError as exc:
         _remember(db, script, read=exc.read, written=[s.dataset_id for s in exc.saved],
@@ -184,30 +263,51 @@ def rerun_for(db: Session, changed_ids: list[str]) -> list[Rerun]:
     done: set[str] = set()
     outcomes: list[Rerun] = []
 
+    # Within a round, in the order the scripts have to run in. Two scripts can
+    # be ready together and still depend on each other - one reads the raw
+    # export and writes a clean file, the other reads the raw export *and* that
+    # clean file - and taken in any other order the second rebuilds on the
+    # first one's output from before the import, then counts as done.
+    everything = list(db.scalars(select(ProjectScript)).all())
+    place = {one.script_id: one for one in running_order(db, everything)}
+
+    def position(script: ProjectScript) -> tuple:
+        found = place.get(script.id)
+        if found is None:
+            return (True, 0, 0, "", "")
+        return (found.in_a_cycle, found.step, found.rank, found.project_name.lower(),
+                found.script_name.lower())
+
     # One round per script is enough for any chain of them: each round runs at
     # least one, or nothing is left that can run.
-    for _ in range(len(db.scalars(select(ProjectScript)).all()) or 1):
-        ready = [s for s in standing_on(db, sorted(stale)) if s.project_id not in done]
+    for _ in range(len(everything) or 1):
+        ready = sorted(
+            (s for s in standing_on(db, sorted(stale)) if s.id not in done), key=position
+        )
         if not ready:
             break
         for script in ready:
-            done.add(script.project_id)
+            done.add(script.id)
             try:
-                outcome = run(db, script.project_id)
+                outcome = run(db, script)
             except (ScriptError, CommandError) as exc:
                 logger.warning(
-                    "The script for project %s could not be re-run: %s",
+                    "Script %s (%s) in project %s could not be re-run: %s",
+                    script.id,
+                    script.name,
                     script.project_id,
                     exc,
                 )
                 outcomes.append(
-                    Rerun(project_id=script.project_id, ran=False, error=str(exc))
+                    Rerun(project_id=script.project_id, ran=False, error=str(exc),
+                          script_id=script.id, script_name=script.name)
                 )
                 continue
             written = outcome.written
             stale.update(written)
             outcomes.append(
-                Rerun(project_id=script.project_id, ran=True, written=written)
+                Rerun(project_id=script.project_id, ran=True, written=written,
+                      script_id=script.id, script_name=script.name)
             )
     return outcomes
 
@@ -223,8 +323,9 @@ def warnings_from(db: Session, outcomes: list[Rerun]) -> list[str]:
         if outcome.ran:
             continue
         name = _project_name(db, outcome.project_id)
+        which = f"'{outcome.script_name}' in {name}" if outcome.script_name else f"for {name}"
         notes.append(
-            f"The script for {name} could not be re-run against the new data: "
+            f"The script {which} could not be re-run against the new data: "
             f"{outcome.error}"
         )
     return notes
@@ -270,6 +371,13 @@ class Place:
     project_name: str
     reads: list[str] = field(default_factory=list)
     writes: list[str] = field(default_factory=list)
+    script_id: str = ""
+    script_name: str = ""
+    # What the script is called where it is named among others - in "waits
+    # for", and on the page. Its own name where that is unique among the
+    # scripts being ordered, and with its project beside it where it is not:
+    # every project's first script is called "Main script".
+    label: str = ""
     step: int = 0
     # Where somebody put this script among the ones it shares a step with.
     # A tie-break and nothing more: the step comes from the data.
@@ -299,14 +407,24 @@ def running_order(db: Session, scripts: list[ProjectScript]) -> list[Place]:
     it is a draft, and nothing is known about what it will touch.
     """
     names = _names_of(db, [script.project_id for script in scripts])
+    called: dict[str, int] = {}
+    for script in scripts:
+        called[script.name.casefold()] = called.get(script.name.casefold(), 0) + 1
     places = {
-        script.project_id: Place(
+        script.id: Place(
             project_id=script.project_id,
             # The plain name. `_project_name` above quotes it, because it is
             # written into a sentence; here it is a heading on a page.
             project_name=names.get(script.project_id, "Unnamed project"),
             reads=list(script.reads or []),
             writes=list(script.writes or []),
+            script_id=script.id,
+            script_name=script.name,
+            label=(
+                script.name
+                if called[script.name.casefold()] == 1
+                else f"{script.name} ({names.get(script.project_id, 'Unnamed project')})"
+            ),
             rank=script.run_rank or 0,
         )
         for script in scripts
@@ -324,20 +442,18 @@ def running_order(db: Session, scripts: list[ProjectScript]) -> list[Place]:
     written_by: dict[str, set[str]] = {}
     for script in scripts:
         for dataset_id in script.writes or []:
-            written_by.setdefault(dataset_id, set()).add(script.project_id)
+            written_by.setdefault(dataset_id, set()).add(script.id)
 
     # waiting[a] is every script a has to wait for.
     waiting: dict[str, set[str]] = {one: set() for one in places}
     for script in scripts:
         for dataset_id in script.reads or []:
             for writer in written_by.get(dataset_id, ()):
-                if writer != script.project_id:
-                    waiting[script.project_id].add(writer)
+                if writer != script.id:
+                    waiting[script.id].add(writer)
 
-    for project_id, above in waiting.items():
-        places[project_id].waits_for = sorted(
-            places[one].project_name for one in above
-        )
+    for script_id, above in waiting.items():
+        places[script_id].waits_for = sorted(places[one].label for one in above)
 
     # Kahn's algorithm, in rounds rather than one at a time: a round is a step,
     # which is what makes "these four can run together" readable off the page.
@@ -346,7 +462,11 @@ def running_order(db: Session, scripts: list[ProjectScript]) -> list[Place]:
     while left:
         ready = sorted(
             (one for one, above in left.items() if not above & left.keys()),
-            key=lambda one: (places[one].rank, places[one].project_name.lower()),
+            key=lambda one: (
+                places[one].rank,
+                places[one].project_name.lower(),
+                places[one].script_name.lower(),
+            ),
         )
         if not ready:
             # Everything still here is in a ring, or waits on one.
@@ -368,6 +488,7 @@ def running_order(db: Session, scripts: list[ProjectScript]) -> list[Place]:
             place.step,
             place.rank,
             place.project_name.lower(),
+            place.script_name.lower(),
         ),
     )
 

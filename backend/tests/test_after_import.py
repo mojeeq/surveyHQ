@@ -445,8 +445,8 @@ def test_the_project_reads_as_its_pipeline_with_what_needs_attention_on_top(
     assert [one["name"] for one in body["outputs"]] == ["adults"]
     [joined] = body["merges"]
     assert joined["status"] == "stuck" and joined["message"]
-    assert body["script"]["exists"] and not body["script"]["saved"]
-    assert body["script"]["runs_on_import"] is False
+    [script] = body["scripts"]
+    assert not script["saved"] and script["runs_on_import"] is False
     kinds = [one["kind"] for one in body["attention"]]
     assert "merge" in kinds and "script" in kinds
 

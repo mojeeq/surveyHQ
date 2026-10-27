@@ -9,6 +9,7 @@ from slugify import slugify
 from sqlalchemy import func, select, update
 
 from app.api.deps import CurrentUser, DbSession, RequireManager
+from app.api.v1.endpoints.scripts import run_now, script_out
 from app.models import (
     AlertRule,
     Chart,
@@ -19,7 +20,6 @@ from app.models import (
     Indicator,
     Project,
     ProjectMember,
-    ProjectScript,
     QualityRule,
     Role,
     SavedQuery,
@@ -53,7 +53,6 @@ from app.services.projects import (
     scope_for,
     visible_projects,
 )
-from app.services.stata import CommandError
 
 router = APIRouter()
 
@@ -558,15 +557,26 @@ def read_overview(project_id: str, db: DbSession, user: CurrentUser) -> dict[str
 
 
 # --- the project's script ---------------------------------------------------
+#
+# From when a project had one script. They mean its first - its oldest - and
+# are kept for whatever calls them by the project; the Scripts page works one
+# script at a time through /scripts/{id}.
 
 
 @router.get("/{project_id}/script", response_model=ScriptOut)
 def read_script(project_id: str, db: DbSession, user: CurrentUser) -> ScriptOut:
-    """The project's do-file, and how its last run went."""
-    _visible_project(project_id, db, user)
-    script = project_script.script_for(db, project_id)
-    db.commit()
-    return _script_out(db, script)
+    """The project's first script, and how its last run went.
+
+    An empty one for a project with none, rather than a 404 - and no longer
+    made on the spot. A script used to be created the first time anybody
+    looked, so most projects carried an empty one; with several possible,
+    every row is a script on the page, and looking must not add one.
+    """
+    project = _visible_project(project_id, db, user)
+    script = project_script.first_script(db, project_id)
+    if script is None:
+        return ScriptOut(project_id=project.id, project_name=project.name)
+    return script_out(db, script, project)
 
 
 @router.get("/{project_id}/script/names", response_model=ScriptNames)
@@ -630,12 +640,12 @@ def write_script(
     """
     # Same as running it: seeing a project is not grounds for rewriting the
     # recipe its data is built from.
-    _editable_project(project_id, db, user, Role.manager)
+    project = _editable_project(project_id, db, user, Role.manager)
     script = project_script.script_for(db, project_id)
     script.text = payload.text
     script.updated_by = user.id
     db.commit()
-    return _script_out(db, script)
+    return script_out(db, script, project)
 
 
 @router.delete("/{project_id}/script", response_model=Message)
@@ -660,9 +670,7 @@ def delete_script(project_id: str, db: DbSession, user: RequireManager) -> Messa
     the project, the same as writing it.
     """
     _editable_project(project_id, db, user, Role.manager)
-    script = db.scalars(
-        select(ProjectScript).where(ProjectScript.project_id == project_id)
-    ).first()
+    script = project_script.first_script(db, project_id)
     if script is None:
         # Nothing to delete reads the same as having deleted it. A row is made
         # the first time anybody opens the tab, so its absence is ordinary.
@@ -698,83 +706,7 @@ def run_script(
     # output that moved, writes into the project it moved to as well. Being
     # able to see a project has never been grounds for rewriting its data.
     project = _editable_project(project_id, db, user, Role.manager)
-    try:
-        archiving.refuse_if_archived(project, "running its script")
-    except ValueError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-    before = project_script.script_for(db, project_id).text
-    try:
-        outcome = project_script.run(db, project_id, payload.text)
-    except stata.ScriptError as exc:
-        # Committed rather than rolled back: what ran, ran.
-        db.commit()
-        raise HTTPException(
-            status_code=422,
-            detail=str(exc),
-            headers={"X-Script-Line": str(exc.line_number)},
-        ) from exc
-    except CommandError as exc:
-        # Committed, like the branch above. Nothing ran - the script has no
-        # command in it, or its first word is not one - so there is no data to
-        # unwind, and the one thing worth keeping is the text somebody typed.
-        # Rolled back, a comment-only draft was thrown away by the act of
-        # trying it, and the editor opened blank on what they had just lost.
-        db.commit()
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    script = project_script.script_for(db, project_id)
-    kept = script.text != before
-    if kept:
-        script.updated_by = user.id
-    record(
-        db,
-        user=user,
-        action="run_project_script",
-        entity_type="project",
-        entity_id=project_id,
-        detail={"saved": [entry.name for entry in outcome.saved], "kept": kept},
-    )
-    db.commit()
-    return {
-        # Whether the run's text is now the saved script, so the editor can
-        # move its marker without being sent the text back.
-        "kept": kept,
-        "log": [
-            {"command": step.command, "message": step.message}
-            for step in outcome.results
-        ],
-        "saved": [
-            {"id": entry.dataset_id, "name": entry.name,
-             "created": entry.created, "rows": entry.rows}
-            for entry in outcome.saved
-        ],
-    }
-
-
-def _script_out(db: DbSession, script) -> ScriptOut:
-    def named(ids: list[str]) -> list[str]:
-        found = [db.get(Dataset, one) for one in ids or []]
-        return [one.name for one in found if one is not None]
-
-    ran = script.last_run_text or ""
-    # Stripped on both sides: a box of spaces is not a script, and a run of
-    # spaces is not worth offering back.
-    return ScriptOut(
-        text=script.text,
-        # Only when it is news. A run of the saved script makes the two the
-        # same, and offering to restore what is already there would be noise
-        # on every project that works the ordinary way.
-        unsaved_run="" if ran.strip() == script.text.strip() else ran,
-        reads=named(script.reads),
-        writes=named(script.writes),
-        last_run_at=script.last_run_at,
-        last_error=script.last_error,
-        previous_text=(
-            ""
-            if (script.previous_text or "").strip() == script.text.strip()
-            else script.previous_text or ""
-        ),
-    )
+    return run_now(db, user, project, project_script.script_for(db, project_id), payload.text)
 
 
 def _to_detail(project: Project, db: DbSession, user: User) -> ProjectDetail:

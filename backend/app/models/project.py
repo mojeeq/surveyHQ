@@ -73,13 +73,16 @@ class Project(UUIDMixin, TimestampMixin, Base):
 
 
 class ProjectScript(UUIDMixin, TimestampMixin, Base):
-    """The project's do-file: one script, written once and re-run.
+    """One of a project's do-files, written once and re-run.
 
-    One per project rather than a library of them. A project's data preparation
-    is a single sequence - read these files, put them together, write those out
-    - and splitting it across several scripts only raises the question of which
-    order they run in, which is a question the script itself already answers by
-    being written top to bottom.
+    A project can have several, each with a name. It started as one per
+    project, on the reasoning that data preparation is a single sequence and
+    the script already says the order by being written top to bottom. In
+    practice a survey's preparation is several jobs - clean the roster, build
+    the household file, make the indicator tables - that people write, run and
+    fix separately, and one long script made each of them wait on the others.
+    Which of several runs first is not left to anybody: it is read off what
+    each one reads and writes, as it is between projects.
 
     `reads` and `writes` are what the last run actually touched, recorded
     rather than parsed out of the text. That is what lets a newer export of one
@@ -89,10 +92,15 @@ class ProjectScript(UUIDMixin, TimestampMixin, Base):
     """
 
     __tablename__ = "project_scripts"
-    __table_args__ = (UniqueConstraint("project_id", name="uq_project_script"),)
 
     project_id: Mapped[str] = mapped_column(
         ForeignKey("projects.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # What the script is called in the list beside the editor. Unique within
+    # its project, without regard to case, which the API checks: two scripts
+    # called "Clean" in one project would be told apart by nothing on the page.
+    name: Mapped[str] = mapped_column(
+        String(120), nullable=False, default="Main script", server_default="Main script"
     )
     text: Mapped[str] = mapped_column(Text, default="")
     # What the last run actually ran, which is not always what is saved above:

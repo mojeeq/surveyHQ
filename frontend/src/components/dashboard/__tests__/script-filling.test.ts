@@ -36,7 +36,7 @@ import { fillWith } from "../../ProjectScript";
  *  something" passes the older one. */
 const untouched = (shown: string, saved: string, knownRun = "") => ({
   filled: "p1",
-  project: "p1",
+  script: "p1",
   inBox: shown,
   shown,
   saved,
@@ -46,7 +46,7 @@ const untouched = (shown: string, saved: string, knownRun = "") => ({
 /** Open on p1, with something else in the box: the person typed. */
 const typed = (inBox: string, shown: string, saved: string, knownRun = "") => ({
   filled: "p1",
-  project: "p1",
+  script: "p1",
   inBox,
   shown,
   saved,
@@ -57,7 +57,7 @@ describe("what fills the editor's box", () => {
   describe("opening on a project", () => {
     const opening = {
       filled: null,
-      project: "p1",
+      script: "p1",
       inBox: "",
       shown: "",
       saved: "",
@@ -81,7 +81,7 @@ describe("what fills the editor's box", () => {
           { text: "p2's script", unsaved_run: "" },
           {
             filled: "p1",
-            project: "p2",
+            script: "p2",
             inBox: "half a draft",
             shown: "",
             saved: "",
@@ -131,9 +131,9 @@ describe("what fills the editor's box", () => {
       );
     });
 
-    it("shows the run when a colleague deleted the script out from under it", () => {
+    it("shows the run when a colleague cleared the saved script", () => {
       // Nothing saved any more, but the run is still on record, which is what
-      // this project now opens on. Following the saved text alone would empty
+      // this script now opens on. Following the saved text alone would empty
       // a box nobody had touched and say nothing about why.
       expect(fillWith({ text: "", unsaved_run: "what ran" }, untouched("kept", "kept"))).toBe(
         "what ran",
@@ -167,48 +167,37 @@ describe("what fills the editor's box", () => {
       );
     });
 
-    it("brings the script back when a delete failed", () => {
-      // Asking for a delete empties the box, the saved text and the cached
-      // answer, all three with the request. A delete that fails puts the
-      // answer back, and then this is what returns the script to an untouched
-      // box - no rollback of its own to write.
-      //
-      // Which makes the cached answer load-bearing in the other direction
-      // too: leave it holding the script while the delete is in flight and
-      // this same line fires immediately, undoing the clear and showing the
-      // script being deleted for as long as the request takes. `fillWith`
-      // cannot tell those two apart - only what the cache holds can - so it
-      // is `script-box-guard.mjs` that keeps the emptying beside the request.
+    it("follows a script saved into an empty, untouched box", () => {
+      // A script somebody started and left empty, and a colleague then saved
+      // into. Nobody has touched this box, so it is a view of what is saved
+      // and shows what they wrote.
       expect(fillWith({ text: "the old script", unsaved_run: "" }, untouched("", ""))).toBe(
         "the old script",
       );
     });
 
-    it("cannot reach a run from an emptied box, which is why a failed delete reopens", () => {
+    it("leaves a box cleared on purpose empty, and only opening offers the run", () => {
       // An empty box showing an empty saved text. Following leaves it alone,
-      // which is right when somebody cleared the box and saved it on purpose
-      // and wrong after a delete that failed, where the run was on screen a
-      // moment ago and would now be invisible with no notice and no offer.
+      // which is right when somebody cleared the box and saved it on purpose:
+      // handing the run back would undo what they did. Note that this is the
+      // emptied box specifically - a box still showing a run does follow a
+      // newer one, above.
       //
-      // From here the two are the same question, so nothing in this function
-      // can tell them apart - note that this is the emptied box specifically:
-      // a box still showing a run does follow a newer one, above. The
-      // delete's failure path marks the project unfilled instead, which sends
-      // the next pass down the opening branch below.
+      // Opening the script again is a different question, and falls back to
+      // the run so the box is not blank on a script that plainly ran.
       expect(fillWith({ text: "", unsaved_run: "what ran" }, untouched("", "", "what ran"))).toBe(
         null,
       );
       expect(
         fillWith(
           { text: "", unsaved_run: "what ran" },
-          { filled: null, project: "p1", inBox: "", shown: "", saved: "", knownRun: "what ran" },
+          { filled: null, script: "p1", inBox: "", shown: "", saved: "", knownRun: "what ran" },
         ),
       ).toBe("what ran");
     });
 
-    it("stays empty while a delete is in flight", () => {
-      // The cached answer was emptied with the request, so there is nothing
-      // newer than the empty saved text and nothing refills the box.
+    it("leaves a script nobody has written empty", () => {
+      // Just started: nothing saved, nothing run, and nothing to show.
       expect(fillWith({ text: "", unsaved_run: "" }, untouched("", ""))).toBe(null);
     });
 

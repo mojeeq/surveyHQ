@@ -8,16 +8,21 @@ from pydantic import BaseModel, Field
 
 
 class ScriptPlace(BaseModel):
-    """One project's script, and where it sits in the order."""
+    """One script, and where it sits in the order."""
 
+    script_id: str
+    # What it is called, and what it is called among the others: its own name
+    # where that is unique, with its project beside it where it is not.
+    name: str
+    label: str
     project_id: str
     project_name: str
     # How many scripts have to have run before this one can. Every script at
     # step 0 can run at once; nothing about the number is a position in a
     # queue.
     step: int = 0
-    # The scripts immediately above this one, by project name, which is what
-    # makes the step mean anything.
+    # The scripts immediately above this one, by label, which is what makes
+    # the step mean anything.
     waits_for: list[str] = Field(default_factory=list)
     # This script reads what another writes, which reads what this one writes.
     # There is no order then, and the page says so rather than inventing one.
@@ -48,6 +53,9 @@ class ScriptPlace(BaseModel):
     # way in only where there is one, rather than showing everybody a button
     # that quietly puts them back on the project.
     can_edit: bool = False
+    # When it was started. A project's oldest script is the one the endpoints
+    # from before a project could have several still mean.
+    created_at: dt.datetime | None = None
 
 
 class ScriptsOverview(BaseModel):
@@ -62,4 +70,19 @@ class ScriptOrderIn(BaseModel):
     front of it when somebody moves a card.
     """
 
-    project_ids: list[str] = Field(default_factory=list)
+    script_ids: list[str] = Field(default_factory=list)
+
+
+class ScriptCreateIn(BaseModel):
+    """A new script, in a project, under a name."""
+
+    project_id: str
+    name: str = Field(default="", max_length=200)
+    text: str = Field(default="", max_length=200_000)
+
+
+class ScriptPatchIn(BaseModel):
+    """A new name, new text, or both. What is left out stays as it is."""
+
+    name: str | None = Field(default=None, max_length=200)
+    text: str | None = Field(default=None, max_length=200_000)

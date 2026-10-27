@@ -135,6 +135,9 @@ export const ScriptEditor = forwardRef<
   const language = useRef(new Compartment())
   const editable = useRef(new Compartment())
   const hint = useRef(new Compartment())
+  // The name a screen reader gives the box, which follows the script's own
+  // name when it is renamed.
+  const named = useRef(new Compartment())
 
   useEffect(() => {
     if (!host.current) return
@@ -213,7 +216,7 @@ export const ScriptEditor = forwardRef<
           hint.current.of(placeholderText(placeholder)),
           stoppedAt,
           stoppedDecorations,
-          EditorView.contentAttributes.of({ 'aria-label': label, spellcheck: 'false' }),
+          named.current.of(EditorView.contentAttributes.of({ 'aria-label': label, spellcheck: 'false' })),
           EditorView.updateListener.of((update) => {
             if (update.docChanged && !update.transactions.some((one) => one.annotation(fromOutside))) {
               latest.current.onChange(update.state.doc.toString())
@@ -265,6 +268,14 @@ export const ScriptEditor = forwardRef<
   useEffect(() => {
     view.current?.dispatch({ effects: markStopped.of(stopped) })
   }, [stopped])
+
+  useEffect(() => {
+    view.current?.dispatch({
+      effects: named.current.reconfigure(
+        EditorView.contentAttributes.of({ 'aria-label': label, spellcheck: 'false' }),
+      ),
+    })
+  }, [label])
 
   useImperativeHandle(ref, () => ({
     insertLine(line: string) {
