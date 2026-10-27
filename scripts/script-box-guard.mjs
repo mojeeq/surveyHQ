@@ -12,15 +12,12 @@
  *
  * So there is one place the editor fills the box from an answer: the effect
  * that calls `fillWith`, which decides whether it may. Everywhere else,
- * `setText` is the person acting - typing, inserting an example, clearing
- * after a delete, or asking for the recorded run back - and a mutation's
- * callback is not the person.
+ * `setText` is the person acting - typing, inserting an example, or asking
+ * for the recorded run back - and a mutation's callback is not the person.
  *
  * A mutation records what happened by moving `shown` and `saved`, never by
- * writing the box - the delete included. Emptying the box after a delete is
- * the person's own action and happens where they ask for it, with the
- * request, because by the time the answer gets back they may have started
- * typing the script that replaces the one they removed.
+ * writing the box. A delete writes nothing at all: it takes the script away,
+ * and the box stops taking keystrokes the moment it is asked for.
  *
  * What this does not catch: a callback that writes the box through a helper
  * rather than calling `setText` itself. Following that would want the call
@@ -136,103 +133,59 @@ if (found.length) {
   process.exit(1)
 }
 
-// Asking for a delete has to empty the cached answer along with the box.
+// A delete takes the script away rather than emptying it.
 //
-// Left holding the script, the answer no longer matches the saved text, so
-// the box - empty and nobody having touched it - follows it straight back and
-// the clear is undone before the request has returned. On a slow delete the
-// box then shows the script being deleted and anything typed goes onto the
-// end of it. The two writes are one act and the guard keeps them together.
+// It used to empty the box and the cached answer with the request and leave
+// the editor open on the project, so that a replacement could be typed
+// straight in - which took an awaited cancel of the read in flight, a
+// rollback of both halves of the answer when the delete failed, and a branch
+// that reopened the project only if nobody had typed, all of it checked here.
+// A project can have several scripts now, and deleting one closes it: there
+// is nothing left to type a replacement into, and the next script is started
+// with New.
+//
+// So the invariant is the other way round, and each part of it stands in for
+// a piece of what was checked before:
+//
+// - nothing is written ahead of the answer, so a delete that fails has
+//   nothing to roll back and the editor is exactly as it was;
+// - the box stops taking keystrokes once the delete is asked for, so nothing
+//   is typed into a script that is about to be gone;
+// - and the draft is not kept again behind the delete, which clears it -
+//   or a keystroke landing in between would keep one for no script at all.
 const asked = lines.findIndex((line) => /drop\.mutate\(/.test(line))
 if (asked < 0) {
   console.error('\nProjectScript never asks for a delete; this guard needs rewriting.\n')
   process.exit(1)
 }
-const withRequest = lines.slice(Math.max(0, asked - 22), asked + 1).join('\n')
-// And a read already on its way back has to be stopped, or it lands after the
-// emptying and puts the script back into the answer - the same bug through a
-// second door. This is what TanStack's own optimistic-update guidance says to
-// do before writing the cache by hand.
-//
-// Presence is not the invariant. An un-awaited call does not wait, a call
-// after the emptying does not protect it, and a call on another key does not
-// touch this read - and each of those would leave prelint reporting the thing
-// as held when it is not, which is worse than not checking at all.
-const cancel = /await\s+queryClient\.cancelQueries\(\s*\{\s*queryKey:\s*\['project-script',\s*projectId\],?\s*\}\s*\)/.exec(
-  withRequest,
+const withRequest = lines.slice(Math.max(0, asked - 14), asked + 1)
+const ahead = withRequest.filter((line) =>
+  /(?<![.\w])(setText|setSaved)\s*\(|setQueryData\s*\(|shown\.current\s*=/.test(line),
 )
-const emptied = /queryClient\.setQueryData\(\['project-script', projectId\], EMPTY_SCRIPT\)/.exec(
-  withRequest,
-)
-if (!cancel) {
-  console.error('\nA delete empties the cached answer without awaiting a cancel of that read:\n')
-  console.error('  ProjectScript.tsx:' + (asked + 1) + '  ' + lines[asked].trim())
-  console.error('\n  Needs `await queryClient.cancelQueries({ queryKey: [\'project-script\',')
-  console.error("  projectId] })` - awaited, on this key. Without the await it does not")
-  console.error('  wait; on another key it does not touch the read that overwrites the')
-  console.error('  emptying and puts the script back in the answer.\n')
+if (ahead.length) {
+  console.error('\nA delete writes the editor ahead of its answer:\n')
+  for (const line of ahead) console.error('  ' + line.trim())
+  console.error('\n  Deleting a script closes it, so there is nothing to empty. Written')
+  console.error('  ahead of the answer, a delete that fails has to put all of it back,')
+  console.error('  and the read already out can land on top of the emptying.\n')
   process.exit(1)
 }
-if (emptied && cancel.index > emptied.index) {
-  console.error('\nA delete cancels the read after emptying the cached answer:\n')
-  console.error('  ProjectScript.tsx:' + (asked + 1) + '  ' + lines[asked].trim())
-  console.error('\n  The cancel has to come first. After the emptying it cancels nothing')
-  console.error('  that could still overwrite it, and the read already out lands on top.\n')
+if (!/readOnly=\{[^}]*drop\.isPending/.test(source)) {
+  console.error('\nThe script box still takes keystrokes while a delete is out.\n')
+  console.error('  Make the editor read-only on `drop.isPending` (and after it), or what')
+  console.error('  is typed then goes into a script that is about to be gone.\n')
   process.exit(1)
 }
-
-if (!emptied) {
-  console.error('\nA delete empties the box without emptying the cached answer:\n')
-  console.error('  ProjectScript.tsx:' + (asked + 1) + '  ' + lines[asked].trim())
-  console.error('\n  Set the cached answer to EMPTY_SCRIPT with the request. Left holding')
-  console.error('  the script it no longer matches the saved text, so the untouched box')
-  console.error('  follows it back and the clear is undone before the answer returns.\n')
+const kept = lines.findIndex((line) => /(?<![.\w])writeDraft\s*\(/.test(line))
+if (kept < 0) {
+  console.error('\nProjectScript no longer keeps drafts; this guard needs rewriting.\n')
   process.exit(1)
 }
-
-// A delete that fails has to put the saved text back along with the answer.
-//
-// `saved` means what the server holds. The delete empties it with the request,
-// so a delete that fails and restores only the answer leaves it empty while
-// the script is still there - and that lie reads two ways: `dirty` measures a
-// draft against nothing, and `fillWith` sees a script that has been there all
-// along as newly saved. The restore is one act, like the emptying.
-const rolled = lines.findIndex((line) =>
-  /setQueryData\(\['project-script', projectId\], before\)/.test(line),
-)
-if (rolled < 0) {
-  console.error('\nNothing puts the answer back when a delete fails; this guard needs rewriting.\n')
-  process.exit(1)
-}
-const withRollback = lines.slice(rolled, rolled + 26).join('\n')
-if (!/setSaved\(before\.text\)/.test(withRollback)) {
-  console.error('\nA delete that fails restores the answer but not the saved text:\n')
-  console.error('  ProjectScript.tsx:' + (rolled + 1) + '  ' + lines[rolled].trim())
-  console.error('\n  Call setSaved(before.text) beside it. The server still holds this')
-  console.error('  script, so leaving the saved text empty measures a draft against')
-  console.error('  nothing and reads an old script as newly saved.\n')
-  process.exit(1)
-}
-
-// A delete that fails has to send the editor back to what the project opens
-// on, and only when nobody has typed.
-//
-// Following cannot get there. With nothing saved and a run on record the
-// opening text is the run, and following compares the saved text, so the box
-// would sit empty with no notice and no offer and the run invisible until a
-// reload. Marking the project unfilled sends the next pass down the opening
-// branch. The condition is the other half: the opening branch does not ask,
-// so without it a replacement somebody had started typing is overwritten.
-const reopens = /if \(live\.current === shown\.current\) filledFor\.current = null/.test(
-  withRollback,
-)
-if (!reopens) {
-  console.error('\nA delete that fails does not send the editor back to what the project opens on:\n')
-  console.error('  ProjectScript.tsx:' + (rolled + 1) + '  ' + lines[rolled].trim())
-  console.error('\n  Add `if (live.current === shown.current) filledFor.current = null`.')
-  console.error('  Following compares the saved text, so a project with nothing saved and')
-  console.error('  a run on record is left with an empty box and no way back to the run.')
-  console.error('  The condition keeps the opening branch off a box somebody is typing in.\n')
+if (!/drop\.isPending/.test(lines.slice(Math.max(0, kept - 8), kept).join('\n'))) {
+  console.error('\nA draft can be kept again behind a delete:\n')
+  console.error('  ProjectScript.tsx:' + (kept + 1) + '  ' + lines[kept].trim())
+  console.error('\n  Leave the draft alone while the delete is out and after it. The')
+  console.error('  delete clears it, and keeping it again leaves a draft for no script.\n')
   process.exit(1)
 }
 

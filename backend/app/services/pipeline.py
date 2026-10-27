@@ -251,11 +251,11 @@ def after_import(
     standing = changed + outcome.rebuilt
     outcome.reruns = project_script.rerun_for(db, standing)
     db.flush()
-    unsaved = _unsaved_scripts_on(db, standing, {r.project_id for r in outcome.reruns})
+    unsaved = _unsaved_scripts_on(db, standing, {r.script_id for r in outcome.reruns})
     outcome.warnings.extend(project_script.warnings_from(db, outcome.reruns))
     outcome.warnings.extend(
-        f"The script for '{name}' reads this data but was never saved, so it was not "
-        "re-run. Save it on the project's Script tab to have it run on every import."
+        f"The script {name} reads this data but was never saved, so it was not "
+        "re-run. Save it on the Scripts page to have it run on every import."
         for name in unsaved
     )
     names = _project_names(db, [r.project_id for r in outcome.reruns])
@@ -275,7 +275,9 @@ def after_import(
         ),
         items=[
             {
-                "name": names.get(r.project_id, "a project"),
+                "name": f"{r.script_name} ({names.get(r.project_id, 'a project')})"
+                if r.script_name
+                else names.get(r.project_id, "a project"),
                 "status": "ran" if r.ran else "failed",
                 "detail": r.error,
             }
@@ -343,17 +345,25 @@ def _refresh_summary(indicators: int, dashboards: list[str]) -> str:
 
 
 def _unsaved_scripts_on(db: Session, dataset_ids: list[str], already: set[str]) -> list[str]:
-    """Projects whose last run read this data, with nothing saved to run again."""
+    """Scripts whose last run read this data, with nothing saved to run again.
+
+    Each as "'Clean roster' in 'Fiji Census'": a project can have several
+    scripts, and the project alone does not say which one to go and save.
+    """
     wanted = set(dataset_ids)
     found = [
-        script.project_id
+        script
         for script in db.scalars(select(ProjectScript)).all()
-        if script.project_id not in already
+        if script.id not in already
         and not script.text.strip()
         and wanted.intersection(script.reads or [])
     ]
-    names = _project_names(db, found)
-    return sorted(names[one] for one in found if one in names)
+    names = _project_names(db, [script.project_id for script in found])
+    return sorted(
+        f"'{script.name}' in '{names[script.project_id]}'"
+        for script in found
+        if script.project_id in names
+    )
 
 
 def _project_names(db: Session, ids: list[str]) -> dict[str, str]:

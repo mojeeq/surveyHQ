@@ -50,6 +50,9 @@ def workshop(client, db_session):
 def script(db_session, project, name: str, reads: list[str], writes: list[str]):
     row = ProjectScript(
         project_id=project(name).id,
+        # Named as its project is, so a label reads as the name it was given:
+        # scripts that share a name are told apart by their project instead.
+        name=name,
         text="use something",
         reads=reads,
         writes=writes,
@@ -235,20 +238,32 @@ def test_the_overview_names_datasets_rather_than_ids(client, auth_headers, db_se
     assert file.id not in mine["reads"]
 
 
-def test_the_overview_leaves_out_a_script_nobody_has_written(
+def test_the_overview_lists_a_script_somebody_started_and_has_not_written(
     client, auth_headers, db_session
 ):
-    """A row is made the first time anybody opens the script tab, so most
-    projects have one and almost none of them is a script."""
-    empty = Project(name="No script here", slug="no-script-here")
-    db_session.add(empty)
+    """Every row is a script now.
+
+    A row used to be made the first time anybody opened a project's script
+    tab, so most projects had one and almost none of them was a script, and
+    the page left the empty ones out. A script is made by being started now,
+    under a name, and an empty one is a script somebody is about to write -
+    which the page has to show, or it could never be opened again.
+    """
+    started = Project(name="Started not written", slug="started-not-written")
+    db_session.add(started)
     db_session.flush()
-    db_session.add(ProjectScript(project_id=empty.id, text="", reads=[], writes=[]))
+    db_session.add(
+        ProjectScript(project_id=started.id, name="Tables", text="", reads=[], writes=[])
+    )
     db_session.commit()
 
     answered = client.get("/api/v1/scripts", headers=auth_headers)
-    names = [place["project_name"] for place in answered.json()["places"]]
-    assert "No script here" not in names
+    mine = [
+        place for place in answered.json()["places"]
+        if place["project_name"] == "Started not written"
+    ]
+    assert [place["name"] for place in mine] == ["Tables"]
+    assert mine[0]["saved"] is False and mine[0]["lines"] == 0
 
 
 def test_the_overview_keeps_a_script_that_ran_without_being_saved(
@@ -430,20 +445,20 @@ def _ordered_ids(client, headers) -> list[str]:
     projects of their own, and a name is not unique across them."""
     answered = client.get("/api/v1/scripts", headers=headers)
     assert answered.status_code == 200, answered.text
-    return [place["project_id"] for place in answered.json()["places"]]
+    return [place["script_id"] for place in answered.json()["places"]]
 
 
-def _step_holding(client, headers, project_id) -> list[str]:
-    """Every project in the step this one is in, in the order shown.
+def _step_holding(client, headers, script_id) -> list[str]:
+    """Every script in the step this one is in, in the order shown.
 
     Read from the page rather than assumed: other scripts share these steps,
     and the endpoint wants the whole step - which is what the page has in
     front of it when somebody moves a card.
     """
     places = client.get("/api/v1/scripts", headers=headers).json()["places"]
-    mine = next(place for place in places if place["project_id"] == project_id)
+    mine = next(place for place in places if place["script_id"] == script_id)
     return [
-        place["project_id"]
+        place["script_id"]
         for place in places
         if place["step"] == mine["step"] and not place["in_a_cycle"]
     ]
@@ -469,16 +484,23 @@ def two_free(db_session, request) -> dict:
     second = Project(name="Beta free", slug=f"beta-free-{tag}")
     db_session.add_all([first, second])
     db_session.flush()
-    for project in (first, second):
-        db_session.add(
-            ProjectScript(
-                project_id=project.id,
-                text="use people",
-                last_run_at=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
-            )
+    rows = [
+        ProjectScript(
+            project_id=project.id,
+            text="use people",
+            last_run_at=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
         )
+        for project in (first, second)
+    ]
+    db_session.add_all(rows)
     db_session.commit()
-    return {"first": first.id, "second": second.id}
+    # Scripts are what get moved; the projects are what a membership is of.
+    return {
+        "first": rows[0].id,
+        "second": rows[1].id,
+        "first_project": first.id,
+        "second_project": second.id,
+    }
 
 
 def test_a_step_can_be_put_in_the_order_somebody_wants(
@@ -493,7 +515,7 @@ def test_a_step_can_be_put_in_the_order_somebody_wants(
         "/api/v1/scripts/order",
         headers=auth_headers,
         json={
-            "project_ids": _swapped(step, two_free["first"], two_free["second"])
+            "script_ids": _swapped(step, two_free["first"], two_free["second"])
         },
     )
     assert moved.status_code == 200, moved.text
@@ -511,7 +533,7 @@ def test_the_chosen_order_survives_a_reload(
         "/api/v1/scripts/order",
         headers=auth_headers,
         json={
-            "project_ids": _swapped(step, two_free["first"], two_free["second"])
+            "script_ids": _swapped(step, two_free["first"], two_free["second"])
         },
     )
     db_session.expire_all()
@@ -537,28 +559,25 @@ def test_a_script_cannot_be_moved_past_what_it_waits_for(
     shared = Dataset(name="handover", slug="handover", project_id=writer.id)
     db_session.add(shared)
     db_session.flush()
-    db_session.add_all(
-        [
-            ProjectScript(
-                project_id=writer.id,
-                text="save as handover",
-                writes=[shared.id],
-                last_run_at=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
-            ),
-            ProjectScript(
-                project_id=reader.id,
-                text="use handover",
-                reads=[shared.id],
-                last_run_at=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
-            ),
-        ]
+    writes = ProjectScript(
+        project_id=writer.id,
+        text="save as handover",
+        writes=[shared.id],
+        last_run_at=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
     )
+    reads = ProjectScript(
+        project_id=reader.id,
+        text="use handover",
+        reads=[shared.id],
+        last_run_at=dt.datetime(2026, 10, 1, tzinfo=dt.UTC),
+    )
+    db_session.add_all([writes, reads])
     db_session.commit()
 
     refused = client.put(
         "/api/v1/scripts/order",
         headers=auth_headers,
-        json={"project_ids": [reader.id, writer.id]},
+        json={"script_ids": [reads.id, writes.id]},
     )
     assert refused.status_code == 422, refused.text
     said = refused.json()["detail"]
@@ -573,7 +592,7 @@ def test_part_of_a_step_is_refused(client, auth_headers, db_session, two_free):
     refused = client.put(
         "/api/v1/scripts/order",
         headers=auth_headers,
-        json={"project_ids": [two_free["first"]]},
+        json={"script_ids": [two_free["first"]]},
     )
     assert refused.status_code == 422, refused.text
 
@@ -597,10 +616,10 @@ def test_reordering_needs_the_manager_role_on_every_script_moved(
     db_session.add_all(
         [
             ProjectMember(
-                project_id=two_free["first"], user_id=half.id, role=Role.manager
+                project_id=two_free["first_project"], user_id=half.id, role=Role.manager
             ),
             ProjectMember(
-                project_id=two_free["second"], user_id=half.id, role=Role.viewer
+                project_id=two_free["second_project"], user_id=half.id, role=Role.viewer
             ),
         ]
     )
@@ -617,7 +636,7 @@ def test_reordering_needs_the_manager_role_on_every_script_moved(
         "/api/v1/scripts/order",
         headers=headers,
         json={
-            "project_ids": _swapped(step, two_free["first"], two_free["second"])
+            "script_ids": _swapped(step, two_free["first"], two_free["second"])
         },
     )
     assert refused.status_code == 403, refused.text
@@ -673,7 +692,7 @@ def test_a_ring_elsewhere_does_not_block_reordering_a_step(
         "/api/v1/scripts/order",
         headers=auth_headers,
         json={
-            "project_ids": _swapped(step, two_free["first"], two_free["second"])
+            "script_ids": _swapped(step, two_free["first"], two_free["second"])
         },
     )
     assert moved.status_code == 200, moved.text

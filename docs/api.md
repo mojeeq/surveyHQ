@@ -93,6 +93,35 @@ PUT    /projects/assign/dataset/{id}      {"project_id": "..."} or null for the
 PUT    /projects/assign/dashboard/{id}    the same, for a dashboard
 ```
 
+#### Scripts
+
+A project can have several scripts, each with a name unique in the project
+(without regard to case). A script is addressed by its own id.
+
+```
+GET    /scripts                           every script you can see, in the
+                                          order they have to run, with the
+                                          step each is in and what it waits for
+POST   /scripts                           {"project_id": "...", "name": "...",
+                                          "text": "..."}; a blank name is the
+                                          next free "Main script" [project manager]
+GET    /scripts/{id}                      one script, and how its last run went
+PATCH  /scripts/{id}                      {"name": "..."} and/or {"text": "..."};
+                                          keeps text without running it
+                                                                      [project manager]
+POST   /scripts/{id}/run                  {"text": null} runs what is saved, or
+                                          the text given - kept if it runs
+                                          cleanly; the log and what it saved
+                                                                      [project manager]
+DELETE /scripts/{id}                      the script; the datasets it wrote stay
+                                                                      [project manager]
+PUT    /scripts/order                     {"script_ids": [...]} - the whole of one
+                                          step, in the order wanted
+```
+
+`GET`, `PUT`, `DELETE /projects/{id}/script` and `POST /projects/{id}/script/run`
+are from when a project had one script, and act on the project's oldest.
+
 #### The Stata command box
 
 A subset of Stata's data-preparation commands, run against one dataset. Manager

@@ -1,5 +1,5 @@
 /*
- * The project's do-file, as the Scripts page's editor.
+ * One of a project's do-files, as the Scripts page's editor.
  *
  * It used to be one command box per dataset, which is the wrong shape for what
  * people actually do: a survey export is several tables, and preparing it
@@ -20,9 +20,15 @@
  * the output and the reference beside it - for the Scripts page to set beside
  * the list of every script. The box itself is ScriptEditor, which colours
  * the script and offers what can come next.
+ *
+ * A project had one script, and this was its editor. It is one script's now,
+ * by the script's own id: a project keeps the roster cleaning, the household
+ * file and the tables in scripts of their own, each named, run, renamed and
+ * deleted on its own.
  */
 
 import { useEffect, useMemo, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Link } from 'react-router-dom'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 
@@ -49,6 +55,11 @@ import type { ScriptNames, Vocabulary } from '@/lib/script-language'
 import { commandStarts, failedLine } from '@/lib/script-lines'
 
 interface Script {
+  id: string
+  /** What it is called in its project, and on the Scripts page. */
+  name: string
+  project_id: string
+  project_name: string
   text: string
   /** What the last run ran, when that is not what is saved. Running and
    *  saving are separate on purpose, so a script can be tried without being
@@ -79,21 +90,6 @@ interface Script {
  */
 export function openingText(script: { text: string; unsaved_run: string }): string {
   return script.text.trim() ? script.text : script.unsaved_run
-}
-
-/** Whether this project has a script to throw away.
- *
- *  A run counts, not only text. The Scripts page lists every project whose
- *  script has run, and a run from before the text of a run was recorded left
- *  its time, reads and writes and no text at all - so asking only about text
- *  hid Delete on exactly the scripts the page sent people here to deal with.
- */
-export function hasScript(script: {
-  text: string
-  unsaved_run: string
-  last_run_at: string | null
-}): boolean {
-  return !!script.text || !!script.unsaved_run || script.last_run_at !== null
 }
 
 /** A run is on record and nothing of its text is: neither saved nor kept
@@ -130,8 +126,9 @@ export function textNotKept(script: {
 export function fillWith(
   answer: { text: string; unsaved_run: string },
   where: {
+    /** The script the box was last filled for, and the one open now. */
     filled: string | null
-    project: string
+    script: string
     inBox: string
     /** What the editor last put in the box itself. */
     shown: string
@@ -141,14 +138,14 @@ export function fillWith(
     knownRun: string
   },
 ): string | null {
-  // Opening on a project. Falling back to the last run matters here: a blank
-  // box on a project whose data was plainly built by something is the
+  // Opening on a script. Falling back to the last run matters here: a blank
+  // box on a script whose data was plainly built by something is the
   // complaint this started from.
   //
-  // Judged by the project rather than by the box, because an untouched box
-  // would otherwise be measured against the previous project's saved text,
-  // and a draft left in one project would turn up in the next one's editor.
-  if (where.filled !== where.project) return openingText(answer)
+  // Judged by the script rather than by the box, because an untouched box
+  // would otherwise be measured against the previous script's saved text,
+  // and a draft left in one script would turn up in the next one's editor.
+  if (where.filled !== where.script) return openingText(answer)
   // Theirs: what is in the box is not what the editor put there.
   if (where.inBox !== where.shown) return null
   // Untouched, and the answer is the one the editor last settled on. Nothing
@@ -176,18 +173,6 @@ export function fillWith(
   return fresh === where.shown ? null : fresh
 }
 
-/** A project with no script, as the server describes one: `script_for`
- *  makes an empty one rather than answering 404. */
-const EMPTY_SCRIPT: Script = Object.freeze({
-  text: '',
-  unsaved_run: '',
-  reads: [],
-  writes: [],
-  last_run_at: null,
-  last_error: '',
-  previous_text: '',
-})
-
 interface RunResult {
   /** Whether what ran is now the saved script. */
   kept: boolean
@@ -196,18 +181,25 @@ interface RunResult {
 }
 
 export function ProjectScript({
+  scriptId,
   projectId,
   projectName,
   canEdit,
+  onDeleted,
 }: {
+  scriptId: string
+  /** The project it belongs to, whose datasets it reads and writes - and
+   *  whose names the editor offers. */
   projectId: string
-  /** Named in the editor's title bar. */
+  /** Named in the editor's title bar, beside the script's own name. */
   projectName: string
   /** Whether this reader may change the script. Running it writes the
    *  project's datasets, so that takes the manager role over the project,
    *  while anybody who can see the project can read it. The server refuses
    *  the rest either way; this is so that nothing invites them to try. */
   canEdit: boolean
+  /** Called once the script is gone, so the page can open another. */
+  onDeleted?: (projectId: string) => void
 }) {
   const queryClient = useQueryClient()
   const ask = useDialog()
@@ -220,15 +212,15 @@ export function ProjectScript({
   const [saved, setSaved] = useState('')
   // The output of the last run here, kept while the page is away: coming back
   // to a script shows what it just did. See `script-drafts`.
-  const [log, setLogShown] = useState<LogLine[]>(() => recallLog(owner, projectId))
+  const [log, setLogShown] = useState<LogLine[]>(() => recallLog(owner, scriptId))
   const setLog = (next: LogLine[]) => {
-    rememberLog(owner, projectId, next)
+    rememberLog(owner, scriptId, next)
     setLogShown(next)
   }
   /** The draft put back in the box when the editor opened, if there was one,
    *  so the editor can say so. */
   const [restored, setRestored] = useState<Draft | null>(null)
-  /** Whether the draft question has been settled for this project. Until it
+  /** Whether the draft question has been settled for this script. Until it
    *  has, nothing may be written over the draft or cleared: the box is still
    *  empty, or still holds the saved script, and either would read as "no
    *  changes" and throw the draft away before it was put back. */
@@ -249,8 +241,8 @@ export function ProjectScript({
   const insert = (line: string) => box.current?.insertLine(line)
 
   const script = useQuery({
-    queryKey: ['project-script', projectId],
-    queryFn: () => api.get<Script>(`/projects/${projectId}/script`),
+    queryKey: ['script', scriptId],
+    queryFn: () => api.get<Script>(`/scripts/${scriptId}`),
     // Asked again whenever the editor opens, rather than shown from a copy up
     // to half a minute old. Somebody coming back to a draft has to see the
     // script as it is now, or a colleague's save in the meantime goes
@@ -276,7 +268,7 @@ export function ProjectScript({
     [vocabulary.data, names.data],
   )
 
-  /** The project the box was last filled for. See `fillWith`.
+  /** The script the box was last filled for. See `fillWith`.
    *
    *  Anything that refetches while somebody is typing - a failed run asking
    *  for the newer error, a window regaining focus - used to refill the box
@@ -285,10 +277,6 @@ export function ProjectScript({
    *  the text is only replaced while nobody has changed it.
    */
   const filledFor = useRef<string | null>(null)
-  /** What is in the box, readable from a callback that runs long after the
-   *  render it was started from. Assigned here rather than in an effect so it
-   *  cannot lag behind by a tick, and never read while rendering. */
-  const live = useRef('')
   /** What the editor last put in the box, which is how a change made by the
    *  person is told apart from a box the editor filled. Not state: nothing is
    *  drawn from it, and it must be read inside the effect that sets it. */
@@ -302,7 +290,7 @@ export function ProjectScript({
     if (script.data === undefined) return
     const fill = fillWith(script.data, {
       filled: filledFor.current,
-      project: projectId,
+      script: scriptId,
       inBox: text,
       shown: shown.current,
       saved,
@@ -322,16 +310,16 @@ export function ProjectScript({
     setSaved(script.data.text)
     knownRun.current = script.data.unsaved_run
     if (fill === null) return
-    filledFor.current = projectId
+    filledFor.current = scriptId
     shown.current = fill
     setText(fill)
     // `text` and `saved` are read above, so they belong here. The effect runs
     // again when they change and stops at `fillWith`, which is the point:
     // the first keystroke is what hands the box over.
-  }, [script.data, projectId, text, saved])
+  }, [script.data, scriptId, text, saved])
 
   // Put back what somebody had typed here and not saved, once the box has
-  // been filled for the project. After the fill, so the editor's own marker
+  // been filled for the script. After the fill, so the editor's own marker
   // is on what the project opens on and the draft reads as theirs - which
   // it is - and no later answer writes over it. See `fillWith`.
   //
@@ -341,18 +329,17 @@ export function ProjectScript({
   // over, and then cleared as though there were none.
   useEffect(() => {
     if (draftSettled || !canEdit || script.data === undefined) return
-    if (filledFor.current !== projectId) return
-    const draft = readDraft(owner, projectId)
+    if (filledFor.current !== scriptId) return
+    const draft = readDraft(owner, scriptId)
     if (draft && draft.text !== openingText(script.data)) {
       setText(draft.text)
       setRestored(draft)
     }
     setDraftSettled(true)
-  }, [draftSettled, script.data, projectId, canEdit, owner, text])
+  }, [draftSettled, script.data, scriptId, canEdit, owner, text])
 
   const keep = useMutation({
-    mutationFn: (next: string) =>
-      api.put<Script>(`/projects/${projectId}/script`, { text: next }),
+    mutationFn: (next: string) => api.patch<Script>(`/scripts/${scriptId}`, { text: next }),
     onSuccess: (result, sent) => {
       // Saving does not write the box. The box stays editable while the PUT
       // is in flight, so anything written back here lands on top of whatever
@@ -367,9 +354,9 @@ export function ProjectScript({
       shown.current = sent
       knownRun.current = result.unsaved_run
       setSaved(result.text)
-      queryClient.setQueryData(['project-script', projectId], result)
+      queryClient.setQueryData(['script', scriptId], result)
       // The list beside the editor counts commands and says whether each
-      // script is saved; a first save is what puts a new one in it.
+      // script is saved.
       queryClient.invalidateQueries({ queryKey: ['scripts'] })
       queryClient.invalidateQueries({ queryKey: ['project-overview', projectId] })
     },
@@ -377,7 +364,7 @@ export function ProjectScript({
 
   const run = useMutation({
     mutationFn: (next: string) =>
-      api.post<RunResult>(`/projects/${projectId}/script/run`, { text: next }),
+      api.post<RunResult>(`/scripts/${scriptId}/run`, { text: next }),
     onSuccess: (result, sent) => {
       // A clean run kept what ran. The marker moves to it exactly as a save
       // moves it - to the text that was sent, never by writing the box, which
@@ -393,7 +380,7 @@ export function ProjectScript({
           .map((step) => ({ command: step.command, message: step.message, ok: true }))
           .reverse(),
       )
-      queryClient.invalidateQueries({ queryKey: ['project-script', projectId] })
+      queryClient.invalidateQueries({ queryKey: ['script', scriptId] })
       queryClient.invalidateQueries({ queryKey: ['datasets'] })
       // A dataset it saved is one the next `use` can name, so the editor
       // offers it.
@@ -410,7 +397,7 @@ export function ProjectScript({
       // the run stays fresh for half a minute, so leaving this tab and
       // coming back inside that window resets the box to what was saved and
       // loses the draft the server had just kept.
-      queryClient.invalidateQueries({ queryKey: ['project-script', projectId] })
+      queryClient.invalidateQueries({ queryKey: ['script', scriptId] })
       // A script that stopped partway saved what it got to, which is the
       // whole reason the run is not unwound.
       queryClient.invalidateQueries({ queryKey: ['datasets'] })
@@ -420,71 +407,35 @@ export function ProjectScript({
   })
 
   const drop = useMutation({
-    // What the answer said before the delete, so a delete that fails can put
-    // it back.
-    mutationFn: (_before: Script | undefined) =>
-      api.delete<{ detail: string }>(`/projects/${projectId}/script`),
-    onSuccess: (result) => {
-      // The box was emptied when they asked, and so was the cached answer.
-      // Nothing here touches either: by the time this arrives they may have
-      // started typing the script that replaces the one they got rid of,
-      // which is the obvious next thing to do, and erasing that is the loss
-      // this whole arrangement is against.
-      setLog([])
-      queryClient.invalidateQueries({ queryKey: ['project-script', projectId] })
-      // The list beside the editor holds this project because it has a
-      // script; it does not any more.
-      queryClient.invalidateQueries({ queryKey: ['scripts'] })
-      queryClient.invalidateQueries({ queryKey: ['project-overview', projectId] })
+    mutationFn: () => api.delete<{ detail: string }>(`/scripts/${scriptId}`),
+    onSuccess: async (result) => {
+      // The script is gone, and with it anything kept for it here: a draft
+      // of a script that no longer exists could only ever be put back into
+      // nothing.
+      clearDraft(owner, scriptId)
+      rememberLog(owner, scriptId, [])
       toast.push(result.detail, 'success')
+      queryClient.invalidateQueries({ queryKey: ['project-overview', projectId] })
+      // The list is asked again before the page moves on, so what it opens
+      // next is chosen from the scripts that are left.
+      await queryClient.invalidateQueries({ queryKey: ['scripts'] })
+      onDeleted?.(projectId)
     },
-    onError: (error: Error, before) => {
-      if (before) {
-        // Put the answer back, and let the ordinary rule do the rest: the box
-        // is empty and nobody has touched it, so it follows the script back.
-        // If they did start typing, the box is theirs and keeps what they
-        // wrote. Either way nothing here writes the box.
-        queryClient.setQueryData(['project-script', projectId], before)
-        // And the saved text with it. `saved` means what the server holds,
-        // and the server still holds this one. Left empty it is a lie that
-        // reads two ways: `dirty` measures a draft against nothing, and
-        // `fillWith` sees a script that has been there all along as newly
-        // saved. Setting it here does not disturb a draft, because the box
-        // is not read.
-        setSaved(before.text)
-        knownRun.current = before.unsaved_run
-        // Nothing happened, so the editor should show what this project
-        // opens on - which is not always the saved text. With nothing saved
-        // and a run on record it is the run, and following cannot reach
-        // that: `fillWith` compares the saved text and would leave the box
-        // empty with no notice and no offer, the run invisible until a
-        // reload. Marking the project unfilled sends the next pass down the
-        // opening branch, which is exactly "what this project opens on".
-        //
-        // Only when nobody has typed. The opening branch does not ask, so on
-        // a box somebody has started a replacement in it would overwrite
-        // them, and that is the loss all of this is against.
-        if (live.current === shown.current) filledFor.current = null
-        // And then go and find out. Cancelling the read that was on its way
-        // back rolls the query to where it was before that read, so what was
-        // snapshotted above is the answer from before it - and putting that
-        // back is putting back something known to be behind. A script a
-        // colleague saved, a newer run, a newer complaint: all of it would
-        // stay hidden until something else happened to ask.
-        //
-        // Restoring first and asking second is the point of a rollback: the
-        // editor shows what it had rather than nothing, and the truth
-        // arrives a moment later through the ordinary rule.
-        queryClient.invalidateQueries({ queryKey: ['project-script', projectId] })
-      }
-      toast.push(error.message, 'error')
-    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
   })
 
-
-  // Above the early return, so a render that bails out early cannot leave
-  // this behind holding something the box no longer contains.
-  live.current = text
+  const rename = useMutation({
+    mutationFn: (name: string) => api.patch<Script>(`/scripts/${scriptId}`, { name }),
+    onSuccess: (result) => {
+      // Only the name is written back. The text in the answer is what the
+      // server holds, and the box may hold more than that by now.
+      queryClient.setQueryData<Script>(['script', scriptId], (was) =>
+        was ? { ...was, name: result.name } : result,
+      )
+      queryClient.invalidateQueries({ queryKey: ['scripts'] })
+      queryClient.invalidateQueries({ queryKey: ['project-overview', projectId] })
+    },
+  })
 
   const dirty = text !== saved
   // Whether leaving would lose anything, which is not the same as `dirty`. A
@@ -499,21 +450,26 @@ export function ProjectScript({
   // are kept as a draft as they are typed, and the draft goes once nothing
   // would be lost - saved, run cleanly, put back, or the script deleted. So
   // leaving the page, opening another script or reloading loses nothing.
+  //
+  // Not while the script is being deleted: the delete clears the draft, and
+  // a keystroke landing after it would otherwise keep one for a script that
+  // is gone.
   useEffect(() => {
     if (!draftSettled || !canEdit || script.data === undefined) return
+    if (drop.isPending || drop.isSuccess) return
     if (wouldLose) {
       setDraftKept(
         writeDraft(
           owner,
-          projectId,
-          draftFrom(readDraft(owner, projectId), text, openingText(script.data), new Date().toISOString()),
+          scriptId,
+          draftFrom(readDraft(owner, scriptId), text, openingText(script.data), new Date().toISOString()),
         ),
       )
     } else {
-      clearDraft(owner, projectId)
+      clearDraft(owner, scriptId)
       setRestored(null)
     }
-  }, [draftSettled, canEdit, script.data, wouldLose, text, projectId, owner])
+  }, [draftSettled, canEdit, script.data, wouldLose, text, scriptId, owner, drop.isPending, drop.isSuccess])
 
   // Closing the tab loses a draft only where the browser would not keep it,
   // and only then is it left to the browser's own question.
@@ -545,9 +501,13 @@ export function ProjectScript({
   // landed first, the DELETE then removed the script that had just been
   // saved, and the refetch emptied the box - after Save had said it worked.
   //
-  // This is about the buttons, not the box. Typing stays free the whole time;
-  // what waits is firing a second request on top of the first.
-  const busy = run.isPending || keep.isPending || drop.isPending
+  // This is about the buttons, not the box: typing stays free while a save
+  // or a run is out, and what waits is firing a second request on top of the
+  // first. A delete is the exception, and so is the moment after one, while
+  // the page moves on: there is nothing left to send anything to.
+  const busy = run.isPending || keep.isPending || drop.isPending || rename.isPending || drop.isSuccess
+  const name = script.data?.name ?? ''
+  const called = `${name || 'Script'} in ${projectName}`
   const last = script.data?.last_run_at
   // Nothing saved, and the box holds what ran. Checked against the box rather
   // than against the answer alone, so the note goes the moment it is typed
@@ -589,7 +549,7 @@ export function ProjectScript({
     <div className="flex min-h-0 min-w-0 flex-1 flex-col lg:flex-row">
       <section
         className="flex min-h-0 min-w-0 flex-1 flex-col"
-        aria-label={`Script for ${projectName}`}
+        aria-label={called}
         onKeyDown={(event) => {
           if (!(event.metaKey || event.ctrlKey)) return
           // Ctrl/Cmd+Enter runs, because Enter has to be a new line in a
@@ -606,25 +566,39 @@ export function ProjectScript({
       >
         <div className="flex flex-wrap items-center gap-2 border-b border-ink-200 px-3 py-1.5 dark:border-dark-200">
           <div className="mr-auto flex min-w-0 items-center gap-2">
-            <Link
-              to={`/projects/${projectId}`}
-              className="truncate text-[13px] font-semibold text-ink-800 hover:text-brand-700 dark:text-dark-800 dark:hover:text-brand-400"
-              title="Open the project"
+            <ScriptName
+              name={name}
+              canEdit={canEdit && !busy}
+              saving={rename.isPending}
+              onRename={async (next) => {
+                try {
+                  await rename.mutateAsync(next)
+                  return null
+                } catch (error) {
+                  return (error as Error).message
+                }
+              }}
             >
-              {projectName}
-            </Link>
-            {!canEdit ? (
-              <span className="chip border-ink-200 bg-ink-100 text-ink-700 dark:border-dark-300 dark:bg-dark-200 dark:text-dark-700">
-                Read only
-              </span>
-            ) : dirty ? (
-              <span
-                className="chip border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200"
-                title="Running uses what is in the box, and keeps it if it runs cleanly."
+              <Link
+                to={`/projects/${projectId}`}
+                className="truncate text-xs text-ink-500 hover:text-brand-700 dark:text-dark-500 dark:hover:text-brand-400"
+                title="Open the project"
               >
-                Unsaved
-              </span>
-            ) : null}
+                {projectName}
+              </Link>
+              {!canEdit ? (
+                <span className="chip border-ink-200 bg-ink-100 text-ink-700 dark:border-dark-300 dark:bg-dark-200 dark:text-dark-700">
+                  Read only
+                </span>
+              ) : dirty ? (
+                <span
+                  className="chip border-amber-200 bg-amber-50 text-amber-800 dark:border-amber-500/30 dark:bg-amber-500/10 dark:text-amber-200"
+                  title="Running uses what is in the box, and keeps it if it runs cleanly."
+                >
+                  Unsaved
+                </span>
+              ) : null}
+            </ScriptName>
           </div>
           {canEdit ? (
             <>
@@ -652,52 +626,27 @@ export function ProjectScript({
               </button>
               {/* Set apart from Run and Save, and quieter. It is the one
                   control here that cannot be undone by typing again. */}
-              {script.data && hasScript(script.data) && (
-                <button
-                  className="btn-ghost btn-sm text-red-700 dark:text-red-300"
-                  disabled={busy}
-                  title="Delete this script"
-                  onClick={async () => {
-                    const sure = await ask.confirm({
-                      title: 'Delete this script?',
-                      message:
-                        'The script goes, along with what its last run read and wrote. ' +
-                        'The datasets it built stay exactly as they are - deleting the ' +
-                        'recipe does not unmake what it cooked. It then drops out of ' +
-                        'the list of scripts until something is written here again.',
-                      confirmLabel: 'Delete script',
-                      tone: 'danger',
-                    })
-                    if (!sure) return
-                    // Emptying the box is part of what they asked for, so it
-                    // happens with the request rather than when the answer
-                    // gets back. The cached answer is emptied in the same
-                    // breath: left holding the script, the empty, untouched
-                    // box follows it straight back, and the clear is undone
-                    // before the request has returned. Keeping what the answer
-                    // said is what lets a delete that fails put it back. See
-                    // `fillWith` and the mutation's `onError`.
-                    //
-                    // A read already on its way back is stopped first, or it
-                    // lands after the emptying and puts the script back into
-                    // the answer - the same bug through a second door.
-                    await queryClient.cancelQueries({
-                      queryKey: ['project-script', projectId],
-                    })
-                    const before = queryClient.getQueryData<Script>(['project-script', projectId])
-                    setText('')
-                    shown.current = ''
-                    // The cached answer is about to say there is no run either.
-                    knownRun.current = ''
-                    setSaved('')
-                    queryClient.setQueryData(['project-script', projectId], EMPTY_SCRIPT)
-                    drop.mutate(before)
-                  }}
-                >
-                  {drop.isPending && <Spinner className="h-3.5 w-3.5" />}
-                  Delete
-                </button>
-              )}
+              <button
+                className="btn-ghost btn-sm text-red-700 dark:text-red-300"
+                disabled={busy}
+                title="Delete this script"
+                onClick={async () => {
+                  const sure = await ask.confirm({
+                    title: `Delete '${name}'?`,
+                    message:
+                      'The script goes, along with what its last run read and wrote. ' +
+                      'The datasets it built stay exactly as they are - deleting the ' +
+                      'recipe does not unmake what it cooked - and the project\'s ' +
+                      'other scripts are not touched.',
+                    confirmLabel: 'Delete script',
+                    tone: 'danger',
+                  })
+                  if (sure) drop.mutate()
+                }}
+              >
+                {drop.isPending && <Spinner className="h-3.5 w-3.5" />}
+                Delete
+              </button>
             </>
           ) : (
             <span className="text-xs text-ink-500 dark:text-dark-500">
@@ -780,10 +729,12 @@ export function ProjectScript({
         <div className="flex min-h-[320px] flex-1 overflow-hidden">
           <ScriptEditor
             ref={box}
-            label={`Script for ${projectName}`}
+            label={called}
             value={text}
             onChange={setText}
-            readOnly={!canEdit}
+            // Read-only once it is being deleted: anything typed then would be
+            // typed into a script that is about to be gone.
+            readOnly={!canEdit || drop.isPending || drop.isSuccess}
             index={language}
             stoppedLine={stopped}
             onCaret={setCaret}
@@ -926,5 +877,116 @@ function Names({ label, names }: { label: string; names: string[] }) {
     <p className="text-ink-600 dark:text-dark-600">
       <span className="font-semibold">{label}:</span> {names.join(', ')}
     </p>
+  )
+}
+
+/** The script's name, renamed where it is shown, as a file is in an editor's
+ *  tab: click it, type, Enter. Escape or a name left empty puts it back.
+ *
+ *  What sits beside the name - its project, whether it is saved - is handed
+ *  in and set aside while it is being renamed, so the field has the room and
+ *  the toolbar stays on one line. */
+function ScriptName({
+  name,
+  canEdit,
+  saving,
+  onRename,
+  children,
+}: {
+  name: string
+  canEdit: boolean
+  saving: boolean
+  /** Resolves to null once the name is kept, or to why it was not. */
+  onRename: (name: string) => Promise<string | null>
+  children?: ReactNode
+}) {
+  const [editing, setEditing] = useState<string | null>(null)
+  const [problem, setProblem] = useState('')
+  // Enter and then the field losing focus are two calls for one rename, and
+  // the second must not send it again while the first is out.
+  const sending = useRef(false)
+
+  const finish = async () => {
+    if (editing === null || sending.current) return
+    const next = editing.trim().replace(/\s+/g, ' ')
+    if (!next || next === name) {
+      setEditing(null)
+      setProblem('')
+      return
+    }
+    sending.current = true
+    const refused = await onRename(next).finally(() => {
+      sending.current = false
+    })
+    // Left open on a name the project already has, with the reason, so it
+    // can be changed rather than typed again from the start.
+    if (refused) setProblem(refused)
+    else {
+      setEditing(null)
+      setProblem('')
+    }
+  }
+
+  if (editing === null) {
+    return (
+      <>
+        {canEdit ? (
+          <button
+            className="truncate rounded-control px-1 text-[13px] font-semibold text-ink-800 hover:bg-ink-100 dark:text-dark-800 dark:hover:bg-dark-200"
+            title="Rename this script"
+            onClick={() => setEditing(name)}
+          >
+            {name}
+          </button>
+        ) : (
+          <span className="truncate text-[13px] font-semibold text-ink-800 dark:text-dark-800">{name}</span>
+        )}
+        {children}
+      </>
+    )
+  }
+  return (
+    <span className="relative flex min-w-0 items-center gap-1.5">
+      <input
+        autoFocus
+        aria-label="Script name"
+        aria-invalid={problem ? true : undefined}
+        aria-describedby={problem ? 'script-name-problem' : undefined}
+        className="input input-sm w-48 font-semibold"
+        value={editing}
+        maxLength={120}
+        // Not disabled: a field that is disabled under the cursor drops its
+        // focus, and with it the place to try another name.
+        readOnly={saving}
+        onChange={(event) => {
+          setEditing(event.target.value)
+          setProblem('')
+        }}
+        onFocus={(event) => event.target.select()}
+        onBlur={() => void finish()}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter') {
+            event.preventDefault()
+            void finish()
+          } else if (event.key === 'Escape') {
+            event.preventDefault()
+            setEditing(null)
+            setProblem('')
+          }
+        }}
+      />
+      {saving && <Spinner className="h-3.5 w-3.5" />}
+      {problem && (
+        // Under the field rather than beside it, where it would push the
+        // toolbar's buttons onto a second line.
+        <span
+          id="script-name-problem"
+          role="alert"
+          className="absolute left-0 top-full z-20 mt-1 w-72 rounded-control border border-red-200 bg-red-50 px-2 py-1 text-xs text-red-800 shadow-md dark:border-red-500/30 dark:bg-dark-50 dark:text-red-300"
+        >
+          {problem}
+        </span>
+      )}
+    </span>
   )
 }

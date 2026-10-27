@@ -1,6 +1,6 @@
 /**
- * Every project's script, and the order they have to run in - and the place
- * they are written.
+ * Every script, and the order they have to run in - and the place they are
+ * written.
  *
  * An office runs several projects, and the scripts are not independent of
  * each other - one writes a cleaned person file, that file is moved to the
@@ -17,6 +17,11 @@
  * the side, the open script in the middle, its output and the reference
  * beside it.
  *
+ * A project can have several scripts - clean the roster, build the household
+ * file, make the tables - and the order runs between those too: the tables
+ * script reads what the cleaning one writes. Each is listed by its own name,
+ * with its project under it.
+ *
  * The step is what the list is for, and it is not a position in a queue.
  * Scripts that wait on nobody are all first, and numbering them 1, 2, 3 would
  * tell somebody to do one at a time what they can do in any order. So they are
@@ -31,11 +36,18 @@ import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/useAuth'
 import { useToast } from '@/hooks/useToast'
 import { relativeTime } from '@/lib/format'
-import { lastOpen, rememberOpen, useDrafts } from '@/lib/script-drafts'
+import { adoptDraft, lastOpen, rememberOpen, useDrafts } from '@/lib/script-drafts'
+import { firstOf, nextName, whichToOpen } from '@/lib/script-open'
 import type { Project } from '@/lib/types'
-import { EmptyState, ErrorNote, Loading } from '@/components/ui'
+import { EmptyState, ErrorNote, Loading, Spinner } from '@/components/ui'
 
 interface ScriptPlace {
+  script_id: string
+  /** What it is called in its project. */
+  name: string
+  /** What it is called among every script: its name where that is unique,
+   *  with its project beside it where it is not. "Waits for" uses these. */
+  label: string
   project_id: string
   project_name: string
   step: number
@@ -57,6 +69,9 @@ interface ScriptPlace {
   can_edit: boolean
   /** Where this sits among the scripts it shares a step with. */
   rank: number
+  /** When it was started. A project's oldest script is the one a link to
+   *  "the project's script" means. */
+  created_at: string | null
 }
 
 /** Somebody who may write a script for this project: running one writes its
@@ -94,8 +109,8 @@ export default function Scripts() {
    *  these, and sending one would leave the rest where nobody put them.
    */
   const reorder = useMutation({
-    mutationFn: (project_ids: string[]) =>
-      api.put<{ places: ScriptPlace[] }>('/scripts/order', { project_ids }),
+    mutationFn: (script_ids: string[]) =>
+      api.put<{ places: ScriptPlace[] }>('/scripts/order', { script_ids }),
     onSuccess: (result) => queryClient.setQueryData(['scripts'], result),
     // The server refuses a move across a step and says which dependency
     // fixes it. That is the useful half of this feature, so it is shown
@@ -122,63 +137,72 @@ export default function Scripts() {
     () => [...steps.flatMap(([, group]) => group), ...tangled],
     [steps, tangled],
   )
-  const asked = params.get('project')
-  // With nothing in the address, the script that was open last, or else the
-  // first in the list: coming back to the page from anywhere in the app, the
-  // sidebar included, should be coming back to where you were - and an
-  // editor that opens on nothing is a page to click through before it does
-  // anything.
+  const asked = params.get('script')
+  const askedProject = params.get('project')
+  // With no script in the address, one is chosen and written there: a
+  // project's first script for a link that names the project, which is every
+  // link from before a project could have several; or the script that was
+  // open last, or else the first in the list. Coming back to the page from
+  // anywhere in the app, the sidebar included, should be coming back to where
+  // you were - and an editor that opens on nothing is a page to click through
+  // before it does anything. See `whichToOpen`.
   //
   // Written into the address rather than only worked out, so the open script
-  // stays open when the list changes under it. Deleting it takes it out of
-  // the list, and an editor that then jumped to whichever script was first
-  // would carry off whatever had been typed in its place.
+  // stays open when the list changes under it.
   useEffect(() => {
     if (asked) {
       rememberOpen(owner, asked)
       return
     }
-    if (scripts.isLoading) return
-    const back = lastOpen(owner)
-    const known =
-      !!back &&
-      (places.some((one) => one.project_id === back) ||
-        !!projects.data?.some((one) => one.id === back))
-    // A script that was being started has no place in the list yet; wait for
-    // the projects before deciding it is gone.
-    if (back && !known && projects.isLoading) return
-    const target = known ? back : listed[0]?.project_id
-    if (target) setParams({ project: target }, { replace: true })
-  }, [asked, listed, places, projects.data, projects.isLoading, scripts.isLoading, setParams, owner])
+    if (scripts.isLoading || scripts.error) return
+    const target = whichToOpen(listed, { project: askedProject, last: lastOpen(owner) })
+    if (target && 'script' in target) setParams({ script: target.script }, { replace: true })
+  }, [asked, askedProject, listed, scripts.isLoading, scripts.error, setParams, owner])
+
+  // Drafts were kept by project while a project had one script. Each goes to
+  // the script that was the project's, so nobody's unsaved work is left under
+  // a key nothing reads any more.
+  useEffect(() => {
+    for (const projectId of new Set(places.map((one) => one.project_id))) {
+      const first = firstOf(places, projectId)
+      if (first) adoptDraft(owner, projectId, first.script_id)
+    }
+  }, [places, owner])
 
   if (scripts.isLoading) return <Loading />
   if (scripts.error) return <ErrorNote error={scripts.error} retry={scripts.refetch} />
 
-  const openId = asked ?? listed[0]?.project_id ?? null
-  const open = places.find((one) => one.project_id === openId)
-  const openProject = projects.data?.find((one) => one.id === openId)
-  // Projects somebody here may start a script for, which have none yet.
+  const openId = asked
+  const open = places.find((one) => one.script_id === openId)
+  // Projects somebody here may start a script in. Any of them: a project
+  // can have as many scripts as it needs.
   const startable = (projects.data ?? [])
-    .filter((one) => mayWrite(one) && !places.some((place) => place.project_id === one.id))
+    .filter(mayWrite)
     .sort((a, b) => a.name.localeCompare(b.name))
+  // A link named a project with no script in it yet, which is an invitation
+  // to start one there - where the reader may.
+  const startingIn =
+    !openId && askedProject && !places.some((one) => one.project_id === askedProject)
+      ? (projects.data ?? []).find((one) => one.id === askedProject)
+      : undefined
   const failing = places.filter((one) => one.last_error).length
-
-  // Scripts being started - a project with none saved yet - that are open or
-  // have changes waiting. They are in no step until they are saved or run.
-  const fresh = (projects.data ?? []).filter(
-    (one) =>
-      mayWrite(one) &&
-      !places.some((place) => place.project_id === one.id) &&
-      (one.id === openId || drafts.has(one.id)),
-  )
 
   /** Open another script. Nothing is lost by it: changes not saved in the
    *  one being left are kept, and are back when it is opened again. */
-  const choose = (projectId: string) => {
-    if (projectId === openId) return
+  const choose = (scriptId: string) => {
+    if (scriptId === openId) return
     // Replaced rather than pushed, so the back button leaves the page rather
     // than walking back through every script that was looked at.
-    setParams({ project: projectId }, { replace: true })
+    setParams({ script: scriptId }, { replace: true })
+  }
+
+  /** After a delete, another script of the same project if it has one, and
+   *  otherwise the first in the list. Read from the list as asked again
+   *  after the delete, so the script just deleted is not among them. */
+  const afterDelete = (projectId: string) => {
+    const left = queryClient.getQueryData<{ places: ScriptPlace[] }>(['scripts'])?.places ?? []
+    const next = firstOf(left, projectId) ?? left[0]
+    setParams(next ? { script: next.script_id } : {}, { replace: true })
   }
 
   return (
@@ -202,36 +226,17 @@ export default function Scripts() {
             <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-500 dark:text-dark-500">
               Explorer
             </span>
-            <NewScript projects={startable} onChoose={choose} />
+            <NewScript
+              projects={startable}
+              places={places}
+              // In the project of the script that is open, where the next
+              // script is most likely to go.
+              initialProject={open?.project_id}
+              onCreated={choose}
+            />
           </div>
 
           <div className="min-h-0 flex-1 overflow-y-auto py-1">
-            {fresh.length > 0 && (
-              <Group title="New" detail="not saved yet">
-                {fresh.map((project) => (
-                  <li key={project.id}>
-                    <button
-                      onClick={() => choose(project.id)}
-                      aria-current={project.id === openId ? 'true' : undefined}
-                      className={`flex w-full items-start gap-2 px-3 py-1.5 text-left ${
-                        project.id === openId
-                          ? 'bg-brand-50 text-brand-800 dark:bg-brand-500/15 dark:text-brand-200'
-                          : 'text-ink-700 hover:bg-ink-50 dark:text-dark-700 dark:hover:bg-dark-100'
-                      }`}
-                    >
-                      <Mark tone="new" label="Not saved yet" />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[13px] font-medium">
-                          {project.name}
-                          {drafts.has(project.id) && <Unsaved />}
-                        </span>
-                      </span>
-                    </button>
-                  </li>
-                ))}
-              </Group>
-            )}
-
             {steps.map(([step, group]) => {
               const waits = [...new Set(group.flatMap((one) => one.waits_for))]
               // Only where there is somewhere to go and the reader may move
@@ -254,11 +259,11 @@ export default function Scripts() {
                 >
                   {group.map((place, index) => (
                     <Entry
-                      key={place.project_id}
+                      key={place.script_id}
                       place={place}
-                      selected={place.project_id === openId}
-                      drafted={drafts.has(place.project_id)}
-                      onSelect={() => choose(place.project_id)}
+                      selected={place.script_id === openId}
+                      drafted={drafts.has(place.script_id)}
+                      onSelect={() => choose(place.script_id)}
                       onMove={
                         movable
                           ? (by) => {
@@ -266,7 +271,7 @@ export default function Scripts() {
                               const to = index + by
                               if (to < 0 || to >= next.length) return
                               ;[next[index], next[to]] = [next[to], next[index]]
-                              reorder.mutate(next.map((one) => one.project_id))
+                              reorder.mutate(next.map((one) => one.script_id))
                             }
                           : undefined
                       }
@@ -283,17 +288,17 @@ export default function Scripts() {
               <Group title="No order" detail="each reads what another writes">
                 {tangled.map((place) => (
                   <Entry
-                    key={place.project_id}
+                    key={place.script_id}
                     place={place}
-                    selected={place.project_id === openId}
-                    drafted={drafts.has(place.project_id)}
-                    onSelect={() => choose(place.project_id)}
+                    selected={place.script_id === openId}
+                    drafted={drafts.has(place.script_id)}
+                    onSelect={() => choose(place.script_id)}
                   />
                 ))}
               </Group>
             )}
 
-            {!places.length && !openProject && (
+            {!places.length && (
               <p className="px-3 py-2 text-xs leading-relaxed text-ink-500 dark:text-dark-500">
                 No scripts yet. Start one with <strong>New</strong> above.
               </p>
@@ -301,30 +306,54 @@ export default function Scripts() {
           </div>
         </nav>
 
-        {openId && !open && projects.isLoading ? (
-          <div className="grid flex-1 place-items-center">
-            <Loading />
-          </div>
-        ) : openId && (open || openProject) ? (
+        {open ? (
           <ProjectScript
             // One editor per script: what the last one logged, where its caret
             // was and which panel it had open belong to it.
-            key={openId}
-            projectId={openId}
-            projectName={open?.project_name ?? openProject?.name ?? ''}
-            canEdit={open ? open.can_edit : !!openProject && mayWrite(openProject)}
+            key={open.script_id}
+            scriptId={open.script_id}
+            projectId={open.project_id}
+            projectName={open.project_name}
+            canEdit={open.can_edit}
+            onDeleted={afterDelete}
           />
+        ) : startingIn && mayWrite(startingIn) ? (
+          <div className="grid flex-1 place-items-center p-6">
+            <div className="w-full max-w-sm">
+              <h2 className="text-[15px] font-semibold text-ink-900 dark:text-dark-900">
+                A script for {startingIn.name}
+              </h2>
+              <p className="mb-3 mt-1 text-xs leading-relaxed text-ink-500 dark:text-dark-500">
+                {startingIn.name} has no script yet. A script reads the project&apos;s
+                datasets, puts them together and writes new ones.
+              </p>
+              <StartScript
+                projects={startable}
+                places={places}
+                initialProject={startingIn.id}
+                onCreated={choose}
+              />
+            </div>
+          </div>
         ) : (
           <div className="grid flex-1 place-items-center p-6">
             <EmptyState
               icon="▤"
-              title={openId && projects.isSuccess ? 'No such project' : 'No script open'}
+              title={
+                openId
+                  ? 'No such script'
+                  : startingIn
+                    ? `${startingIn.name} has no script yet`
+                    : 'No script open'
+              }
               description={
-                openId && projects.isSuccess
-                  ? 'The link names a project that is not there, or that you cannot see.'
-                  : startable.length
-                    ? 'Choose a script from the list, or start one with New. A script reads the project’s datasets, puts them together and writes new ones.'
-                    : 'Nobody has written a script you can see yet. Starting one takes the manager role on a project.'
+                openId
+                  ? 'The link names a script that is not there, or that you cannot see. It may have been deleted.'
+                  : startingIn
+                    ? 'Starting one takes the manager role on the project.'
+                    : startable.length
+                      ? 'Choose a script from the list, or start one with New. A script reads the project’s datasets, puts them together and writes new ones.'
+                      : 'Nobody has written a script you can see yet. Starting one takes the manager role on a project.'
               }
             />
           </div>
@@ -370,7 +399,6 @@ const MARKS = {
   unsaved: 'bg-amber-500',
   ran: 'bg-brand-500',
   never: 'border border-ink-400 dark:border-dark-500',
-  new: 'border border-brand-500',
 } as const
 
 /** How a script stands, as a dot with its meaning beside it for a screen
@@ -414,14 +442,21 @@ function Entry({
       : !place.saved
         ? ['unsaved', 'Ran, never saved']
         : ['ran', 'Ran']
+  // Its project under its name: two projects' scripts can share a name, and
+  // most will at first - every project's first script is "Main script".
   const detail = place.last_error
-    ? `failed ${relativeTime(place.last_run_at)}`
+    ? `${place.project_name} · failed ${relativeTime(place.last_run_at)}`
     : [
+        place.project_name,
         place.lines > 0
           ? `${place.lines} command${place.lines === 1 ? '' : 's'}${place.saved ? '' : ', not saved'}`
-          : place.text_kept
-            ? 'run without being saved'
-            : 'its text was not kept',
+          : !place.last_run_at
+            ? // Just started. "Its text was not kept" is about a run from
+              // before a run's text was recorded, and there is no run here.
+              'nothing written yet'
+            : place.text_kept
+              ? 'run without being saved'
+              : 'its text was not kept',
         place.last_run_at ? relativeTime(place.last_run_at) : 'never run',
       ].join(' · ')
 
@@ -431,7 +466,7 @@ function Entry({
         onClick={onSelect}
         aria-current={selected ? 'true' : undefined}
         title={[
-          place.project_name,
+          `${place.name} in ${place.project_name}`,
           place.reads.length ? `Reads ${place.reads.join(', ')}` : '',
           place.writes.length ? `Writes ${place.writes.join(', ')}` : '',
           place.waits_for.length ? `Waits for ${place.waits_for.join(', ')}` : '',
@@ -447,7 +482,7 @@ function Entry({
         <Mark tone={tone} label={label} />
         <span className="min-w-0 flex-1">
           <span className="block truncate text-[13px] font-medium">
-            {place.project_name}
+            {place.name}
             {drafted && <Unsaved />}
           </span>
           <span
@@ -471,7 +506,7 @@ function Entry({
         >
           <button
             className="btn-ghost btn-xs px-1.5"
-            aria-label={`Run ${place.project_name} earlier`}
+            aria-label={`Run ${place.label} earlier`}
             title="Run earlier in this step"
             disabled={first || busy}
             onClick={() => onMove(-1)}
@@ -480,7 +515,7 @@ function Entry({
           </button>
           <button
             className="btn-ghost btn-xs px-1.5"
-            aria-label={`Run ${place.project_name} later`}
+            aria-label={`Run ${place.label} later`}
             title="Run later in this step"
             disabled={last || busy}
             onClick={() => onMove(1)}
@@ -493,22 +528,23 @@ function Entry({
   )
 }
 
-/** Start a script for a project that has none. */
+/** Start a script: in which project, and under what name. */
 function NewScript({
   projects,
-  onChoose,
+  places,
+  initialProject,
+  onCreated,
 }: {
   projects: Project[]
-  onChoose: (projectId: string) => void
+  places: ScriptPlace[]
+  initialProject?: string
+  onCreated: (scriptId: string) => void
 }) {
   const [open, setOpen] = useState(false)
   if (!projects.length) return null
   return (
     <div
       className="relative"
-      onBlur={(event) => {
-        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) setOpen(false)
-      }}
       onKeyDown={(event) => {
         if (event.key === 'Escape') setOpen(false)
       }}
@@ -516,35 +552,120 @@ function NewScript({
       <button
         className="btn-ghost btn-xs"
         aria-expanded={open}
-        aria-haspopup="menu"
+        aria-haspopup="dialog"
         onClick={() => setOpen((was) => !was)}
-        title="Start a script for a project that has none"
+        title="Start a new script"
       >
         + New
       </button>
       {open && (
         <div
-          role="menu"
-          className="absolute right-0 top-full z-30 mt-1 max-h-72 w-60 overflow-y-auto rounded-control border border-ink-200 bg-white py-1 shadow-lg dark:border-dark-300 dark:bg-dark-50"
+          role="dialog"
+          aria-label="New script"
+          className="absolute right-0 top-full z-30 mt-1 w-64 rounded-control border border-ink-200 bg-white p-3 shadow-lg dark:border-dark-300 dark:bg-dark-50"
         >
-          <p className="px-3 pb-1 pt-0.5 text-[11px] text-ink-500 dark:text-dark-500">
-            A script for…
-          </p>
-          {projects.map((project) => (
-            <button
-              key={project.id}
-              role="menuitem"
-              className="block w-full truncate px-3 py-1.5 text-left text-[13px] text-ink-700 hover:bg-ink-50 dark:text-dark-700 dark:hover:bg-dark-100"
-              onClick={() => {
-                setOpen(false)
-                onChoose(project.id)
-              }}
-            >
-              {project.name}
-            </button>
-          ))}
+          <StartScript
+            projects={projects}
+            places={places}
+            initialProject={
+              projects.some((one) => one.id === initialProject) ? initialProject : undefined
+            }
+            onCreated={(id) => {
+              setOpen(false)
+              onCreated(id)
+            }}
+            onCancel={() => setOpen(false)}
+          />
         </div>
       )}
     </div>
+  )
+}
+
+/** The form that starts one. A name left empty is the one the project has
+ *  not used yet - "Main script", then "Main script 2" - shown in the box so
+ *  it is no surprise. */
+function StartScript({
+  projects,
+  places,
+  initialProject,
+  onCreated,
+  onCancel,
+}: {
+  projects: Project[]
+  places: ScriptPlace[]
+  initialProject?: string
+  onCreated: (scriptId: string) => void
+  onCancel?: () => void
+}) {
+  const queryClient = useQueryClient()
+  const [projectId, setProjectId] = useState(initialProject ?? projects[0]?.id ?? '')
+  const [name, setName] = useState('')
+  const create = useMutation({
+    mutationFn: () =>
+      api.post<{ id: string }>('/scripts', { project_id: projectId, name: name.trim() }),
+    onSuccess: async (made) => {
+      // In the list before it is opened, so the page has it to open.
+      await queryClient.invalidateQueries({ queryKey: ['scripts'] })
+      queryClient.invalidateQueries({ queryKey: ['project-overview', projectId] })
+      onCreated(made.id)
+    },
+  })
+  return (
+    <form
+      className="space-y-2.5"
+      onSubmit={(event) => {
+        event.preventDefault()
+        if (projectId && !create.isPending) create.mutate()
+      }}
+    >
+      <label className="block">
+        <span className="mb-1 block text-xs font-medium text-ink-700 dark:text-dark-700">Project</span>
+        <select
+          className="input"
+          value={projectId}
+          onChange={(event) => {
+            setProjectId(event.target.value)
+            create.reset()
+          }}
+        >
+          {projects.map((project) => (
+            <option key={project.id} value={project.id}>
+              {project.name}
+            </option>
+          ))}
+        </select>
+      </label>
+      <label className="block">
+        <span className="mb-1 block text-xs font-medium text-ink-700 dark:text-dark-700">Name</span>
+        <input
+          autoFocus
+          className="input"
+          value={name}
+          maxLength={120}
+          placeholder={nextName(places, projectId)}
+          onChange={(event) => {
+            setName(event.target.value)
+            create.reset()
+          }}
+        />
+      </label>
+      {create.error && (
+        <p role="alert" className="text-xs text-red-700 dark:text-red-300">
+          {create.error.message}
+        </p>
+      )}
+      <div className="flex justify-end gap-2">
+        {onCancel && (
+          <button type="button" className="btn-ghost btn-sm" onClick={onCancel}>
+            Cancel
+          </button>
+        )}
+        <button type="submit" className="btn-primary btn-sm" disabled={!projectId || create.isPending}>
+          {create.isPending && <Spinner className="h-3.5 w-3.5 text-white" />}
+          Create
+        </button>
+      </div>
+    </form>
   )
 }

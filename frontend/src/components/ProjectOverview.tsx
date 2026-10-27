@@ -51,16 +51,8 @@ export interface Overview {
     status: 'rebuilt' | 'failed' | 'stuck'
     message: string
   }[]
-  script: {
-    exists: boolean
-    saved?: boolean
-    commands?: number
-    last_run_at?: string | null
-    last_error?: string
-    reads?: string[]
-    writes?: string[]
-    runs_on_import?: boolean
-  }
+  /** Every script in the project, oldest first. */
+  scripts: OverviewScript[]
   outputs: { id: string; name: string; rows: number }[]
   dashboards: {
     id: string
@@ -72,11 +64,42 @@ export interface Overview {
   watching: { indicators: number; open_alerts: number; checks: number; failing_checks: number }
 }
 
+interface OverviewScript {
+  id: string
+  name: string
+  saved: boolean
+  commands: number
+  last_run_at: string | null
+  last_error: string
+  reads: string[]
+  writes: string[]
+  runs_on_import: boolean
+}
+
 type Mark = 'ok' | 'warn' | 'none'
+
+/** A script with something in it: saved text, or a run on record. One just
+ *  started and still empty is somebody's next script, not a step that
+ *  failed to keep up. */
+function written(script: OverviewScript): boolean {
+  return script.saved || script.commands > 0 || script.last_run_at !== null
+}
+
+/** What one script does for the project, in a line. */
+export function scriptSummary(script: OverviewScript): string {
+  if (!written(script)) return 'Nothing written yet'
+  if (script.last_error) return 'The last run failed'
+  if (script.runs_on_import) {
+    return `${script.commands} command${script.commands === 1 ? '' : 's'}, run again on every import`
+  }
+  return script.saved
+    ? 'Saved, and not run yet'
+    : 'Ran but was never saved, so imports do not re-run it'
+}
 
 /** Whether a step kept up: fine, something to look at, or nothing there yet. */
 export function stepMarks(overview: Overview): Record<'in' | 'joined' | 'prepared' | 'shown' | 'watched', Mark> {
-  const script = overview.script
+  const scripts = overview.scripts.filter(written)
   return {
     in: !overview.sources.length
       ? 'none'
@@ -88,9 +111,9 @@ export function stepMarks(overview: Overview): Record<'in' | 'joined' | 'prepare
       : overview.merges.some((one) => one.status !== 'rebuilt')
         ? 'warn'
         : 'ok',
-    prepared: !script.exists
+    prepared: !scripts.length
       ? 'none'
-      : script.last_error || !script.runs_on_import
+      : scripts.some((one) => one.last_error || !one.runs_on_import)
         ? 'warn'
         : 'ok',
     shown: overview.dashboards.length ? 'ok' : 'none',
@@ -235,47 +258,60 @@ export function ProjectOverview({
           mark={marks.prepared}
           title="Prepared"
           summary={
-            !data.script.exists
+            !data.scripts.length
               ? 'No script'
-              : data.script.runs_on_import
-                ? `A script of ${data.script.commands} command(s), run again on every import`
-                : data.script.saved
-                  ? 'A saved script that has not run yet'
-                  : 'A script that ran but was never saved, so imports do not re-run it'
+              : data.scripts.length === 1
+                ? scriptSummary(data.scripts[0])
+                : `${data.scripts.length} scripts${
+                    data.scripts.every((one) => one.runs_on_import)
+                      ? ', all run again on every import'
+                      : ''
+                  }`
           }
           action={
-            // To the project's script on the Scripts page, where every
-            // project's script is written. Somebody who may only read it is
-            // shown it, read-only; writing one takes the manager role.
-            canManage || data.script.exists ? (
+            // To the Scripts page, where every script is written: the
+            // project's first, or a new one for a project with none. Somebody
+            // who may only read is shown them, read-only; writing one takes
+            // the manager role.
+            canManage || data.scripts.length ? (
               <Link
                 to={`/scripts?project=${encodeURIComponent(projectId)}`}
                 className="btn-ghost btn-sm"
               >
-                {!canManage ? 'View script' : data.script.exists ? 'Open script' : 'Write a script'}
+                {!canManage
+                  ? data.scripts.length === 1 ? 'View script' : 'View scripts'
+                  : data.scripts.length
+                    ? data.scripts.length === 1 ? 'Open script' : 'Open scripts'
+                    : 'Write a script'}
               </Link>
             ) : undefined
           }
         >
-          {data.script.exists && (
-            <>
-              <p className="text-xs text-ink-500">
-                {data.script.last_run_at ? `Last ran ${relativeTime(data.script.last_run_at)}` : 'Never run'}
-                {data.script.reads?.length ? ` · reads ${data.script.reads.join(', ')}` : ''}
-              </p>
-              {data.script.last_error && (
-                <p className="text-xs text-amber-800 dark:text-amber-200">{data.script.last_error}</p>
-              )}
-              {data.outputs.map((one) => (
-                <Row
-                  key={one.id}
-                  name={one.name}
-                  to={`/datasets/${one.id}`}
-                  detail={`written by the script · ${formatNumber(one.rows)} rows`}
-                />
-              ))}
-            </>
-          )}
+          {data.scripts.map((one) => (
+            <Row
+              key={one.id}
+              name={one.name}
+              to={`/scripts?script=${encodeURIComponent(one.id)}`}
+              detail={[
+                data.scripts.length > 1 ? scriptSummary(one) : '',
+                one.last_run_at ? `last ran ${relativeTime(one.last_run_at)}` : 'never run',
+                one.reads.length ? `reads ${one.reads.join(', ')}` : '',
+              ]
+                .filter(Boolean)
+                .join(' · ')}
+              warn={one.last_error || undefined}
+            />
+          ))}
+          {data.outputs.map((one) => (
+            <Row
+              key={one.id}
+              name={one.name}
+              to={`/datasets/${one.id}`}
+              detail={`written by ${
+                data.scripts.length === 1 ? 'the script' : 'a script'
+              } · ${formatNumber(one.rows)} rows`}
+            />
+          ))}
         </Step>
 
         <Step

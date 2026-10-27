@@ -96,6 +96,12 @@ class ScriptRunIn(BaseModel):
 
 
 class ScriptOut(BaseModel):
+    # Which script this is. Empty from the one-script endpoints for a project
+    # that has none yet, which answer with an empty script rather than a 404.
+    id: str = ""
+    name: str = ""
+    project_id: str = ""
+    project_name: str = ""
     text: str = ""
     # What the last run ran, when that is not what is saved above. Running and
     # saving are separate on purpose, so a script can be tried without being

@@ -159,7 +159,7 @@ else:
 | Earlier versions kept for rollback | Dashboards and their widgets, colours and pages |
 | | Charts, indicators and their history |
 | | Quality checks and their results, alert rules and the alerts they raised |
-| | Relationships and the project's script |
+| | Relationships and the project's scripts |
 | | Boundary layers, dashboard backgrounds and logos |
 
 The dialog says how much disk it will free before you agree to it, because that
@@ -171,7 +171,7 @@ share links are closed - a live link showing a dashboard of blank charts reads
 as a broken platform to whoever you sent it to - and are closed rather than
 deleted, so the same address works again later.
 
-Importing into an archived project and running its script are both refused with
+Importing into an archived project and running one of its scripts are both refused with
 a reason, since either would leave half of it holding data and the project still
 saying it holds none.
 
@@ -672,9 +672,9 @@ Deriving a variable, recoding an answer, labelling a question: anyone who has
 prepared survey data has the idioms in their fingers, and reaching for a
 spreadsheet to add one derived column is a poor substitute for them.
 
-Open **Scripts**, under Data, and choose the project's script in the list down
-the side - or **+ New** at the top of the list to start one for a project that
-has none. It takes a script, one command per line, as a do-file is written:
+Open **Scripts**, under Data, and choose a script in the list down the side -
+or **+ New** at the top of the list to start one. A script takes one command
+per line, as a do-file is written:
 
     * everyone old enough to work
     gen adult = age >= 18
@@ -720,7 +720,34 @@ The **Reference** panel lists what the language understands; click a line
 there to put it in the script where the cursor is.
 
 Writing a script, running it and saving it take the manager role on its
-project. Anyone who can see a project can open its script, read-only.
+project. Anyone who can see a project can open its scripts, read-only.
+
+#### Several scripts in a project
+
+A project can have as many scripts as the work needs, as a Stata project has
+several do-files: one to clean the roster, one to build the household file,
+one to make the tables. Each is written, run, saved and deleted on its own, so
+fixing the tables does not mean running the cleaning again.
+
+**+ New** asks which project the script is for - the project of the script you
+have open, unless you choose another - and what to call it. Left blank, the
+name is the one the project has not used yet: **Main script**, then **Main
+script 2**. Names are unique within a project, without regard to case, so two
+scripts called "Clean" in one list cannot happen; two projects can each have a
+"Clean". A project's script from before a project could have several is its
+**Main script**.
+
+Click the name above the box to rename it: type, then **Enter**; **Escape**
+leaves it as it was. Each script keeps its own unsaved changes, its own last
+run and its own output.
+
+What a script may rebuild is what that script built. A second script in the
+same project saving over the first one's output is refused, as it would be from
+another project, unless the line says `save as <name>, replace` - two scripts
+quietly writing one dataset would each undo the other on every import.
+
+The project's page lists its scripts under **Prepared**, each with when it last
+ran and what it reads, and **Open script** goes to the first of them.
 
 #### What it understands
 
@@ -907,16 +934,15 @@ replays the commands without the loop.
 #### Seeing every script at once
 
 A script belongs to a project, and they are all written on the one page.
-An office runs several projects, and the scripts are not independent of each
-other: one writes a cleaned person file, that file is moved to the project
-that reports on it, and a second script reads it. Run them the other way
-round and the second builds on last week's data, silently, because nothing
-fails.
+The scripts are not independent of each other: one writes a cleaned person
+file and a second reads it - in the same project, or in the project that
+reports on it after the file is moved there. Run them the other way round and
+the second builds on last week's data, silently, because nothing fails.
 
-Nothing on any single project's page can show that, because the relationship
-is between projects. The list down the side of **Scripts** shows all of them,
-grouped by the order they have to run in: under each name, how many commands
-it has and when it last ran, or that the last run failed. Pointing at a name
+Nothing on any single script can show that, because the relationship is
+between scripts. The list down the side of **Scripts** shows all of them,
+grouped by the order they have to run in: under each name, its project, how
+many commands it has and when it last ran, or that the last run failed. Pointing at a name
 shows what it reads and writes. The dot before it is filled when it ran,
 amber when it ran and was never saved, red when the last run failed, and
 hollow when it has never run.
@@ -929,18 +955,23 @@ step 1 with everything else that waits on nothing.
 
 Step 1 is not "first". Every script in step 1 can be run at once, or in any
 order; a script moves to step 2 only when it reads something a step 1 script
-writes, and the step's heading names which. Two scripts that each read what
+writes, and the step's heading names which - by the script's name, with its
+project beside it where two scripts share that name. Two scripts that each read what
 the other writes have no order at all, and the list puts them under **No
 order** rather than inventing one.
 
 Within a step, **↑** and **↓** beside a script - shown when you point at it or
 have it open - move it earlier or later. That is the order an import runs
-them in when more than one stands on the same data. A move across steps is
+them in when more than one stands on the same data. Between steps the import
+follows the steps themselves, so when a new export is read both by a cleaning
+script and by a script that also reads what the cleaning one writes, the
+cleaning one runs first and the second builds on its new output. A move across steps is
 refused, with the dependency that decides it, since a script cannot run before
 the one whose output it reads.
 
-**Delete**, above the script, removes it and what its last run recorded. The
-datasets it built stay as they are.
+**Delete**, above the script, removes it and what its last run recorded, and
+opens the project's next script. The datasets it built stay as they are, and
+so do the project's other scripts.
 
 Changes you have not saved are kept, as an editor keeps an unsaved file open:
 leave for another page, open another script, or reload, and they are back in
@@ -1123,8 +1154,8 @@ Two things follow from that:
   build, unless the line says `save as <name>, replace`.
 
 A re-run that fails does not fail the import, which has already happened. It is
-reported beside the uploaded data and on the project's script, with the line
-that stopped it.
+reported beside the uploaded data and on the script, by its name, with the
+line that stopped it.
 
 Scripts run after merges rebuild, so one that reads a merged dataset gets the
 new join rather than the previous export's.

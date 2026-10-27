@@ -137,6 +137,27 @@ describe('drafts', () => {
     expect(reopened).toEqual({ text: 'use people\ndrop x', base: 'use people', at: 't2' })
   })
 
+  it('hands a draft kept by project to the script that was the project\'s', async () => {
+    // Kept under the project's id while a project had one script.
+    const before = await fresh()
+    before.writeDraft('ann', 'project-1', draft)
+    const after = await fresh()
+    after.adoptDraft('ann', 'project-1', 'script-1')
+    expect(after.readDraft('ann', 'script-1')).toEqual(draft)
+    expect(after.readDraft('ann', 'project-1')).toBeNull()
+    expect([...storage.items.keys()]).toEqual(['surveyhq.scriptDraft.ann.script-1'])
+  })
+
+  it('does not write an old draft over one the script has of its own', async () => {
+    const drafts = await fresh()
+    const own = { ...draft, text: 'use households' }
+    drafts.writeDraft('ann', 'project-1', draft)
+    drafts.writeDraft('ann', 'script-1', own)
+    drafts.adoptDraft('ann', 'project-1', 'script-1')
+    expect(drafts.readDraft('ann', 'script-1')).toEqual(own)
+    expect(drafts.readDraft('ann', 'project-1')).toBeNull()
+  })
+
   it('remembers the last run\'s output and the script that was open, per account', async () => {
     const drafts = await fresh()
     const log = [{ command: 'use people', message: 'Loaded people', ok: true }]
