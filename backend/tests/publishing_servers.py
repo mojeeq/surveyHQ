@@ -346,7 +346,11 @@ class SftpServer:
             transport = paramiko.Transport(conn)
             transport.add_server_key(self.host_key)
             transport.set_subsystem_handler("sftp", paramiko.SFTPServer, _Folder, str(self.root))
-            transport.start_server(server=_Server(self.client_key))
+            try:
+                transport.start_server(server=_Server(self.client_key))
+            except (EOFError, OSError, paramiko.SSHException):
+                transport.close()
+                continue
             self.transports.append(transport)
 
     def stop(self) -> None:
