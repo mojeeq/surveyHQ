@@ -14,7 +14,7 @@
   :root {
     --ink-900: #1c1b19; --ink-700: #44423e; --ink-500: #6f6c66;
     --ink-400: #8d8a83; --ink-200: #e3e1dc; --ink-100: #efedea; --ink-50: #f7f6f4;
-    --brand: #2f6fd0; --surface: #ffffff; --canvas: #f4f3f1;
+    --brand: #2f6fd0; --surface: #ffffff; --canvas: #f8fafc;
     /* The platform's defaults, for a board that set none of its own. A row is
        74px and the gutter between rows and columns is 16px, which is what
        react-grid-layout is given; span n rows then measures
@@ -26,18 +26,37 @@
     margin: 0; background: var(--canvas); color: var(--ink-900);
     font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
   }
-  .wrap { max-width: 1500px; margin: 0 auto; padding: 20px 16px 48px; }
-  header.board {
-    padding-bottom: 12px; margin-bottom: 4px;
+  /* The page is laid out as the platform's own public page is: a column as
+     wide as the platform's, the board's name across the top on the page, and
+     everything the board holds on a canvas of its own underneath. Every
+     measure below is the platform's, read off it in a browser - the export
+     had drifted to a masthead half the height, its logo squeezed beside the
+     title, over cards that started right under the tabs with no title bar,
+     and the charts were the first thing anybody saw. */
+  .wrap { max-width: 1500px; margin: 0 auto; padding: 24px 24px 48px; }
+  header.board { margin-bottom: 24px; }
+  header.board h1 {
+    margin: 0; font-size: 24px; font-weight: 600; line-height: 1.15;
+    letter-spacing: -0.015em;
+  }
+  header.board p { margin: 6px 0 0; color: var(--ink-500); font-size: 14px; }
+  /* The logo beside the name, or above it when the name is centred - one
+     column, as the platform stacks them. */
+  header.board .brand { display: flex; align-items: center; gap: 12px; }
+  header.board .brand img { height: 32px; width: auto; flex-shrink: 0; object-fit: contain; }
+  /* The board itself. Its ground, when it has one, is painted here rather
+     than behind the name, and its widgets sit a gutter in from its edge. */
+  .canvas { padding: 16px; border-radius: 3px; }
+  .canvas > .grid { padding: 16px; }
+  .canvas > .group { margin: 16px; }
+  .tabs {
+    display: flex; flex-wrap: wrap; gap: 0 4px; margin: 0 0 16px;
     border-bottom: 1px solid var(--ink-200);
   }
-  header.board h1 { margin: 0; font-size: 24px; font-weight: 600; letter-spacing: -0.01em; }
-  header.board p { margin: 4px 0 0; color: var(--ink-500); font-size: 13px; }
-  .tabs { display: flex; flex-wrap: wrap; gap: 4px; margin: 14px 0 10px; }
   .tabs button {
-    border: 0; background: none; padding: 8px 14px; border-radius: 6px 6px 0 0;
-    font: inherit; font-size: 13px; color: var(--ink-500); cursor: pointer;
-    border-bottom: 2px solid transparent;
+    border: 0; background: none; padding: 10px 14px; margin-bottom: -1px;
+    font: inherit; font-size: 14px; font-weight: 500; color: var(--ink-500);
+    cursor: pointer; white-space: nowrap; border-bottom: 2px solid transparent;
   }
   .tabs button[aria-selected="true"] {
     color: var(--brand); border-bottom-color: var(--brand); font-weight: 600;
@@ -45,7 +64,7 @@
   .filters {
     display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
     background: var(--surface); border: 1px solid var(--ink-200);
-    border-radius: 3px; padding: 10px 12px; margin-bottom: 12px;
+    border-radius: 3px; padding: 10px 12px; margin: 0 16px;
   }
   .filters label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-700); }
   .filters select {
@@ -81,24 +100,27 @@
     text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 10px;
   }
   .group[open] > summary { margin-bottom: 12px; }
-  /* The platform's own card: a 3px corner and the same three-part shadow,
-     rather than the 10px pill and flat hairline this page used to draw. A
-     board printed beside a report reads as a report, not as a web page. */
+  /* The platform's own card: a 12px corner, a hairline and a soft two-part
+     shadow, with the title in a bar of its own over a hairline. The title bar
+     is part of the widget's height on the platform, so leaving it out here
+     handed every chart the 20-odd pixels it takes - a chart a size larger
+     than the one on the board. */
   .card {
-    background: var(--surface); border: 1px solid var(--ink-200); border-radius: 3px;
+    background: var(--surface); border: 1px solid var(--ink-200); border-radius: 12px;
     display: flex; flex-direction: column; overflow: hidden; min-width: 0;
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.5),
-      0 1px 3px rgba(15, 23, 42, 0.08),
-      0 6px 16px -10px rgba(15, 23, 42, 0.25);
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.035), 0 8px 24px -18px rgba(15, 23, 42, 0.28);
   }
   .card > h2 {
-    margin: 0; padding: 12px 14px 0; font-size: 14px; font-weight: 600;
+    margin: 0; padding: 16px; line-height: 20px; font-size: 14px; font-weight: 600;
+    border-bottom: 1px solid var(--ink-200); flex-shrink: 0;
     white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   }
-  .card > .body { flex: 1; min-height: 0; padding: 10px 14px 12px; overflow: auto; }
-  .card > .caption { padding: 0 14px 10px; font-size: 11px; color: var(--ink-500); }
-  .frozen { padding: 0 14px 8px; font-size: 11px; color: #8a6d1f; }
+  .card > .body { flex: 1; min-height: 0; padding: 16px 16px 8px; overflow: auto; }
+  .card > .caption {
+    padding: 8px 16px; font-size: 12px; line-height: 1.4; color: var(--ink-500);
+    border-top: 1px solid var(--ink-100); flex-shrink: 0;
+  }
+  .frozen { padding: 8px 16px 0; font-size: 11px; color: #8a6d1f; }
   .chart { width: 100%; height: 100%; min-height: 120px; }
   table.data { border-collapse: collapse; width: 100%; font-size: 12px; }
   table.data th, table.data td { border-bottom: 1px solid var(--ink-100); padding: 5px 8px; text-align: left; }
@@ -128,13 +150,15 @@
   .text { white-space: pre-wrap; font-size: 13px; color: var(--ink-700); }
   .leafmap { width: 100%; height: 100%; min-height: 180px; border-radius: 6px; }
   .embed { width: 100%; height: 100%; border: 0; }
-  footer.board { margin-top: 26px; color: var(--ink-400); font-size: 11px; }
+  footer.board { margin: 10px 16px 0; color: var(--ink-400); font-size: 11px; }
   /* How this particular board is dressed: its ground, masthead, title, tabs,
      filter bar and card opacity, written server-side from the same appearance
      the platform draws it with. Last in the sheet so it wins on its own
      specificity rather than by shouting. Empty for an undressed board. */
 /*__LOOK__*/
   @media (max-width: 780px) {
+    .wrap { padding: 16px 12px 32px; }
+    .canvas, .canvas > .grid { padding: 8px; }
     .grid { display: block; }
     .card { margin-bottom: 14px; height: 320px; }
   }
@@ -161,6 +185,9 @@
     @page { margin: 14mm; }
     body { background: #fff; }
     .wrap { max-width: none; padding: 0; }
+    .canvas, .canvas > .grid { padding: 0; }
+    .canvas > .group { margin: 16px 0; }
+    .filters, footer.board { margin-left: 0; margin-right: 0; }
     /* Backgrounds off by default in most browsers, which would print a dark
        tile as black text on white and a chart's own fill as nothing. */
     * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
@@ -1620,21 +1647,13 @@
 
     var look = DATA.look || {}
     var header = el('header', 'board')
-    // A logo sits beside the title rather than above it, which is where the
-    // platform puts it and what a ministry's letterhead looks like.
-    if (look.logo) {
-      var brand = el('div', 'brand')
-      var mark = document.createElement('img')
-      mark.src = look.logo
-      mark.alt = ''
-      brand.appendChild(mark)
-      brand.appendChild(el('h1', '', DATA.name))
-      header.appendChild(brand)
-    } else {
-      header.appendChild(el('h1', '', DATA.name))
-    }
+    // The name, what the board is for and what it is pinned to, as one block:
+    // a logo goes beside that block, or above it when the name is centred,
+    // which is how the platform sets them out.
+    var titles = el('div', 'titles')
+    titles.appendChild(el('h1', '', DATA.name))
     if (DATA.description && !look.hide_subtitle) {
-      header.appendChild(el('p', '', DATA.description))
+      titles.appendChild(el('p', '', DATA.description))
     }
     /* What this file is of. A pinned export has no control for these, so
        without a line saying so one area's copy and the whole country's look
@@ -1646,9 +1665,24 @@
       pin.textContent = DATA.pinned.map(function (one) {
         return one.label + ': ' + one.value
       }).join(' · ')
-      header.appendChild(pin)
+      titles.appendChild(pin)
+    }
+    if (look.logo) {
+      var brand = el('div', 'brand')
+      var mark = document.createElement('img')
+      mark.src = look.logo
+      mark.alt = ''
+      brand.appendChild(mark)
+      brand.appendChild(titles)
+      header.appendChild(brand)
+    } else {
+      header.appendChild(titles)
     }
     app.appendChild(header)
+
+    // Everything else is on the board's own canvas, under the name.
+    var board = el('main', 'canvas')
+    app.appendChild(board)
 
     if (DATA.pages.length > 1) {
       var tabs = el('div', 'tabs')
@@ -1658,7 +1692,7 @@
         button.onclick = function () { page = index; render() }
         tabs.appendChild(button)
       })
-      app.appendChild(tabs)
+      board.appendChild(tabs)
     }
 
     var controls = controlsHere()
@@ -1696,7 +1730,7 @@
       var clear = el('button', 'clear', 'Clear')
       clear.onclick = function () { chosen = {}; render() }
       bar.appendChild(clear)
-      app.appendChild(bar)
+      board.appendChild(bar)
     }
 
     // Groups are bands here rather than the boxes they are on the platform:
@@ -1713,7 +1747,7 @@
     if (ungrouped.length) {
       var loose = el('div', 'grid')
       ungrouped.forEach(function (widget) { loose.appendChild(card(widget)) })
-      app.appendChild(loose)
+      board.appendChild(loose)
     }
 
     groups.forEach(function (group) {
@@ -1742,7 +1776,7 @@
           entry.refit()
         })
       })
-      app.appendChild(band)
+      board.appendChild(band)
     })
 
     // The charts are built while their cards are still being assembled, so at
@@ -1757,7 +1791,7 @@
     var footer = el('footer', 'board')
     footer.textContent = 'Exported from SurveyHQ on ' + new Date(DATA.generated_at).toLocaleString() +
       '. The numbers are as they stood then.'
-    app.appendChild(footer)
+    board.appendChild(footer)
   }
 
   function card(widget) {
