@@ -1830,6 +1830,9 @@ background image, the masthead, the logo, the title's size, colour and
 typeface, the tab band, the filter bar and the widget transparency all travel
 with it. Any bundled typeface the board is set in is carried inside the file
 as well, so it reads in that face on a laptop that has never met the platform.
+It is laid out as the board's shared link is - the same masthead, the same
+widget sizes with their title bars, the board on its own canvas under the
+name - so a published copy and the link look like one thing.
 
 **Word** gives you the board as a report, for the document it ends up inside:
 the title and what it was narrowed to, then each page, then each widget as a
@@ -2197,8 +2200,9 @@ belongs to them rather than to the platform. **Appearance → Header** is where 
 says so:
 
 - **Logo** - upload your organisation's mark (PNG, JPEG, GIF or WebP, up to
-  8 MB). It sits beside the title, at whatever height you set, and it travels
-  with the shared link, where it matters most.
+  8 MB). It sits beside the title, or above it when the title is centred, at
+  whatever height you set, and it travels with the shared link and the
+  downloaded and published copies, where it matters most.
 - **Title size** - from 16 to 64 pixels, so a board left on an office wall can
   be read from across the room.
 - **Title font** - the interface face, or a grotesque, serif, slab or

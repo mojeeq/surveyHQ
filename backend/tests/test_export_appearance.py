@@ -32,11 +32,9 @@ def dashboard(**appearance: object) -> SimpleNamespace:
 
 def test_an_undressed_board_gets_no_rules_at_all():
     """A board nobody has styled must not gain a stylesheet full of defaults."""
-    css = appearance_css(dashboard())
-    # Only the logo sizing rule, which is harmless and always present.
-    assert "body{" not in css
-    assert ".wrap{" not in css
-    assert "header.board{" not in css
+    # The page's own sheet carries the platform's defaults, the logo's size
+    # among them, so there is nothing left for this one to say.
+    assert appearance_css(dashboard()) == ""
 
 
 def test_the_page_ground_reaches_the_body():
@@ -241,9 +239,10 @@ def test_the_stylesheet_is_not_also_carried_in_the_json():
 
 # --- what is actually behind the loose text ---------------------------------
 #
-# The footer and the title sit inside the board, not on the page ground, so
-# they read against the board's own canvas whenever one is set. Reading the
-# ground instead is how the footer came out pale grey on pale paper.
+# The footer sits on the board's own canvas, so it reads against that whenever
+# one is set; reading the ground instead is how it came out pale grey on pale
+# paper. The title is on the page ground, above the canvas, as it is on the
+# platform.
 
 
 def test_a_light_board_on_a_dark_ground_keeps_dark_footer_text():
@@ -263,12 +262,61 @@ def test_a_dark_ground_with_no_board_colour_does_lighten_the_footer():
     assert "footer.board{color:rgba(255,255,255,.65);}" in css
 
 
-def test_a_dark_board_lightens_the_title_only_when_no_masthead_covers_it():
-    bare = appearance_css(dashboard(background_color="#0b2545"))
-    assert "header.board h1{color:#f4f5f7;}" in bare
+def test_the_title_reads_against_the_page_not_the_board_under_it():
+    """The name is above the canvas, on the page ground, as on the platform."""
+    on_dark_board = appearance_css(dashboard(background_color="#0b2545"))
+    assert "header.board h1{color:#f4f5f7;}" not in on_dark_board
+
+    on_dark_ground = appearance_css(
+        dashboard(page_background="#0b2545", background_color="#f7f9fc")
+    )
+    assert "header.board h1{color:#f4f5f7;}" in on_dark_ground
 
     # With a masthead the title sits on the band, which decides for itself.
     covered = appearance_css(
-        dashboard(background_color="#0b2545", header_background="#ffd54f")
+        dashboard(page_background="#0b2545", header_background="#ffd54f")
     )
     assert covered.count("header.board h1{color:#f4f5f7;}") == 0
+
+
+def test_the_board_ground_is_painted_on_the_canvas_not_behind_the_name():
+    css = appearance_css(dashboard(background_color="#fbf8f1"))
+    assert ".canvas{background-color:#fbf8f1;" in css
+    assert ".wrap{" not in css
+
+
+# --- the masthead's proportions ---------------------------------------------
+#
+# The export's band was half the platform's height, with its logo squeezed
+# beside the name: the board's name looked an afterthought over its charts.
+
+
+def test_a_masthead_is_the_platforms_size():
+    css = appearance_css(dashboard(header_background="#9a6408"))
+    assert "padding:28px 32px;" in css
+    assert "header.board h1{font-size:28px;}" in css
+    assert "border:1px solid rgba(255,255,255,.14);" in css
+
+
+def test_a_chosen_title_size_still_wins_on_a_masthead():
+    css = appearance_css(dashboard(header_background="#9a6408", title_size=40))
+    assert css.index("font-size:28px") < css.index("font-size:40px")
+
+
+def test_a_centred_name_has_its_logo_above_it():
+    centred = appearance_css(dashboard(header_background="#9a6408", title_align="center"))
+    assert "header.board .brand{flex-direction:column;gap:12px;}" in centred
+
+    beside = appearance_css(dashboard(header_background="#9a6408"))
+    assert "flex-direction:column" not in beside
+
+
+def test_a_logo_is_the_platforms_size_unless_set():
+    assert ".brand img" not in appearance_css(dashboard())
+    assert "header.board .brand img{height:48px;}" in appearance_css(dashboard(logo_height=48))
+
+
+def test_tabs_on_a_dark_board_are_readable_without_a_band():
+    css = appearance_css(dashboard(background_color="#0b2545"))
+    assert ".tabs button{color:#f4f5f7" in css
+    assert ".tabs{border-bottom-color:rgba(255,255,255,.25);}" in css

@@ -185,30 +185,27 @@ def stylesheet(dashboard: Any, background: str) -> str:
 
     board = canvas(appearance, background)
     if board:
-        # The board is its own surface inside the page, which is the shape the
-        # application gives it once a ground is set behind it.
-        out.append(f".wrap{{{board}border-radius:12px;padding:20px 18px 40px;}}")
+        # The board's own surface, under the name rather than behind it - the
+        # name is on the page, as it is on the platform.
+        out.append(f".canvas{{{board}}}")
 
-    # Everything loose on the board - the title where no masthead covers it,
-    # and the footer - reads against whatever is directly behind it. That is
-    # the board's own canvas when one is set, and only the page ground when
-    # there is no board colour at all. Getting this backwards is how the footer
-    # ended up pale grey on pale paper.
+    # Loose text reads against whatever is directly behind it. The title,
+    # where no masthead covers it, is on the page ground. The footer is on the
+    # board's canvas when one is set, and only on the ground when there is no
+    # board colour at all. Getting this backwards is how the footer ended up
+    # pale grey on pale paper.
     # A board given only a ready-made ground has no colour of its own, and the
-    # thing behind the title is then that ground's tint rather than nothing.
+    # thing behind the footer is then that ground's tint rather than nothing.
     tint = (export_backgrounds.ground(appearance.get("background_pattern", "")) or {}).get("tint")
-    behind = (
-        appearance.get("background_color") or tint
-        if board
-        else appearance.get("page_background")
-    )
-    if is_dark(behind):
+    on_dark_board = bool(board) and is_dark(appearance.get("background_color") or tint)
+    footer_on_dark = on_dark_board if board else is_dark(appearance.get("page_background"))
+    if footer_on_dark:
         out.append("footer.board{color:rgba(255,255,255,.65);}")
-        if not appearance.get("header_background"):
-            out.append(
-                "header.board h1{color:#f4f5f7;}"
-                "header.board p{color:rgba(244,245,247,.75);}"
-            )
+    if is_dark(appearance.get("page_background")) and not appearance.get("header_background"):
+        out.append(
+            "header.board h1{color:#f4f5f7;}"
+            "header.board p{color:rgba(244,245,247,.75);}"
+        )
 
     masthead = band(
         appearance.get("header_background"),
@@ -216,13 +213,21 @@ def stylesheet(dashboard: Any, background: str) -> str:
         appearance.get("header_angle"),
     )
     if masthead:
+        # The platform's band: 28px above and below the name, 32 at the sides
+        # (24 on a narrow screen), an edge taken from the light the colour is
+        # lit by, and a name set larger than it is on a plain page.
+        dark_band = is_dark(appearance.get("header_background"))
+        edge = "rgba(255,255,255,.14)" if dark_band else "rgba(0,0,0,.10)"
         out.append(
-            f"header.board{{{masthead}border-radius:10px;padding:16px 18px;margin-bottom:6px;}}"
+            f"header.board{{{masthead}border:1px solid {edge};border-radius:3px;"
+            "padding:28px 32px;}"
+            "@media (max-width:1023px){header.board{padding:28px 24px;}}"
+            "header.board h1{font-size:28px;}"
         )
-        if is_dark(appearance.get("header_background")):
+        if dark_band:
             out.append(
                 "header.board h1{color:#f4f5f7;}"
-                "header.board p{color:rgba(244,245,247,.75);}"
+                "header.board p{color:rgba(244,245,247,.85);}"
             )
 
     title_stack = export_fonts.stack_for(appearance.get("title_font"))
@@ -236,16 +241,24 @@ def stylesheet(dashboard: Any, background: str) -> str:
     if title_colour:
         out.append(f"header.board h1{{color:{title_colour};}}")
     if str(appearance.get("title_align")) == "center":
-        out.append("header.board{text-align:center;}header.board .brand{justify-content:center;}")
+        # Centred, the logo stands above the name rather than beside it.
+        out.append(
+            "header.board{text-align:center;}"
+            "header.board .brand{flex-direction:column;"
+            f"gap:{12 if masthead else 8}px;}}"
+        )
     if appearance.get("header_rule"):
         out.append("header.board{border-bottom:1px solid var(--ink-200);padding-bottom:12px;}")
 
     tab_band = _clean(appearance.get("tab_background"))
     if tab_band:
-        out.append(f".tabs{{background:{tab_band};border-radius:8px;padding:4px 6px;}}")
-    tab_colour = _clean(appearance.get("tab_color")) or (
-        "#f4f5f7" if (tab_band and is_dark(tab_band)) else ""
-    )
+        out.append(f".tabs{{background:{tab_band};border-radius:8px;padding:0 8px;}}")
+    # On their own band the tabs read against it; without one, against the
+    # board's canvas - a dark board left them grey on navy.
+    tabs_on_dark = is_dark(tab_band) if tab_band else on_dark_board
+    if tabs_on_dark:
+        out.append(".tabs{border-bottom-color:rgba(255,255,255,.25);}")
+    tab_colour = _clean(appearance.get("tab_color")) or ("#f4f5f7" if tabs_on_dark else "")
     if tab_colour:
         # The chosen tab keeps its underline but takes the same ink, so a dark
         # band does not leave one tab legible and the rest not.
@@ -271,10 +284,8 @@ def stylesheet(dashboard: Any, background: str) -> str:
         out.append(f".card{{background-color:rgba(255,255,255,{opacity:g});}}")
 
     logo_height = _number(appearance.get("logo_height"), 8, 200)
-    out.append(
-        "header.board .brand{display:flex;align-items:center;gap:12px;}"
-        f"header.board .brand img{{height:{logo_height or 40:g}px;width:auto;}}"
-    )
+    if logo_height:
+        out.append(f"header.board .brand img{{height:{logo_height:g}px;}}")
 
     return "\n".join(out)
 

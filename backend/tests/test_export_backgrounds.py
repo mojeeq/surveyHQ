@@ -142,9 +142,11 @@ def test_a_ground_this_version_no_longer_has_is_simply_not_drawn():
     assert ground("ziggurat") is None
 
 
-def test_a_dark_ground_lightens_the_title_and_the_footer():
-    """The title reads against the board's ground when nothing else is behind it."""
+def test_a_dark_ground_lightens_the_footer_and_the_tabs_on_it():
+    """The footer and the tabs are on the board's ground. The title is not -
+    it is above the board, on the page - so it is left as the page has it."""
     css = export_appearance.stylesheet(_Board({"background_pattern": "carbon"}), "")
 
     assert "footer.board{color:rgba(255,255,255,.65);}" in css
-    assert "header.board h1{color:#f4f5f7;}" in css
+    assert ".tabs button{color:#f4f5f7" in css
+    assert "header.board h1{color:#f4f5f7;}" not in css
