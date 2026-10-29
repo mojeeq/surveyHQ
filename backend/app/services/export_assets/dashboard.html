@@ -53,6 +53,10 @@
     border: 1px solid var(--ink-200); background: #fff; min-width: 150px;
   }
   .filters .clear { border: 0; background: none; color: var(--brand); font: inherit; font-size: 12px; cursor: pointer; }
+  .filters input[type=date] {
+    font: inherit; font-size: 12px; padding: 3px 6px; border-radius: 6px;
+    border: 1px solid var(--ink-200); background: #fff;
+  }
   /* Screen has the control itself; see the print rules at the foot. */
   .filters .printed { display: none; }
   /* The board's own geometry, written onto the page from its appearance so a
@@ -176,7 +180,7 @@
     /* The chosen value, as text. `.printed` is written beside each control on
        every render, because a <select> prints as a control and a reader
        holding the sheet has no way to see which option it was left on. */
-    .filters select { display: none; }
+    .filters select, .filters input[type=date] { display: none; }
     .filters .printed { display: inline; font-size: 12px; font-weight: 600; color: var(--ink-900); }
     footer.board { margin-top: 14px; }
   }
@@ -286,13 +290,13 @@
     cube.columns.forEach(function (column, index) { at[column.name] = index })
     var dims = cube.dimensions.map(function (name) { return at[name] })
     var tests = cube.filters.map(function (control) {
-      return { index: at[control.column], want: chosen[control.variable] || '' }
+      return { index: at[control.column], want: chosen[control.variable] || '', kind: control.kind }
     })
     var buckets = new Map()
     var order = []
     cube.rows.forEach(function (row) {
       for (var f = 0; f < tests.length; f++) {
-        if (tests[f].want && text(row[tests[f].index]) !== tests[f].want) return
+        if (!keeps(tests[f], row[tests[f].index])) return
       }
       var key = dims.map(function (index) { return text(row[index]) }).join('||')
       var bucket = buckets.get(key)
@@ -341,6 +345,229 @@
       return { name: measure.name, label: measure.label || measure.name, type: 'measure' }
     }))
     return { columns: columns, rows: rows }
+  }
+
+  // ---- choosing -----------------------------------------------------------
+  /**
+   * Whether a row's value is inside what the reader chose for one filter:
+   * that value, or for a date filter a range of days. A filter left on All
+   * keeps everything.
+   */
+  function keeps(test, value) {
+    if (!test.want) return true
+    if (test.kind === 'dates') return inRange(text(value), test.want, new Date())
+    return text(value) === test.want
+  }
+
+  function inRange(day, choice, today) {
+    var span = dateBounds(choice, today)
+    var stamp = String(day || '').slice(0, 10)
+    if (!stamp) return false
+    return (!span.first || stamp >= span.first) && (!span.after || stamp < span.after)
+  }
+
+  /**
+   * A date filter's choice as its first day and the day after its last, as
+   * yyyy-mm-dd. The board's own rule (frontend/src/lib/date-range.ts and
+   * app/services/date_ranges.py), so "Last 7 days" means the same seven days
+   * in the file as on the board: counted back from the reader's today.
+   */
+  function dateBounds(value, today) {
+    var choice = value.indexOf('dates:') === 0 ? value.slice(6) : value
+    function pad(n) { return (n < 10 ? '0' : '') + n }
+    function day(offset, base) {
+      var from = base || today
+      var at = new Date(from.getFullYear(), from.getMonth(), from.getDate() + offset)
+      return at.getFullYear() + '-' + pad(at.getMonth() + 1) + '-' + pad(at.getDate())
+    }
+    var tomorrow = day(1)
+    if (choice === 'today') return { first: day(0), after: tomorrow }
+    if (choice === 'yesterday') return { first: day(-1), after: day(0) }
+    if (choice === 'last_7') return { first: day(-6), after: tomorrow }
+    if (choice === 'last_30') return { first: day(-29), after: tomorrow }
+    if (choice === 'this_week') return { first: day(-((today.getDay() + 6) % 7)), after: tomorrow }
+    if (choice === 'this_month') {
+      return { first: day(0, new Date(today.getFullYear(), today.getMonth(), 1)), after: tomorrow }
+    }
+    if (choice === 'last_month') {
+      return {
+        first: day(0, new Date(today.getFullYear(), today.getMonth() - 1, 1)),
+        after: day(0, new Date(today.getFullYear(), today.getMonth(), 1)),
+      }
+    }
+    var parts = choice.split('..')
+    var last = /^\d{4}-\d{2}-\d{2}$/.test(parts[1] || '') ? parts[1] : ''
+    return {
+      first: /^\d{4}-\d{2}-\d{2}$/.test(parts[0] || '') ? parts[0] : null,
+      after: last ? day(1, new Date(Number(last.slice(0, 4)), Number(last.slice(5, 7)) - 1, Number(last.slice(8, 10)))) : null,
+    }
+  }
+
+  // ---- tick all that apply --------------------------------------------------
+  /**
+   * A share as the platform rounds it: to one place, a half to the even
+   * neighbour (Python's round). Exact halves are rare - an eighth, a
+   * sixteenth - but when one comes the file and the board should still agree.
+   */
+  function share(count, base) {
+    if (!base) return null
+    var value = (100 * count) / base
+    if (Number.isInteger(value * 100) && Math.abs((value * 100) % 10) === 5) {
+      var down = Math.floor(value * 10)
+      return (down % 2 === 0 ? down : down + 1) / 10
+    }
+    return Number(value.toFixed(1))
+  }
+
+  function orderedBy(rows, sort, at) {
+    if (sort === 'value_desc') rows.sort(function (a, b) { return b[at] - a[at] })
+    else if (sort === 'value_asc') rows.sort(function (a, b) { return a[at] - b[at] })
+    else if (sort === 'label_asc') {
+      rows.sort(function (a, b) { return String(a[0]) < String(b[0]) ? -1 : String(a[0]) > String(b[0]) ? 1 : 0 })
+    }
+    return rows
+  }
+
+  /**
+   * A tick-all-that-apply chart, narrowed to what is chosen and worked out
+   * again - the same arithmetic the platform does (app/services/multiselect.py),
+   * on counts the file carries per filter value. Comes back as the query
+   * result the chart is drawn from, so nothing below knows the difference.
+   */
+  function combineMultiselect(ms) {
+    var width = ms.keys || 0
+    var tests = (ms.filters || []).map(function (control) {
+      return { index: control.index, want: chosen[control.variable] || '', kind: control.kind }
+    })
+    function kept(row) {
+      for (var f = 0; f < tests.length; f++) if (!keeps(tests[f], row[tests[f].index])) return false
+      return true
+    }
+    function baseOf(totalRows, answered) {
+      return ms.percent_of === 'respondents' ? answered : totalRows
+    }
+    var bases = ms.bases.filter(kept)
+    var base = baseOf(
+      bases.reduce(function (sum, row) { return sum + (Number(row[width]) || 0) }, 0),
+      bases.reduce(function (sum, row) { return sum + (Number(row[width + 1]) || 0) }, 0)
+    )
+    var rows = ms.rows.filter(kept)
+    var labels = ms.labels
+    var n = labels.length
+    var zeros = function () { return labels.map(function () { return 0 }) }
+    var dimension = function (name, label, type) {
+      return { name: name, label: label, type: 'dimension', data_type: type || 'string' }
+    }
+    var dims, out, countLabel = 'Chose it', shareLabel = ms.share_label
+
+    if (ms.view === 'by_group') {
+      var groups = {}
+      rows.forEach(function (row) {
+        var into = groups[row[width]] || (groups[row[width]] = { c: zeros(), total: 0, answered: 0 })
+        for (var i = 0; i < n; i++) into.c[i] += Number(row[width + 1 + i]) || 0
+        into.total += Number(row[width + 1 + n]) || 0
+        into.answered += Number(row[width + 2 + n]) || 0
+      })
+      var present = (ms.groups || []).filter(function (name) { return groups[name] })
+      var overall = orderedBy(labels.map(function (label, i) {
+        return [label, present.reduce(function (sum, name) { return sum + groups[name].c[i] }, 0)]
+      }), ms.sort, 1)
+      out = []
+      overall.forEach(function (entry) {
+        var i = labels.indexOf(entry[0])
+        present.forEach(function (name) {
+          var found = groups[name]
+          out.push([entry[0], name, found.c[i], share(found.c[i], baseOf(found.total, found.answered))])
+        })
+      })
+      dims = [dimension('option', 'Option'), dimension('group', ms.group_label || 'Group')]
+    } else if (ms.view === 'how_many') {
+      var many = {}
+      rows.forEach(function (row) { many[row[width]] = (many[row[width]] || 0) + (Number(row[width + 1]) || 0) })
+      var most = Object.keys(many).reduce(function (top, k) { return Math.max(top, Number(k)) }, 0)
+      out = []
+      for (var k = 0; k <= most; k++) out.push([k, many[k] || 0, share(many[k] || 0, base)])
+      dims = [dimension('chosen', 'Options chosen', 'numeric')]
+      countLabel = 'Respondents'
+    } else if (ms.view === 'combinations') {
+      var sets = {}
+      rows.forEach(function (row) {
+        var key = String(row[width] || '')
+        sets[key] = (sets[key] || 0) + (Number(row[width + 1]) || 0)
+      })
+      var found = Object.keys(sets).map(function (key) { return [key, sets[key]] })
+        .filter(function (entry) { return entry[1] > 0 })
+        .sort(function (a, b) { return b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0) })
+      var keep = found.slice(0, Math.max(1, ms.top || 10))
+      var rest = found.slice(keep.length)
+      var named = function (key) {
+        var picked = key.split('|').filter(function (one) { return one !== '' })
+          .map(function (one) { return labels[Number(one)] })
+        if (!picked.length) return 'None of these'
+        return picked.length === 1 ? picked[0] + ' only' : picked.join(' + ')
+      }
+      out = keep.map(function (entry) { return [named(entry[0]), entry[1], share(entry[1], base), entry[0]] })
+      if (ms.sort === 'none') {
+        var place = function (key) {
+          var picked = key.split('|').filter(function (one) { return one !== '' }).map(Number)
+          return picked.length ? picked : [-1]
+        }
+        out.sort(function (a, b) {
+          var one = place(a[3]), two = place(b[3])
+          for (var i = 0; i < Math.min(one.length, two.length); i++) if (one[i] !== two[i]) return one[i] - two[i]
+          return one.length - two.length
+        })
+      } else orderedBy(out, ms.sort, 1)
+      out = out.map(function (entry) { return entry.slice(0, 3) })
+      if (rest.length) {
+        var left = rest.reduce(function (sum, entry) { return sum + entry[1] }, 0)
+        out.push(['Other combinations (' + rest.length.toLocaleString('en-US') + ')', left, share(left, base)])
+      }
+      dims = [dimension('combination', 'Combination')]
+      countLabel = 'Respondents'
+    } else if (ms.view === 'together') {
+      var single = zeros()
+      var pairs = {}
+      ;(ms.pairs || []).forEach(function (pair) { pairs[pair[0] + '_' + pair[1]] = 0 })
+      rows.forEach(function (row) {
+        for (var i = 0; i < n; i++) single[i] += Number(row[width + i]) || 0
+        ;(ms.pairs || []).forEach(function (pair, p) {
+          pairs[pair[0] + '_' + pair[1]] += Number(row[width + n + p]) || 0
+        })
+      })
+      var order = orderedBy(labels.map(function (label, i) { return [label, single[i], i] }), ms.sort, 1)
+      out = []
+      order.forEach(function (one) {
+        order.forEach(function (two) {
+          if (one[2] === two[2]) { out.push([one[0], two[0], one[1], null]); return }
+          var both = pairs[Math.min(one[2], two[2]) + '_' + Math.max(one[2], two[2])] || 0
+          out.push([one[0], two[0], both, share(both, one[1])])
+        })
+      })
+      dims = [dimension('option', 'Of those who chose'), dimension('also', 'Also chose')]
+      countLabel = 'Chose both'
+      shareLabel = '% who also chose it'
+    } else {
+      var counts = zeros()
+      rows.forEach(function (row) { for (var i = 0; i < n; i++) counts[i] += Number(row[width + i]) || 0 })
+      out = orderedBy(labels.map(function (label, i) {
+        return [label, counts[i], base ? share(counts[i], base) : 0.0]
+      }), ms.sort, 1)
+      dims = [dimension('option', 'Option')]
+    }
+
+    // The one number a chart draws, or both for a table, as the board chose.
+    var columns = dims.concat([
+      { name: 'chose', label: countLabel, type: 'measure' },
+      { name: 'percent', label: shareLabel, type: 'measure', data_type: 'percent' },
+    ])
+    var keepAt = dims.map(function (_, i) { return i })
+    if (ms.show === 'count' || ms.show === 'both') keepAt.push(dims.length)
+    if (ms.show === 'percent' || ms.show === 'both') keepAt.push(dims.length + 1)
+    return {
+      columns: keepAt.map(function (i) { return columns[i] }),
+      rows: out.map(function (entry) { return keepAt.map(function (i) { return entry[i] }) }),
+    }
   }
 
   function typeOf(cube, name) {
@@ -1312,6 +1539,68 @@
     body.appendChild(el('p', 'note', 'This widget is not part of the exported copy.'))
   }
 
+  // ---- the date control ---------------------------------------------------
+  var DATE_PRESETS = [
+    ['dates:today', 'Today'],
+    ['dates:yesterday', 'Yesterday'],
+    ['dates:last_7', 'Last 7 days'],
+    ['dates:last_30', 'Last 30 days'],
+    ['dates:this_week', 'This week'],
+    ['dates:this_month', 'This month'],
+    ['dates:last_month', 'Last month'],
+  ]
+
+  /**
+   * A date filter, as the board offers it: all dates, a named range counted
+   * back from today, or two days of the reader's choosing. The file carries
+   * every widget's numbers by day, so any range can be added back up.
+   */
+  function dateControl(control) {
+    var label = el('label')
+    label.appendChild(el('span', '', control.label))
+    var current = chosen[control.variable] || ''
+    var custom = current !== '' && current.indexOf('..') >= 0
+    var select = document.createElement('select')
+    select.setAttribute('aria-label', control.label)
+    ;[['', 'All dates']].concat(DATE_PRESETS).concat([['range', 'Choose dates\u2026']]).forEach(function (one) {
+      var option = document.createElement('option')
+      option.value = one[0]
+      option.textContent = one[1]
+      select.appendChild(option)
+    })
+    select.value = custom ? 'range' : current
+    select.onchange = function () {
+      chosen[control.variable] = select.value === 'range'
+        ? 'dates:' + (control.min || '') + '..' + (control.max || '')
+        : select.value
+      render()
+    }
+    label.appendChild(select)
+    var printed = select.value ? select.options[select.selectedIndex].textContent : 'All dates'
+    if (custom) {
+      var parts = current.slice(6).split('..')
+      var boxes = ['From', 'To'].map(function (name, index) {
+        var box = document.createElement('input')
+        box.type = 'date'
+        box.setAttribute('aria-label', control.label + ': ' + name.toLowerCase())
+        if (control.min) box.min = control.min
+        if (control.max) box.max = control.max
+        box.value = parts[index] || ''
+        return box
+      })
+      boxes.forEach(function (box) {
+        box.onchange = function () {
+          chosen[control.variable] = 'dates:' + boxes[0].value + '..' + boxes[1].value
+          render()
+        }
+        label.appendChild(box)
+      })
+      printed = (parts[0] || 'the start') + ' to ' + (parts[1] || 'the end')
+    }
+    label.appendChild(el('span', 'printed', printed))
+    return label
+  }
+
   // ---- the page -----------------------------------------------------------
   function controlsHere() {
     return DATA.filters.filter(function (control) { return control.page === page })
@@ -1376,6 +1665,7 @@
     if (controls.length) {
       var bar = el('div', 'filters')
       controls.forEach(function (control) {
+        if (control.kind === 'dates') { bar.appendChild(dateControl(control)); return }
         var label = el('label')
         label.appendChild(el('span', '', control.label))
         var select = document.createElement('select')
@@ -1507,6 +1797,9 @@
         else drawCrosstab(body, combine(widget.cube), widget.crosstab)
       }
       else if (widget.kind === 'chart') drawChart(body, widget.chart_type, combine(widget.cube), widget.display)
+      else if (widget.kind === 'multiselect') {
+        drawChart(body, widget.chart_type, combineMultiselect(widget.multiselect), widget.display)
+      }
       else drawSnapshot(body, widget)
     } catch (error) {
       body.appendChild(el('p', 'note', 'This widget could not be drawn: ' + error.message))

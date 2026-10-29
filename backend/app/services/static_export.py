@@ -23,6 +23,7 @@ quality and freshness panels, which are not queries over the data at all.
 
 from __future__ import annotations
 
+import datetime as dt
 import json
 from pathlib import Path
 from typing import Any
@@ -41,22 +42,59 @@ from app.schemas.query import (
     Aggregation,
     Condition,
     CrosstabRequest,
+    DateGrain,
     Dimension,
     FilterGroup,
     Measure,
     QuerySpec,
 )
-from app.services import date_ranges, export_appearance, export_fonts, export_lib, preferences
+from app.services import (
+    date_ranges,
+    export_appearance,
+    export_fonts,
+    export_lib,
+    multiselect,
+    preferences,
+)
 from app.services.datasets import dataset_is_queryable
 from app.services.monitoring import COUNTED, formula_of, part_spec, weight_of
 from app.services.query_engine import (
     DatasetContext,
     QueryError,
+    SQLBuilder,
+    _label_value,
+    _quote_path,
     execute_crosstab,
     execute_query,
+    run_sql,
 )
 
 TEMPLATE = Path(__file__).parent / "export_assets" / "dashboard.html"
+
+
+def as_text(value: Any) -> str:
+    """A value written the way the exported page's script writes it.
+
+    The page keeps a widget's rows where the value equals the one chosen in
+    the dropdown, comparing the two as text. The dropdown's values were
+    written here with `str` and the rows' by the page from the JSON, and the
+    two disagree about numbers and days: a team coded 1 was offered as "1.0"
+    and matched against "1", and a day as "2026-07-19 00:00:00" against
+    "2026-07-19". Choosing either kept nothing, and every chart on the page
+    went blank - which reads as a filter that does not work.
+
+    So the dropdown is written by this, which follows `text()` in the
+    template: a whole number without its ".0", a day at midnight as the day.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    if isinstance(value, dt.datetime) and value.time() == dt.time(0):
+        return value.date().isoformat()
+    return str(value)
 
 # How many rows of cube one widget may carry. A cube is the widget's own
 # grouping crossed with every filter variable, so a chart by day filtered by
@@ -173,7 +211,7 @@ def _narrowed(
 def _cube(
     ctx: DatasetContext,
     spec: QuerySpec,
-    filter_variables: list[str],
+    filters: list[dict[str, str]],
     pinned: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     """One widget's numbers, at the grain its filters need.
@@ -190,15 +228,28 @@ def _cube(
     # output name, because a cross-tab groups by its row and column variables
     # under aliases of its own and would otherwise carry each of them twice.
     grouped = {
-        dimension.variable: dimension.output_name for dimension in spec.dimensions
+        dimension.variable: dimension.output_name
+        for dimension in spec.dimensions
+        if not dimension.grain and not dimension.bin_width
     }
-    extra = [name for name in filter_variables if name not in grouped]
+    extra: list[Dimension] = []
     # Which column answers for which control: a selection is made against a
     # variable, and the column holding it may be one of the widget's own
     # groupings under an alias of its own.
-    against = [
-        {"variable": name, "column": grouped.get(name, name)} for name in filter_variables
-    ]
+    against: list[dict[str, str]] = []
+    for control in filters:
+        name = control["variable"]
+        if control["kind"] == "dates":
+            # Always a column of its own, by day: a chart by week of the same
+            # date cannot say which days of the week a range keeps.
+            column = f"__day__{name}"
+            extra.append(Dimension(variable=name, grain=DateGrain.day, alias=column))
+            against.append({"variable": name, "column": column, "kind": "dates"})
+        elif name in grouped:
+            against.append({"variable": name, "column": grouped[name], "kind": "values"})
+        else:
+            extra.append(Dimension(variable=name))
+            against.append({"variable": name, "column": name, "kind": "values"})
     asked, recipes = _recipe(list(spec.measures))
     if pinned:
         spec = spec.model_copy(update={"filters": _narrowed(ctx, spec.filters, pinned)})
@@ -206,7 +257,7 @@ def _cube(
         update={
             "dimensions": [
                 *[d.model_copy(update={"limit": None}) for d in spec.dimensions],
-                *[Dimension(variable=name) for name in extra],
+                *extra,
             ],
             "measures": asked,
             "limit": MAX_CUBE_ROWS + 1,
@@ -252,17 +303,18 @@ def _filters_for(dashboard: Dashboard) -> list[dict[str, Any]]:
         variable = str(raw.get("variable") or "")
         if not variable:
             continue
-        # A date range is not a dropdown, and a file cannot carry every day's
-        # numbers to filter by. A saved view's range still narrows the file:
-        # see _pin.
-        if raw.get("kind") == "dates":
-            continue
         controls.append(
             {
                 "variable": variable,
                 "label": str(raw.get("label") or variable),
                 "dataset_id": str(raw.get("dataset_id") or ""),
                 "page": int(raw.get("page") or 0),
+                # A date range is not a dropdown - two hundred days make a list
+                # nobody can use - so it travels as a range: the file carries
+                # each widget's numbers by day, and the page offers the same
+                # choices the board does. It used to be left out altogether,
+                # so a board filtered by date arrived with no filter at all.
+                "kind": "dates" if raw.get("kind") == "dates" else "values",
                 "values": [],
             }
         )
@@ -288,10 +340,30 @@ def _values_for(ctx: DatasetContext, variable: str, limit: int = 200) -> list[st
         value = row[0]
         if value is None:
             continue
-        text = str(value)
+        text = as_text(value)
         if text and text not in seen:
             seen.append(text)
     return sorted(seen)
+
+
+def _date_span(ctx: DatasetContext, variable: str) -> dict[str, str] | None:
+    """The first and last day a date variable holds, for the range control.
+
+    None where it holds no dates - a control that can only ever empty the
+    page is worse than none.
+    """
+    try:
+        day = SQLBuilder(ctx).dimension_expr(Dimension(variable=variable, grain=DateGrain.day))
+        _, rows = run_sql(
+            f"SELECT CAST(min({day}) AS DATE), CAST(max({day}) AS DATE) "
+            f"FROM read_parquet({_quote_path(ctx.parquet_path)})"
+        )
+    except QueryError:
+        return None
+    if not rows or rows[0][0] is None:
+        return None
+    first, last = rows[0]
+    return {"min": as_text(first), "max": as_text(last)}
 
 
 def _ctx_for(db: Session, dataset_id: str | None) -> DatasetContext | None:
@@ -306,20 +378,20 @@ def _ctx_for(db: Session, dataset_id: str | None) -> DatasetContext | None:
         return None
 
 
-def _applicable_names(ctx: DatasetContext, controls: list[dict[str, Any]]) -> list[str]:
-    """The filter variables this widget's dataset actually has.
+def _applicable(ctx: DatasetContext, controls: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """The filters this widget's dataset can answer, and what kind each is.
 
     The same rule the live page follows: a control naming a variable the
     widget's dataset does not carry leaves that widget alone rather than
     emptying it.
     """
     known = set(ctx.variables)
-    names: list[str] = []
+    found: list[dict[str, str]] = []
     for control in controls:
         variable = control["variable"]
-        if variable in known and variable not in names:
-            names.append(variable)
-    return names
+        if variable in known and all(one["variable"] != variable for one in found):
+            found.append({"variable": variable, "kind": control.get("kind") or "values"})
+    return found
 
 
 def _crosstab_spec(request: CrosstabRequest) -> QuerySpec:
@@ -356,12 +428,10 @@ def _chart_widget(
     ctx = _ctx_for(db, chart.dataset_id)
     if ctx is None:
         raise NotExportable("its dataset is not available")
-    names = _applicable_names(ctx, controls)
+    names = _applicable(ctx, controls)
 
     if spec_raw.get("multiselect", {}).get("columns"):
-        raise NotExportable(
-            "a tick-all-that-apply chart is built from columns rather than groups"
-        )
+        return _multiselect_widget(ctx, chart, names, pinned)
 
     if spec_raw.get("crosstab"):
         request = CrosstabRequest.model_validate(spec_raw["crosstab"])
@@ -439,6 +509,60 @@ def _chart_widget(
     }
 
 
+def _multiselect_widget(
+    ctx: DatasetContext, chart: Chart, filters: list[dict[str, str]], pinned: dict[str, str]
+) -> dict[str, Any]:
+    """A tick-all-that-apply chart, carried so that it follows the filters.
+
+    It used to travel frozen - "built from columns rather than groups" - so on
+    a board made of them, choosing a province in the file left almost every
+    chart where it was. Its counts are taken per filter value instead (see
+    `multiselect.cube`) and added back up in the page, with the chart's own
+    saved settings, exactly as the board runs them.
+    """
+    saved = (chart.spec or {}).get("multiselect") or {}
+    own = FilterGroup.model_validate(saved.get("filters") or {})
+    try:
+        found = multiselect.cube(
+            ctx,
+            list(saved.get("columns") or []),
+            _narrowed(ctx, own, pinned) if pinned else own,
+            filters,
+            percent_of=str(saved.get("percent_of") or "respondents"),
+            sort=str(saved.get("sort") or "value_desc"),
+            show=str(saved.get("show") or "both"),
+            view=str(saved.get("view") or "options"),
+            by=str(saved.get("by") or ""),
+            top=max(1, min(50, int(saved.get("top") or 10))),
+            limit=MAX_CUBE_ROWS,
+        )
+    except QueryError as exc:
+        raise NotExportable(str(exc)) from None
+    # The filter values as the page compares them, written once here rather
+    # than by the page: a coded province is matched by its label, the one the
+    # dropdown offers, and a day by its date.
+    width = len(filters)
+    for rows in (found["rows"], found["bases"]):
+        for row in rows:
+            for index, control in enumerate(filters):
+                value = row[index]
+                info = ctx.variables.get(control["variable"])
+                if control["kind"] != "dates" and info is not None and info.value_labels:
+                    value = _label_value(info, value)
+                row[index] = as_text(value)
+    found["filters"] = [
+        {"variable": control["variable"], "kind": control["kind"], "index": index}
+        for index, control in enumerate(filters)
+    ]
+    found["keys"] = width
+    return {
+        "kind": "multiselect",
+        "chart_type": chart.chart_type.value,
+        "display": (chart.spec or {}).get("options") or {},
+        "multiselect": found,
+    }
+
+
 def _inline_widget(
     db: Session, widget: Widget, controls: list[dict[str, Any]], pinned: dict[str, str]
 ) -> dict[str, Any]:
@@ -453,7 +577,7 @@ def _inline_widget(
         if widget.widget_type.value == "chart"
         else widget.widget_type.value,
         "display": config.get("options") or {},
-        "cube": _cube(ctx, spec, _applicable_names(ctx, controls), pinned),
+        "cube": _cube(ctx, spec, _applicable(ctx, controls), pinned),
     }
 
 
@@ -467,7 +591,7 @@ def _indicator_widget(
     if ctx is None:
         raise NotExportable("its dataset is not available")
     spec = QuerySpec.model_validate(indicator.spec or {})
-    names = _applicable_names(ctx, controls)
+    names = _applicable(ctx, controls)
     shows_breakdown = bool((widget.config or {}).get("show_breakdown"))
     breakdown = indicator.breakdown_variable if shows_breakdown else ""
     headline = spec.model_copy(
@@ -582,7 +706,7 @@ def _map_widget(
             "point_opacity": config.get("point_opacity"),
             "size_by_value": config.get("size_by_value", True),
         },
-        "cube": _cube(ctx, spec, _applicable_names(ctx, controls), pinned),
+        "cube": _cube(ctx, spec, _applicable(ctx, controls), pinned),
     }
 
 
@@ -753,10 +877,15 @@ def build_payload(
     controls = _filters_for(dashboard)
     for control in controls:
         ctx = _ctx_for(db, control["dataset_id"])
-        control["values"] = _values_for(ctx, control["variable"]) if ctx else []
+        if control["kind"] == "dates":
+            span = _date_span(ctx, control["variable"]) if ctx else None
+            if span:
+                control.update(span)
+        else:
+            control["values"] = _values_for(ctx, control["variable"]) if ctx else []
     # A control nothing can answer is worse than no control: it would sit on
     # the page offering choices that move nothing.
-    controls = [control for control in controls if control["values"]]
+    controls = [control for control in controls if control["values"] or control.get("min")]
     # A pinned variable is answered, so it is not a question any more. Dropped
     # before the widgets are built, which is what keeps it out of every cube.
     # One entry per variable, not per control. The same filter is usually
@@ -770,11 +899,16 @@ def build_payload(
                 {
                     "variable": name,
                     "label": control.get("label") or name,
-                    "value": pinned[name],
+                    # A range in words, with the days it stood for on the day
+                    # the file was made, rather than its stored form.
+                    "value": date_ranges.describe(pinned[name], utcnow().date())
+                    if control["kind"] == "dates"
+                    else pinned[name],
                 }
             )
     controls = [control for control in controls if control["variable"] not in pinned]
-    # A date range has no control in the file, so its pinned choice is said
+    # A date range whose dataset gave no days has no control in the file, so
+    # its pinned choice is said
     # here or nowhere: the days the file covers, under its title.
     for raw in dashboard.filters or []:
         if not isinstance(raw, dict) or raw.get("kind") != "dates":

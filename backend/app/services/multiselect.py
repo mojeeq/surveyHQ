@@ -23,6 +23,8 @@ import re
 from typing import Any
 
 from app.schemas.query import (
+    DateGrain,
+    Dimension,
     FilterGroup,
     QueryColumn,
     QueryResult,
@@ -618,3 +620,150 @@ def _empty() -> QueryResult:
         truncated=False,
         total_rows_scanned=0,
     )
+
+
+# --- the question at every filter value, for a file --------------------------
+#
+# An exported dashboard filters itself in the reader's browser, from numbers
+# carried in the file at the grain its filters need. A tick-all-that-apply
+# chart was the one kind of chart left frozen, because its numbers are not a
+# grouping of rows the way an ordinary chart's are - so on boards made mostly
+# of them, choosing a province in the file moved almost nothing.
+#
+# Every view is made of counts, though: how many chose an option, how many
+# chose both of two, how many chose three, how many were asked. Counts taken
+# per filter value add back up to the counts for any choice of values, and the
+# shares are those sums divided. So each view is computed here grouped by the
+# filters, and the page does the adding and dividing - the same arithmetic as
+# above, which is what keeps the file's numbers the platform's numbers.
+
+
+def cube(
+    ctx: DatasetContext,
+    columns: list[str],
+    filters: FilterGroup | None,
+    split: list[dict[str, str]],
+    *,
+    percent_of: str = "respondents",
+    sort: str = "value_desc",
+    show: str = "both",
+    view: str = "options",
+    by: str = "",
+    top: int = 10,
+    limit: int = 20_000,
+) -> dict[str, Any]:
+    """One view's counts for every combination of the filter values in `split`.
+
+    Each row starts with the values of the `split` variables, as stored - the
+    caller writes them out as the page compares them - then the view's own
+    columns. `bases` holds, per combination, the rows and the respondents a
+    share is of.
+    """
+    chosen = [name for name in columns if name in ctx.variables]
+    missing = [name for name in columns if name not in ctx.variables]
+    if missing:
+        raise QueryError(f"'{missing[0]}' is not a variable in this dataset")
+    if not chosen:
+        raise QueryError("Choose at least one option column")
+    if len(chosen) > MAX_OPTIONS:
+        raise QueryError(f"That is {len(chosen)} options; {MAX_OPTIONS} at most")
+
+    builder = SQLBuilder(ctx)
+    keys: list[str] = []
+    for one in split:
+        if one["kind"] == "dates":
+            day = builder.dimension_expr(Dimension(variable=one["variable"], grain=DateGrain.day))
+            keys.append(f"CAST({day} AS DATE)")
+        else:
+            keys.append(builder.dimension_expr(Dimension(variable=one["variable"])))
+    where = builder.filter_sql(filters) if filters else ""
+    params = list(builder.params)
+    asked = Asked(ctx=ctx, chosen=chosen, where=where, params=params, percent_of=percent_of)
+    width = len(keys)
+
+    def grouped(select: str, *, answered_only: bool = False, more: int = 0) -> list[list[Any]]:
+        head = [f"{key} AS f{index}" for index, key in enumerate(keys)]
+        positions = ", ".join(str(index + 1) for index in range(width + more))
+        _, rows = run_sql(
+            f"SELECT {', '.join([*head, select])} FROM {asked.source(answered_only)}"
+            + (f" GROUP BY {positions}" if positions else ""),
+            params,
+        )
+        if len(rows) > limit:
+            raise QueryError(
+                "there are too many combinations of its answers and this page's filters"
+            )
+        return [list(row) for row in rows]
+
+    counts = ", ".join(
+        f"SUM(CASE WHEN {_chosen(name)} THEN 1 ELSE 0 END) AS c{index}"
+        for index, name in enumerate(chosen)
+    )
+    answered = f"SUM(CASE WHEN {_answered(chosen)} THEN 1 ELSE 0 END)"
+    out: dict[str, Any] = {
+        "view": view if view in VIEWS else "options",
+        "show": show,
+        "sort": sort,
+        "top": max(1, top),
+        "percent_of": percent_of,
+        "labels": asked.labels(),
+        "share_label": asked.share_label(),
+        "bases": grouped(f"COUNT(*) AS total_rows, {answered} AS answered"),
+    }
+
+    if view == "by_group":
+        if not by:
+            raise QueryError("Choose the variable to break the answers down by")
+        info = ctx.require(by)
+        if info.name in chosen:
+            raise QueryError(f"{by} is one of the options; break down by another variable")
+        group = quote_ident(info.name)
+        rows = grouped(
+            f"{group} AS g, {counts}, COUNT(*) AS total_rows, {answered} AS answered", more=1
+        )
+        raw = {row[width] for row in rows}
+        if len(raw) > MAX_GROUPS:
+            raise QueryError(f"{by} has {len(raw):,} groups, more than {MAX_GROUPS}")
+        # Written as the live chart writes them, and listed in its order:
+        # codes as numbered, names as written, the blank group last.
+        def named(value: Any) -> str:
+            blank = value is None or value == "" or _is_missing(info, value)
+            return MISSING_LABEL if blank else str(_label_value(info, value))
+
+        order: list[str] = []
+        for value in sorted(raw, key=lambda v: (v is None, v if v is not None else 0)):
+            if named(value) not in order:
+                order.append(named(value))
+        for row in rows:
+            row[width] = named(row[width])
+        out.update(
+            rows=rows,
+            groups=order,
+            group_label=info.label or info.name,
+            share_label=asked.share_label() + " in the group",
+        )
+    elif view == "combinations":
+        key = ", ".join(
+            f"CASE WHEN {_chosen(name)} THEN '{index}' END" for index, name in enumerate(chosen)
+        )
+        rows = grouped(
+            f"concat_ws('|', {key}) AS combination, COUNT(*) AS n", answered_only=True, more=1
+        )
+        out["rows"] = rows
+    elif view == "how_many":
+        ticked = " + ".join(f"CASE WHEN {_chosen(name)} THEN 1 ELSE 0 END" for name in chosen)
+        out["rows"] = grouped(f"({ticked}) AS k, COUNT(*) AS n", answered_only=True, more=1)
+    elif view == "together":
+        if len(chosen) > MAX_TOGETHER:
+            raise QueryError(f"Chosen together compares {MAX_TOGETHER} options at most")
+        pairs = [(i, j) for i in range(len(chosen)) for j in range(i + 1, len(chosen))]
+        both = ", ".join(
+            f"SUM(CASE WHEN {_chosen(chosen[i])} AND {_chosen(chosen[j])} THEN 1 ELSE 0 END)"
+            f" AS p{i}_{j}"
+            for i, j in pairs
+        )
+        out.update(rows=grouped(", ".join(filter(None, [counts, both]))), pairs=pairs)
+    else:
+        out["rows"] = grouped(counts)
+    return out
+

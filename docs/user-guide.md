@@ -1809,6 +1809,22 @@ average of averages is not an average unless every group happens to be the same
 size, and quietly returning one would be worse than not exporting it at all.
 The page tabs work too, and each page keeps its own controls.
 
+Every kind of filter the board has travels:
+
+- **Dropdowns**, including ones of numbers - a team, a round - and of codes
+  shown by their labels.
+- **A date range** offers the board's own choices: all dates, Today,
+  Yesterday, the last 7 or 30 days, this week, this month, last month, or
+  **Choose dates…** with two days between the first and last the file holds.
+  The named ranges are counted back from the reader's today, as on the board,
+  so "Last 7 days" in a file opened a month later is a different week - choose
+  the dates for a fixed one. The file carries each widget's numbers by day to
+  make this possible, which makes it larger for a long fieldwork period.
+- **Tick-all-that-apply charts** follow the filters too, in every view -
+  options, by group, combinations, how many and chosen together - with their
+  shares worked out again over the respondents the filters keep, exactly as
+  the board does.
+
 **It looks like your board.** The page ground, the board's own colour or
 background image, the masthead, the logo, the title's size, colour and
 typeface, the tab band, the filter bar and the widget transparency all travel
@@ -1838,7 +1854,7 @@ values they were set to.
 
 What the web page does not do:
 
-- **Clicking a mark does not filter it.** The dropdowns are the filters.
+- **Clicking a mark does not filter it.** The controls above the board are the filters.
 - **A map has no ground under its pins without the internet.** The charts are
   drawn by libraries carried inside the file, so they draw on a machine with no
   connection; a basemap cannot be, because it is millions of tiles on somebody
@@ -1848,7 +1864,7 @@ What the web page does not do:
   than answering a query, so there is nothing for a filter to narrow. A chart
   resting on a median, a distinct count, a percentile or a standard deviation
   cannot be worked out again from group totals - a median of medians is not a
-  median. A tick-all-that-apply chart is built from columns rather than groups.
+  median.
   A widget with so many combinations of groups and filter values that the file
   would be enormous is frozen too. All of them are still drawn, as they stood
   when the file was made.
