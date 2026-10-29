@@ -72,7 +72,9 @@ def values_for(db: Session, dashboard: Dashboard, variable: str) -> list[str]:
         (
             one
             for one in static_export._filters_for(dashboard)
-            if one["variable"] == variable
+            # A date range is a span, not a list of values to report on one
+            # by one.
+            if one["variable"] == variable and one["kind"] == "values"
         ),
         None,
     )

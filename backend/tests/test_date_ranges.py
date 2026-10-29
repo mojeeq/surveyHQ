@@ -123,8 +123,9 @@ def test_a_file_from_a_view_is_narrowed_to_its_range(client, auth_headers, dated
     )
     db_session.expire_all()
     dashboard = db_session.get(Dashboard, board["id"])
-    # No dropdown of every timestamp in the file.
-    assert static_export._filters_for(dashboard) == []
+    # A range, not a dropdown of every timestamp in the file.
+    [control] = static_export._filters_for(dashboard)
+    assert control["kind"] == "dates" and control["values"] == []
     payload = static_export.build_payload(
         db_session, dashboard, render=lambda widget, filters: {},
         pinned={"when": "dates:2026-11-03..2026-11-05"},

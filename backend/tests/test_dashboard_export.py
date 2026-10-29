@@ -136,7 +136,7 @@ def test_a_count_is_carried_at_the_grain_its_filter_needs(client, auth_headers, 
     assert cube["dimensions"] == ["province"]
     # Grouped on the filter's variable already, so it is tested against that
     # same column rather than a second copy of it.
-    assert cube["filters"] == [{"variable": "province", "column": "province"}]
+    assert cube["filters"] == [{"variable": "province", "column": "province", "kind": "values"}]
     counts = {row[0]: row[1] for row in cube["rows"]}
     assert counts == {"Northern": 4, "Highland": 4}
 
