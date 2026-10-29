@@ -279,6 +279,58 @@ def test_a_bad_or_read_only_token_is_said_plainly(client, auth_headers, github):
     assert "Contents: Read and write" in tested.json()["detail"]
 
 
+def test_testing_a_token_that_may_only_read_says_so_before_publishing(client, auth_headers):
+    """GitHub gives the account's permissions with the repository, not the
+    token's, so a read-only fine-grained token passed its test and was refused
+    at the first publish. The test now writes."""
+    fake = FakeGitHub(token_can_write=False)
+    with mock_github(fake):
+        target = make_target(
+            client, auth_headers, "github", {"owner": fake.owner, "repo": fake.repo},
+            token=GOOD_TOKEN,
+        )
+        tested = client.post(f"/api/v1/publishing/targets/{target['id']}/test",
+                             headers=auth_headers)
+    assert tested.status_code == 422
+    detail = tested.json()["detail"]
+    assert "Contents: Read and write" in detail
+    assert "Repository access" in detail
+    assert fake.files("main") == {"README.md": b"# Dashboards\n"}
+
+
+def test_testing_an_empty_repository_starts_it(client, auth_headers):
+    fake = FakeGitHub(empty=True)
+    with mock_github(fake):
+        target = make_target(
+            client, auth_headers, "github", {"owner": fake.owner, "repo": fake.repo},
+            token=GOOD_TOKEN,
+        )
+        tested = client.post(f"/api/v1/publishing/targets/{target['id']}/test",
+                             headers=auth_headers)
+    assert tested.status_code == 200, tested.text
+    assert fake.files("gh-pages") == {".nojekyll": b""}
+    assert any("was empty" in note for note in tested.json()["notes"])
+
+
+def test_an_empty_repository_the_token_may_not_write_to_blames_the_token(
+    client, auth_headers, board
+):
+    """The fault reported: told to add a README when the token was the trouble."""
+    fake = FakeGitHub(empty=True, token_can_write=False)
+    with mock_github(fake):
+        target = make_target(
+            client, auth_headers, "github", {"owner": fake.owner, "repo": fake.repo},
+            token=GOOD_TOKEN,
+        )
+        published = publish(client, auth_headers, board, target, path="census")
+    assert published.status_code == 422
+    detail = published.json()["detail"]
+    assert "Contents: Read and write" in detail
+    assert "README" not in detail
+    # Not tried again on the default branch: the token would be refused there too.
+    assert fake.calls.count(f"PUT /repos/{fake.owner}/{fake.repo}/contents/.nojekyll") == 1
+
+
 def test_pages_that_cannot_be_switched_on_is_a_note_not_a_failure(
     client, auth_headers, board
 ):

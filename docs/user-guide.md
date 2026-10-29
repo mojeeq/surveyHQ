@@ -1993,9 +1993,18 @@ does it again later.
 2. Make a **fine-grained personal access token** (GitHub -> Settings ->
    Developer settings -> Personal access tokens -> Fine-grained tokens) for
    that one repository, with **Contents: Read and write** and **Pages: Read and
-   write**.
+   write**. A permission added to a token starts as **Read-only**, so change
+   those two; nothing else is needed.
 3. Add the destination with the account, the repository and the token. The
    branch is `gh-pages` unless you change it; it is made on the first publish.
+   The test writes to the repository - a scrap GitHub throws away, or for an
+   empty repository its first commit, an empty `.nojekyll` file - because
+   GitHub lets a token read a repository it may not write to.
+
+If the test says GitHub would not let the token write, edit the token on
+GitHub: its **Repository access** must include the repository, and Contents
+must be **Read and write**. Saving keeps the same token, so the destination
+needs no change; test it again.
 
 Pages are committed to that branch, one commit per publish, and the first
 publish switches GitHub Pages on to serve it - if the token may; otherwise the

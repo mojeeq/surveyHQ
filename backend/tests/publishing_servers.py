@@ -44,11 +44,16 @@ class FakeGitHub:
         *,
         empty: bool = False,
         can_push: bool = True,
+        token_can_write: bool = True,
         can_enable_pages: bool = True,
         can_read_pages: bool = True,
     ) -> None:
         self.owner, self.repo = owner, repo
         self.can_push = can_push
+        # A fine-grained token with Contents only readable, or without this
+        # repository: GitHub still reports the account's own permissions on
+        # the repository, and refuses the writes.
+        self.token_can_write = token_can_write
         self.can_enable_pages = can_enable_pages
         self.can_read_pages = can_read_pages
         self.blobs: dict[str, bytes] = {}
@@ -124,7 +129,7 @@ class FakeGitHub:
             if commit is None:
                 return httpx.Response(404, json={"message": "Not Found"})
             return httpx.Response(200, json={"tree": {"sha": commit["tree"]}})
-        if not self.can_push and method in ("POST", "PATCH", "PUT"):
+        if not (self.can_push and self.token_can_write) and method in ("POST", "PATCH", "PUT"):
             return httpx.Response(403, json={"message": "Resource not accessible by personal access token"})
         if rest == "/git/blobs" and method == "POST":
             data = base64.b64decode(body["content"])

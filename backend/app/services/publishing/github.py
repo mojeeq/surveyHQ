@@ -36,6 +36,9 @@ _CANNOT_SEE_PAGES = (
     "give the token 'Pages: Read and write' to have this checked and switched on for you."
 )
 
+# What GitHub answers when it is the token that is wrong, not the request.
+_TOKEN_REFUSED = (401, 403, 404)
+
 # A branch that does not exist yet is started with this beside the pages:
 # without it GitHub runs the branch through Jekyll, which takes longer and
 # drops any file or folder whose name starts with an underscore.
@@ -143,15 +146,21 @@ class GitHubSite(Site):
                 "Make a new one and put it on the destination."
             )
         if response.status_code == 404:
-            return NotReady(f"GitHub has no repository {where}, or this token cannot see it.")
+            return NotReady(
+                f"GitHub has no repository {where}, or this token cannot see it. Check the "
+                "owner and name, and that the token's Repository access includes it."
+            )
         if response.status_code == 403 and response.headers.get("x-ratelimit-remaining") == "0":
             return PublishError(
                 "GitHub's rate limit for this token is used up. Try again in an hour."
             )
         if response.status_code == 403:
             return NotReady(
-                f"GitHub would not let this token {doing} ({said}). A fine-grained token "
-                f"needs 'Contents: Read and write' on {where}."
+                f"GitHub would not let this token {doing} ({said}). Edit the token on GitHub "
+                "(Settings, Developer settings, Personal access tokens): under Repository "
+                f"access include {where}, and give it 'Contents: Read and write', and 'Pages: "
+                "Read and write' to have Pages switched on for you. The token stays the same, "
+                "so nothing needs changing here. A classic token needs the repo scope."
             )
         return PublishError(f"GitHub refused to {doing}: {said or response.status_code}")
 
@@ -172,7 +181,7 @@ class GitHubSite(Site):
                 f"This token can read {self.owner}/{self.repo} but not write to it. Give "
                 "it 'Contents: Read and write' on this repository."
             )
-        notes: list[str] = []
+        notes = self._try_writing()
         if info.get("private"):
             notes.append(
                 "The repository is private, but a GitHub Pages site is public: anyone with "
@@ -192,8 +201,8 @@ class GitHubSite(Site):
         where = f" in {self.folder}/" if self.folder else ""
         return Check(
             message=(
-                f"Connected to {self.owner}/{self.repo}. Pages will be committed to the "
-                f"{self.branch} branch{where}."
+                f"Connected to {self.owner}/{self.repo}, and can write to it. Pages will be "
+                f"committed to the {self.branch} branch{where}."
             ),
             url=self.folder_url(),
             notes=notes,
@@ -255,12 +264,15 @@ class GitHubSite(Site):
         body = {"message": "Start the dashboard site", "content": "", "branch": self.branch}
         url = f"{self._repo_path}/contents/{NO_JEKYLL}"
         response = self._call("PUT", url, json=body)
-        if response.status_code not in (200, 201):
+        if response.status_code not in (200, 201, *_TOKEN_REFUSED):
             # Some servers will not start a repository on a branch that is not
             # its default; started on the default instead, the branch is then
             # made as for any repository that does not have it yet.
             body.pop("branch")
             response = self._call("PUT", url, json=body)
+        if response.status_code in _TOKEN_REFUSED:
+            # The token, not the repository: a README would not help.
+            raise self._fail(response, "write to the repository")
         if response.status_code not in (200, 201):
             raise NotReady(
                 f"{self.owner}/{self.repo} is empty and could not be started "
@@ -268,13 +280,33 @@ class GitHubSite(Site):
                 "publish again."
             )
 
-    def _blob(self, body: bytes) -> str:
+    def _try_writing(self) -> list[str]:
+        """Show the token may write here, which reading the repository does not.
+
+        The `permissions` GitHub gives with the repository are the account's,
+        not the token's: a fine-grained token left without this repository, or
+        with Contents only readable, reads it perfectly well and is refused at
+        the first write - which used to be the first publish. So a blob is
+        written, one no commit points at and GitHub throws away; and an empty
+        repository, which takes no blobs, is given the first commit its first
+        publish would have given it.
+        """
+        if self._head() is _Empty:
+            self._start_repository()
+            return [
+                f"The repository was empty, so it was given its first commit, an empty "
+                f"{NO_JEKYLL} file."
+            ]
+        self._blob(b"SurveyHQ can write here\n", "write to the repository")
+        return []
+
+    def _blob(self, body: bytes, doing: str = "upload the page") -> str:
         response = self._call(
             "POST",
             f"{self._repo_path}/git/blobs",
             json={"content": base64.b64encode(body).decode("ascii"), "encoding": "base64"},
         )
-        return str(self._json(response, "upload the page")["sha"])
+        return str(self._json(response, doing)["sha"])
 
     def _apply_once(self, writes: dict[str, bytes], deletes: list[str], message: str) -> list[str]:
         head = self._head()
