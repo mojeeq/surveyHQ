@@ -46,6 +46,10 @@ redis==5.2.1
 httpx==0.28.1
 tenacity==9.0.0
 
+# --- Publishing dashboards ---------------------------------------------------
+# To a web server reached over SFTP. GitHub Pages goes through httpx above.
+paramiko==3.5.1
+
 # --- Misc --------------------------------------------------------------------
 python-slugify==8.0.4
 Jinja2==3.1.5

@@ -1758,7 +1758,8 @@ already built from it alone.
 
 ### Share links
 
-**Share** lists every address this dashboard is published at, and adds more.
+**Share** lists every address this dashboard is shared at, and adds more. The
+same dialog downloads the board and publishes it to a website - see below.
 
 One board usually goes to several audiences at once - a minister, the field
 supervisors, a donor - and those do not end together. Each gets its own link,
@@ -1907,6 +1908,111 @@ across a page break, folded groups opened for the printing and closed again
 after, and the filters printed as the values they were set to so the figures
 say what they are of. Print to PDF gives a document you can attach or file.
 For Word, print to PDF and place it, or copy a table straight off the page.
+
+### Publishing to a website
+
+A link needs SurveyHQ running and reachable from wherever the reader is. When
+the platform runs on an office network or a laptop - switched off at night,
+behind a firewall - a board can instead be **published**: pushed to GitHub
+Pages or to your own web server, where it stays readable whatever the platform
+is doing.
+
+What is published is the **Web page** download above, exactly: one file, its
+filters working, carrying the numbers each widget shows. Never a row of data -
+the disclosure floor applies as it does to the download - so a board can go
+on a public site while the survey stays inside the office.
+
+**Share -> Publish to a website** does it:
+
+- **To** is the destination: a GitHub Pages site or a web server an
+  administrator has set up (below).
+- **At the address** is the board's folder on that site, its name to begin
+  with: `fieldwork-week` puts it at `https://.../fieldwork-week/`. The full
+  address is shown before you publish. Letters, digits, dashes, dots and
+  underscores, with `/` between folders.
+- **Of** publishes one saved view instead of the whole board, narrowed just as
+  a report for one province is.
+- **Publish again after each import** keeps it current: whenever an import
+  changes the data the board shows, the copy online is rebuilt and pushed as
+  part of that import. The import's report says what was republished, and a
+  destination that cannot be reached is a note there rather than a failed
+  import.
+
+Each published copy is then listed with its address, when it was last
+published, **Publish again** to bring it up to date by hand, **Copy link**,
+and **Unpublish**, which deletes the page from the server. A board can be on
+several sites at once, or on one site twice at different addresses.
+
+**Nothing the platform did not write is overwritten or deleted.** Every page it
+publishes carries a mark in its head. If the address already holds a page
+without that mark - the ministry's own page, an export somebody uploaded by
+hand - publishing stops and asks whether to replace it, and unpublishing leaves
+it where it is.
+
+**A publish that fails leaves the last good copy online.** The list marks it
+**Last publish failed** with the reason, and the address keeps working while
+the fault is fixed.
+
+**Deleting a board takes its published copies down** with it. A copy on a
+server that cannot be reached at that moment is named in the message, to be
+removed there by hand.
+
+A publish of a project that is archived is refused: its data has been
+cleared, and the board would go online empty.
+
+#### Setting up a destination
+
+**Administration -> Publishing -> Add destination**, for an administrator,
+since each destination holds the credentials for somebody else's server. They
+are kept encrypted and never shown again; editing a destination says which are
+kept and replaces one only if you type a new one. Adding a destination tests
+it at once - connecting, then writing and removing a small file - and **Test**
+does it again later.
+
+**GitHub Pages** needs a repository and a token:
+
+1. Make a repository on GitHub for the dashboards, say `dashboards`. Public is
+   simplest; a GitHub Pages site is public even when its repository is
+   private, and private repositories need a paid GitHub plan for Pages.
+2. Make a **fine-grained personal access token** (GitHub -> Settings ->
+   Developer settings -> Personal access tokens -> Fine-grained tokens) for
+   that one repository, with **Contents: Read and write** and **Pages: Read and
+   write**.
+3. Add the destination with the account, the repository and the token. The
+   branch is `gh-pages` unless you change it; it is made on the first publish.
+
+Pages are committed to that branch, one commit per publish, and the first
+publish switches GitHub Pages on to serve it - if the token may; otherwise the
+destination says so, and you switch it on under the repository's **Settings
+-> Pages -> Deploy from a branch -> gh-pages / (root)**. The site is then at
+`https://account.github.io/repository/`, and GitHub takes a minute or so to put
+a new page live. A site with its own domain gives that domain as its **web
+address**; GitHub Enterprise Server gives its **API address** too.
+
+**A web server over SFTP** - a Linux machine running nginx or Apache that you
+reach with SSH. Give the server, the user name, a password or a private key,
+the **folder** the pages go into (`/var/www/html/dashboards`) and the **web
+address** that folder is served at (`https://stats.example.org/dashboards/`),
+which is what makes the links. The first test trusts the server's key and shows
+its fingerprint, to compare with the server's own; every later connection is
+checked against it and refused if it changes. If the server was rebuilt,
+**Forget it** on the destination and test again.
+
+**A web host over FTP** - the shared hosting most organisations' websites sit
+on. The same fields as SFTP. The connection is encrypted (FTPS) and the
+host's certificate checked unless you turn either off; a shared host's
+certificate is often for the hosting company's server name, which is then the
+name to use.
+
+**Keep a list of the published dashboards at the front of the folder** writes
+an `index.html` linking to each board published there, kept up to date as
+boards are published and taken down - so the site's own address is a page
+rather than a 404, and is the one link that goes into a report. It is left
+alone if the folder already has a front page of its own.
+
+A destination with boards published on it cannot be deleted until they are
+unpublished, so nothing is left online that the platform no longer knows
+about.
 
 ### Giving a dashboard its own address
 

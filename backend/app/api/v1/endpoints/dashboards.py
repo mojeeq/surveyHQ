@@ -90,6 +90,7 @@ from app.services import (
     boundary_store,
     export_document,
     multiselect,
+    publishing,
     quality,
     reports,
     snapshots,
@@ -883,6 +884,9 @@ def update_dashboard(
 def delete_dashboard(dashboard_id: str, db: DbSession, user: RequireAnalyst) -> Message:
     dashboard = _get_dashboard(dashboard_id, db, user)
     name = dashboard.name
+    # Its published copies come down with it. A board deleted here and left
+    # on a ministry's website is the one thing nobody deleting it expects.
+    still_online = publishing.take_down_all(db, dashboard)
     remove_all(dashboard.id)
     db.delete(dashboard)
     record(
@@ -891,8 +895,16 @@ def delete_dashboard(dashboard_id: str, db: DbSession, user: RequireAnalyst) -> 
         action="delete_dashboard",
         entity_type="dashboard",
         entity_id=dashboard_id,
+        detail={"still_online": still_online} if still_online else None,
     )
     db.commit()
+    if still_online:
+        return Message(
+            detail=(
+                f"Dashboard '{name}' deleted, but it could not be taken down from "
+                f"{'; '.join(still_online)}. Remove it there by hand."
+            )
+        )
     return Message(detail=f"Dashboard '{name}' deleted")
 
 

@@ -335,6 +335,35 @@ Naming is publishing. The interface says so at the point of naming, and:
 - names live under the configured domain only, and the platform's own hostname
   and a list of reserved labels (`www`, `api`, `admin`, …) cannot be taken.
 
+## Publishing dashboards to other web servers
+
+A dashboard can be published to GitHub Pages or to a web server reached over
+SFTP or FTP (see *Publishing to a website* in the user guide). That is how a
+platform on an office network, or on a laptop, puts boards on a public site:
+the platform pushes the pages out, and nothing has to reach in.
+
+So the only network it needs is **outbound** from the server running the API
+and the worker:
+
+| Destination | Reaches |
+|---|---|
+| GitHub Pages | `api.github.com` on 443 (or your GitHub Enterprise server) |
+| SFTP | the web server's SSH port, usually 22 |
+| FTP / FTPS | port 21 and the host's passive data ports |
+
+No inbound port is opened for it, and the platform can sit behind a firewall
+that allows nothing in at all.
+
+Destinations are set up under **Administration -> Publishing**. Their tokens,
+passwords and keys are encrypted with `ENCRYPTION_KEY`, as Survey Solutions
+passwords are, so changing that key means entering them again. An SFTP
+destination remembers its server's host key from its first test and refuses a
+server that presents a different one.
+
+Publishing to SFTP uses `paramiko`, added to the backend's requirements with
+this feature: `make update` rebuilds the images, and a hand-run install needs
+`pip install -r requirements.txt` again.
+
 ## Firewall
 
 ```bash

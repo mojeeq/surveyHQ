@@ -106,7 +106,7 @@ def test_a_replacement_rebuilds_the_merge_and_says_so(client, auth_headers, db_s
     assert named(db_session, project["id"], "People + Households").row_count == 2
     assert "Rebuilt from the new data: People + Households" in body["warnings"]
     stages = {stage["key"]: stage for stage in body["stages"]}
-    assert list(stages) == ["commands", "merges", "scripts", "refresh"]
+    assert list(stages) == ["commands", "merges", "scripts", "refresh", "publish"]
     assert stages["merges"]["detail"] == "1 rebuilt"
 
 
@@ -336,7 +336,7 @@ def test_a_sync_rebuilds_the_merges_then_runs_the_scripts_and_shows_each_step(
     ], "the script ran over the new export, not the old one"
 
     stages = {stage["key"]: stage for stage in job.stages}
-    assert list(stages) == ["download", "commands", "merges", "scripts", "refresh"]
+    assert list(stages) == ["download", "commands", "merges", "scripts", "refresh", "publish"]
     assert all(stage["status"] in ("done", "skipped") for stage in job.stages), json.dumps(
         job.stages, indent=1
     )

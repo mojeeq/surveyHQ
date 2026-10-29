@@ -5,6 +5,7 @@ import { copyText } from '@/lib/clipboard'
 import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
 import { formatNumber, relativeTime } from '@/lib/format'
+import PublishOnline from '@/components/PublishOnline'
 import { Badge, Field, Modal, Segmented, Spinner } from '@/components/ui'
 import type { Dashboard, DashboardSavedView, Job } from '@/lib/types'
 
@@ -149,7 +150,7 @@ export default function ShareLinks({
     <Modal
       open
       wide
-      title="Share links"
+      title="Share and publish"
       onClose={onClose}
       footer={
         <button className="btn-secondary" onClick={onClose}>
@@ -163,6 +164,8 @@ export default function ShareLinks({
       </p>
 
       <DownloadCopy dashboard={dashboard} />
+
+      <PublishOnline dashboard={dashboard} />
 
       {dashboard.is_public && dashboard.public_token && (
         <LinkRow

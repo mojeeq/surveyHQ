@@ -13,6 +13,7 @@ from app.api.v1.endpoints import (
     monitoring,
     projects,
     public,
+    publishing,
     quality_reports,
     relationships,
     scripts,
@@ -35,8 +36,12 @@ api_router.include_router(geography.router, prefix="/boundaries", tags=["boundar
 # Keep the static chart-library route ahead of the dashboards router, whose
 # /charts/{chart_id} family is more general.
 api_router.include_router(chart_library.router, prefix="/dashboards", tags=["dashboards"])
+api_router.include_router(
+    publishing.dashboard_router, prefix="/dashboards", tags=["publishing"]
+)
 api_router.include_router(dashboards.router, prefix="/dashboards", tags=["dashboards"])
 api_router.include_router(monitoring.router, prefix="/monitoring", tags=["monitoring"])
 api_router.include_router(quality_reports.router, prefix="/monitoring", tags=["monitoring"])
 api_router.include_router(system.router, prefix="/system", tags=["system"])
 api_router.include_router(public.router, prefix="/public", tags=["public"])
+api_router.include_router(publishing.router, prefix="/publishing", tags=["publishing"])
