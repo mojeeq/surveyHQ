@@ -43,7 +43,7 @@ from app.schemas.project import (
     ScriptVariable,
 )
 from app.services import archive as archiving
-from app.services import project_overview, project_script, stata
+from app.services import project_overview, project_script, publishing, stata
 from app.services.audit import record
 from app.services.dashboard_assets import remove_all
 from app.services.datasets import delete_dataset_files
@@ -246,7 +246,9 @@ def delete_project(
         )
         for relationship in relationships:
             db.delete(relationship)
+        still_online: list[str] = []
         for dashboard in dashboards:
+            still_online.extend(publishing.take_down_all(db, dashboard))
             remove_all(dashboard.id)
             db.delete(dashboard)
 
@@ -285,6 +287,11 @@ def delete_project(
             f"Project '{name}' deleted, with {removed['datasets']} dataset(s), "
             f"{removed['dashboards']} dashboard(s) and everything built on them"
         )
+        if still_online:
+            summary += (
+                f". Some published copies could not be taken down: {'; '.join(still_online)}. "
+                "Remove them there by hand"
+            )
     else:
         removed = {}
         summary = f"Project '{name}' deleted; its data moved to the shared area"

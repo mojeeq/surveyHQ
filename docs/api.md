@@ -498,6 +498,55 @@ Filter conditions sent to `/data` are applied per widget: each one receives only
 the conditions its own dataset has variables for, and reports the rest in
 `filters_ignored`.
 
+### Publishing
+
+A dashboard published to GitHub Pages or a web server is the HTML export, pushed
+there and kept up to date. Destinations hold credentials for somebody else's
+server, so only an administrator sets them up; anybody who may share a
+dashboard may publish it.
+
+```
+GET    /publishing/targets                every destination, without secrets   [analyst]
+POST   /publishing/targets                {"name", "kind": "github"|"sftp"|"ftp",
+                                          "settings": {...}, "token" | "password" |
+                                          "private_key" + "passphrase"}          [admin]
+PATCH  /publishing/targets/{id}           a secret left empty is kept;
+                                          "forget_host_key": true for a rebuilt
+                                          SSH server                              [admin]
+DELETE /publishing/targets/{id}           refused (409) while anything is
+                                          published there                        [admin]
+POST   /publishing/targets/{id}/test      connect, write and remove a file; the
+                                          first test of an SFTP server trusts
+                                          its key                                [admin]
+
+GET    /dashboards/{id}/publications       where this board is published
+POST   /dashboards/{id}/publications       {"target_id", "path"?, "view_id"?,
+                                          "auto_republish"?, "replace_existing"?}
+                                          publishes it; 409 when another page is
+                                          at that address                       [analyst]
+PATCH  /dashboards/{id}/publications/{p}   {"auto_republish": true|false}        [analyst]
+POST   /dashboards/{id}/publications/{p}/publish
+                                          publish again, as the board is now     [analyst]
+DELETE /dashboards/{id}/publications/{p}?keep_files=false
+                                          take the page down; keep_files=true
+                                          forgets it without touching the server [analyst]
+```
+
+Settings by kind:
+
+- `github`: `owner`, `repo`, `branch` (default `gh-pages`), `folder`,
+  `site_url` (a custom domain), `api_url` (GitHub Enterprise),
+  `contents_page`.
+- `sftp`: `host`, `port` (22), `username`, `auth` (`password` or `key`),
+  `folder`, `site_url` (the address `folder` is served at), `contents_page`.
+- `ftp`: `host`, `port` (21), `username`, `folder`, `site_url`, `tls`
+  (default true), `verify_tls` (default true), `contents_page`.
+
+A failed publish answers 502 when the server refused or could not be reached,
+422 when the destination needs something done first, and 409 when the address
+holds a page this platform did not write. The page that was online before stays
+online.
+
 ### Boundaries
 
 Areas a map draws under its points: provinces, districts, enumeration areas.

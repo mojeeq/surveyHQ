@@ -147,7 +147,7 @@ def test_nothing_rebuilds_merges_beside_the_pipeline(source: Path, function: str
     )
 
 
-def test_the_pipeline_replays_then_merges_then_scripts_then_dashboards():
+def test_the_pipeline_replays_then_merges_then_scripts_then_dashboards_then_publishes():
     """Order, not merely presence.
 
     A merge standing on a generated variable cannot be rebuilt until the
@@ -160,8 +160,11 @@ def test_the_pipeline_replays_then_merges_then_scripts_then_dashboards():
     replay = inside.index("stata.replay(db, dataset)")
     merges = inside.index("rebuild_merges(db, changed)")
     scripts = inside.index("project_script.rerun_for(db, standing)")
-    boards = inside.index("_dashboards_on(db, affected)")
-    assert replay < merges < scripts < boards
+    boards = inside.index("_boards_on(db, affected)")
+    # And the copies published elsewhere are brought up to date last, from
+    # the boards named above - the step that reads everything the rest wrote.
+    published = inside.index("publishing.republish_after_import(db, set(boards))")
+    assert replay < merges < scripts < boards < published
 
 
 def test_publishing_a_reviewed_import_replays_before_it_counts():

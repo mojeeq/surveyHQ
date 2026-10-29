@@ -52,6 +52,7 @@ from app.models.project import (
     ProjectScript,
     ProjectStatus,
 )
+from app.models.publishing import Publication, PublishKind, PublishTarget
 from app.models.relationship import (
     Cardinality,
     DatasetRelationship,
@@ -121,4 +122,7 @@ __all__ = [
     "DatasetRelationship",
     "Cardinality",
     "KeyMatch",
+    "Publication",
+    "PublishKind",
+    "PublishTarget",
 ]

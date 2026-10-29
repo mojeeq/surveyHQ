@@ -48,7 +48,7 @@ from app.models import (
     ProjectScript,
     Widget,
 )
-from app.services import preferences, project_script, stata
+from app.services import preferences, project_script, publishing, stata
 from app.services.derived import MergeOutcome, rebuild_merges
 
 logger = get_logger(__name__)
@@ -59,6 +59,7 @@ AFTER_IMPORT = [
     ("merges", "Rebuild merged datasets"),
     ("scripts", "Run project scripts"),
     ("refresh", "Update indicators and dashboards"),
+    ("publish", "Republish dashboards online"),
 ]
 
 
@@ -154,6 +155,8 @@ class Aftermath:
     dashboards: list[str] = field(default_factory=list)
     # The datasets the re-run scripts wrote, by name.
     script_outputs: list[str] = field(default_factory=list)
+    # The published copies brought up to date, on GitHub Pages or a web server.
+    republished: list[Any] = field(default_factory=list)
 
     @property
     def rebuilt(self) -> list[str]:
@@ -175,6 +178,18 @@ class Aftermath:
         lines.extend(self.warnings)
         if self.dashboards:
             lines.append("Showing the new data: " + ", ".join(sorted(self.dashboards)))
+        done = [one for one in self.republished if one.ok]
+        if done:
+            lines.append(
+                "Republished online: "
+                + ", ".join(f"{one.dashboard} ({one.url or one.target})" for one in done)
+            )
+        lines.extend(
+            f"'{one.dashboard}' could not be republished to {one.target}, so the copy there "
+            f"still shows the data before this import: {one.error}"
+            for one in self.republished
+            if not one.ok
+        )
         return lines
 
 
@@ -292,13 +307,36 @@ def after_import(
     progress.start(db, "refresh")
     affected = set(standing) | {i for r in outcome.reruns if r.ran for i in r.written}
     outcome.indicators = _indicators_on(db, affected)
-    outcome.dashboards = _dashboards_on(db, affected)
+    boards = _boards_on(db, affected)
+    outcome.dashboards = sorted(boards.values())
     progress.finish(
         db,
         "refresh",
         _refresh_summary(outcome.indicators, outcome.dashboards),
         status="done" if outcome.indicators or outcome.dashboards else "skipped",
         items=[{"name": name, "status": "updated"} for name in sorted(outcome.dashboards)],
+    )
+
+    # 5. The copies of those boards published elsewhere, for the ones set to
+    # follow the data. A web server that is down is a note on the import, not
+    # a failed import: the data is in, and the copy online keeps showing what
+    # it showed until the next publish reaches it.
+    progress.start(db, "publish")
+    outcome.republished = publishing.republish_after_import(db, set(boards))
+    failed = [one for one in outcome.republished if not one.ok]
+    progress.finish(
+        db,
+        "publish",
+        _publish_summary(outcome.republished),
+        status="skipped" if not outcome.republished else "warning" if failed else "done",
+        items=[
+            {
+                "name": f"{one.dashboard} on {one.target}",
+                "status": "published" if one.ok else "failed",
+                "detail": one.error or one.url,
+            }
+            for one in outcome.republished
+        ],
     )
     return outcome
 
@@ -386,10 +424,20 @@ def _indicators_on(db: Session, dataset_ids: set[str]) -> int:
     )
 
 
-def _dashboards_on(db: Session, dataset_ids: set[str]) -> list[str]:
-    """The dashboards with a widget reading any of these datasets."""
+def _publish_summary(republished: list[Any]) -> str:
+    if not republished:
+        return "No published copy of these dashboards is set to follow the data"
+    ok = sum(1 for one in republished if one.ok)
+    said = f"{ok} published {'copy' if ok == 1 else 'copies'} brought up to date"
+    if len(republished) - ok:
+        said += f", {len(republished) - ok} failed"
+    return said
+
+
+def _boards_on(db: Session, dataset_ids: set[str]) -> dict[str, str]:
+    """The dashboards with a widget reading any of these datasets, id to name."""
     if not dataset_ids:
-        return []
+        return {}
     charts = set(db.scalars(select(Chart.id).where(Chart.dataset_id.in_(dataset_ids))).all())
     indicators = set(
         db.scalars(select(Indicator.id).where(Indicator.dataset_id.in_(dataset_ids))).all()
@@ -403,5 +451,10 @@ def _dashboards_on(db: Session, dataset_ids: set[str]) -> list[str]:
         ):
             boards.add(widget.dashboard_id)
     if not boards:
-        return []
-    return sorted(db.scalars(select(Dashboard.name).where(Dashboard.id.in_(boards))).all())
+        return {}
+    return {
+        row[0]: row[1]
+        for row in db.execute(
+            select(Dashboard.id, Dashboard.name).where(Dashboard.id.in_(boards))
+        ).all()
+    }
