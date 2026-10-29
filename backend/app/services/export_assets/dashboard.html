@@ -133,6 +133,11 @@
      third of a page of nothing, which is what an exported board full of
      counters looked like. */
   .card > .body.middle { display: flex; flex-direction: column; justify-content: center; }
+  /* A tile with its groups drawn under the number: the chart takes what the
+     number leaves, as on the platform. Sized to the whole body it ran past
+     the foot of the card, its axis out of sight. */
+  .card > .body.stack { display: flex; flex-direction: column; }
+  .card > .body.stack > .chart { flex: 1; height: auto; margin-top: 12px; }
   .track { height: 8px; border-radius: 999px; background: var(--ink-100); overflow: hidden; margin-top: 10px; }
   .track > div { height: 100%; border-radius: 999px; }
   /* A widget somebody painted a dark colour. Everything inside reads its ink
@@ -252,6 +257,38 @@
       splitLine: { show: false },
     }
   }
+  /** The words of a name on at most two lines of about this many characters,
+      cut after the second so it cannot run into the next. The platform's own
+      rule, word for word. */
+  function twoLines(text, perLine) {
+    var lines = []
+    var line = ''
+    text.split(/\s+/).filter(Boolean).forEach(function (word) {
+      var next = line ? line + ' ' + word : word
+      if (next.length <= perLine || !line) { line = next; return }
+      lines.push(line)
+      line = word
+    })
+    if (line) lines.push(line)
+    if (lines.length <= 2) return lines.join('\n')
+    var second = lines.slice(1).join(' ')
+    return lines[0] + '\n' + second.slice(0, Math.max(1, perLine - 1)).replace(/\s+$/, '') + '\u2026'
+  }
+
+  /* Names down the side of a chart, held to `room` pixels: cut with an
+     ellipsis, or wrapped onto two lines first where the widget asks for that.
+     Left to themselves they take whatever they ask for, and nine long answers
+     to "main activity" took the whole card and left the bars a sliver at its
+     right edge. The tooltip still carries the whole name. */
+  function sideLabel(room, wrap) {
+    if (!wrap) return { width: room, overflow: 'truncate' }
+    var perLine = Math.max(8, Math.floor(room / (FACE.fontSize * 0.56)))
+    return {
+      width: room, overflow: 'truncate', lineHeight: Math.round(FACE.fontSize * 1.2),
+      formatter: function (value) { return twoLines(String(value), perLine) },
+    }
+  }
+
   function valueAxis() {
     return {
       type: 'value',
@@ -802,6 +839,11 @@
       ? Math.floor((width - axisGutter - 32) / built.categories.length) : 0
     var category = categoryAxis(built.categories)
     if (rotated) category.axisLabel.rotate = 30
+    // Down the side, the names get a third of the chart and the bars the
+    // other two thirds - the platform's share.
+    if (horizontal && width) {
+      Object.assign(category.axisLabel, sideLabel(Math.round(width / 3), display.wrapLabels))
+    }
     // A turned label is not bounded by its own slot - it runs diagonally under
     // its neighbour's - so cutting it to that width would shorten a name the
     // axis had room for. Below 44px the axis' own thinning is the better of
@@ -1338,7 +1380,7 @@
    */
   function drawIndicatorBody(body, widget, spec, value, breakdown) {
     var status = indicatorStatus(spec, value)
-    if (!breakdown.length) body.className += ' middle'
+    body.className += breakdown.length ? ' stack' : ' middle'
     body.appendChild(el('p', 'kpi', formatValue(value, spec.value_format, spec.unit)))
     if (spec.target_value) {
       var track = el('div', 'track')
@@ -1447,8 +1489,15 @@
               bar('Over target', part('over'), '#16a34a'),
             ]
       }
-      instance.setOption(option)
-      drawn.push({ chart: instance, refit: function () {} })
+      // The groups' names get a third of the chart, as on any bar chart lying
+      // on its side. The host has no width until the page is laid out, so
+      // this is set again from the real one on the layout pass.
+      var paint = function () {
+        if (host.clientWidth) option.yAxis.axisLabel = sideLabel(Math.round(host.clientWidth / 3), false)
+        instance.setOption(option)
+      }
+      paint()
+      drawn.push({ chart: instance, refit: paint })
     }
   }
 
