@@ -61,20 +61,26 @@
   .tabs button[aria-selected="true"] {
     color: var(--brand); border-bottom-color: var(--brand); font-weight: 600;
   }
+  /* At the size of the platform's own filter bar: 13px labels beside 32px
+     dropdowns, with room between the controls. */
   .filters {
-    display: flex; flex-wrap: wrap; align-items: center; gap: 14px;
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px 24px;
     background: var(--surface); border: 1px solid var(--ink-200);
-    border-radius: 3px; padding: 10px 12px; margin: 0 16px;
+    border-radius: 3px; padding: 10px 16px; margin: 0 16px;
   }
-  .filters label { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--ink-700); }
+  .filters label {
+    display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500;
+    color: var(--ink-700);
+  }
   .filters select {
-    font: inherit; font-size: 12px; padding: 4px 6px; border-radius: 6px;
-    border: 1px solid var(--ink-200); background: #fff; min-width: 150px;
+    font: inherit; font-size: 13px; font-weight: 400; height: 32px; padding: 0 10px;
+    border-radius: 8px; border: 1px solid #cbd5e1; background: #fff; color: var(--ink-900);
+    min-width: 192px;
   }
-  .filters .clear { border: 0; background: none; color: var(--brand); font: inherit; font-size: 12px; cursor: pointer; }
+  .filters .clear { border: 0; background: none; color: var(--brand); font: inherit; font-size: 13px; cursor: pointer; }
   .filters input[type=date] {
-    font: inherit; font-size: 12px; padding: 3px 6px; border-radius: 6px;
-    border: 1px solid var(--ink-200); background: #fff;
+    font: inherit; font-size: 13px; font-weight: 400; height: 32px; padding: 0 8px;
+    border-radius: 8px; border: 1px solid #cbd5e1; background: #fff; color: var(--ink-900);
   }
   /* Screen has the control itself; see the print rules at the foot. */
   .filters .printed { display: none; }
@@ -153,7 +159,7 @@
   /* A data quality panel, as the platform draws it: what passed and what never
      ran as counts, then each failing check as a pane of its own that glows in
      the colour of how much it matters - red when critical, amber for a
-     warning, blue for information - or one green pane, glowing too, when
+     warning or for information - or one green pane, glowing too, when
      nothing failed. The panes carry their own colours, so they read the same
      on a card somebody painted dark. The list is given room round its edges
      for the glow, which a box that scrolls would otherwise clip, and takes it
@@ -194,12 +200,6 @@
   }
   .check.warning .why { color: rgba(120, 53, 15, 0.9); }
   .check.warning .rate { border-color: #fcd34d; background: #fef3c7; color: #92400e; }
-  .check.info {
-    --rail: #0284c7; --glow: 2, 132, 199;
-    background: #f0f9ff; border-color: #7dd3fc; color: #082f49;
-  }
-  .check.info .why { color: rgba(12, 74, 110, 0.9); }
-  .check.info .rate { border-color: #7dd3fc; background: #e0f2fe; color: #075985; }
   .check.ok {
     --rail: #059669; --glow: 16, 185, 129;
     background: #ecfdf5; border-color: rgba(110, 231, 183, 0.7); color: #064e3b;
@@ -1642,8 +1642,9 @@
     }
     var list = el('ul', 'checks')
     failing.forEach(function (check) {
-      // A severity this file does not know reads as a warning, the default.
-      var level = rank[check.severity] === undefined ? 'warning' : check.severity
+      // Red when critical; amber for anything less, and for a severity this
+      // file does not know.
+      var level = check.severity === 'critical' ? 'critical' : 'warning'
       var pane = el('li', 'check ' + level)
       var head = el('div', 'head')
       head.appendChild(el('p', 'name', check.name))
