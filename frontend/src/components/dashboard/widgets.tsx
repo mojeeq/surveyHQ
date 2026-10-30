@@ -31,8 +31,10 @@ import {
   countResult,
   mixColours,
   mixResult,
+  failingBySeverity,
   qualityChartType,
   rateResult,
+  severityPane,
   topChecks,
   trendResult,
   worstFirst,
@@ -282,7 +284,7 @@ export function QualityWidget({
   theme: string;
   display?: BuildOptions;
 }) {
-  const failing = payload.checks.filter((c: any) => c.passed === false);
+  const failing = failingBySeverity(payload.checks);
   const stale = payload.oldest_run_at;
   const charted = CHARTED_VIEWS.has(view);
   const chartType = qualityChartType(view, chart);
@@ -434,15 +436,19 @@ export function QualityWidget({
         // negative margin so nothing moves: a list that scrolls clips whatever
         // is drawn outside it, and the halo came out as a shadow underneath.
         <ul className="-mx-3 -mt-2 min-h-0 flex-1 space-y-3 overflow-auto px-3 pb-3 pt-2">
-          {/* Each failing check glows red. White like the rest of the board,
-              a failure was the last thing on it anybody noticed. */}
-          {failing.map((check: any) => (
+          {/* Each failing check glows in the colour of how much it matters -
+              red, amber or blue - and a clean bill glows green. White like
+              the rest of the board, a failure was the last thing on it
+              anybody noticed. */}
+          {failing.map((check: any) => {
+            const look = severityPane(check);
+            return (
             <li
               key={check.id}
-              className="aero-pane aero-pane-bad px-3 py-2 pl-4"
+              className={`aero-pane aero-pane-glow px-3 py-2 pl-4 ${look.pane}`}
             >
               <div className="flex items-start justify-between gap-2">
-                <p className="min-w-0 font-medium text-red-900 dark:text-red-100">
+                <p className={`min-w-0 font-medium ${look.name}`}>
                   {check.name}
                 </p>
                 {/* The number the check turns on, where the eye lands after
@@ -450,7 +456,7 @@ export function QualityWidget({
                     out of the middle of a sentence is slower than reading it
                     off the right-hand edge of every box in the column. */}
                 {check.failure_rate > 0 && (
-                  <span className="chip shrink-0 border-red-300 bg-red-100 font-semibold tabular-nums text-red-700 dark:border-red-500/40 dark:bg-red-500/20 dark:text-red-200">
+                  <span className={`chip shrink-0 font-semibold tabular-nums ${look.chip}`}>
                     {(check.failure_rate * 100).toFixed(
                       check.failure_rate < 0.01 ? 2 : 0,
                     )}
@@ -458,19 +464,20 @@ export function QualityWidget({
                   </span>
                 )}
               </div>
-              <p className="mt-0.5 text-[0.87em] text-red-800/90 dark:text-red-200/80">
+              <p className={`mt-0.5 text-[0.87em] ${look.message}`}>
                 {check.message}
               </p>
               {payload.filtered && check.total_rows > 0 && (
-                <p className="mt-0.5 text-[0.8em] text-red-700/80 dark:text-red-200/70">
+                <p className={`mt-0.5 text-[0.8em] ${look.message}`}>
                   {formatNumber(check.failed_rows)} of{" "}
                   {formatNumber(check.total_rows)} rows in view
                 </p>
               )}
             </li>
-          ))}
+            );
+          })}
           {!failing.length && (
-            <li className="aero-pane aero-pane-ok px-3 py-2 pl-4 text-emerald-600">
+            <li className="aero-pane aero-pane-ok aero-pane-glow px-3 py-2 pl-4 text-emerald-600 dark:text-emerald-400">
               <p className="font-medium text-emerald-900 dark:text-emerald-200">
                 Every active check passed
               </p>

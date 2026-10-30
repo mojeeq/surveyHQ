@@ -3,11 +3,14 @@ import { describe, expect, it } from "vitest";
 import {
   CHECK_COLOURS,
   QUALITY_CHARTS,
+  SEVERITY_PANES,
   countResult,
+  failingBySeverity,
   mixColours,
   mixResult,
   qualityChartType,
   rateResult,
+  severityPane,
   topChecks,
   trendResult,
   worstFirst,
@@ -163,5 +166,35 @@ describe("a limit that is not a whole number of checks", () => {
     expect(
       topChecks(CHECKS, (check) => check.failed_rows, 2.7).map((c) => c.name),
     ).toEqual(["Too fast", "Duplicate key"]);
+  });
+});
+
+describe("a failing check in a panel's list", () => {
+  const checks = [
+    { id: "w1", name: "Missing GPS", passed: false, severity: "warning" },
+    { id: "i1", name: "Late upload", passed: false, severity: "info" },
+    { id: "ok", name: "Age in range", passed: true, severity: "critical" },
+    { id: "c1", name: "Duplicate key", passed: false, severity: "critical" },
+    { id: "w2", name: "Too fast", passed: false, severity: "warning" },
+  ];
+
+  it("lists the critical ones first, then warnings, then information", () => {
+    expect(failingBySeverity(checks).map((check) => check.id)).toEqual([
+      "c1",
+      "w1",
+      "w2",
+      "i1",
+    ]);
+  });
+
+  it("is red when critical, amber when a warning and blue for information", () => {
+    expect(severityPane({ severity: "critical" }).pane).toContain("aero-pane-bad");
+    expect(severityPane({ severity: "warning" }).pane).toContain("aero-pane-warn");
+    expect(severityPane({ severity: "info" }).pane).toContain("aero-pane-info");
+  });
+
+  it("reads as a warning, the default, when its severity is not known", () => {
+    expect(severityPane({})).toBe(SEVERITY_PANES.warning);
+    expect(severityPane({ severity: "dire" })).toBe(SEVERITY_PANES.warning);
   });
 });
