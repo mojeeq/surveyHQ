@@ -593,6 +593,23 @@
   .dark .aero-pane-ok {
     box-shadow: inset 3px 0 0 currentColor;
   }
+  /* A check that failed. The one state that is lit: a red halo round the
+     pane as well as the rail, because a failing check is the thing a quality
+     panel is on the wall to show, and drawn in the same white as everything
+     else on the board it was the last thing anybody noticed. */
+  .aero-pane-bad {
+    @apply border-red-300 bg-red-50 dark:border-red-500/50 dark:bg-red-500/10;
+    box-shadow:
+      inset 3px 0 0 theme('colors.red.600'),
+      0 0 0 1px rgb(220 38 38 / 0.18),
+      0 0 12px 1px rgb(220 38 38 / 0.35);
+  }
+  .dark .aero-pane-bad {
+    box-shadow:
+      inset 3px 0 0 theme('colors.red.400'),
+      0 0 0 1px rgb(248 113 113 / 0.25),
+      0 0 14px 1px rgb(248 113 113 / 0.35);
+  }
 }
 
 @keyframes fade-in {
