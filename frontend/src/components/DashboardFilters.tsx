@@ -58,13 +58,15 @@ export default function DashboardFilters({
 }) {
   if (!controls.length) return null
 
-  // A filter bar is chrome, not content: it should cost the dashboard as
-  // little vertical room as it can and still be operable. Label and control
-  // sit on one line rather than stacked, which halves the height, and the
-  // whole row wraps when there are more filters than fit.
+  // A filter bar is chrome, not content: label and control sit on one line
+  // rather than stacked, and the whole row wraps when there are more filters
+  // than fit. It is drawn at the size of the board's other controls, though.
+  // Squeezed to the small one - 12px labels, 28px dropdowns in a tight strip -
+  // it read as an afterthought under the tabs, and it is the thing a reader
+  // reaches for first.
   return (
     <div
-      className="mb-3 flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-card border border-ink-200 px-2.5 py-1.5"
+      className="mb-4 flex flex-wrap items-center gap-x-6 gap-y-2.5 rounded-card border border-ink-200 px-4 py-2.5"
       style={{ backgroundColor: background || '#ffffff' }}
     >
       {controls.map((control) =>
@@ -89,7 +91,7 @@ export default function DashboardFilters({
       )}
       {Object.values(value).some(Boolean) && (
         <button
-          className="btn-ghost btn-xs text-ink-500"
+          className="btn-ghost btn-sm text-ink-500"
           style={labelColor ? { color: labelColor } : undefined}
           onClick={() => onChange({})}
         >
@@ -128,7 +130,7 @@ function FilterControlInput({
 
   const name = control.label || control.variable
   return (
-    <label className="flex items-center gap-1.5 text-xs text-ink-600">
+    <label className="flex items-center gap-2 text-[13px] text-ink-600">
       <span
         className="whitespace-nowrap font-medium"
         // The label only. The dropdown beside it keeps its own ink, because it
@@ -138,7 +140,7 @@ function FilterControlInput({
         {name}
       </span>
       <select
-        className="input input-sm w-36"
+        className="input w-48"
         aria-label={name}
         value={value}
         onChange={(event) => onChange(event.target.value)}
@@ -176,7 +178,7 @@ function DateRangeInput({
   const custom = Boolean(value) && !isPreset(value)
   const { from, to } = rangeParts(value)
   return (
-    <div className="flex flex-wrap items-center gap-1.5 text-xs text-ink-600">
+    <div className="flex flex-wrap items-center gap-2 text-[13px] text-ink-600">
       <span
         className="whitespace-nowrap font-medium"
         style={labelColor ? { color: labelColor } : undefined}
@@ -184,7 +186,7 @@ function DateRangeInput({
         {name}
       </span>
       <select
-        className="input input-sm w-36"
+        className="input w-48"
         aria-label={name}
         value={custom ? 'custom' : choiceOf(value)}
         onChange={(event) => {
@@ -211,7 +213,7 @@ function DateRangeInput({
         <>
           <input
             type="date"
-            className="input input-sm w-36"
+            className="input w-40"
             aria-label={`${name} from`}
             value={from}
             max={to || undefined}
@@ -220,7 +222,7 @@ function DateRangeInput({
           <span>to</span>
           <input
             type="date"
-            className="input input-sm w-36"
+            className="input w-40"
             aria-label={`${name} to`}
             value={to}
             min={from || undefined}

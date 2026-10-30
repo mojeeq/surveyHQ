@@ -187,10 +187,10 @@ describe("a failing check in a panel's list", () => {
     ]);
   });
 
-  it("is red when critical, amber when a warning and blue for information", () => {
+  it("is red when critical, and amber for a warning or information", () => {
     expect(severityPane({ severity: "critical" }).pane).toContain("aero-pane-bad");
     expect(severityPane({ severity: "warning" }).pane).toContain("aero-pane-warn");
-    expect(severityPane({ severity: "info" }).pane).toContain("aero-pane-info");
+    expect(severityPane({ severity: "info" })).toBe(SEVERITY_PANES.warning);
   });
 
   it("reads as a warning, the default, when its severity is not known", () => {

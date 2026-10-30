@@ -593,22 +593,15 @@
   .dark .aero-pane-ok {
     box-shadow: inset 3px 0 0 currentColor;
   }
-  /* A check that failed critically, and one that failed for information.
-     Amber, for a warning, is the pane above. */
+  /* A check that failed critically. Anything less is the amber pane above. */
   .aero-pane-bad {
     @apply border-red-300 bg-red-50 dark:border-red-500/50 dark:bg-red-500/10;
-    box-shadow: inset 3px 0 0 currentColor;
-  }
-  .aero-pane-info {
-    @apply border-sky-300 bg-sky-50 dark:border-sky-500/50 dark:bg-sky-500/10;
     box-shadow: inset 3px 0 0 currentColor;
   }
   .aero-pane-warn { --pane-glow: 245 158 11; }
   .aero-pane-ok { --pane-glow: 16 185 129; }
   .aero-pane-bad { --pane-glow: 220 38 38; }
-  .aero-pane-info { --pane-glow: 2 132 199; }
   .dark .aero-pane-bad { --pane-glow: 248 113 113; }
-  .dark .aero-pane-info { --pane-glow: 56 189 248; }
   /* A pane that is lit: a halo in its own colour round it as well as the
      rail. For the findings of a data quality panel, which is on the wall to
      show them - drawn in the same white as everything else on the board, a

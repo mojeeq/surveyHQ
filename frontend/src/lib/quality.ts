@@ -24,8 +24,9 @@ export const checkState = (check: any) =>
 
 /**
  * How a failing check is painted in a panel's list, by how much it matters:
- * red for critical, amber for a warning, blue for information. Each pane
- * glows in its own colour; the pane's text colour is what draws its rail.
+ * red when critical, amber for anything less - a warning or a note for
+ * information. Each pane glows in its own colour; the pane's text colour is
+ * what draws its rail.
  *
  * Whole class names rather than a colour put together, because Tailwind only
  * keeps the classes it can read whole in the source.
@@ -46,15 +47,10 @@ export const SEVERITY_PANES: Record<
     message: "text-amber-900/90 dark:text-amber-200/80",
     chip: "border-amber-300 bg-amber-100 text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/20 dark:text-amber-200",
   },
-  info: {
-    pane: "aero-pane-info text-sky-600 dark:text-sky-400",
-    name: "text-sky-950 dark:text-sky-100",
-    message: "text-sky-900/90 dark:text-sky-200/80",
-    chip: "border-sky-300 bg-sky-100 text-sky-800 dark:border-sky-500/40 dark:bg-sky-500/20 dark:text-sky-200",
-  },
 };
 
-/** A check of a severity this does not know reads as a warning, the default. */
+/** Red for a critical check; amber for a warning, for information, and for
+ *  a severity this does not know. */
 export const severityPane = (check: any) =>
   SEVERITY_PANES[check.severity] ?? SEVERITY_PANES.warning;
 
