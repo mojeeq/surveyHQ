@@ -23,6 +23,61 @@ export const checkState = (check: any) =>
   check.passed === false ? "failing" : check.passed ? "passing" : "not run";
 
 /**
+ * How a failing check is painted in a panel's list, by how much it matters:
+ * red for critical, amber for a warning, blue for information. Each pane
+ * glows in its own colour; the pane's text colour is what draws its rail.
+ *
+ * Whole class names rather than a colour put together, because Tailwind only
+ * keeps the classes it can read whole in the source.
+ */
+export const SEVERITY_PANES: Record<
+  string,
+  { pane: string; name: string; message: string; chip: string }
+> = {
+  critical: {
+    pane: "aero-pane-bad text-red-600 dark:text-red-400",
+    name: "text-red-900 dark:text-red-100",
+    message: "text-red-800/90 dark:text-red-200/80",
+    chip: "border-red-300 bg-red-100 text-red-700 dark:border-red-500/40 dark:bg-red-500/20 dark:text-red-200",
+  },
+  warning: {
+    pane: "aero-pane-warn text-amber-500 dark:text-amber-400",
+    name: "text-amber-950 dark:text-amber-100",
+    message: "text-amber-900/90 dark:text-amber-200/80",
+    chip: "border-amber-300 bg-amber-100 text-amber-800 dark:border-amber-500/40 dark:bg-amber-500/20 dark:text-amber-200",
+  },
+  info: {
+    pane: "aero-pane-info text-sky-600 dark:text-sky-400",
+    name: "text-sky-950 dark:text-sky-100",
+    message: "text-sky-900/90 dark:text-sky-200/80",
+    chip: "border-sky-300 bg-sky-100 text-sky-800 dark:border-sky-500/40 dark:bg-sky-500/20 dark:text-sky-200",
+  },
+};
+
+/** A check of a severity this does not know reads as a warning, the default. */
+export const severityPane = (check: any) =>
+  SEVERITY_PANES[check.severity] ?? SEVERITY_PANES.warning;
+
+const SEVERITY_ORDER: Record<string, number> = { critical: 0, warning: 1, info: 2 };
+
+/**
+ * Failing checks, the critical ones first, then warnings, then information;
+ * in the order they came within each. A red pane under three amber ones is a
+ * red pane somebody has to scroll to.
+ */
+export function failingBySeverity(checks: any[]): any[] {
+  return checks
+    .filter((check) => check.passed === false)
+    .map((check, at) => ({ check, at }))
+    .sort(
+      (a, b) =>
+        (SEVERITY_ORDER[a.check.severity] ?? 1) - (SEVERITY_ORDER[b.check.severity] ?? 1) ||
+        a.at - b.at,
+    )
+    .map(({ check }) => check);
+}
+
+/**
  * What a quality panel can plot, in the order the picker offers them.
  *
  * Named once because two places ask the question: the widget dialog, and the

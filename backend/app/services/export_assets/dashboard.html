@@ -150,6 +150,61 @@
     --ink-100: rgba(255,255,255,.14); --ink-50: rgba(255,255,255,.10);
     --surface: rgba(255,255,255,.06);
   }
+  /* A data quality panel, as the platform draws it: what passed and what never
+     ran as counts, then each failing check as a pane of its own that glows in
+     the colour of how much it matters - red when critical, amber for a
+     warning, blue for information - or one green pane, glowing too, when
+     nothing failed. The panes carry their own colours, so they read the same
+     on a card somebody painted dark. The list is given room round its edges
+     for the glow, which a box that scrolls would otherwise clip, and takes it
+     back with a negative margin. */
+  .counts { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .counts span {
+    font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 6px;
+    background: var(--ink-100); color: var(--ink-700); border: 1px solid var(--ink-200);
+  }
+  .counts span.never { background: #fffbeb; color: #92400e; border-color: #fcd34d; }
+  .checks {
+    list-style: none; margin: -8px -12px 0; padding: 8px 12px 12px;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .check {
+    border: 1px solid; border-radius: 3px; padding: 8px 12px 8px 16px;
+    /* The rail, the ring and the halo, each in the pane's own colour. */
+    box-shadow: inset 3px 0 0 var(--rail), 0 0 0 1px rgba(var(--glow), 0.18),
+      0 0 12px 1px rgba(var(--glow), 0.35);
+  }
+  .check p { margin: 0; }
+  .check .head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+  .check .name { font-weight: 500; min-width: 0; }
+  .check .why { margin-top: 2px; font-size: 0.87em; }
+  .check .rate {
+    flex-shrink: 0; font-size: 0.8em; font-weight: 600; font-variant-numeric: tabular-nums;
+    padding: 0 6px; border-radius: 6px; border: 1px solid;
+  }
+  .check.critical {
+    --rail: #dc2626; --glow: 220, 38, 38;
+    background: #fef2f2; border-color: #fca5a5; color: #7f1d1d;
+  }
+  .check.critical .why { color: rgba(153, 27, 27, 0.9); }
+  .check.critical .rate { border-color: #fca5a5; background: #fee2e2; color: #b91c1c; }
+  .check.warning {
+    --rail: #f59e0b; --glow: 245, 158, 11;
+    background: #fffbeb; border-color: rgba(252, 211, 77, 0.7); color: #451a03;
+  }
+  .check.warning .why { color: rgba(120, 53, 15, 0.9); }
+  .check.warning .rate { border-color: #fcd34d; background: #fef3c7; color: #92400e; }
+  .check.info {
+    --rail: #0284c7; --glow: 2, 132, 199;
+    background: #f0f9ff; border-color: #7dd3fc; color: #082f49;
+  }
+  .check.info .why { color: rgba(12, 74, 110, 0.9); }
+  .check.info .rate { border-color: #7dd3fc; background: #e0f2fe; color: #075985; }
+  .check.ok {
+    --rail: #059669; --glow: 16, 185, 129;
+    background: #ecfdf5; border-color: rgba(110, 231, 183, 0.7); color: #064e3b;
+  }
+  .check.ok .why { color: rgba(6, 95, 70, 0.9); }
   .muted { color: var(--ink-500); font-size: 11px; margin: 6px 0 0; }
   .note { color: var(--ink-400); font-size: 11px; }
   .text { white-space: pre-wrap; font-size: 13px; color: var(--ink-700); }
@@ -1557,6 +1612,56 @@
     })
   }
 
+  /* A data quality panel: the counts, then each failing check glowing in the
+     colour of its severity with the share of rows it turns on at its
+     right-hand edge - or, when nothing failed, the one green pane that says so. It used to be a table
+     with "failing" written in grey beside each name, which a reader had to
+     go looking for. */
+  function drawChecks(body, payload) {
+    var checks = payload.checks || []
+    // The critical ones first, then warnings, then information, in the order
+    // they came within each - as the platform lists them.
+    var rank = { critical: 0, warning: 1, info: 2 }
+    var failing = checks
+      .map(function (check, at) { return { check: check, at: at } })
+      .filter(function (one) { return one.check.passed === false })
+      .sort(function (a, b) {
+        var ra = rank[a.check.severity], rb = rank[b.check.severity]
+        return (ra === undefined ? 1 : ra) - (rb === undefined ? 1 : rb) || a.at - b.at
+      })
+      .map(function (one) { return one.check })
+    if (payload.passing > 0 || payload.never_run > 0) {
+      var counts = el('div', 'counts')
+      if (payload.passing > 0) counts.appendChild(el('span', '', payload.passing + ' passing'))
+      if (payload.never_run > 0) counts.appendChild(el('span', 'never', payload.never_run + ' never run'))
+      body.appendChild(counts)
+    }
+    if (!checks.length) {
+      body.appendChild(el('p', 'note', 'No active checks on ' + (payload.name || 'this dataset') + '.'))
+      return
+    }
+    var list = el('ul', 'checks')
+    failing.forEach(function (check) {
+      // A severity this file does not know reads as a warning, the default.
+      var level = rank[check.severity] === undefined ? 'warning' : check.severity
+      var pane = el('li', 'check ' + level)
+      var head = el('div', 'head')
+      head.appendChild(el('p', 'name', check.name))
+      var rate = Number(check.failure_rate) || 0
+      if (rate > 0) head.appendChild(el('span', 'rate', (rate * 100).toFixed(rate < 0.01 ? 2 : 0) + '%'))
+      pane.appendChild(head)
+      if (check.message) pane.appendChild(el('p', 'why', check.message))
+      list.appendChild(pane)
+    })
+    if (!failing.length) {
+      var ok = el('li', 'check ok')
+      ok.appendChild(el('p', 'name', 'Every active check passed'))
+      ok.appendChild(el('p', 'why', payload.name || ''))
+      list.appendChild(ok)
+    }
+    body.appendChild(list)
+  }
+
   /* A widget the filters cannot move, drawn as it stood when the file was
      made. Enough of it to be read, not a second copy of the whole platform. */
   function drawSnapshot(body, widget) {
@@ -1570,23 +1675,7 @@
       body.appendChild(frame)
       return
     }
-    if (payload.type === 'quality') {
-      var checks = payload.checks || []
-      var failing = checks.filter(function (check) { return check.passed === false })
-      body.appendChild(el('p', 'muted',
-        (payload.failing || 0) + ' failing, ' + (payload.passing || 0) + ' passing'))
-      var list = el('table', 'data')
-      var tbody = document.createElement('tbody')
-      ;(failing.length ? failing : checks).forEach(function (check) {
-        var line = document.createElement('tr')
-        line.appendChild(el('td', '', check.name))
-        line.appendChild(el('td', 'n', check.passed === false ? 'failing' : check.passed ? 'passing' : 'not run'))
-        tbody.appendChild(line)
-      })
-      list.appendChild(tbody)
-      body.appendChild(list)
-      return
-    }
+    if (payload.type === 'quality') { drawChecks(body, payload); return }
     if (payload.type === 'freshness') {
       var table = el('table', 'data')
       var body2 = document.createElement('tbody')
