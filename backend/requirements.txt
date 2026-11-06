@@ -1,0 +1,55 @@
+# --- Web framework -----------------------------------------------------------
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+python-multipart==0.0.20
+pydantic==2.10.4
+pydantic-settings==2.7.0
+email-validator==2.2.0
+
+# --- Database ----------------------------------------------------------------
+SQLAlchemy==2.0.36
+psycopg2-binary==2.9.10
+alembic==1.14.0
+
+# --- Auth / crypto -----------------------------------------------------------
+PyJWT==2.10.1
+bcrypt==4.2.1
+cryptography==44.0.0
+
+# --- Analytics engine --------------------------------------------------------
+duckdb==1.1.3
+pandas==2.2.3
+pyarrow==18.1.0
+numpy==2.2.1
+openpyxl==3.1.5
+pyreadstat==1.2.8
+XlsxWriter==3.2.0
+
+# --- Documents ---------------------------------------------------------------
+# A dashboard exported as a Word report. Pure Python over lxml, which is
+# already here through the rest of the stack: no office suite on the server
+# and nothing fetched at run time, which is what lets it work on a machine
+# with no internet.
+python-docx==1.1.2
+
+# --- Boundary files ----------------------------------------------------------
+# Shapefiles only. Pure Python with no compiled part and no system GIS library,
+# which is what lets a boundary layer be read on a server with no internet and
+# no GDAL. GeoPackages and GeoJSON are read without any of this.
+pyshp==3.1.6
+
+# --- Background jobs ---------------------------------------------------------
+celery==5.4.0
+redis==6.1.0
+
+# --- HTTP client (Survey Solutions API) --------------------------------------
+httpx==0.28.1
+tenacity==9.0.0
+
+# --- Publishing dashboards ---------------------------------------------------
+# To a web server reached over SFTP. GitHub Pages goes through httpx above.
+paramiko==3.5.1
+
+# --- Misc --------------------------------------------------------------------
+python-slugify==8.0.4
+Jinja2==3.1.5

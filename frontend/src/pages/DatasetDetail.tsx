@@ -1,0 +1,1024 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useRef, useState } from 'react'
+import { Link, useParams } from 'react-router-dom'
+import { api, downloadFile } from '@/lib/api'
+import MoreMenu from '@/components/MoreMenu'
+import { formatBytes, formatNumber, formatDate, titleCase } from '@/lib/format'
+import type { Dataset, FrequencyResult, SummaryStats, Variable } from '@/lib/types'
+import { useBreadcrumbs } from '@/hooks/useBreadcrumbs'
+import { useAuth } from '@/hooks/useAuth'
+import { useToast } from '@/hooks/useToast'
+import ChartCard from '@/components/ChartCard'
+import DataTable from '@/components/DataTable'
+import AssignProject from '@/components/AssignProject'
+import DatasetVersions from '@/components/DatasetVersions'
+import { BringInModal, LinkedVariablesCard, useLinkedVariables } from '@/components/LinkedVariables'
+import { broughtFrom } from '@/lib/linked-variables'
+import {
+  Badge,
+  Card,
+  ErrorNote,
+  Field,
+  Loading,
+  Modal,
+  PageHeader,
+  Spinner,
+  Stat,
+  Tabs,
+} from '@/components/ui'
+
+type TabId = 'variables' | 'data' | 'summary' | 'progress'
+
+const TYPE_TONE = {
+  numeric: 'info',
+  categorical: 'success',
+  datetime: 'warning',
+  text: 'neutral',
+  boolean: 'neutral',
+} as const
+
+export default function DatasetDetail() {
+  const { id = '' } = useParams()
+  const { can } = useAuth()
+  const [tab, setTab] = useState<TabId>('variables')
+  const [search, setSearch] = useState('')
+  const [inspecting, setInspecting] = useState<Variable | null>(null)
+  const [labelling, setLabelling] = useState<Variable | null>(null)
+  const [appending, setAppending] = useState(false)
+  const [renaming, setRenaming] = useState(false)
+  const [bringing, setBringing] = useState(false)
+
+  const toast = useToast()
+  const queryClient = useQueryClient()
+
+  const dataset = useQuery({
+    queryKey: ['dataset', id],
+    queryFn: () => api.get<Dataset>(`/datasets/${id}`),
+  })
+  const linked = useLinkedVariables(id)
+
+  const rebuild = useMutation({
+    mutationFn: () => api.post<Dataset>(`/relationships/rebuild/${id}`),
+    onSuccess: (rebuilt) => {
+      toast.push(`Rebuilt: ${rebuilt.row_count.toLocaleString()} rows`, 'success')
+      queryClient.invalidateQueries({ queryKey: ['dataset', id] })
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  useBreadcrumbs(dataset.data ? [{ label: dataset.data.name }] : null)
+  if (dataset.isLoading) return <Loading />
+  if (dataset.error) return <ErrorNote error={dataset.error} retry={dataset.refetch} />
+
+  const data = dataset.data!
+  const variables = data.variables ?? []
+  const monitoringFields = data.meta?.monitoring_fields ?? {}
+  const links = linked.data ?? []
+  const from = broughtFrom(links)
+  const filtered = variables.filter(
+    (variable) =>
+      !search ||
+      variable.name.toLowerCase().includes(search.toLowerCase()) ||
+      variable.label.toLowerCase().includes(search.toLowerCase()),
+  )
+
+  return (
+    <>
+      <PageHeader
+        title={data.name}
+        description={data.description || `Imported ${formatDate(data.created_at)}`}
+        actions={
+          <>
+            <AssignProject
+              kind="dataset"
+              id={data.id}
+              projectId={data.project_id}
+              canMove={can('manager')}
+            />
+            <Link to={`/explore?dataset=${data.id}`} className="btn-primary">
+              Analyse
+            </Link>
+            <Link to={`/quality?dataset=${data.id}`} className="btn-secondary">
+              Data quality
+            </Link>
+            {can('manager') && <DownloadMenu dataset={data} />}
+            {can('manager') && (
+              // What is done to a dataset now and then rather than every day.
+              // Side by side with Analyse and the downloads they made a row
+              // of nine controls that wrapped onto two lines.
+              <MoreMenu
+                label="this dataset"
+                items={[
+                  ...(data.derivation?.type === 'merge'
+                    ? [
+                        {
+                          // A derived dataset is defined by its recipe, so it
+                          // is refreshed by re-running that rather than by
+                          // uploading anything.
+                          label: rebuild.isPending ? 'Rebuilding…' : 'Rebuild from sources',
+                          // A menu item cannot be greyed out the way the
+                          // button was, so while one rebuild runs choosing it
+                          // again does nothing: each is a full join and a
+                          // fresh file, not something to queue twice.
+                          onClick: () => {
+                            if (!rebuild.isPending) rebuild.mutate()
+                          },
+                        },
+                      ]
+                    : []),
+                  ...(!data.derivation?.type
+                    ? [{ label: 'Append more data', onClick: () => setAppending(true) }]
+                    : []),
+                  {
+                    label: 'Bring in variables from another dataset',
+                    onClick: () => setBringing(true),
+                  },
+                  { label: 'Rename', onClick: () => setRenaming(true) },
+                ]}
+              />
+            )}
+          </>
+        }
+      />
+
+      {renaming && (
+        <RenameModal
+          dataset={data}
+          onClose={() => setRenaming(false)}
+          onDone={() => {
+            setRenaming(false)
+            dataset.refetch()
+            queryClient.invalidateQueries({ queryKey: ['datasets'] })
+          }}
+        />
+      )}
+
+      <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
+        <Stat label="Rows" value={formatNumber(data.row_count)} />
+        <Stat label="Variables" value={data.column_count} />
+        <Stat label="Stored size" value={formatBytes(data.file_size)} />
+        <Stat
+          label="Last refreshed"
+          value={formatDate(data.refreshed_at ?? data.updated_at)}
+          hint={`version ${data.version}`}
+        />
+      </div>
+
+      {Object.keys(monitoringFields).length > 0 && (
+        <Card
+          className="mb-6"
+          title="Recognised monitoring fields"
+          subtitle="Detected automatically, used to build field-progress views with no setup"
+        >
+          <div className="flex flex-wrap gap-2">
+            {Object.entries(monitoringFields).map(([role, column]) => (
+              <span
+                key={role}
+                className="rounded-card border border-ink-200 bg-ink-50 px-2.5 py-1.5 text-xs"
+              >
+                <span className="font-semibold text-ink-700">{titleCase(role)}</span>
+                <span className="mx-1 text-ink-500">→</span>
+                <code className="font-mono text-ink-600">{column}</code>
+              </span>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      <LinkedVariablesCard datasetId={id} links={links} canEdit={can('manager')} />
+
+      {can('manager') && <DatasetVersions datasetId={id} version={data.version} />}
+      <Tabs<TabId>
+        tabs={[
+          { id: 'variables', label: 'Variables', count: variables.length },
+          { id: 'data', label: 'Data' },
+          { id: 'summary', label: 'Statistics' },
+          { id: 'progress', label: 'Field progress' },
+        ]}
+        active={tab}
+        onChange={setTab}
+      />
+
+      <div className="mt-4">
+        {tab === 'variables' && (
+          <Card
+            title="Variables"
+            actions={
+              <input
+                className="input w-56 py-1.5 text-xs"
+                placeholder="Search variables…"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+              />
+            }
+            bodyClassName="p-0"
+          >
+            <div className="max-h-[600px] overflow-auto">
+              <table className="table-base">
+                <thead className="sticky top-0">
+                  <tr>
+                    <th>Name</th>
+                    <th>Label</th>
+                    <th>What the codes mean</th>
+                    <th>Type</th>
+                    <th className="text-right">Missing</th>
+                    <th className="text-right">Distinct</th>
+                    <th className="text-right">Range</th>
+                    <th />
+                  </tr>
+                </thead>
+                <tbody>
+                  {filtered.map((variable) => (
+                    <tr key={variable.id}>
+                      <td className="font-mono text-xs text-ink-800">
+                        {variable.name}
+                        {from[variable.name] && (
+                          <span
+                            className="ml-1.5 rounded bg-brand-50 px-1.5 py-0.5 font-sans text-[10px] text-brand-700"
+                            title={`Brought in from ${from[variable.name]}, and kept up to date with it`}
+                          >
+                            from {from[variable.name]}
+                          </span>
+                        )}
+                      </td>
+                      <td className="max-w-xs truncate text-ink-600">{variable.label || '-'}</td>
+                      {/* The codes and what they stand for, without opening
+                          anything: a categorical column is unreadable until
+                          you know whether 1 is male or married, and having to
+                          open a dialog per variable to find out is how a file
+                          gets analysed with the codes still in it. */}
+                      <td className="max-w-[260px] truncate text-xs text-ink-500">
+                        <Codes variable={variable} />
+                      </td>
+                      <td>
+                        <Badge tone={TYPE_TONE[variable.var_type] ?? 'neutral'}>
+                          {variable.var_type}
+                        </Badge>
+                      </td>
+                      <td className="text-right tabular-nums">
+                        {variable.n_missing > 0 ? (
+                          <span
+                            className={
+                              variable.n_missing / Math.max(data.row_count, 1) > 0.2
+                                ? 'font-semibold text-amber-700'
+                                : ''
+                            }
+                          >
+                            {formatNumber(variable.n_missing)}
+                          </span>
+                        ) : (
+                          '-'
+                        )}
+                      </td>
+                      <td className="text-right tabular-nums">{formatNumber(variable.n_unique)}</td>
+                      <td className="text-right tabular-nums text-xs text-ink-500">
+                        {variable.min_value !== null && variable.max_value !== null
+                          ? `${formatNumber(variable.min_value, 1)} - ${formatNumber(variable.max_value, 1)}`
+                          : '-'}
+                      </td>
+                      <td className="text-right whitespace-nowrap">
+                        {can('manager') && (
+                          <button
+                            className="btn-ghost btn-sm"
+                            onClick={() => setLabelling(variable)}
+                            title="Name this variable and its codes"
+                          >
+                            Labels
+                          </button>
+                        )}
+                        <button
+                          className="btn-ghost btn-sm"
+                          onClick={() => setInspecting(variable)}
+                        >
+                          Tabulate
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Card>
+        )}
+
+        {tab === 'data' && <DataPreview datasetId={id} totalRows={data.row_count} />}
+        {tab === 'summary' && <SummaryPanel datasetId={id} variables={variables} />}
+        {tab === 'progress' && <ProgressPanel datasetId={id} />}
+      </div>
+
+      {appending && <AppendModal datasetId={id} onClose={() => setAppending(false)} />}
+      {bringing && <BringInModal dataset={data} links={links} onClose={() => setBringing(false)} />}
+
+      {inspecting && (
+        <FrequencyModal
+          datasetId={id}
+          variable={inspecting}
+          onClose={() => setInspecting(null)}
+        />
+      )}
+
+      {labelling && (
+        <LabelModal
+          datasetId={id}
+          variable={labelling}
+          onClose={() => setLabelling(null)}
+        />
+      )}
+    </>
+  )
+}
+
+/**
+ * What a variable's codes stand for, in the width of a table cell.
+ *
+ * A categorical column of 1s and 2s says nothing until you know whether 1 is
+ * male or married. The whole set is on the cell's tooltip; the first few are
+ * enough to recognise it in passing, which is what a list of two hundred
+ * variables is read for.
+ */
+function Codes({ variable }: { variable: Variable }) {
+  const pairs = Object.entries(variable.value_labels ?? {})
+  if (!pairs.length) {
+    // Only where the values really are codes. A column holding "Northern" and
+    // "Southern" needs no names for them, and saying it lacks some would send
+    // people looking for work that is not there.
+    // A column of 0s and 1s is a tick, not a code: it is one option of a
+    // multiple-select or a yes-or-no, and naming 0 and 1 would add nothing
+    // that the column's own name does not already say.
+    const tick =
+      variable.n_unique <= 2 && variable.min_value === 0 && variable.max_value === 1
+    const coded =
+      variable.var_type === 'categorical' &&
+      !tick &&
+      /int|float|double|number/i.test(variable.storage_type ?? '')
+    return coded ? (
+      <span className="text-amber-700">no names for its codes</span>
+    ) : (
+      <span className="text-ink-500">-</span>
+    )
+  }
+  const shown = pairs.slice(0, 3).map(([code, text]) => `${code} = ${text}`)
+  const rest = pairs.length - shown.length
+  return (
+    <span title={pairs.map(([code, text]) => `${code} = ${text}`).join('\n')}>
+      {shown.join(', ')}
+      {rest > 0 && <span className="text-ink-500"> +{rest} more</span>}
+    </span>
+  )
+}
+
+function DataPreview({ datasetId, totalRows }: { datasetId: string; totalRows: number }) {
+  const [offset, setOffset] = useState(0)
+  const limit = 50
+  const preview = useQuery({
+    queryKey: ['preview', datasetId, offset],
+    queryFn: () =>
+      api.get<{ columns: string[]; rows: unknown[][] }>(
+        `/datasets/${datasetId}/preview?limit=${limit}&offset=${offset}`,
+      ),
+  })
+
+  return (
+    <Card
+      title="Raw data"
+      subtitle={`Rows ${offset + 1}-${Math.min(offset + limit, totalRows)} of ${formatNumber(totalRows)}`}
+      actions={
+        <div className="flex gap-1">
+          <button
+            className="btn-secondary btn-sm"
+            disabled={offset === 0}
+            onClick={() => setOffset(Math.max(0, offset - limit))}
+          >
+            Previous
+          </button>
+          <button
+            className="btn-secondary btn-sm"
+            disabled={offset + limit >= totalRows}
+            onClick={() => setOffset(offset + limit)}
+          >
+            Next
+          </button>
+        </div>
+      }
+    >
+      {preview.isLoading ? (
+        <Loading />
+      ) : preview.error ? (
+        <ErrorNote error={preview.error} />
+      ) : (
+        <DataTable columns={preview.data!.columns} rows={preview.data!.rows} />
+      )}
+    </Card>
+  )
+}
+
+function SummaryPanel({ datasetId, variables }: { datasetId: string; variables: Variable[] }) {
+  const numeric = variables.filter((v) => v.var_type === 'numeric').map((v) => v.name)
+  const summary = useQuery({
+    queryKey: ['summary', datasetId],
+    queryFn: () =>
+      api.post<SummaryStats[]>(`/analytics/datasets/${datasetId}/summary`, numeric.slice(0, 50)),
+    enabled: numeric.length > 0,
+  })
+
+  if (!numeric.length) {
+    return (
+      <Card>
+        <p className="py-8 text-center text-sm text-ink-500">
+          This dataset has no numeric variables to summarise.
+        </p>
+      </Card>
+    )
+  }
+  if (summary.isLoading) return <Loading />
+  if (summary.error) return <ErrorNote error={summary.error} />
+
+  return (
+    <Card title="Descriptive statistics" bodyClassName="p-0">
+      <div className="overflow-auto">
+        <table className="table-base">
+          <thead>
+            <tr>
+              <th>Variable</th>
+              <th className="text-right">N</th>
+              <th className="text-right">Missing</th>
+              <th className="text-right">Mean</th>
+              <th className="text-right">SD</th>
+              <th className="text-right">Min</th>
+              <th className="text-right">P25</th>
+              <th className="text-right">Median</th>
+              <th className="text-right">P75</th>
+              <th className="text-right">Max</th>
+            </tr>
+          </thead>
+          <tbody>
+            {summary.data!.map((row) => (
+              <tr key={row.variable}>
+                <td>
+                  <span className="font-mono text-xs">{row.variable}</span>
+                  {row.label && <p className="text-xs text-ink-500">{row.label}</p>}
+                </td>
+                {[row.count, row.missing, row.mean, row.std, row.min, row.p25, row.median, row.p75, row.max].map(
+                  (value, index) => (
+                    <td key={index} className="text-right tabular-nums">
+                      {value === null ? '-' : formatNumber(value, 2)}
+                    </td>
+                  ),
+                )}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </Card>
+  )
+}
+
+function ProgressPanel({ datasetId }: { datasetId: string }) {
+  const progress = useQuery({
+    queryKey: ['field-progress', datasetId],
+    queryFn: () =>
+      api.post<any>(`/monitoring/datasets/${datasetId}/field-progress`, {
+        op: 'and',
+        conditions: [],
+        groups: [],
+      }),
+  })
+
+  if (progress.isLoading) return <Loading label="Building field progress views" />
+  if (progress.error) return <ErrorNote error={progress.error} />
+  const data = progress.data
+
+  if (!data.available_views?.length) {
+    return (
+      <Card>
+        <p className="py-8 text-center text-sm text-ink-500">
+          No monitoring fields were recognised in this dataset, so field-progress views are not
+          available. You can still build any chart you like in Explore.
+        </p>
+      </Card>
+    )
+  }
+
+  const asResult = (rows: Record<string, unknown>[], dimension: string, measure: string) => ({
+    columns: [
+      { name: dimension, label: titleCase(dimension), type: 'dimension' as const, data_type: 'text' },
+      { name: measure, label: titleCase(measure), type: 'measure' as const, data_type: 'number' },
+    ],
+    rows: rows.map((row) => [row[dimension], row[measure]]),
+    row_count: rows.length,
+    truncated: false,
+    sql: '',
+    duration_ms: 0,
+  })
+
+  return (
+    <div className="grid gap-6 lg:grid-cols-2">
+      {/* Daily counts and the running total have very different scales, so they
+          get a chart each rather than being squashed onto one axis. */}
+      {data.submissions_over_time?.length > 0 && (
+        <>
+          <Card title="Submissions per period">
+            <ChartCard
+              chartType="bar"
+              result={{
+                columns: [
+                  { name: 'period', label: 'Date', type: 'dimension', data_type: 'datetime' },
+                  { name: 'count', label: 'Interviews', type: 'measure', data_type: 'number' },
+                ],
+                rows: data.submissions_over_time.map((row: any) => [row.period, row.count]),
+                row_count: data.submissions_over_time.length,
+                truncated: false,
+                sql: '',
+                duration_ms: 0,
+              }}
+            />
+          </Card>
+          <Card title="Cumulative submissions">
+            <ChartCard
+              chartType="area"
+              result={{
+                columns: [
+                  { name: 'period', label: 'Date', type: 'dimension', data_type: 'datetime' },
+                  {
+                    name: 'cumulative',
+                    label: 'Interviews to date',
+                    type: 'measure',
+                    data_type: 'number',
+                  },
+                ],
+                rows: data.submissions_over_time.map((row: any) => [row.period, row.cumulative]),
+                row_count: data.submissions_over_time.length,
+                truncated: false,
+                sql: '',
+                duration_ms: 0,
+              }}
+            />
+          </Card>
+        </>
+      )}
+      {data.status_breakdown?.length > 0 && (
+        <Card title="Interviews by status">
+          <ChartCard
+            result={asResult(data.status_breakdown, 'status', 'count')}
+            chartType="donut"
+          />
+        </Card>
+      )}
+      {data.by_interviewer?.length > 0 && (
+        <Card title="Interviews per interviewer">
+          <ChartCard
+            result={asResult(data.by_interviewer, 'interviewer', 'interviews')}
+            chartType="horizontal_bar"
+          />
+        </Card>
+      )}
+      {data.coverage_by_area?.length > 0 && (
+        <Card title="Coverage by area">
+          <ChartCard
+            result={asResult(data.coverage_by_area, 'area', 'interviews')}
+            chartType="bar"
+          />
+        </Card>
+      )}
+      {data.geo_points?.length > 0 && (
+        <Card title="Interview locations" subtitle={`${data.geo_points.length} points with GPS`}>
+          <GeoScatter points={data.geo_points} />
+        </Card>
+      )}
+    </div>
+  )
+}
+
+function GeoScatter({ points }: { points: Record<string, unknown>[] }) {
+  return (
+    <ChartCard
+      showToggle={false}
+      chartType="scatter"
+      result={{
+        columns: [
+          { name: 'lon', label: 'Longitude', type: 'measure', data_type: 'number' },
+          { name: 'lat', label: 'Latitude', type: 'measure', data_type: 'number' },
+        ],
+        rows: points.map((point) => [point.lon, point.lat]),
+        row_count: points.length,
+        truncated: false,
+        sql: '',
+        duration_ms: 0,
+      }}
+    />
+  )
+}
+
+function FrequencyModal({
+  datasetId,
+  variable,
+  onClose,
+}: {
+  datasetId: string
+  variable: Variable
+  onClose: () => void
+}) {
+  const frequency = useQuery({
+    queryKey: ['frequency', datasetId, variable.name],
+    queryFn: () =>
+      api.get<FrequencyResult>(
+        `/analytics/datasets/${datasetId}/frequency/${encodeURIComponent(variable.name)}`,
+      ),
+  })
+
+  return (
+    <Modal open onClose={onClose} title={`Tabulation: ${variable.name}`} wide>
+      {frequency.isLoading ? (
+        <Loading />
+      ) : frequency.error ? (
+        <ErrorNote error={frequency.error} />
+      ) : (
+        <>
+          <p className="mb-4 text-sm text-ink-500">
+            {variable.label || 'No label'} · {formatNumber(frequency.data!.total)} records,{' '}
+            {formatNumber(frequency.data!.missing)} missing
+          </p>
+          <div className="mb-5">
+            <ChartCard
+              showToggle={false}
+              chartType={frequency.data!.rows.length > 8 ? 'horizontal_bar' : 'bar'}
+              height={260}
+              result={{
+                columns: [
+                  { name: 'label', label: variable.name, type: 'dimension', data_type: 'text' },
+                  { name: 'count', label: 'Count', type: 'measure', data_type: 'number' },
+                ],
+                rows: frequency.data!.rows.slice(0, 25).map((row) => [row.label, row.count]),
+                row_count: frequency.data!.rows.length,
+                truncated: false,
+                sql: '',
+                duration_ms: 0,
+              }}
+            />
+          </div>
+          <div className="overflow-auto rounded-card border border-ink-200">
+            <table className="table-base">
+              <thead>
+                <tr>
+                  <th>Value</th>
+                  <th className="text-right">Count</th>
+                  <th className="text-right">%</th>
+                  <th className="text-right">Valid %</th>
+                  <th className="text-right">Cumulative %</th>
+                </tr>
+              </thead>
+              <tbody>
+                {frequency.data!.rows.map((row, index) => (
+                  <tr key={index}>
+                    <td>{row.label}</td>
+                    <td className="text-right tabular-nums">{formatNumber(row.count)}</td>
+                    <td className="text-right tabular-nums">{row.percent.toFixed(1)}</td>
+                    <td className="text-right tabular-nums">{row.valid_percent.toFixed(1)}</td>
+                    <td className="text-right tabular-nums">
+                      {row.cumulative_percent.toFixed(1)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </Modal>
+  )
+}
+
+
+function AppendModal({ datasetId, onClose }: { datasetId: string; onClose: () => void }) {
+  const toast = useToast()
+  const queryClient = useQueryClient()
+  const fileRef = useRef<HTMLInputElement>(null)
+  const [error, setError] = useState('')
+
+  const append = useMutation({
+    mutationFn: async () => {
+      const file = fileRef.current?.files?.[0]
+      if (!file) throw new Error('Choose a file to append.')
+      const form = new FormData()
+      form.append('file', file)
+      return api.upload<Dataset>(`/datasets/${datasetId}/append`, form)
+    },
+    onSuccess: (dataset) => {
+      toast.push(`Dataset now holds ${formatNumber(dataset.row_count)} rows`, 'success')
+      queryClient.invalidateQueries({ queryKey: ['dataset', datasetId] })
+      queryClient.invalidateQueries({ queryKey: ['preview', datasetId] })
+      onClose()
+    },
+    onError: (err: Error) => setError(err.message),
+  })
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Append another round"
+      footer={
+        <>
+          <button className="btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="btn-primary"
+            onClick={() => append.mutate()}
+            disabled={append.isPending}
+          >
+            {append.isPending && <Spinner className="h-4 w-4 text-white" />}
+            Append
+          </button>
+        </>
+      }
+    >
+      {error && (
+        <div className="mb-4 rounded-card border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+          {error}
+        </div>
+      )}
+      <p className="mb-4 text-sm text-ink-500">
+        The rows are added to what is already here rather than replacing it. A{' '}
+        <code className="text-xs">source_file</code> column records which file each row
+        came from, so rounds can be compared. Charts and indicators built on this dataset
+        keep working.
+      </p>
+      <Field
+        label="File to append"
+        hint="A data file, or a .zip of them. A variable the new file does not contain is left blank for its rows."
+      >
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".dta,.sav,.csv,.tab,.tsv,.txt,.xlsx,.xls,.zip"
+          className="input py-1.5"
+        />
+      </Field>
+    </Modal>
+  )
+}
+
+
+/**
+ * Naming a variable, and naming its codes.
+ *
+ * An export often ships neither: a column called DEM_SEX holding 1 and 2,
+ * which every table then prints as "1.0" and "2.0". Nothing about the data is
+ * changed here - only what the platform calls it, in every chart and table
+ * that shows it. The names are kept on the dataset as well as the variable, so
+ * the next export replacing the file does not take them with it.
+ */
+function LabelModal({
+  datasetId,
+  variable,
+  onClose,
+}: {
+  datasetId: string
+  variable: Variable
+  onClose: () => void
+}) {
+  const toast = useToast()
+  const queryClient = useQueryClient()
+  const [label, setLabel] = useState(variable.label ?? '')
+  const [labels, setLabels] = useState<Record<string, string>>(variable.value_labels ?? {})
+
+  // The codes actually present, so there is something to label even when the
+  // file carried no labels at all - which is the case this exists for.
+  const values = useQuery({
+    queryKey: ['values', datasetId, variable.name],
+    queryFn: () =>
+      api.get<{ value: string; label: string; count: number }[]>(
+        `/datasets/${datasetId}/variables/${encodeURIComponent(variable.name)}/values?limit=200`,
+      ),
+  })
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.patch(`/datasets/${datasetId}/variables/${encodeURIComponent(variable.name)}`, {
+        label,
+        value_labels: labels,
+      }),
+    onSuccess: () => {
+      toast.push('Labels saved', 'success')
+      queryClient.invalidateQueries({ queryKey: ['dataset', datasetId] })
+      queryClient.invalidateQueries({ queryKey: ['values', datasetId, variable.name] })
+      onClose()
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  // The values endpoint orders by frequency, which is right for a chart and
+  // wrong for a form: 1, 2, 3 is the order the codes are being read off in.
+  const rows = [...(values.data ?? [])].sort((a, b) => {
+    const [x, y] = [Number(a.value), Number(b.value)]
+    if (Number.isFinite(x) && Number.isFinite(y)) return x - y
+    return String(a.value).localeCompare(String(b.value))
+  })
+  const codes = rows.map((row) => String(row.value))
+  const labellable = codes.length > 0 && codes.length <= 200
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`Labels for ${variable.name}`}
+      footer={
+        <>
+          <button className="btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button className="btn-primary" onClick={() => save.mutate()} disabled={save.isPending}>
+            Save labels
+          </button>
+        </>
+      }
+    >
+      <Field label="Variable label" hint="Shown instead of the column name on charts and tables.">
+        <input
+          className="input"
+          value={label}
+          onChange={(event) => setLabel(event.target.value)}
+          placeholder={variable.name}
+          data-suggest=""
+        />
+      </Field>
+
+      <Field
+        label="Value labels"
+        hint="What each code should read as. Leave one blank to show the code itself."
+      >
+        {values.isLoading ? (
+          <Loading />
+        ) : !labellable ? (
+          <p className="text-sm text-ink-500">
+            {codes.length ? 'Too many distinct values to label.' : 'This variable has no values.'}
+          </p>
+        ) : (
+          <div className="max-h-72 space-y-1 overflow-auto pr-1">
+            {rows.map((row) => {
+              const code = String(row.value)
+              return (
+                <div key={code} className="flex items-center gap-2">
+                  <span className="w-24 shrink-0 truncate font-mono text-xs text-ink-500">
+                    {code}
+                  </span>
+                  <input
+                    className="input py-1 text-sm"
+                    value={labels[code] ?? ''}
+                    placeholder={code}
+                    data-suggest=""
+                    onChange={(event) =>
+                      setLabels({ ...labels, [code]: event.target.value })
+                    }
+                  />
+                  <span className="w-16 shrink-0 text-right text-xs text-ink-500">
+                    {row.count}
+                  </span>
+                </div>
+              )
+            })}
+          </div>
+        )}
+      </Field>
+    </Modal>
+  )
+}
+
+
+/** Rename a dataset, and describe it.
+ *
+ *  An archive names each dataset after the file inside it, which is how a
+ *  project ends up holding R_demographics and roster_pp. Those are the names
+ *  the export chose; this is where they become the names the team uses.
+ */
+function RenameModal({
+  dataset,
+  onClose,
+  onDone,
+}: {
+  dataset: Dataset
+  onClose: () => void
+  onDone: () => void
+}) {
+  const toast = useToast()
+  const [name, setName] = useState(dataset.name)
+  const [description, setDescription] = useState(dataset.description ?? '')
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.patch<Dataset>(`/datasets/${dataset.id}`, {
+        name: name.trim(),
+        description,
+      }),
+    onSuccess: () => {
+      toast.push('Renamed', 'success')
+      onDone()
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Rename dataset"
+      footer={
+        <>
+          <button className="btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="btn-primary"
+            onClick={() => save.mutate()}
+            disabled={!name.trim() || save.isPending}
+          >
+            Save
+          </button>
+        </>
+      }
+    >
+      <Field label="Name">
+        <input
+          className="input"
+          value={name}
+          autoFocus
+          onChange={(event) => setName(event.target.value)}
+        />
+      </Field>
+      <Field
+        label="Description"
+        hint="What this table holds, and anything the next person should know about it."
+      >
+        <textarea
+          className="input"
+          rows={3}
+          value={description}
+          onChange={(event) => setDescription(event.target.value)}
+        />
+      </Field>
+    </Modal>
+  )
+}
+
+/** Download the whole dataset.
+ *
+ *  Stata first because it is the one that carries the labels; a merged dataset
+ *  has no file of its own, so all three are written from what the platform
+ *  actually queries.
+ */
+function DownloadMenu({ dataset }: { dataset: Dataset }) {
+  const toast = useToast()
+  const [busy, setBusy] = useState('')
+
+  const download = async (format: 'dta' | 'csv' | 'xlsx') => {
+    setBusy(format)
+    try {
+      await downloadFile(
+        `/datasets/${dataset.id}/download?format=${format}`,
+        null,
+        `${dataset.slug || 'dataset'}.${format}`,
+        'GET',
+      )
+    } catch (error) {
+      toast.push(error instanceof Error ? error.message : 'Download failed', 'error')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  return (
+    // Named: three buttons reading "Stata CSV Excel" in a row of actions did
+    // not say that pressing one downloads the data.
+    <div
+      role="group"
+      aria-label="Download the data"
+      className="inline-flex items-stretch overflow-hidden rounded-card border border-ink-200 dark:border-dark-200"
+    >
+      <span className="flex items-center bg-ink-50 px-2.5 text-xs font-medium text-ink-600 dark:bg-dark-100 dark:text-dark-600">
+        Download
+      </span>
+      {([
+        ['dta', 'Stata'],
+        ['csv', 'CSV'],
+        ['xlsx', 'Excel'],
+      ] as const).map(([format, label]) => (
+        <button
+          key={format}
+          className="border-l border-ink-200 px-2.5 py-1.5 text-xs font-medium text-ink-700 hover:bg-ink-50 disabled:opacity-60 dark:border-dark-200 dark:text-dark-700 dark:hover:bg-dark-100"
+          onClick={() => download(format)}
+          disabled={Boolean(busy)}
+          title={
+            format === 'dta'
+              ? 'Download with variable and value labels'
+              : `Download as ${label}`
+          }
+        >
+          {busy === format ? '…' : label}
+        </button>
+      ))}
+    </div>
+  )
+}
+

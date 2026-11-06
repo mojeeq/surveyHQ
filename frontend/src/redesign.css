@@ -1,0 +1,264 @@
+/*
+ * SurveyHQ interface refresh.
+ *
+ * This stylesheet is intentionally imported after index.css. It replaces the
+ * legacy Aero/Redash treatment with a flatter, calmer design system while
+ * preserving the class contracts already used throughout the application.
+ */
+
+body {
+  @apply bg-slate-50 text-[14px] leading-5 text-slate-700 dark:bg-slate-950 dark:text-slate-300;
+}
+
+h1,
+h2,
+h3,
+h4 {
+  @apply tracking-[-0.015em] text-slate-950 dark:text-slate-50;
+}
+
+::selection {
+  @apply bg-brand-200 text-brand-900;
+}
+
+.card {
+  @apply rounded-xl border border-slate-200 bg-white dark:border-slate-800 dark:bg-slate-900;
+  background-image: none !important;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.035), 0 8px 24px -18px rgb(15 23 42 / 0.28) !important;
+}
+
+.dark .card {
+  box-shadow: 0 1px 2px rgb(0 0 0 / 0.22), 0 12px 32px -22px rgb(0 0 0 / 0.7) !important;
+}
+
+.card-header {
+  @apply border-slate-100 px-5 py-4 dark:border-slate-800;
+}
+
+.card-body {
+  @apply p-5;
+}
+
+.label {
+  @apply mb-1 block text-[13px] font-semibold text-slate-700 dark:text-slate-300;
+}
+
+/* Appearance only, as with .btn above. This set min-h-10 and a 14px face, so
+   every field stood eight pixels taller than the button beside it and spoke a
+   size larger: the single most visible reason the proportions looked wrong. */
+.input {
+  @apply rounded-lg border-slate-300 bg-white px-3 text-[13px] text-slate-800
+         placeholder:text-slate-400 hover:border-slate-400 focus:border-brand-500 focus:ring-4
+         focus:ring-brand-500/10 disabled:bg-slate-100 disabled:text-slate-500
+         dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200 dark:placeholder:text-slate-500
+         dark:hover:border-slate-600 dark:disabled:bg-slate-900;
+  box-shadow: none !important;
+}
+
+/*
+ * A control that is chrome rather than a field: a filter dropdown, an inline
+ * rename box, a small picker over a chart.
+ *
+ * Two class names rather than the height utilities already written on those
+ * elements, because those utilities cannot reach. Nothing in this stylesheet
+ * is inside a Tailwind layer, so `.input` above beats every utility - and it
+ * sets a min-height, which a `h-7` cannot undo in any case since height and
+ * min-height are different properties. Eight controls across the application
+ * asked to be small and every one of them came out forty pixels tall in
+ * fourteen-point text.
+ *
+ * `.input.input-sm` rather than `.input-sm` on its own: two classes outrank
+ * one, so this wins over `.input` wherever it lands in the file.
+ *
+ * Deliberately narrow. Putting `.input` into the components layer would have
+ * fixed these eight and also woken up the `text-xs` on fifty-four other
+ * inputs and the `py-1.5` on forty-two, restyling most of the application in
+ * a change that was asked to make one bar smaller.
+ */
+.input.input-sm {
+  @apply px-2 text-xs;
+  /* The same declared height as .btn-xs, which is the whole point of there
+     being a compact step: the two stand in the same filter bar. */
+  min-height: var(--control-height-sm);
+  height: var(--control-height-sm);
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+.input.input-xs {
+  @apply px-2 text-xs;
+  min-height: var(--control-height-xs);
+  height: var(--control-height-xs);
+  padding-top: 0;
+  padding-bottom: 0;
+}
+
+/* A box that is typed into rather than picked from grows with its rows. */
+textarea.input.input-sm,
+textarea.input.input-xs {
+  height: auto;
+}
+
+/* Appearance only, deliberately.
+   
+   How tall a control is, how much padding it carries and how big its lettering
+   is are declared once in index.css against --control-height. This sheet used
+   to set those too - min-h-9 here, h-9 on .icon-button - and because it loads
+   second it quietly won, which is how the platform came to show three button
+   heights in a single header: 38 from one sheet, 36 from this one, 32 from a
+   modifier neither of them agreed about. Two stylesheets with an opinion about
+   the same geometry is not a style, it is a race. */
+.btn {
+  @apply rounded-lg font-semibold transition-all duration-150
+         focus:outline-none focus:ring-4 focus:ring-offset-0;
+  background-image: none !important;
+  text-shadow: none !important;
+}
+
+.btn-primary {
+  @apply btn border border-brand-600 bg-brand-600 text-white hover:border-brand-700 hover:bg-brand-700
+         focus:ring-brand-500/15;
+  box-shadow: 0 1px 2px rgb(2 132 199 / 0.16) !important;
+}
+
+.btn-primary:active:not(:disabled) {
+  @apply translate-y-px bg-brand-800;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+
+.btn-secondary {
+  @apply btn border border-slate-300 bg-white text-slate-700 hover:border-slate-400 hover:bg-slate-50
+         hover:text-slate-950 focus:ring-slate-500/10
+         dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300 dark:hover:border-slate-600
+         dark:hover:bg-slate-800 dark:hover:text-white;
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.04) !important;
+}
+
+.btn-danger {
+  @apply btn border border-red-600 bg-red-600 text-white hover:border-red-700 hover:bg-red-700
+         focus:ring-red-500/15;
+  box-shadow: none !important;
+}
+
+.btn-ghost {
+  @apply btn border border-transparent bg-transparent text-slate-600 hover:bg-slate-100 hover:text-slate-950
+         focus:ring-slate-500/10 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white;
+  box-shadow: none !important;
+}
+
+/* Geometry lives in index.css against --control-height; this sheet setting it
+   as well is what made a .btn-sm shorter than the .btn next to it. */
+.btn-sm {
+  @apply px-2.5;
+}
+
+/*
+ * The compact partner to `.btn-sm`, for a button standing in a row beside an
+ * `.input-sm` rather than at the foot of a form.
+ *
+ * `.btn-sm` is four pixels taller than `.input-sm`, and in a row of centred
+ * items the tallest one sets the height. The filter bar grew from 42 to 46
+ * pixels the moment a filter was chosen, because that is when its Clear button
+ * appears - so picking a value nudged every widget on the dashboard down.
+ *
+ * One class rather than two, unlike `.input-sm`: `.btn-ghost` and its siblings
+ * copy `.btn` in rather than carrying the class, so there is no `.btn` on the
+ * element to pair with. Same specificity as those, and later in the file, so
+ * it wins on order the way `.btn-sm` already does.
+ */
+.btn-xs {
+  @apply px-2 py-0 text-xs;
+  min-height: var(--control-height-sm);
+  height: var(--control-height-sm);
+}
+
+/* The same height as every other control: this lived in another stylesheet as
+   h-9, which is 36px, so the icons in the header stood taller than the buttons
+   beside them and shorter than the one above them. */
+.icon-button {
+  height: var(--control-height);
+  width: var(--control-height);
+  @apply inline-grid place-items-center rounded-lg border border-transparent text-slate-500
+         transition-colors hover:bg-slate-100 hover:text-slate-950 focus:outline-none focus:ring-4
+         focus:ring-brand-500/10 dark:text-slate-400 dark:hover:bg-slate-800 dark:hover:text-white;
+}
+
+.chip {
+  @apply rounded-md border px-2 py-0.5 text-xs font-semibold;
+  background-image: none !important;
+  box-shadow: none !important;
+}
+
+.table-base {
+  @apply text-[13px];
+}
+
+.table-base thead th {
+  @apply border-slate-200 bg-slate-50 px-3 py-2.5 text-xs font-semibold uppercase tracking-[0.04em]
+         text-slate-500 dark:border-slate-800 dark:bg-slate-900 dark:text-slate-400;
+  background-image: none !important;
+}
+
+.table-base tbody td {
+  @apply border-slate-100 px-3 py-2.5 text-slate-700 dark:border-slate-800 dark:text-slate-300;
+}
+
+/* A widget given its own text size: every table in it follows, the headings
+   a step smaller as they are by default. Two classes, so it outranks the
+   rules above wherever it lands. */
+.widget-sized .table-base {
+  font-size: var(--widget-text);
+}
+
+.widget-sized .table-base thead th {
+  font-size: calc(var(--widget-text) * 0.92);
+}
+
+.table-base tbody tr:hover {
+  @apply bg-slate-50/80 dark:bg-slate-800/50;
+}
+
+.aero-surface,
+.aero-gloss,
+.aero-glass,
+.aero-sidebar,
+.nav-selected {
+  background-image: none;
+}
+
+.aero-glass {
+  @apply bg-white/90 dark:bg-slate-950/90;
+  box-shadow: none;
+}
+
+.aero-sidebar {
+  @apply bg-slate-950;
+  box-shadow: none;
+}
+
+/* Page rhythm: cards can remain compact, but the page hierarchy should breathe. */
+main > div > h1,
+main > div > header h1 {
+  letter-spacing: -0.025em;
+}
+
+/*
+ * Project scope is now a single workspace control in the application header.
+ * Explore still carries its old project select internally so legacy deep links
+ * keep working, but it must not render a second workspace selector beside the
+ * dataset picker. This selector is uniquely identified by its Shared area
+ * option (`none`) and its legacy width class.
+ */
+main select.input.w-52:has(> option[value="none"]) {
+  display: none;
+}
+
+/* Keep analytics and dashboard workspaces comfortable on large displays. */
+@media (min-width: 1280px) {
+  .table-base tbody td,
+  .table-base thead th {
+    padding-left: 0.875rem;
+    padding-right: 0.875rem;
+  }
+}

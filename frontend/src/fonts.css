@@ -1,0 +1,21 @@
+/*
+ * The bundled typefaces, served by this installation.
+ *
+ * Imported here rather than in a component so the @font-face rules exist from
+ * the first paint. Declaring a face costs nothing on its own: a browser fetches
+ * the file only once something on the page actually asks for that family, so a
+ * dashboard set in the interface font downloads none of these.
+ *
+ * Variable packages where one exists - a single file covering weight 100 to
+ * 900, instead of one file per weight. IBM Plex Serif has no variable build, so
+ * it takes the two weights the interface uses.
+ */
+
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/source-sans-3";
+@import "@fontsource-variable/ibm-plex-sans";
+@import "@fontsource-variable/space-grotesk";
+@import "@fontsource-variable/source-serif-4";
+@import "@fontsource-variable/jetbrains-mono";
+@import "@fontsource/ibm-plex-serif/400.css";
+@import "@fontsource/ibm-plex-serif/600.css";

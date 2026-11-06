@@ -1,0 +1,2109 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="generator" content="SurveyHQ">
+<title>__TITLE__</title>
+<!--__HEAD__-->
+<style>
+/* Any bundled font a widget on this board is set in, carried in the file as
+   base64 so the board reads the same on a laptop that has never met this
+   platform. Empty when the board uses none. */
+/*__FONTS__*/
+  :root {
+    --ink-900: #1c1b19; --ink-700: #44423e; --ink-500: #6f6c66;
+    --ink-400: #8d8a83; --ink-200: #e3e1dc; --ink-100: #efedea; --ink-50: #f7f6f4;
+    --brand: #2f6fd0; --surface: #ffffff; --canvas: #f8fafc;
+    /* The platform's defaults, for a board that set none of its own. A row is
+       74px and the gutter between rows and columns is 16px, which is what
+       react-grid-layout is given; span n rows then measures
+       n*74 + (n-1)*16, the same arithmetic the platform does. */
+    --cols: 12; --row: 74px; --gap: 16px;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--canvas); color: var(--ink-900);
+    font: 14px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  /* The page is laid out as the platform's own public page is: a column as
+     wide as the platform's, the board's name across the top on the page, and
+     everything the board holds on a canvas of its own underneath. Every
+     measure below is the platform's, read off it in a browser - the export
+     had drifted to a masthead half the height, its logo squeezed beside the
+     title, over cards that started right under the tabs with no title bar,
+     and the charts were the first thing anybody saw. */
+  .wrap { max-width: 1500px; margin: 0 auto; padding: 24px 24px 48px; }
+  header.board { margin-bottom: 24px; }
+  header.board h1 {
+    margin: 0; font-size: 24px; font-weight: 600; line-height: 1.15;
+    letter-spacing: -0.015em;
+  }
+  header.board p { margin: 6px 0 0; color: var(--ink-500); font-size: 14px; }
+  /* The logo beside the name, or above it when the name is centred - one
+     column, as the platform stacks them. */
+  header.board .brand { display: flex; align-items: center; gap: 12px; }
+  header.board .brand img { height: 32px; width: auto; flex-shrink: 0; object-fit: contain; }
+  /* Two logos: one at each end, the name between them - centred between them
+     when the name is centred (see the appearance sheet), beside the first
+     otherwise. */
+  header.board .brand.pair {
+    display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 16px;
+  }
+  header.board .brand.pair .end { display: flex; }
+  header.board .brand.pair .end.right { justify-self: end; }
+  /* The board itself. Its ground, when it has one, is painted here rather
+     than behind the name, and its widgets sit a gutter in from its edge. */
+  .canvas { padding: 16px; border-radius: 3px; }
+  .canvas > .grid { padding: 16px; }
+  .canvas > .group { margin: 16px; }
+  .tabs {
+    display: flex; flex-wrap: wrap; gap: 0 4px; margin: 0 0 16px;
+    border-bottom: 1px solid var(--ink-200);
+  }
+  .tabs button {
+    border: 0; background: none; padding: 10px 14px; margin-bottom: -1px;
+    font: inherit; font-size: 14px; font-weight: 500; color: var(--ink-500);
+    cursor: pointer; white-space: nowrap; border-bottom: 2px solid transparent;
+  }
+  .tabs button[aria-selected="true"] {
+    color: var(--brand); border-bottom-color: var(--brand); font-weight: 600;
+  }
+  /* At the size of the platform's own filter bar: 13px labels beside 32px
+     dropdowns, with room between the controls. */
+  .filters {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px 24px;
+    background: var(--surface); border: 1px solid var(--ink-200);
+    border-radius: 3px; padding: 10px 16px; margin: 0 16px;
+  }
+  .filters label {
+    display: flex; align-items: center; gap: 8px; font-size: 13px; font-weight: 500;
+    color: var(--ink-700);
+  }
+  .filters select {
+    font: inherit; font-size: 13px; font-weight: 400; height: 32px; padding: 0 10px;
+    border-radius: 8px; border: 1px solid #cbd5e1; background: #fff; color: var(--ink-900);
+    min-width: 192px;
+  }
+  .filters .clear { border: 0; background: none; color: var(--brand); font: inherit; font-size: 13px; cursor: pointer; }
+  .filters input[type=date] {
+    font: inherit; font-size: 13px; font-weight: 400; height: 32px; padding: 0 8px;
+    border-radius: 8px; border: 1px solid #cbd5e1; background: #fff; color: var(--ink-900);
+  }
+  /* Screen has the control itself; see the print rules at the foot. */
+  .filters .printed { display: none; }
+  /* The board's own geometry, written onto the page from its appearance so a
+     widget arrives the size it was drawn. These were once fixed at 12 columns
+     and 42px rows against the platform's 74px, which put every widget at just
+     over half its height: a chart squeezed until its axis was cut off, and a
+     table showing four of its rows and half of a fifth. */
+  .grid {
+    display: grid;
+    grid-template-columns: repeat(var(--cols), minmax(0, 1fr));
+    grid-auto-rows: var(--row); gap: var(--gap);
+  }
+  /* A group is a band here: its widgets are packed within it, as the board
+     packs them, but the band itself is a strip down the page rather than the
+     rectangle it is on the platform. */
+  .group {
+    border: 1px dashed var(--ink-200); border-radius: 3px;
+    padding: 10px 12px 14px; margin: 16px 0;
+  }
+  .group > summary {
+    cursor: pointer; font-size: 12px; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 10px;
+  }
+  .group[open] > summary { margin-bottom: 12px; }
+  /* The platform's own card: a 12px corner, a hairline and a soft two-part
+     shadow, with the title in a bar of its own over a hairline. The title bar
+     is part of the widget's height on the platform, so leaving it out here
+     handed every chart the 20-odd pixels it takes - a chart a size larger
+     than the one on the board. */
+  .card {
+    background: var(--surface); border: 1px solid var(--ink-200); border-radius: 12px;
+    display: flex; flex-direction: column; overflow: hidden; min-width: 0;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.035), 0 8px 24px -18px rgba(15, 23, 42, 0.28);
+  }
+  .card > h2 {
+    margin: 0; padding: 16px; line-height: 20px; font-size: 14px; font-weight: 600;
+    border-bottom: 1px solid var(--ink-200); flex-shrink: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  .card > .body { flex: 1; min-height: 0; padding: 16px 16px 8px; overflow: auto; }
+  .card > .caption {
+    padding: 8px 16px; font-size: 12px; line-height: 1.4; color: var(--ink-500);
+    border-top: 1px solid var(--ink-100); flex-shrink: 0;
+  }
+  .frozen { padding: 8px 16px 0; font-size: 11px; color: #8a6d1f; }
+  .chart { width: 100%; height: 100%; min-height: 120px; }
+  table.data { border-collapse: collapse; width: 100%; font-size: 12px; }
+  table.data th, table.data td { border-bottom: 1px solid var(--ink-100); padding: 5px 8px; text-align: left; }
+  table.data th { background: var(--ink-50); font-weight: 600; position: sticky; top: 0; }
+  table.data td.n, table.data th.n { text-align: right; font-variant-numeric: tabular-nums; }
+  table.data tr.total td, table.data td.total { font-weight: 600; background: var(--ink-50); }
+  .kpi { font-size: 30px; font-weight: 600; font-variant-numeric: tabular-nums; }
+  /* A tile holding one number is centred in its card, as it is on the
+     platform. Left at the top, a tile four rows tall is a number and then a
+     third of a page of nothing, which is what an exported board full of
+     counters looked like. */
+  /* Safely: a tile made bigger than its card runs down into the scroll rather
+     than off both ends, where nothing can scroll to what was cut. */
+  .card > .body.middle { display: flex; flex-direction: column; justify-content: safe center; }
+  /* A tile with its groups drawn under the number: the chart takes what the
+     number leaves, as on the platform. Sized to the whole body it ran past
+     the foot of the card, its axis out of sight. */
+  .card > .body.stack { display: flex; flex-direction: column; }
+  .card > .body.stack > .chart { flex: 1; height: auto; margin-top: 12px; }
+  .track { height: 8px; border-radius: 999px; background: var(--ink-100); overflow: hidden; margin-top: 10px; }
+  .track > div { height: 100%; border-radius: 999px; }
+  /* A widget somebody painted a dark colour. Everything inside reads its ink
+     from these variables, so redefining them here is the whole repair: the
+     table headers, the progress track, the hairlines and the muted lines all
+     follow. Without it a slate tile arrived with near-black labels on it. */
+  .card.on-dark {
+    --ink-900: #f4f5f7; --ink-700: #e2e5ea; --ink-500: #c2c7d1;
+    --ink-400: #c2c7d1; --ink-200: rgba(255,255,255,.18);
+    --ink-100: rgba(255,255,255,.14); --ink-50: rgba(255,255,255,.10);
+    --surface: rgba(255,255,255,.06);
+  }
+  /* A data quality panel, as the platform draws it: what passed and what never
+     ran as counts, then each failing check as a pane of its own that glows in
+     the colour of how much it matters - red when critical, amber for a
+     warning or for information - or one green pane, glowing too, when
+     nothing failed. The panes carry their own colours, so they read the same
+     on a card somebody painted dark. The list is given room round its edges
+     for the glow, which a box that scrolls would otherwise clip, and takes it
+     back with a negative margin. */
+  .counts { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+  .counts span {
+    font-size: 11px; font-weight: 600; padding: 1px 8px; border-radius: 6px;
+    background: var(--ink-100); color: var(--ink-700); border: 1px solid var(--ink-200);
+  }
+  .counts span.never { background: #fffbeb; color: #92400e; border-color: #fcd34d; }
+  .checks {
+    list-style: none; margin: -8px -12px 0; padding: 8px 12px 12px;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .check {
+    border: 1px solid; border-radius: 3px; padding: 8px 12px 8px 16px;
+    /* The rail, the ring and the halo, each in the pane's own colour. */
+    box-shadow: inset 3px 0 0 var(--rail), 0 0 0 1px rgba(var(--glow), 0.18),
+      0 0 12px 1px rgba(var(--glow), 0.35);
+  }
+  .check p { margin: 0; }
+  .check .head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+  .check .name { font-weight: 500; min-width: 0; }
+  .check .why { margin-top: 2px; font-size: 0.87em; }
+  .check .rate {
+    flex-shrink: 0; font-size: 0.8em; font-weight: 600; font-variant-numeric: tabular-nums;
+    padding: 0 6px; border-radius: 6px; border: 1px solid;
+  }
+  .check.critical {
+    --rail: #dc2626; --glow: 220, 38, 38;
+    background: #fef2f2; border-color: #fca5a5; color: #7f1d1d;
+  }
+  .check.critical .why { color: rgba(153, 27, 27, 0.9); }
+  .check.critical .rate { border-color: #fca5a5; background: #fee2e2; color: #b91c1c; }
+  .check.warning {
+    --rail: #f59e0b; --glow: 245, 158, 11;
+    background: #fffbeb; border-color: rgba(252, 211, 77, 0.7); color: #451a03;
+  }
+  .check.warning .why { color: rgba(120, 53, 15, 0.9); }
+  .check.warning .rate { border-color: #fcd34d; background: #fef3c7; color: #92400e; }
+  .check.ok {
+    --rail: #059669; --glow: 16, 185, 129;
+    background: #ecfdf5; border-color: rgba(110, 231, 183, 0.7); color: #064e3b;
+  }
+  .check.ok .why { color: rgba(6, 95, 70, 0.9); }
+  .muted { color: var(--ink-500); font-size: 11px; margin: 6px 0 0; }
+  .note { color: var(--ink-400); font-size: 11px; }
+  .text { white-space: pre-wrap; font-size: 13px; color: var(--ink-700); }
+  /* A widget given its own text size. A chart is handed the number; here the
+     rest follows it: a table's cells, a note, a quality panel's findings, and
+     on an indicator tile the number and its lines in the platform's
+     proportion - the number at 15/7 of it, the lines at 6/7. A KPI chart's
+     number is three times a chart's text, as on the platform. */
+  .card > .body.sized table.data,
+  .card > .body.sized .text,
+  .card > .body.sized .checks,
+  .card > .body.sized .counts,
+  .card > .body.sized.tile { font-size: var(--text); }
+  .card > .body.sized.tile .kpi { font-size: calc(var(--text) * 2.143); }
+  .card > .body.sized.tile .muted { font-size: calc(var(--text) * 0.857); }
+  .card > .body.sized:not(.tile) .kpi { font-size: calc(var(--text) * 3); }
+  .card > .body.sized:not(.tile) .muted { font-size: calc(var(--text) * 1.167); }
+  .leafmap { width: 100%; height: 100%; min-height: 180px; border-radius: 6px; }
+  .embed { width: 100%; height: 100%; border: 0; }
+  footer.board { margin: 10px 16px 0; color: var(--ink-400); font-size: 11px; }
+  /* How this particular board is dressed: its ground, masthead, title, tabs,
+     filter bar and card opacity, written server-side from the same appearance
+     the platform draws it with. Last in the sheet so it wins on its own
+     specificity rather than by shouting. Empty for an undressed board. */
+/*__LOOK__*/
+  @media (max-width: 780px) {
+    .wrap { padding: 16px 12px 32px; }
+    .canvas, .canvas > .grid { padding: 8px; }
+    .grid { display: block; }
+    .card { margin-bottom: 14px; height: 320px; }
+  }
+  /* On paper.
+     The file is made to be attached to a report and carried into a meeting,
+     and a meeting is where it gets printed. Printed as it stands, the page
+     came out with its ground colour over every sheet, a row of dropdowns
+     nobody can use, and cards sliced in half at the page break.
+
+     What the ink says is kept: which filters the numbers were read under is
+     part of the figure, so the controls are printed as the values they are
+     set to rather than dropped. The charts are canvases and print as they are
+     drawn, which is why the background colours have to be told to print. */
+  /* The pinned selection under the title. Reads as a subtitle on screen and
+     has to survive onto paper, where it is the only thing distinguishing one
+     province's printout from another's. */
+  .pinned {
+    margin: 6px 0 0;
+    font-weight: 600;
+    letter-spacing: .01em;
+  }
+
+  @media print {
+    @page { margin: 14mm; }
+    body { background: #fff; }
+    .wrap { max-width: none; padding: 0; }
+    .canvas, .canvas > .grid { padding: 0; }
+    .canvas > .group { margin: 16px 0; }
+    .filters, footer.board { margin-left: 0; margin-right: 0; }
+    /* Backgrounds off by default in most browsers, which would print a dark
+       tile as black text on white and a chart's own fill as nothing. */
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    /* A card is a unit: half a chart at the foot of one sheet and half at the
+       head of the next is worse than a shorter first sheet. */
+    .card, .group { break-inside: avoid; page-break-inside: avoid; }
+    .card { box-shadow: none; }
+    /* Nothing on paper can be unfolded, so a folded group is opened for the
+       print and closed again after it - see the beforeprint handler. The
+       marker goes, because a disclosure triangle on paper is furniture for a
+       thing the reader cannot do. */
+    .group > summary { list-style: none; }
+    .group > summary::-webkit-details-marker { display: none; }
+    .tabs { display: none; }
+    .filters { border: 0; padding: 0; background: none; margin-bottom: 10px; }
+    .filters .clear { display: none; }
+    /* The chosen value, as text. `.printed` is written beside each control on
+       every render, because a <select> prints as a control and a reader
+       holding the sheet has no way to see which option it was left on. */
+    .filters select, .filters input[type=date] { display: none; }
+    .filters .printed { display: inline; font-size: 12px; font-weight: 600; color: var(--ink-900); }
+    footer.board { margin-top: 14px; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap" id="app"></div>
+<script type="application/json" id="board-data">"__PAYLOAD__"</script>
+<!--__SCRIPTS__-->
+<script>
+/*
+ * The exported dashboard, drawn from the cube beside it.
+ *
+ * Every widget carries its numbers grouped by what it groups on and by every
+ * variable this page's filters name. Choosing a filter keeps the rows that
+ * match and adds the measures back up, which is the same number the platform
+ * would have returned: a sum of counts is a count. A mean is carried as its
+ * total and its number of values so it can be divided again rather than
+ * averaged, which would be a different number.
+ */
+(function () {
+  var DATA = JSON.parse(document.getElementById('board-data').textContent)
+  /* The colours this board is drawn in, carried in the payload from the
+     platform's own theme table. There used to be a private list of ten here
+     that matched no theme the platform has, so a board came back in hues it
+     had never been shown in. The fallback is the default ordering, for a file
+     written before the payload carried them. */
+  var PALETTE = (DATA.colors && DATA.colors.length) ? DATA.colors
+    : ['#2a78d6', '#eb6834', '#1baf7a', '#eda100', '#e87ba4', '#008300', '#4a3aa7', '#e34948']
+  /* The chart furniture the platform draws: a hairline axis, no ticks, muted
+     12px labels, and split lines on the value axis only. Drawn from ECharts'
+     defaults instead, an exported chart arrived with darker labels, tick marks
+     and a full grid the same board does not have on screen. */
+  var INK = { muted: '#898781', grid: '#e1e0d9', axis: '#c3c2b7', surface: '#ffffff', primary: '#0b0b0b' }
+  var FACE = { fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif', fontSize: 12 }
+  /* A chart built at a widget's own text size. Everything above reads FACE
+     as an option is built, so it is set for the length of one build and put
+     back after it: the other charts on the page keep their own. */
+  function atSize(size, build) {
+    var was = FACE.fontSize
+    if (size) FACE.fontSize = size
+    try { return build() } finally { FACE.fontSize = was }
+  }
+
+  function categoryAxis(data) {
+    return {
+      type: 'category', data: data,
+      axisLine: { lineStyle: { color: INK.axis } },
+      axisTick: { show: false },
+      axisLabel: Object.assign({ color: INK.muted, hideOverlap: true }, FACE),
+      splitLine: { show: false },
+    }
+  }
+  /** The words of a name on at most two lines of about this many characters,
+      cut after the second so it cannot run into the next. The platform's own
+      rule, word for word. */
+  function twoLines(text, perLine) {
+    var lines = []
+    var line = ''
+    text.split(/\s+/).filter(Boolean).forEach(function (word) {
+      var next = line ? line + ' ' + word : word
+      if (next.length <= perLine || !line) { line = next; return }
+      lines.push(line)
+      line = word
+    })
+    if (line) lines.push(line)
+    if (lines.length <= 2) return lines.join('\n')
+    var second = lines.slice(1).join(' ')
+    return lines[0] + '\n' + second.slice(0, Math.max(1, perLine - 1)).replace(/\s+$/, '') + '\u2026'
+  }
+
+  /* Names down the side of a chart, held to `room` pixels: cut with an
+     ellipsis, or wrapped onto two lines first where the widget asks for that.
+     Left to themselves they take whatever they ask for, and nine long answers
+     to "main activity" took the whole card and left the bars a sliver at its
+     right edge. The tooltip still carries the whole name. */
+  function sideLabel(room, wrap) {
+    if (!wrap) return { width: room, overflow: 'truncate' }
+    var perLine = Math.max(8, Math.floor(room / (FACE.fontSize * 0.56)))
+    return {
+      width: room, overflow: 'truncate', lineHeight: Math.round(FACE.fontSize * 1.2),
+      formatter: function (value) { return twoLines(String(value), perLine) },
+    }
+  }
+
+  function valueAxis() {
+    return {
+      type: 'value',
+      axisLine: { show: false },
+      axisTick: { show: false },
+      axisLabel: Object.assign({
+        color: INK.muted, hideOverlap: true,
+        formatter: function (value) {
+          return Math.abs(value) < 10 && value % 1 !== 0
+            ? value.toLocaleString(undefined, { maximumFractionDigits: 2 })
+            : num(value)
+        },
+      }, FACE),
+      splitLine: { lineStyle: { color: INK.grid, width: 1 } },
+    }
+  }
+  var TOOLTIP = {
+    backgroundColor: '#ffffff', borderColor: INK.grid, borderWidth: 1, padding: [8, 12],
+    textStyle: Object.assign({ color: INK.primary }, FACE),
+    extraCssText: 'box-shadow: 0 10px 30px rgba(15,23,42,.12); border-radius: 8px;',
+    // Off <body>, or a tooltip wider than its card is cut off at the card's
+    // edge. A card clips its contents, which is right for the contents; a
+    // tooltip floats over the page and is not contents. Same reasoning, and
+    // the same one line, as lib/charts.ts in the frontend.
+    appendToBody: true,
+  }
+  var STATUS = { ok: '#2aa876', warning: '#c2872f', critical: '#d94f4f', unknown: '#8d8a83' }
+  var app = document.getElementById('app')
+  var page = 0
+  var chosen = {}
+  var drawn = []
+
+  // ---- numbers ------------------------------------------------------------
+  function num(value, decimals) {
+    if (value === null || value === undefined || value === '' || isNaN(value)) return '-'
+    var d = decimals === undefined ? (Number.isInteger(Number(value)) ? 0 : 2) : decimals
+    return Number(value).toLocaleString(undefined, { minimumFractionDigits: d, maximumFractionDigits: d })
+  }
+  function formatValue(value, format, unit) {
+    if (value === null || value === undefined || isNaN(value)) return '-'
+    if (format === 'percent') return Number(value).toFixed(1) + '%'
+    if (format === 'currency') return num(value, 0) + (unit ? ' ' + unit : '')
+    if (format === 'decimal') return num(value, 2)
+    return num(value) + (unit ? ' ' + unit : '')
+  }
+  function text(value) {
+    if (value === null || value === undefined) return ''
+    var written = String(value)
+    // A day is stored as a moment at midnight, and an axis of "2026-07-19
+    // 00:00:00" is unreadable at any width a widget has.
+    return written.replace(/^(\d{4}-\d{2}-\d{2})[T ]00:00:00.*$/, '$1')
+  }
+
+  // ---- the cube -----------------------------------------------------------
+  /**
+   * The cube, narrowed to what is chosen and added back up.
+   *
+   * Comes back in the shape a query answers in - named columns and rows - so
+   * nothing that draws below has to know a filter happened at all.
+   */
+  function combine(cube) {
+    var at = {}
+    cube.columns.forEach(function (column, index) { at[column.name] = index })
+    var dims = cube.dimensions.map(function (name) { return at[name] })
+    var tests = cube.filters.map(function (control) {
+      return { index: at[control.column], want: chosen[control.variable] || '', kind: control.kind }
+    })
+    var buckets = new Map()
+    var order = []
+    cube.rows.forEach(function (row) {
+      for (var f = 0; f < tests.length; f++) {
+        if (!keeps(tests[f], row[tests[f].index])) return
+      }
+      var key = dims.map(function (index) { return text(row[index]) }).join('||')
+      var bucket = buckets.get(key)
+      if (!bucket) {
+        bucket = { key: dims.map(function (index) { return row[index] }), parts: {} }
+        buckets.set(key, bucket)
+        order.push(bucket)
+      }
+      cube.measures.forEach(function (measure) {
+        measure.parts.forEach(function (part) {
+          var value = Number(row[at[part]])
+          if (isNaN(value)) return
+          var held = bucket.parts[part]
+          if (held === undefined) bucket.parts[part] = value
+          else if (measure.how === 'min') bucket.parts[part] = Math.min(held, value)
+          else if (measure.how === 'max') bucket.parts[part] = Math.max(held, value)
+          else bucket.parts[part] = held + value
+        })
+      })
+    })
+    var rows = order.map(function (bucket) {
+      var out = bucket.key.slice()
+      cube.measures.forEach(function (measure) {
+        if (measure.how === 'mean') {
+          var count = bucket.parts[measure.parts[1]]
+          out.push(count ? bucket.parts[measure.parts[0]] / count : null)
+        } else {
+          var held = bucket.parts[measure.parts[0]]
+          out.push(held === undefined ? null : held)
+        }
+      })
+      return out
+    })
+    cube.measures.forEach(function (measure, index) {
+      if (measure.how !== 'share') return
+      var column = cube.dimensions.length + index
+      var total = rows.reduce(function (sum, row) { return sum + (Number(row[column]) || 0) }, 0)
+      rows.forEach(function (row) { row[column] = total ? (row[column] / total) * 100 : 0 })
+    })
+    rows = order.length ? sorted(rows, cube) : rows
+    rows = topN(rows, cube)
+    var columns = cube.dimensions.map(function (name) {
+      var found = cube.columns.filter(function (column) { return column.name === name })[0]
+      return { name: name, label: (found && found.label) || name, type: 'dimension' }
+    }).concat(cube.measures.map(function (measure) {
+      return { name: measure.name, label: measure.label || measure.name, type: 'measure' }
+    }))
+    return { columns: columns, rows: rows }
+  }
+
+  // ---- choosing -----------------------------------------------------------
+  /**
+   * Whether a row's value is inside what the reader chose for one filter:
+   * that value, or for a date filter a range of days. A filter left on All
+   * keeps everything.
+   */
+  function keeps(test, value) {
+    if (!test.want) return true
+    if (test.kind === 'dates') return inRange(text(value), test.want, new Date())
+    return text(value) === test.want
+  }
+
+  function inRange(day, choice, today) {
+    var span = dateBounds(choice, today)
+    var stamp = String(day || '').slice(0, 10)
+    if (!stamp) return false
+    return (!span.first || stamp >= span.first) && (!span.after || stamp < span.after)
+  }
+
+  /**
+   * A date filter's choice as its first day and the day after its last, as
+   * yyyy-mm-dd. The board's own rule (frontend/src/lib/date-range.ts and
+   * app/services/date_ranges.py), so "Last 7 days" means the same seven days
+   * in the file as on the board: counted back from the reader's today.
+   */
+  function dateBounds(value, today) {
+    var choice = value.indexOf('dates:') === 0 ? value.slice(6) : value
+    function pad(n) { return (n < 10 ? '0' : '') + n }
+    function day(offset, base) {
+      var from = base || today
+      var at = new Date(from.getFullYear(), from.getMonth(), from.getDate() + offset)
+      return at.getFullYear() + '-' + pad(at.getMonth() + 1) + '-' + pad(at.getDate())
+    }
+    var tomorrow = day(1)
+    if (choice === 'today') return { first: day(0), after: tomorrow }
+    if (choice === 'yesterday') return { first: day(-1), after: day(0) }
+    if (choice === 'last_7') return { first: day(-6), after: tomorrow }
+    if (choice === 'last_30') return { first: day(-29), after: tomorrow }
+    if (choice === 'this_week') return { first: day(-((today.getDay() + 6) % 7)), after: tomorrow }
+    if (choice === 'this_month') {
+      return { first: day(0, new Date(today.getFullYear(), today.getMonth(), 1)), after: tomorrow }
+    }
+    if (choice === 'last_month') {
+      return {
+        first: day(0, new Date(today.getFullYear(), today.getMonth() - 1, 1)),
+        after: day(0, new Date(today.getFullYear(), today.getMonth(), 1)),
+      }
+    }
+    var parts = choice.split('..')
+    var last = /^\d{4}-\d{2}-\d{2}$/.test(parts[1] || '') ? parts[1] : ''
+    return {
+      first: /^\d{4}-\d{2}-\d{2}$/.test(parts[0] || '') ? parts[0] : null,
+      after: last ? day(1, new Date(Number(last.slice(0, 4)), Number(last.slice(5, 7)) - 1, Number(last.slice(8, 10)))) : null,
+    }
+  }
+
+  // ---- tick all that apply --------------------------------------------------
+  /**
+   * A share as the platform rounds it: to one place, a half to the even
+   * neighbour (Python's round). Exact halves are rare - an eighth, a
+   * sixteenth - but when one comes the file and the board should still agree.
+   */
+  function share(count, base) {
+    if (!base) return null
+    var value = (100 * count) / base
+    if (Number.isInteger(value * 100) && Math.abs((value * 100) % 10) === 5) {
+      var down = Math.floor(value * 10)
+      return (down % 2 === 0 ? down : down + 1) / 10
+    }
+    return Number(value.toFixed(1))
+  }
+
+  function orderedBy(rows, sort, at) {
+    if (sort === 'value_desc') rows.sort(function (a, b) { return b[at] - a[at] })
+    else if (sort === 'value_asc') rows.sort(function (a, b) { return a[at] - b[at] })
+    else if (sort === 'label_asc') {
+      rows.sort(function (a, b) { return String(a[0]) < String(b[0]) ? -1 : String(a[0]) > String(b[0]) ? 1 : 0 })
+    }
+    return rows
+  }
+
+  /**
+   * A tick-all-that-apply chart, narrowed to what is chosen and worked out
+   * again - the same arithmetic the platform does (app/services/multiselect.py),
+   * on counts the file carries per filter value. Comes back as the query
+   * result the chart is drawn from, so nothing below knows the difference.
+   */
+  function combineMultiselect(ms) {
+    var width = ms.keys || 0
+    var tests = (ms.filters || []).map(function (control) {
+      return { index: control.index, want: chosen[control.variable] || '', kind: control.kind }
+    })
+    function kept(row) {
+      for (var f = 0; f < tests.length; f++) if (!keeps(tests[f], row[tests[f].index])) return false
+      return true
+    }
+    function baseOf(totalRows, answered) {
+      return ms.percent_of === 'respondents' ? answered : totalRows
+    }
+    var bases = ms.bases.filter(kept)
+    var base = baseOf(
+      bases.reduce(function (sum, row) { return sum + (Number(row[width]) || 0) }, 0),
+      bases.reduce(function (sum, row) { return sum + (Number(row[width + 1]) || 0) }, 0)
+    )
+    var rows = ms.rows.filter(kept)
+    var labels = ms.labels
+    var n = labels.length
+    var zeros = function () { return labels.map(function () { return 0 }) }
+    var dimension = function (name, label, type) {
+      return { name: name, label: label, type: 'dimension', data_type: type || 'string' }
+    }
+    var dims, out, countLabel = 'Chose it', shareLabel = ms.share_label
+
+    if (ms.view === 'by_group') {
+      var groups = {}
+      rows.forEach(function (row) {
+        var into = groups[row[width]] || (groups[row[width]] = { c: zeros(), total: 0, answered: 0 })
+        for (var i = 0; i < n; i++) into.c[i] += Number(row[width + 1 + i]) || 0
+        into.total += Number(row[width + 1 + n]) || 0
+        into.answered += Number(row[width + 2 + n]) || 0
+      })
+      var present = (ms.groups || []).filter(function (name) { return groups[name] })
+      var overall = orderedBy(labels.map(function (label, i) {
+        return [label, present.reduce(function (sum, name) { return sum + groups[name].c[i] }, 0)]
+      }), ms.sort, 1)
+      out = []
+      overall.forEach(function (entry) {
+        var i = labels.indexOf(entry[0])
+        present.forEach(function (name) {
+          var found = groups[name]
+          out.push([entry[0], name, found.c[i], share(found.c[i], baseOf(found.total, found.answered))])
+        })
+      })
+      dims = [dimension('option', 'Option'), dimension('group', ms.group_label || 'Group')]
+    } else if (ms.view === 'how_many') {
+      var many = {}
+      rows.forEach(function (row) { many[row[width]] = (many[row[width]] || 0) + (Number(row[width + 1]) || 0) })
+      var most = Object.keys(many).reduce(function (top, k) { return Math.max(top, Number(k)) }, 0)
+      out = []
+      for (var k = 0; k <= most; k++) out.push([k, many[k] || 0, share(many[k] || 0, base)])
+      dims = [dimension('chosen', 'Options chosen', 'numeric')]
+      countLabel = 'Respondents'
+    } else if (ms.view === 'combinations') {
+      var sets = {}
+      rows.forEach(function (row) {
+        var key = String(row[width] || '')
+        sets[key] = (sets[key] || 0) + (Number(row[width + 1]) || 0)
+      })
+      var found = Object.keys(sets).map(function (key) { return [key, sets[key]] })
+        .filter(function (entry) { return entry[1] > 0 })
+        .sort(function (a, b) { return b[1] - a[1] || (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0) })
+      var keep = found.slice(0, Math.max(1, ms.top || 10))
+      var rest = found.slice(keep.length)
+      var named = function (key) {
+        var picked = key.split('|').filter(function (one) { return one !== '' })
+          .map(function (one) { return labels[Number(one)] })
+        if (!picked.length) return 'None of these'
+        return picked.length === 1 ? picked[0] + ' only' : picked.join(' + ')
+      }
+      out = keep.map(function (entry) { return [named(entry[0]), entry[1], share(entry[1], base), entry[0]] })
+      if (ms.sort === 'none') {
+        var place = function (key) {
+          var picked = key.split('|').filter(function (one) { return one !== '' }).map(Number)
+          return picked.length ? picked : [-1]
+        }
+        out.sort(function (a, b) {
+          var one = place(a[3]), two = place(b[3])
+          for (var i = 0; i < Math.min(one.length, two.length); i++) if (one[i] !== two[i]) return one[i] - two[i]
+          return one.length - two.length
+        })
+      } else orderedBy(out, ms.sort, 1)
+      out = out.map(function (entry) { return entry.slice(0, 3) })
+      if (rest.length) {
+        var left = rest.reduce(function (sum, entry) { return sum + entry[1] }, 0)
+        out.push(['Other combinations (' + rest.length.toLocaleString('en-US') + ')', left, share(left, base)])
+      }
+      dims = [dimension('combination', 'Combination')]
+      countLabel = 'Respondents'
+    } else if (ms.view === 'together') {
+      var single = zeros()
+      var pairs = {}
+      ;(ms.pairs || []).forEach(function (pair) { pairs[pair[0] + '_' + pair[1]] = 0 })
+      rows.forEach(function (row) {
+        for (var i = 0; i < n; i++) single[i] += Number(row[width + i]) || 0
+        ;(ms.pairs || []).forEach(function (pair, p) {
+          pairs[pair[0] + '_' + pair[1]] += Number(row[width + n + p]) || 0
+        })
+      })
+      var order = orderedBy(labels.map(function (label, i) { return [label, single[i], i] }), ms.sort, 1)
+      out = []
+      order.forEach(function (one) {
+        order.forEach(function (two) {
+          if (one[2] === two[2]) { out.push([one[0], two[0], one[1], null]); return }
+          var both = pairs[Math.min(one[2], two[2]) + '_' + Math.max(one[2], two[2])] || 0
+          out.push([one[0], two[0], both, share(both, one[1])])
+        })
+      })
+      dims = [dimension('option', 'Of those who chose'), dimension('also', 'Also chose')]
+      countLabel = 'Chose both'
+      shareLabel = '% who also chose it'
+    } else {
+      var counts = zeros()
+      rows.forEach(function (row) { for (var i = 0; i < n; i++) counts[i] += Number(row[width + i]) || 0 })
+      out = orderedBy(labels.map(function (label, i) {
+        return [label, counts[i], base ? share(counts[i], base) : 0.0]
+      }), ms.sort, 1)
+      dims = [dimension('option', 'Option')]
+    }
+
+    // The one number a chart draws, or both for a table, as the board chose.
+    var columns = dims.concat([
+      { name: 'chose', label: countLabel, type: 'measure' },
+      { name: 'percent', label: shareLabel, type: 'measure', data_type: 'percent' },
+    ])
+    var keepAt = dims.map(function (_, i) { return i })
+    if (ms.show === 'count' || ms.show === 'both') keepAt.push(dims.length)
+    if (ms.show === 'percent' || ms.show === 'both') keepAt.push(dims.length + 1)
+    return {
+      columns: keepAt.map(function (i) { return columns[i] }),
+      rows: out.map(function (entry) { return keepAt.map(function (i) { return entry[i] }) }),
+    }
+  }
+
+  function typeOf(cube, name) {
+    var found = cube.columns.filter(function (column) { return column.name === name })[0]
+    return (found && found.data_type) || ''
+  }
+
+  function sorted(rows, cube) {
+    var names = cube.dimensions.concat(cube.measures.map(function (m) { return m.name }))
+    var sort = (cube.sort || [])[0]
+    var index = sort ? names.indexOf(sort.field) : -1
+    var down = sort ? sort.direction !== 'asc' : true
+    if (index < 0) {
+      if (cube.dimensions.length !== 1 || !cube.measures.length) return rows
+      // An axis with an order of its own is read along that order: a date
+      // left to right in time, a number low to high. Age in ten year bands
+      // is the case that made this plain - sorted biggest first, a
+      // histogram came out 10, 80, 30, 60, 40, the shape of the
+      // distribution thrown away and nothing on the chart admitting it.
+      // Everything else with one grouping is read biggest first, which is
+      // how the platform draws a grouping nothing sorted.
+      var axis = typeOf(cube, cube.dimensions[0])
+      if (axis === 'datetime' || axis === 'numeric') { index = 0; down = false }
+      else index = cube.dimensions.length
+    }
+    return rows.slice().sort(function (a, b) {
+      var left = a[index], right = b[index]
+      if (typeof left === 'number' || typeof right === 'number') {
+        return down ? (Number(right) || 0) - (Number(left) || 0) : (Number(left) || 0) - (Number(right) || 0)
+      }
+      return down ? text(right).localeCompare(text(left)) : text(left).localeCompare(text(right))
+    })
+  }
+
+  /* The chart's own top-N, taken after the filter: the ten busiest
+     interviewers in one province are not the national ten. */
+  function topN(rows, cube) {
+    if (!cube.top || cube.dimensions.length !== 1 || rows.length <= cube.top) return rows
+    var head = rows.slice(0, cube.top)
+    var tail = rows.slice(cube.top)
+    var other = ['Other']
+    cube.measures.forEach(function (measure, index) {
+      other.push(measure.how === 'sum' || measure.how === 'share'
+        ? tail.reduce(function (sum, row) { return sum + (Number(row[index + 1]) || 0) }, 0)
+        : null)
+    })
+    return head.concat([other])
+  }
+
+  // ---- drawing ------------------------------------------------------------
+  function el(tag, className, textContent) {
+    var node = document.createElement(tag)
+    if (className) node.className = className
+    if (textContent !== undefined) node.textContent = textContent
+    return node
+  }
+
+  /** Categories and one series per measure, or per value of a second grouping. */
+  function shape(result) {
+    var dims = result.columns.filter(function (c) { return c.type === 'dimension' }).length
+    var measures = result.columns.slice(dims)
+    if (dims >= 2 && measures.length === 1) {
+      var categories = [], series = [], seen = {}, place = {}
+      result.rows.forEach(function (row) {
+        var one = text(row[0]), two = text(row[1])
+        if (place[one] === undefined) { place[one] = categories.length; categories.push(one) }
+        if (seen[two] === undefined) { seen[two] = series.length; series.push({ name: two, data: [] }) }
+      })
+      series.forEach(function (line) { line.data = new Array(categories.length).fill(0) })
+      result.rows.forEach(function (row) {
+        series[seen[text(row[1])]].data[place[text(row[0])]] = Number(row[2]) || 0
+      })
+      return { categories: categories, series: series }
+    }
+    return {
+      categories: result.rows.map(function (row) { return dims ? text(row[0]) : '' }),
+      series: measures.map(function (column, index) {
+        return {
+          name: column.label,
+          data: result.rows.map(function (row) { return Number(row[dims + index]) || 0 }),
+        }
+      }),
+    }
+  }
+
+  function chartOption(kind, result, display, width) {
+    var built = shape(result)
+    var many = built.series.length > 1
+    var horizontalKind = kind === 'horizontal_bar' || kind === 'horizontal_stacked_bar'
+    var stackedKind = kind === 'stacked_bar' || kind === 'horizontal_stacked_bar'
+    var labels = display && display.showValues
+      ? {
+          show: true,
+          // Outside the mark, as the platform draws them: printed inside, a
+          // number sits on top of the bar it belongs to and is unreadable
+          // against it. A stacked bar has nowhere outside to put them.
+          position: stackedKind ? 'inside' : horizontalKind ? 'right' : 'top',
+          formatter: function (p) { return num(p.value) },
+        }
+      : { show: false }
+    var base = {
+      color: PALETTE,
+      textStyle: Object.assign({}, FACE),
+      animationDuration: 400,
+      grid: { left: 8, right: 16, top: many ? 40 : 16, bottom: 8, containLabel: true },
+      tooltip: Object.assign({}, TOOLTIP, {
+        trigger: kind === 'pie' || kind === 'donut' ? 'item' : 'axis',
+        axisPointer: { type: 'line', lineStyle: { color: INK.axis, width: 1 } },
+      }),
+      legend: many
+        ? {
+            type: 'scroll', top: 0, left: 0, icon: 'roundRect',
+            itemWidth: 10, itemHeight: 10, itemGap: 16,
+            textStyle: Object.assign({ color: '#52514e' }, FACE),
+          }
+        : { show: false },
+    }
+    if (kind === 'pie' || kind === 'donut') {
+      return Object.assign({}, base, {
+        grid: undefined,
+        legend: {
+          type: 'scroll', orient: 'horizontal', bottom: 0, left: 'center', icon: 'roundRect',
+          itemWidth: 10, itemHeight: 10, itemGap: 16,
+          textStyle: Object.assign({ color: '#52514e' }, FACE),
+        },
+        series: [{
+          type: 'pie',
+          radius: kind === 'donut' ? ['48%', '70%'] : ['0%', '68%'],
+          center: ['50%', '45%'],
+          avoidLabelOverlap: true,
+          itemStyle: { borderColor: INK.surface, borderWidth: 2, borderRadius: 3 },
+          label: Object.assign({ color: '#52514e' }, FACE, display && display.showValues
+            ? { formatter: function (p) { return num(p.value) + ' (' + p.percent + '%)' } }
+            : { formatter: '{d}%' }),
+          labelLine: { length: 8, length2: 8, lineStyle: { color: INK.axis } },
+          data: built.categories.map(function (name, index) {
+            return { name: name, value: built.series[0] ? built.series[0].data[index] : 0 }
+          }),
+        }],
+      })
+    }
+    if (kind === 'scatter') {
+      var x = built.series[0], y = built.series[1]
+      return Object.assign({}, base, {
+        tooltip: Object.assign({}, TOOLTIP, { trigger: 'item' }),
+        xAxis: Object.assign(valueAxis(), { scale: true, name: x ? x.name : '',
+          nameTextStyle: Object.assign({ color: INK.muted }, FACE) }),
+        yAxis: Object.assign(valueAxis(), { scale: true, name: y ? y.name : '',
+          nameTextStyle: Object.assign({ color: INK.muted }, FACE) }),
+        series: [{
+          type: 'scatter',
+          symbolSize: 10,
+          data: built.categories.map(function (_, index) {
+            return [x ? x.data[index] : 0, y ? y.data[index] : 0]
+          }),
+        }],
+      })
+    }
+    if (kind === 'funnel') {
+      return Object.assign({}, base, {
+        grid: undefined,
+        tooltip: Object.assign({}, TOOLTIP, { trigger: 'item' }),
+        series: [{
+          type: 'funnel', left: '8%', right: '8%', label: { position: 'inside' },
+          data: built.categories.map(function (name, index) {
+            return { name: name, value: built.series[0] ? built.series[0].data[index] : 0 }
+          }),
+        }],
+      })
+    }
+    var horizontal = horizontalKind
+    var stacked = stackedKind
+    /* Names under upright bars, kept rather than thinned.
+       ECharts' answer to a label wider than the slot its bar stands in is to
+       drop it and every second one after it. On six provinces across a wide
+       card that left three labelled bars and three unlabelled ones, with no
+       way to tell which was which. Cutting each name to its own slot keeps
+       every one, and the tooltip still carries the whole name.
+
+       The slot is the plot divided by the number of bars, and the plot is the
+       chart less the value axis, which is about as wide as its longest number.
+       Erring narrow is the safe way round: a label bounded tighter than its
+       slot is shorter than it needed to be, while one bounded looser overlaps
+       its neighbour and ECharts hides one of the two. This is the same
+       arithmetic the platform's own chart builder does. */
+    var rotated = !horizontal && built.categories.length > 8
+    var widest = 0
+    if (stacked) {
+      built.categories.forEach(function (_, at) {
+        var total = 0
+        built.series.forEach(function (line) { total += Number(line.data[at]) || 0 })
+        if (total > widest) widest = total
+      })
+    } else {
+      built.series.forEach(function (line) {
+        line.data.forEach(function (value) { if ((Number(value) || 0) > widest) widest = Number(value) || 0 })
+      })
+    }
+    // Never under four characters: the axis is labelled by its ticks, not by
+    // its largest value, and an axis running to 1 is ticked "0.25".
+    var digits = Math.max(4, num(widest).length)
+    var axisGutter = digits * FACE.fontSize * 0.62 + 8
+    // 8 and 24 are the grid's own gutters, set in `base` above.
+    var slot = width && built.categories.length
+      ? Math.floor((width - axisGutter - 32) / built.categories.length) : 0
+    var category = categoryAxis(built.categories)
+    if (rotated) category.axisLabel.rotate = 30
+    // Down the side, the names get a third of the chart and the bars the
+    // other two thirds - the platform's share.
+    if (horizontal && width) {
+      Object.assign(category.axisLabel, sideLabel(Math.round(width / 3), display.wrapLabels))
+    }
+    // A turned label is not bounded by its own slot - it runs diagonally under
+    // its neighbour's - so cutting it to that width would shorten a name the
+    // axis had room for. Below 44px the axis' own thinning is the better of
+    // the two, because forty names across a quarter tile would be forty
+    // ellipses.
+    if (!horizontal && !rotated && slot >= 44) {
+      category.axisLabel.interval = 0
+      category.axisLabel.width = slot - 4
+      category.axisLabel.overflow = 'truncate'
+    }
+    var value = valueAxis()
+    return Object.assign({}, base, {
+      xAxis: horizontal ? value : category,
+      yAxis: horizontal ? category : value,
+      series: built.series.map(function (line) {
+        return {
+          name: line.name,
+          type: kind === 'line' || kind === 'area' ? 'line' : 'bar',
+          smooth: false,
+          areaStyle: kind === 'area' ? {} : undefined,
+          stack: stacked ? 'total' : undefined,
+          barMaxWidth: 46,
+          label: labels,
+          data: line.data,
+        }
+      }),
+    })
+  }
+
+  function drawChart(body, kind, result, display) {
+    if (!result.rows.length) { body.appendChild(el('p', 'note', 'Nothing matches these filters.')); return }
+    if (kind === 'table' || !window.echarts) { drawTable(body, result); return }
+    if (kind === 'kpi' || kind === 'gauge') {
+      var dims = result.columns.filter(function (c) { return c.type === 'dimension' }).length
+      body.className += ' middle'
+      body.appendChild(el('p', 'kpi', num(result.rows[0][dims])))
+      body.appendChild(el('p', 'muted', result.columns[dims] ? result.columns[dims].label : ''))
+      return
+    }
+    var known = ['bar', 'horizontal_bar', 'stacked_bar', 'horizontal_stacked_bar', 'line',
+                 'area', 'pie', 'donut', 'scatter', 'funnel']
+    if (known.indexOf(kind) < 0) { drawTable(body, result); return }
+    var host = el('div', 'chart')
+    body.appendChild(host)
+    var instance = echarts.init(host)
+    // Read off the host rather than threaded through: the widget node already
+    // carries the colour, whether it was chosen or decided from the background.
+    var ink = getComputedStyle(host).color
+    // How much width the category labels have to share is not known yet: the
+    // card is still being assembled and is not in the page, so the host
+    // measures nothing. The option is set now at that width and set again from
+    // the real one on the layout pass below - the same pass that gives every
+    // chart its first real size.
+    function paint() {
+      var settings = display || {}
+      instance.setOption(inkOption(atSize(settings.fontSize, function () {
+        return chartOption(kind, result, settings, host.clientWidth)
+      }), ink))
+    }
+    paint()
+    drawn.push({ chart: instance, refit: paint })
+  }
+
+  /* Rec. 709 luma: the eye takes green as much brighter than blue at the same
+     number, so averaging the channels would call #0000ff light. */
+  function isDark(color) {
+    var hex = String(color || '').replace('#', '')
+    if (hex.length === 3) hex = hex[0] + hex[0] + hex[1] + hex[1] + hex[2] + hex[2]
+    if (hex.length !== 6) return false
+    var r = parseInt(hex.slice(0, 2), 16)
+    var g = parseInt(hex.slice(2, 4), 16)
+    var b = parseInt(hex.slice(4, 6), 16)
+    return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 < 0.5
+  }
+
+  /* Chart text takes the widget's ink, the same way the platform's does.
+     ECharts gives an axis label and a legend their own default colour, which
+     wins over anything set at the root, so each one has to be written. A label
+     positioned inside a mark keeps its white: it sits on a filled shape, and
+     recolouring it is how it disappears into the bar it is labelling. */
+  var TEXT_KEYS = ['textStyle', 'axisLabel', 'nameTextStyle', 'label']
+  function isPlainObject(value) {
+    return value && typeof value === 'object' &&
+      Object.prototype.toString.call(value) !== '[object Array]'
+  }
+  function inkOption(node, color) {
+    if (!color) return node
+    if (Object.prototype.toString.call(node) === '[object Array]') {
+      for (var i = 0; i < node.length; i++) inkOption(node[i], color)
+      return node
+    }
+    if (!isPlainObject(node)) return node
+    for (var k = 0; k < TEXT_KEYS.length; k++) {
+      var target = node[TEXT_KEYS[k]]
+      // A label sitting on a filled mark keeps its white.
+      if (isPlainObject(target) && !(TEXT_KEYS[k] === 'label' && target.position === 'inside')) {
+        target.color = color
+      }
+    }
+    // A legend carries its text colour one level down, in its own textStyle.
+    if (isPlainObject(node.legend)) {
+      node.legend.textStyle = Object.assign({}, node.legend.textStyle, { color: color })
+    }
+    for (var name in node) {
+      if (Object.prototype.hasOwnProperty.call(node, name)) inkOption(node[name], color)
+    }
+    return node
+  }
+
+  function drawTable(body, result) {
+    var table = el('table', 'data')
+    var head = document.createElement('tr')
+    result.columns.forEach(function (column) {
+      var cell = el('th', column.type === 'measure' ? 'n' : '', column.label)
+      head.appendChild(cell)
+    })
+    var thead = document.createElement('thead')
+    thead.appendChild(head)
+    table.appendChild(thead)
+    var tbody = document.createElement('tbody')
+    result.rows.forEach(function (row) {
+      var line = document.createElement('tr')
+      row.forEach(function (value, index) {
+        var measure = result.columns[index] && result.columns[index].type === 'measure'
+        line.appendChild(el('td', measure ? 'n' : '', measure ? num(value) : text(value)))
+      })
+      tbody.appendChild(line)
+    })
+    table.appendChild(tbody)
+    body.appendChild(table)
+  }
+
+  /** A cross-tab rebuilt from its cells: the totals and shares are arithmetic. */
+  // A column's heading as the table was set to show it: renamed, or its label.
+  function heading(spec, label) {
+    var renamed = (spec.column_headings || {})[label]
+    return renamed && String(renamed).trim() ? String(renamed).trim() : label
+  }
+
+  function drawFixedCrosstab(body, spec) {
+    // Under disclosure control the table arrives finished rather than as a
+    // cube, because a cube is the cell values and the withheld ones are
+    // exactly what must not travel. Nothing here is recomputed, so the page
+    // filters cannot narrow this widget - the note at the foot says so.
+    var fixed = spec.fixed
+    var totals = spec.include_totals && fixed.column_labels.length > 0
+    var rowTotals = fixed.column_labels.length > 1
+    var table = el('table', 'data')
+    var thead = document.createElement('thead')
+    var head = document.createElement('tr')
+    head.appendChild(el('th', '', spec.row_heading || spec.row_variable || spec.column_variable || ''))
+    fixed.column_labels.forEach(function (c) { head.appendChild(el('th', 'n', heading(spec, c))) })
+    if (rowTotals) head.appendChild(el('th', 'n', 'Total'))
+    thead.appendChild(head)
+    table.appendChild(thead)
+    var tbody = document.createElement('tbody')
+    var suffix = spec.percentages === 'none' ? '' : '%'
+    var margin = function (value) { return value === null ? '*' : num(value) }
+    fixed.row_labels.forEach(function (label, i) {
+      var line = document.createElement('tr')
+      line.appendChild(el('td', '', label))
+      ;(fixed.values[i] || []).forEach(function (value, j) {
+        var hidden = (fixed.suppressed[i] || [])[j]
+        var text = hidden ? '*' : value === null ? '-' : num(value) + suffix
+        line.appendChild(el('td', 'n', text))
+      })
+      if (rowTotals) {
+        line.appendChild(el('td', 'n total', margin(fixed.row_totals[i])))
+      }
+      tbody.appendChild(line)
+    })
+    if (totals && fixed.row_labels.length > 1) {
+      var last = document.createElement('tr')
+      last.className = 'total'
+      last.appendChild(el('td', '', 'Total'))
+      fixed.column_totals.forEach(function (t) { last.appendChild(el('td', 'n', margin(t))) })
+      if (rowTotals) last.appendChild(el('td', 'n', margin(fixed.grand_total)))
+      tbody.appendChild(last)
+    }
+    table.appendChild(tbody)
+    body.appendChild(table)
+
+    var withheld = fixed.suppressed.some(function (row) {
+      return row.some(function (cell) { return cell })
+    })
+    var note = el('p', 'note')
+    note.textContent =
+      (withheld ? '* withheld to protect fewer than ' + fixed.threshold + ' records. ' : '') +
+      (fixed.rows_withheld > 0
+        ? fixed.rows_withheld + ' categor' + (fixed.rows_withheld === 1 ? 'y' : 'ies') +
+          ' below that floor are not listed. '
+        : '') +
+      'Computed against the whole dataset, so this table does not respond to the filters above.'
+    body.appendChild(note)
+  }
+
+  function drawCrosstab(body, result, spec) {
+    if (spec.fixed) return drawFixedCrosstab(body, spec)
+    // A table can be asked for with no cell values at all: the categories of
+    // the one variable it has and nothing beside them. There is nothing to
+    // total either, so the stand-in column and both total lines go.
+    var values = spec.show_values !== false
+    // Several cell values side by side: each is a column of its own, in the
+    // order they were chosen, and only counts and sums add into a total.
+    var many = spec.measure_labels && spec.measure_labels.length > 1
+    var totals = spec.include_totals && values && (!many || spec.adds_across)
+    var rows = [], columns = [], cells = {}
+    result.rows.forEach(function (row) {
+      var r = text(row[0]) || '(missing)'
+      if (rows.indexOf(r) < 0) rows.push(r)
+      if (many) {
+        spec.measure_labels.forEach(function (label, index) {
+          cells[r + '||' + label] = (cells[r + '||' + label] || 0) + (Number(row[1 + index]) || 0)
+        })
+        return
+      }
+      var c = result.columns.length > 2 ? (text(row[1]) || '(missing)') : spec.measure_label
+      if (values && columns.indexOf(c) < 0) columns.push(c)
+      cells[r + '||' + c] = (cells[r + '||' + c] || 0) + (Number(row[row.length - 1]) || 0)
+    })
+    rows.sort()
+    if (many) columns = spec.measure_labels.slice()
+    else columns.sort()
+    var rowTotal = {}, columnTotal = {}, grand = 0
+    rows.forEach(function (r) {
+      rowTotal[r] = columns.reduce(function (sum, c) { return sum + (cells[r + '||' + c] || 0) }, 0)
+      grand += rowTotal[r]
+    })
+    columns.forEach(function (c) {
+      columnTotal[c] = rows.reduce(function (sum, r) { return sum + (cells[r + '||' + c] || 0) }, 0)
+    })
+    var show = function (value, r, c) {
+      if (spec.percentages === 'row') return rowTotal[r] ? num((value / rowTotal[r]) * 100, 1) + '%' : '-'
+      if (spec.percentages === 'column') return columnTotal[c] ? num((value / columnTotal[c]) * 100, 1) + '%' : '-'
+      if (spec.percentages === 'total') return grand ? num((value / grand) * 100, 1) + '%' : '-'
+      return num(value)
+    }
+    var table = el('table', 'data')
+    var thead = document.createElement('thead')
+    var head = document.createElement('tr')
+    head.appendChild(el('th', '', spec.row_heading || spec.row_variable || spec.column_variable || ''))
+    columns.forEach(function (c) { head.appendChild(el('th', 'n', heading(spec, c))) })
+    if (totals) head.appendChild(el('th', 'n', 'Total'))
+    thead.appendChild(head)
+    table.appendChild(thead)
+    var tbody = document.createElement('tbody')
+    rows.forEach(function (r) {
+      var line = document.createElement('tr')
+      line.appendChild(el('td', '', r))
+      columns.forEach(function (c) {
+        line.appendChild(el('td', 'n', show(cells[r + '||' + c] || 0, r, c)))
+      })
+      if (totals) line.appendChild(el('td', 'n total', num(rowTotal[r])))
+      tbody.appendChild(line)
+    })
+    if (totals) {
+      var last = document.createElement('tr')
+      last.className = 'total'
+      last.appendChild(el('td', '', 'Total'))
+      columns.forEach(function (c) { last.appendChild(el('td', 'n', num(columnTotal[c]))) })
+      last.appendChild(el('td', 'n', num(grand)))
+      tbody.appendChild(last)
+    }
+    table.appendChild(tbody)
+    body.appendChild(table)
+  }
+
+  function indicatorStatus(spec, value) {
+    if (value === null || value === undefined) return 'unknown'
+    if (spec.warning_threshold === null && spec.critical_threshold === null) return 'ok'
+    if (spec.direction === 'lower_is_better') {
+      if (spec.critical_threshold !== null && value >= spec.critical_threshold) return 'critical'
+      if (spec.warning_threshold !== null && value >= spec.warning_threshold) return 'warning'
+      return 'ok'
+    }
+    if (spec.critical_threshold !== null && value <= spec.critical_threshold) return 'critical'
+    if (spec.warning_threshold !== null && value <= spec.warning_threshold) return 'warning'
+    return 'ok'
+  }
+
+  /**
+   * The little arithmetic an indicator can be defined by, read offline.
+   *
+   * Mirrors services/formula.py exactly - numbers, part names, + - * /,
+   * brackets and a leading minus, and nothing else. It is a parser rather
+   * than a call to eval for the same reason the server has one: the
+   * expression was typed by a reader and stored, and a file that evaluated
+   * it would run whatever came with the board.
+   *
+   * No value propagates, and a division by nothing is no value rather than
+   * an infinity: a province where nothing was issued has no completion rate,
+   * and a blank is what that is.
+   */
+  function readFormula(text) {
+    var tokens = []
+    var at = 0
+    var source = String(text || '')
+    while (at < source.length) {
+      var char = source.charAt(at)
+      if (/\s/.test(char)) { at += 1; continue }
+      if ('+-*/()'.indexOf(char) >= 0) { tokens.push([char, char]); at += 1; continue }
+      var number = /^(?:\d+(?:\.\d+)?|\.\d+)/.exec(source.slice(at))
+      if (number) { tokens.push(['number', number[0]]); at += number[0].length; continue }
+      var name = /^[A-Za-z_][A-Za-z0-9_]*/.exec(source.slice(at))
+      if (name) { tokens.push(['name', name[0]]); at += name[0].length; continue }
+      throw new Error('bad character in formula')
+    }
+    var here = 0
+    var peek = function () { return here < tokens.length ? tokens[here] : null }
+    var take = function () {
+      if (here >= tokens.length) throw new Error('formula ends mid sum')
+      return tokens[here++]
+    }
+    var expression = function () {
+      var left = term()
+      var token = peek()
+      while (token && (token[0] === '+' || token[0] === '-')) {
+        take()
+        left = [token[0], left, term()]
+        token = peek()
+      }
+      return left
+    }
+    var term = function () {
+      var left = factor()
+      var token = peek()
+      while (token && (token[0] === '*' || token[0] === '/')) {
+        take()
+        left = [token[0], left, factor()]
+        token = peek()
+      }
+      return left
+    }
+    var factor = function () {
+      var token = peek()
+      if (token && (token[0] === '+' || token[0] === '-')) {
+        take()
+        var inner = factor()
+        // A leading minus is nought take it away, which is the same tree the
+        // server builds for it.
+        return token[0] === '-' ? ['-', ['number', 0, null], inner] : inner
+      }
+      return primary()
+    }
+    var primary = function () {
+      var token = take()
+      if (token[0] === 'number') return ['number', Number(token[1]), null]
+      if (token[0] === 'name') return ['name', token[1], null]
+      if (token[0] === '(') {
+        var inside = expression()
+        var closing = peek()
+        if (!closing || closing[0] !== ')') throw new Error('bracket never closed')
+        take()
+        return inside
+      }
+      throw new Error('cannot start a sum with ' + token[1])
+    }
+    var tree = expression()
+    if (peek()) throw new Error('left over at the end')
+    return tree
+  }
+
+  function runFormula(tree, parts) {
+    var kind = tree[0]
+    if (kind === 'number') return tree[1]
+    if (kind === 'name') {
+      var held = parts[tree[1]]
+      return held === undefined || held === null ? null : Number(held)
+    }
+    var one = runFormula(tree[1], parts)
+    var other = runFormula(tree[2], parts)
+    if (one === null || other === null) return null
+    if (kind === '+') return one + other
+    if (kind === '-') return one - other
+    if (kind === '*') return one * other
+    if (kind === '/') return other === 0 ? null : one / other
+    return null
+  }
+
+  /**
+   * One part's cube read whole, ignoring its grouping.
+   *
+   * The headline of a formula is the sum asked of everything the reader is
+   * looking at, not the sum of the groups' answers: a mean averaged again
+   * across groups is not the mean. Bucketing with no dimensions puts every
+   * row in one bucket, and the recipe that rebuilds a mean from its total and
+   * its count then runs over the whole of it.
+   */
+  function wholeOf(cube) {
+    var flat = {}
+    for (var key in cube) if (Object.prototype.hasOwnProperty.call(cube, key)) flat[key] = cube[key]
+    flat.dimensions = []
+    var result = combine(flat)
+    return result.rows.length ? Number(result.rows[0][0]) : null
+  }
+
+  /**
+   * One group's status against its own quota.
+   *
+   * Mirrors services/monitoring._status_against: the thresholds are set
+   * against the headline, so a region carrying a tenth of the quota has them
+   * scaled to a tenth as well, or every small region would sit permanently in
+   * the red. A group with no quota of its own is not judged at all.
+   */
+  function groupStatus(spec, value, target) {
+    if (value === null || value === undefined || !target) return 'unknown'
+    var headline = spec.target_value
+    if (!headline || headline === target) return indicatorStatus(spec, value)
+    var scale = target / headline
+    return indicatorStatus({
+      direction: spec.direction,
+      warning_threshold:
+        spec.warning_threshold === null || spec.warning_threshold === undefined
+          ? null
+          : spec.warning_threshold * scale,
+      critical_threshold:
+        spec.critical_threshold === null || spec.critical_threshold === undefined
+          ? null
+          : spec.critical_threshold * scale,
+    }, value)
+  }
+
+  /**
+   * The groups of a breakdown, in the order the board was set to.
+   *
+   * Follows lib/breakdown-order exactly: furthest from its own quota first by
+   * default, a group with no quota last because it is not behind and not
+   * finished, and the largest first where nothing has a quota at all.
+   */
+  function ordered(pairs, quotas, how) {
+    var rows = pairs.slice()
+    var quota = function (pair) {
+      var target = Number(quotas[pair[0]])
+      return target > 0 ? target : null
+    }
+    var share = function (pair) {
+      var target = quota(pair)
+      return target === null ? null : ((Number(pair[1]) || 0) / target) * 100
+    }
+    var quoted = rows.some(function (pair) { return quota(pair) !== null })
+    if (how === 'name') {
+      return rows.sort(function (one, other) {
+        return String(one[0]).localeCompare(String(other[0]), undefined, { numeric: true })
+      })
+    }
+    if (how === 'largest' || !quoted) {
+      return rows.sort(function (one, other) { return other[1] - one[1] })
+    }
+    return rows.sort(function (one, other) {
+      var mine = share(one), theirs = share(other)
+      if (mine === null && theirs === null) return other[1] - one[1]
+      if (mine === null) return 1
+      if (theirs === null) return -1
+      return how === 'done' ? theirs - mine : mine - theirs
+    })
+  }
+
+  /**
+   * A formula indicator's headline and its groups.
+   *
+   * Follows services/monitoring._by_formula: each part read from its own
+   * cube, the sum taken over the whole and then once per group, and a group
+   * a part matched nothing in counted as nought where the part counts things
+   * and as no value where it averages them - the mean of no rows is not
+   * nought. A group the sum has nothing to say about is left out rather than
+   * drawn as a nought.
+   */
+  function formulaFigures(widget) {
+    var tree = readFormula(widget.formula.expression)
+    var parts = widget.formula.parts || []
+    var cubes = widget.parts || {}
+    var head = {}
+    var perGroup = {}
+    var groups = []
+    parts.forEach(function (part) {
+      var cube = cubes[part.name]
+      if (!cube) return
+      head[part.name] = wholeOf(cube)
+      var read = combine(cube)
+      var dims = read.columns.filter(function (c) { return c.type === 'dimension' }).length
+      if (!dims) return
+      var found = {}
+      read.rows.forEach(function (row) {
+        var key = text(row[0])
+        if (groups.indexOf(key) < 0) groups.push(key)
+        found[key] = Number(row[dims]) || 0
+      })
+      perGroup[part.name] = found
+    })
+    var breakdown = []
+    groups.forEach(function (key) {
+      var here = {}
+      parts.forEach(function (part) {
+        var found = perGroup[part.name]
+        var held = found ? found[key] : undefined
+        here[part.name] = held === undefined ? (part.counted ? 0 : null) : held
+      })
+      var got = runFormula(tree, here)
+      if (got !== null) breakdown.push([key, got])
+    })
+    return { value: runFormula(tree, head), breakdown: breakdown }
+  }
+
+  function drawIndicator(body, widget) {
+    var spec = widget.indicator
+    var breakdown = []
+    var value = null
+    if (widget.formula) {
+      // An indicator written as arithmetic over named parts: each part has
+      // its own cube because each has its own filter, and the sum is worked
+      // out here for the whole and again for every group, which is what the
+      // platform does with the same numbers.
+      var figures = formulaFigures(widget)
+      value = figures.value
+      breakdown = figures.breakdown
+      drawIndicatorBody(body, widget, spec, value, breakdown)
+      return
+    }
+    var result = combine(widget.cube)
+    var denominator = widget.denominator ? combine(widget.denominator) : null
+    var dims = result.columns.filter(function (c) { return c.type === 'dimension' }).length
+    var total = 0
+    result.rows.forEach(function (row) {
+      var one = Number(row[dims]) || 0
+      total += one
+      if (dims) breakdown.push([text(row[0]), one])
+    })
+    value = total
+    if (spec.percent_of && denominator) {
+      var whole = denominator.rows.reduce(function (sum, row) {
+        return sum + (Number(row[denominator.columns.filter(function (c) { return c.type === 'dimension' }).length]) || 0)
+      }, 0)
+      value = whole ? (total / whole) * 100 : null
+      if (breakdown.length) {
+        var per = {}
+        var dd = denominator.columns.filter(function (c) { return c.type === 'dimension' }).length
+        denominator.rows.forEach(function (row) { per[text(row[0])] = Number(row[dd]) || 0 })
+        breakdown = breakdown
+          .filter(function (pair) { return per[pair[0]] })
+          .map(function (pair) { return [pair[0], (pair[1] / per[pair[0]]) * 100] })
+      }
+    }
+    drawIndicatorBody(body, widget, spec, value, breakdown)
+  }
+
+  /**
+   * The tile itself, given a number and its groups.
+   *
+   * Which numbers those are is the only difference between an indicator
+   * written as one aggregate and one written as a formula, so the drawing is
+   * shared: the headline, its progress bar, and the groups as a chart or as
+   * a table, all read the same either way.
+   */
+  function drawIndicatorBody(body, widget, spec, value, breakdown) {
+    var status = indicatorStatus(spec, value)
+    body.className += breakdown.length ? ' stack' : ' middle'
+    body.appendChild(el('p', 'kpi', formatValue(value, spec.value_format, spec.unit)))
+    if (spec.target_value) {
+      var track = el('div', 'track')
+      var bar = el('div')
+      bar.style.width = Math.min(((value || 0) / spec.target_value) * 100, 100) + '%'
+      bar.style.background = STATUS[status]
+      track.appendChild(bar)
+      body.appendChild(track)
+      body.appendChild(el('p', 'muted',
+        num(((value || 0) / spec.target_value) * 100, 0) + '% of ' + num(spec.target_value)))
+    }
+    // Each group against its own quota, never against the headline: the
+    // headline is what the quotas add up to, so a group measured against it
+    // reads as hopelessly behind whatever it has actually done. A group with
+    // no quota of its own is shown as its value and nothing else.
+    var quotas = spec.breakdown_targets || {}
+    var quoted = breakdown.some(function (pair) { return Number(quotas[pair[0]]) > 0 })
+    var lower = spec.direction === 'lower_is_better'
+    // The same order the board was set to. A file that ordered its own way
+    // would be a different reading of the same numbers, and the reader holding
+    // both has no way to tell which one is the board.
+    breakdown = ordered(breakdown, quotas, widget.config && widget.config.breakdown_order)
+
+    // A list of figures where the widget was set to one: a tile of sixty bars
+    // is a smear, and the file has to be the board rather than a tidier
+    // relative of it.
+    if (breakdown.length && widget.config && widget.config.breakdown_view === 'table') {
+      var table = el('table', 'data')
+      var head = document.createElement('tr')
+      head.appendChild(el('th', '', spec.breakdown_variable || 'Group'))
+      head.appendChild(el('th', 'n', spec.name || 'Value'))
+      if (quoted) {
+        head.appendChild(el('th', 'n', 'Target'))
+        head.appendChild(el('th', 'n', lower ? 'Of limit' : 'Done'))
+      }
+      var header = document.createElement('thead')
+      header.appendChild(head)
+      table.appendChild(header)
+      var lines = document.createElement('tbody')
+      breakdown.forEach(function (pair) {
+        var target = Number(quotas[pair[0]]) > 0 ? Number(quotas[pair[0]]) : null
+        var line = document.createElement('tr')
+        line.appendChild(el('td', '', pair[0]))
+        line.appendChild(el('td', 'n', formatValue(pair[1], spec.value_format, spec.unit)))
+        if (quoted) {
+          line.appendChild(el('td', 'n', target === null ? '-' : num(target)))
+          var share = el('td', 'n',
+            target === null ? '-' : num(((Number(pair[1]) || 0) / target) * 100, 0) + '%')
+          share.style.fontWeight = '600'
+          if (target !== null) share.style.color = STATUS[groupStatus(spec, pair[1], target)]
+          line.appendChild(share)
+        }
+        lines.appendChild(line)
+      })
+      table.appendChild(lines)
+      body.appendChild(table)
+      return
+    }
+
+    if (breakdown.length && window.echarts) {
+      var host = el('div', 'chart')
+      body.appendChild(host)
+      var instance = echarts.init(host)
+      var option = {
+        color: PALETTE,
+        grid: { left: 8, right: 30, top: 10, bottom: 6, containLabel: true },
+        tooltip: Object.assign({}, TOOLTIP, { trigger: 'axis' }),
+        xAxis: { type: 'value' },
+        yAxis: { type: 'category', data: breakdown.map(function (p) { return p[0] }) },
+      }
+      if (!quoted) {
+        option.series = [{
+          type: 'bar', barMaxWidth: 22,
+          label: { show: true, position: 'right', formatter: function (p) { return num(p.value) } },
+          data: breakdown.map(function (p) { return p[1] }),
+        }]
+      } else {
+        // The bar IS the quota, split into what has been done and what is
+        // left, with anything over it on the end. Stacking the value on top of
+        // the target would be arithmetic nobody can read: 86 interviews plus a
+        // quota of 100 is not 186 of anything.
+        var part = function (pick) {
+          return breakdown.map(function (pair) {
+            var target = Number(quotas[pair[0]])
+            var value = Number(pair[1]) || 0
+            if (!(target > 0)) return pick === 'within' ? value : 0
+            if (pick === 'within') return Math.min(value, target)
+            if (pick === 'left') return Math.max(target - value, 0)
+            return Math.max(value - target, 0)
+          })
+        }
+        var bar = function (name, values, colour) {
+          return {
+            type: 'bar', stack: 'quota', barMaxWidth: 22, name: name,
+            itemStyle: colour ? { color: colour } : undefined,
+            data: values,
+          }
+        }
+        option.legend = { bottom: 0, itemHeight: 8, itemWidth: 12, textStyle: { fontSize: 11 } }
+        option.grid.bottom = 24
+        option.series = lower
+          ? [bar('Within the limit', part('within')), bar('Over the limit', part('over'), '#dc2626')]
+          : [
+              bar('Achieved', part('within')),
+              bar('Still to go', part('left'), 'rgba(148,163,184,0.35)'),
+              bar('Over target', part('over'), '#16a34a'),
+            ]
+      }
+      // The groups' names get a third of the chart, as on any bar chart lying
+      // on its side. The host has no width until the page is laid out, so
+      // this is set again from the real one on the layout pass.
+      // Its text at the tile's size, in the proportion a chart's text has to
+      // a tile's lines: 12 to 14 by default.
+      var tileText = Number((widget.style || {}).chart_font_size) || 0
+      if (tileText) option.textStyle = { fontSize: Math.round(tileText * 12 / 14) }
+      var paint = function () {
+        if (host.clientWidth) option.yAxis.axisLabel = sideLabel(Math.round(host.clientWidth / 3), false)
+        instance.setOption(option)
+      }
+      paint()
+      drawn.push({ chart: instance, refit: paint })
+    }
+  }
+
+  function drawMap(body, widget) {
+    if (!window.L) { body.appendChild(el('p', 'note', 'The map needs an internet connection to draw.')); return }
+    var result = combine(widget.cube)
+    var dims = result.columns.filter(function (c) { return c.type === 'dimension' }).length
+    var merged = new Map()
+    result.rows.forEach(function (row) {
+      var lat = Number(row[0]), lon = Number(row[1])
+      if (!isFinite(lat) || !isFinite(lon) || (lat === 0 && lon === 0)) return
+      var key = lat + ',' + lon
+      var point = merged.get(key)
+      if (!point) { point = { lat: lat, lon: lon, value: 0, detail: row.slice(2, dims) }; merged.set(key, point) }
+      point.value += Number(row[dims]) || 0
+    })
+    var points = Array.from(merged.values())
+    var host = el('div', 'leafmap')
+    body.appendChild(host)
+    // Leaflet measures its container, which has no size until the card is in
+    // the document, so the map is built after this frame rather than now.
+    setTimeout(function () {
+      var map = L.map(host, { preferCanvas: true }).setView([0, 0], 2)
+      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors', maxZoom: 19,
+      }).addTo(map)
+      var largest = points.reduce(function (top, point) { return Math.max(top, point.value) }, 1)
+      var size = Number(widget.map.point_size) || 8
+      points.forEach(function (point) {
+        var radius = widget.map.size_by_value === false
+          ? size
+          : Math.max(4, size * Math.sqrt(point.value / largest))
+        var marker = L.circleMarker([point.lat, point.lon], {
+          radius: radius,
+          color: widget.map.point_color || PALETTE[0],
+          fillColor: widget.map.point_color || PALETTE[0],
+          fillOpacity: widget.map.point_opacity === null || widget.map.point_opacity === undefined
+            ? 0.6 : Number(widget.map.point_opacity),
+          weight: 1,
+        })
+        var lines = [widget.map.measure_label + ': ' + num(point.value)]
+        widget.map.detail.forEach(function (name, index) {
+          lines.push(name + ': ' + text(point.detail[index]))
+        })
+        marker.bindPopup(lines.map(escapeHtml).join('<br>'))
+        marker.addTo(map)
+      })
+      if (points.length) {
+        map.fitBounds(L.latLngBounds(points.map(function (p) { return [p.lat, p.lon] })).pad(0.15))
+      }
+    }, 0)
+  }
+
+  function escapeHtml(value) {
+    return text(value).replace(/[&<>"']/g, function (character) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]
+    })
+  }
+
+  /* A data quality panel: the counts, then each failing check glowing in the
+     colour of its severity with the share of rows it turns on at its
+     right-hand edge - or, when nothing failed, the one green pane that says so. It used to be a table
+     with "failing" written in grey beside each name, which a reader had to
+     go looking for. */
+  function drawChecks(body, payload) {
+    var checks = payload.checks || []
+    // The critical ones first, then warnings, then information, in the order
+    // they came within each - as the platform lists them.
+    var rank = { critical: 0, warning: 1, info: 2 }
+    var failing = checks
+      .map(function (check, at) { return { check: check, at: at } })
+      .filter(function (one) { return one.check.passed === false })
+      .sort(function (a, b) {
+        var ra = rank[a.check.severity], rb = rank[b.check.severity]
+        return (ra === undefined ? 1 : ra) - (rb === undefined ? 1 : rb) || a.at - b.at
+      })
+      .map(function (one) { return one.check })
+    if (payload.passing > 0 || payload.never_run > 0) {
+      var counts = el('div', 'counts')
+      if (payload.passing > 0) counts.appendChild(el('span', '', payload.passing + ' passing'))
+      if (payload.never_run > 0) counts.appendChild(el('span', 'never', payload.never_run + ' never run'))
+      body.appendChild(counts)
+    }
+    if (!checks.length) {
+      body.appendChild(el('p', 'note', 'No active checks on ' + (payload.name || 'this dataset') + '.'))
+      return
+    }
+    var list = el('ul', 'checks')
+    failing.forEach(function (check) {
+      // Red when critical; amber for anything less, and for a severity this
+      // file does not know.
+      var level = check.severity === 'critical' ? 'critical' : 'warning'
+      var pane = el('li', 'check ' + level)
+      var head = el('div', 'head')
+      head.appendChild(el('p', 'name', check.name))
+      var rate = Number(check.failure_rate) || 0
+      if (rate > 0) head.appendChild(el('span', 'rate', (rate * 100).toFixed(rate < 0.01 ? 2 : 0) + '%'))
+      pane.appendChild(head)
+      if (check.message) pane.appendChild(el('p', 'why', check.message))
+      list.appendChild(pane)
+    })
+    if (!failing.length) {
+      var ok = el('li', 'check ok')
+      ok.appendChild(el('p', 'name', 'Every active check passed'))
+      ok.appendChild(el('p', 'why', payload.name || ''))
+      list.appendChild(ok)
+    }
+    body.appendChild(list)
+  }
+
+  /* A widget the filters cannot move, drawn as it stood when the file was
+     made. Enough of it to be read, not a second copy of the whole platform. */
+  function drawSnapshot(body, widget) {
+    var payload = widget.snapshot || {}
+    if (payload.error) { body.appendChild(el('p', 'note', payload.error)); return }
+    if (widget.type === 'text') { body.appendChild(el('p', 'text', (widget.config || {}).content || '')); return }
+    if (widget.type === 'html') {
+      var frame = el('iframe', 'embed')
+      frame.setAttribute('sandbox', '')
+      frame.srcdoc = payload.html || (widget.config || {}).html || ''
+      body.appendChild(frame)
+      return
+    }
+    if (payload.type === 'quality') { drawChecks(body, payload); return }
+    if (payload.type === 'freshness') {
+      var table = el('table', 'data')
+      var body2 = document.createElement('tbody')
+      ;(payload.datasets || []).forEach(function (line) {
+        var row = document.createElement('tr')
+        row.appendChild(el('td', '', line.name || ''))
+        row.appendChild(el('td', 'n', line.age_label || line.status || ''))
+        body2.appendChild(row)
+      })
+      table.appendChild(body2)
+      body.appendChild(table)
+      return
+    }
+    if (payload.result) {
+      drawChart(body, payload.chart_type || 'table', {
+        columns: payload.result.columns,
+        rows: payload.result.rows,
+      }, payload.display)
+      return
+    }
+    if (payload.type === 'indicator') {
+      body.className += ' middle'
+      body.appendChild(el('p', 'kpi', formatValue(payload.value, payload.value_format, payload.unit)))
+      return
+    }
+    body.appendChild(el('p', 'note', 'This widget is not part of the exported copy.'))
+  }
+
+  // ---- the date control ---------------------------------------------------
+  var DATE_PRESETS = [
+    ['dates:today', 'Today'],
+    ['dates:yesterday', 'Yesterday'],
+    ['dates:last_7', 'Last 7 days'],
+    ['dates:last_30', 'Last 30 days'],
+    ['dates:this_week', 'This week'],
+    ['dates:this_month', 'This month'],
+    ['dates:last_month', 'Last month'],
+  ]
+
+  /**
+   * A date filter, as the board offers it: all dates, a named range counted
+   * back from today, or two days of the reader's choosing. The file carries
+   * every widget's numbers by day, so any range can be added back up.
+   */
+  function dateControl(control) {
+    var label = el('label')
+    label.appendChild(el('span', '', control.label))
+    var current = chosen[control.variable] || ''
+    var custom = current !== '' && current.indexOf('..') >= 0
+    var select = document.createElement('select')
+    select.setAttribute('aria-label', control.label)
+    ;[['', 'All dates']].concat(DATE_PRESETS).concat([['range', 'Choose dates\u2026']]).forEach(function (one) {
+      var option = document.createElement('option')
+      option.value = one[0]
+      option.textContent = one[1]
+      select.appendChild(option)
+    })
+    select.value = custom ? 'range' : current
+    select.onchange = function () {
+      chosen[control.variable] = select.value === 'range'
+        ? 'dates:' + (control.min || '') + '..' + (control.max || '')
+        : select.value
+      render()
+    }
+    label.appendChild(select)
+    var printed = select.value ? select.options[select.selectedIndex].textContent : 'All dates'
+    if (custom) {
+      var parts = current.slice(6).split('..')
+      var boxes = ['From', 'To'].map(function (name, index) {
+        var box = document.createElement('input')
+        box.type = 'date'
+        box.setAttribute('aria-label', control.label + ': ' + name.toLowerCase())
+        if (control.min) box.min = control.min
+        if (control.max) box.max = control.max
+        box.value = parts[index] || ''
+        return box
+      })
+      boxes.forEach(function (box) {
+        box.onchange = function () {
+          chosen[control.variable] = 'dates:' + boxes[0].value + '..' + boxes[1].value
+          render()
+        }
+        label.appendChild(box)
+      })
+      printed = (parts[0] || 'the start') + ' to ' + (parts[1] || 'the end')
+    }
+    label.appendChild(el('span', 'printed', printed))
+    return label
+  }
+
+  // ---- the page -----------------------------------------------------------
+  function controlsHere() {
+    return DATA.filters.filter(function (control) { return control.page === page })
+  }
+
+  function render() {
+    drawn.forEach(function (entry) { entry.chart.dispose() })
+    drawn = []
+    app.innerHTML = ''
+
+    // How much board there is to arrange on, taken from the same appearance
+    // the platform lays this board out with rather than assumed.
+    var dress = DATA.appearance || {}
+    var root = document.documentElement.style
+    root.setProperty('--cols', String(Math.max(1, Number(dress.columns) || 12)))
+    root.setProperty('--row', (Math.max(8, Number(dress.row_height) || 74)) + 'px')
+
+    var look = DATA.look || {}
+    var header = el('header', 'board')
+    // The name, what the board is for and what it is pinned to, as one block:
+    // a logo goes beside that block, or above it when the name is centred,
+    // which is how the platform sets them out.
+    var titles = el('div', 'titles')
+    titles.appendChild(el('h1', '', DATA.name))
+    if (DATA.description && !look.hide_subtitle) {
+      titles.appendChild(el('p', '', DATA.description))
+    }
+    /* What this file is of. A pinned export has no control for these, so
+       without a line saying so one area's copy and the whole country's look
+       identical side by side on a desk. (No example name here: this comment
+       travels inside every exported file, and a province named in it reads
+       as data to anyone searching the file for one.) */
+    if (DATA.pinned && DATA.pinned.length) {
+      var pin = el('p', 'pinned')
+      pin.textContent = DATA.pinned.map(function (one) {
+        return one.label + ': ' + one.value
+      }).join(' · ')
+      titles.appendChild(pin)
+    }
+    var mark = function (src) {
+      var image = document.createElement('img')
+      image.src = src
+      image.alt = ''
+      return image
+    }
+    if (look.logo_right) {
+      // One at each end, as the platform sets a pair out.
+      var pair = el('div', 'brand pair')
+      var left = el('div', 'end left')
+      if (look.logo) left.appendChild(mark(look.logo))
+      var right = el('div', 'end right')
+      right.appendChild(mark(look.logo_right))
+      pair.appendChild(left)
+      pair.appendChild(titles)
+      pair.appendChild(right)
+      header.appendChild(pair)
+    } else if (look.logo) {
+      var brand = el('div', 'brand')
+      brand.appendChild(mark(look.logo))
+      brand.appendChild(titles)
+      header.appendChild(brand)
+    } else {
+      header.appendChild(titles)
+    }
+    app.appendChild(header)
+
+    // Everything else is on the board's own canvas, under the name.
+    var board = el('main', 'canvas')
+    app.appendChild(board)
+
+    if (DATA.pages.length > 1) {
+      var tabs = el('div', 'tabs')
+      DATA.pages.forEach(function (one, index) {
+        var button = el('button', '', one.name)
+        button.setAttribute('aria-selected', index === page ? 'true' : 'false')
+        button.onclick = function () { page = index; render() }
+        tabs.appendChild(button)
+      })
+      board.appendChild(tabs)
+    }
+
+    var controls = controlsHere()
+    if (controls.length) {
+      var bar = el('div', 'filters')
+      controls.forEach(function (control) {
+        if (control.kind === 'dates') { bar.appendChild(dateControl(control)); return }
+        var label = el('label')
+        label.appendChild(el('span', '', control.label))
+        var select = document.createElement('select')
+        select.setAttribute('aria-label', control.label)
+        var all = document.createElement('option')
+        all.value = ''
+        all.textContent = 'All'
+        select.appendChild(all)
+        control.values.forEach(function (value) {
+          var option = document.createElement('option')
+          option.value = value
+          option.textContent = value
+          select.appendChild(option)
+        })
+        select.value = chosen[control.variable] || ''
+        select.onchange = function () {
+          chosen[control.variable] = select.value
+          render()
+        }
+        label.appendChild(select)
+        // What the control is set to, in words, for the printed sheet. A
+        // <select> prints as a control, and a reader holding the paper cannot
+        // see which option it was left on - so a page narrowed to one province
+        // printed as if it were the whole country.
+        label.appendChild(el('span', 'printed', select.value || 'All'))
+        bar.appendChild(label)
+      })
+      var clear = el('button', 'clear', 'Clear')
+      clear.onclick = function () { chosen = {}; render() }
+      bar.appendChild(clear)
+      board.appendChild(bar)
+    }
+
+    // Groups are bands here rather than the boxes they are on the platform:
+    // a band is a strip down the page, with its own widgets packed inside it.
+    // The name still has to survive, because it is what says why these
+    // widgets are together. A folded group exports folded, and opens on a
+    // click like any summary.
+    var mine = DATA.widgets.filter(function (widget) { return widget.page === page })
+    var groups = (DATA.groups || []).filter(function (group) { return group.page === page })
+    var ungrouped = mine.filter(function (widget) {
+      return !widget.group_id || !groups.some(function (g) { return g.id === widget.group_id })
+    })
+
+    if (ungrouped.length) {
+      var loose = el('div', 'grid')
+      ungrouped.forEach(function (widget) { loose.appendChild(card(widget)) })
+      board.appendChild(loose)
+    }
+
+    groups.forEach(function (group) {
+      var members = mine.filter(function (widget) { return widget.group_id === group.id })
+      if (!members.length) return
+      var band = document.createElement('details')
+      band.className = 'group'
+      band.open = !group.collapsed
+      var name = document.createElement('summary')
+      name.textContent = group.name
+      if (group.color) { name.style.color = group.color; band.style.borderColor = group.color }
+      // Its own ground, with a light heading on a dark one unless a colour
+      // was chosen for it, and its heading at the size it was set to - as the
+      // platform draws the group.
+      if (group.background) {
+        band.style.background = group.background
+        if (!group.color && isDark(group.background)) name.style.color = '#f4f5f7'
+      }
+      if (group.title_size) name.style.fontSize = group.title_size + 'px'
+      band.appendChild(name)
+      var inner = el('div', 'grid')
+      members.forEach(function (widget) { inner.appendChild(card(widget)) })
+      band.appendChild(inner)
+      // A chart measures its box once, when it starts. Inside a band that was
+      // exported folded that box is nothing, and the one resize below runs
+      // while it is still nothing - so the chart stays blank after the band is
+      // opened, until the window itself happens to be resized. Measuring again
+      // on the way open is what makes a folded group worth exporting folded.
+      band.addEventListener('toggle', function () {
+        if (!band.open) return
+        drawn.forEach(function (entry) {
+          if (!band.contains(entry.chart.getDom())) return
+          entry.chart.resize()
+          entry.refit()
+        })
+      })
+      board.appendChild(band)
+    })
+
+    // The charts are built while their cards are still being assembled, so at
+    // that moment the containers are not in the document and have no size. A
+    // chart measures its box once, when it starts, and would keep the nothing
+    // it found: the card appears and stays empty. One resize after the page is
+    // in place puts every one of them right.
+    requestAnimationFrame(function () {
+      drawn.forEach(function (entry) { entry.chart.resize(); entry.refit() })
+    })
+
+    var footer = el('footer', 'board')
+    footer.textContent = 'Exported from SurveyHQ on ' + new Date(DATA.generated_at).toLocaleString() +
+      '. The numbers are as they stood then.'
+    board.appendChild(footer)
+  }
+
+  function card(widget) {
+    var node = el('article', 'card')
+    var place = widget.place
+    if (place && window.matchMedia('(min-width: 781px)').matches) {
+      // Both coordinates, worked out when the file was written: the board
+      // packs its widgets upwards, so neither the stored row nor the order
+      // they were made in is where they actually sit. See place_widgets.
+      node.style.gridColumn = (place.x + 1) + ' / span ' + place.w
+      node.style.gridRow = (place.row + 1) + ' / span ' + place.h
+    }
+    var style = widget.style || {}
+    if (style.background) node.style.background = style.background
+    // Choosing a dark colour should not oblige anybody to go and choose a text
+    // colour to go with it. Same rule and same threshold as the platform.
+    if (isDark(style.background)) {
+      node.className += ' on-dark'
+      if (!style.font_color) node.style.color = '#f4f5f7'
+    }
+    if (style.font_color) node.style.color = style.font_color
+    if (style.font_family) node.style.fontFamily = style.font_family
+    if (widget.title) node.appendChild(el('h2', '', widget.title))
+    if (widget.frozen_because) {
+      node.appendChild(el('div', 'frozen',
+        'As it stood when this file was made: ' + widget.frozen_because + '.'))
+    }
+    var body = el('div', 'body')
+    node.appendChild(body)
+    // The widget's text size: a chart is handed it, and everything else is
+    // sized from it in the sheet above.
+    var size = Number(style.chart_font_size) || 0
+    if (size) {
+      body.className += widget.kind === 'indicator' ? ' sized tile' : ' sized'
+      body.style.setProperty('--text', size + 'px')
+    }
+    var drawnAt = function (display) {
+      return size ? Object.assign({}, display, { fontSize: size }) : display
+    }
+    try {
+      if (widget.kind === 'indicator') drawIndicator(body, widget)
+      else if (widget.kind === 'map') drawMap(body, widget)
+      else if (widget.kind === 'crosstab') {
+        // A withheld table travels finished and carries an empty cube, so
+        // there is nothing to re-add and combine() has nothing to walk.
+        if (widget.crosstab.fixed) drawFixedCrosstab(body, widget.crosstab)
+        else drawCrosstab(body, combine(widget.cube), widget.crosstab)
+      }
+      else if (widget.kind === 'chart') drawChart(body, widget.chart_type, combine(widget.cube), drawnAt(widget.display))
+      else if (widget.kind === 'multiselect') {
+        drawChart(body, widget.chart_type, combineMultiselect(widget.multiselect), drawnAt(widget.display))
+      }
+      else drawSnapshot(body, widget)
+    } catch (error) {
+      body.appendChild(el('p', 'note', 'This widget could not be drawn: ' + error.message))
+    }
+    if (style.caption) node.appendChild(el('div', 'caption', style.caption))
+    return node
+  }
+
+  window.addEventListener('resize', function () {
+    drawn.forEach(function (entry) { entry.chart.resize(); entry.refit() })
+  })
+
+  /* Printing.
+     A group exported folded is folded on paper too, and a sheet cannot be
+     unfolded: whatever it holds would simply be missing from the printout
+     with nothing to say so. Each one is opened for the print and put back
+     afterwards, and the charts inside are measured again on the way - a chart
+     in a folded group has never had a size, and would otherwise print blank.
+     Both handlers run before and after the browser lays the sheets out, which
+     is what makes this work without the reader doing anything. */
+  var unfolded = []
+  window.addEventListener('beforeprint', function () {
+    unfolded = []
+    Array.prototype.forEach.call(document.querySelectorAll('details.group'), function (band) {
+      if (band.open) return
+      band.open = true
+      unfolded.push(band)
+    })
+    drawn.forEach(function (entry) { entry.chart.resize(); entry.refit() })
+  })
+  window.addEventListener('afterprint', function () {
+    unfolded.forEach(function (band) { band.open = false })
+    unfolded = []
+    // A frame later, so the charts are measured against the restored screen
+    // layout rather than the sheet's - the two are different widths, and a
+    // chart left at the paper's would have its labels fitted for paper.
+    requestAnimationFrame(function () {
+      drawn.forEach(function (entry) { entry.chart.resize(); entry.refit() })
+    })
+  })
+
+  render()
+})()
+</script>
+</body>
+</html>

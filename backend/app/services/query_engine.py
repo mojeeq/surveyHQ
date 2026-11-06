@@ -1,0 +1,1747 @@
+"""Compiles QuerySpec objects into DuckDB SQL and runs them over Parquet files.
+
+Safety model: every identifier that reaches the SQL string is first checked
+against the dataset's registered variable names, so a caller can never inject a
+column expression. Literal values are always bound as parameters.
+"""
+
+from __future__ import annotations
+
+import math
+import os
+import time
+from dataclasses import dataclass, field
+from decimal import Decimal
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+import duckdb
+import pandas as pd
+
+from app.core.logging import get_logger
+from app.schemas.query import (
+    Aggregation,
+    Condition,
+    CrosstabRequest,
+    CrosstabResult,
+    Dimension,
+    FilterGroup,
+    FilterOperator,
+    FrequencyResult,
+    FrequencyRow,
+    Measure,
+    QueryColumn,
+    QueryResult,
+    QuerySpec,
+    SummaryStats,
+)
+from app.services import columnar, formula, preferences
+
+logger = get_logger(__name__)
+
+MAX_ROWS = 100_000
+OTHER_LABEL = "Other"
+# System missing. Stata's tagged missings (.a to .z) keep their own tag and are
+# reported as separate categories beside this one.
+MISSING_LABEL = "(blank)"
+# Companion column written by the ingest step; see ingest.MISSING_TAG_SUFFIX.
+MISSING_TAG_SUFFIX = "__mv"
+
+
+class QueryError(ValueError):
+    """Raised for specs that reference unknown variables or invalid options."""
+
+
+@dataclass
+class VariableInfo:
+    name: str
+    label: str = ""
+    var_type: str = "text"
+    value_labels: dict[str, str] = field(default_factory=dict)
+    # Stata tagged missings present on this variable, e.g. [".a", ".b"]
+    missing_tags: list[str] = field(default_factory=list)
+    # How the column is stored, as the ingest that wrote it named the type.
+    # Two vocabularies reach this, because two ingest paths write it: a pandas
+    # dtype ("float64", "object") for a file read whole, and a DuckDB type
+    # ("DOUBLE", "VARCHAR") for one read through Parquet.
+    storage_type: str = ""
+
+    @property
+    def is_numeric(self) -> bool:
+        """Whether this behaves as a quantity: what to measure, how to summarise.
+
+        An analytical judgement, not a fact about the file. A column of whole
+        numbers carrying value labels is stored as a number and read as a code
+        set, and this says code set.
+        """
+        return self.var_type in ("numeric", "boolean")
+
+    @property
+    def number_kind(self) -> str:
+        """Which family of number the stored column is: integer, decimal, float.
+
+        Empty for a column that holds something else. The distinction matters
+        because a filter value is bound as a Python object and the binding has
+        to be exact: an integer wider than 2**53 or a decimal with more digits
+        than a double can carry comes back changed if it goes through `float`,
+        and then matches the wrong rows rather than failing.
+        """
+        kind = self.storage_type.lower()
+        if not kind:
+            # Written by an ingest old enough not to have recorded it. The
+            # analytical type is the best that is left, which is what this
+            # decision used on its own before.
+            return "float" if self.is_numeric else ""
+        if "datetime" in kind or "timestamp" in kind or "date" in kind:
+            return ""
+        if "int" in kind:
+            return "integer"
+        if "decimal" in kind or "numeric" in kind:
+            return "decimal"
+        if "float" in kind or "double" in kind or "real" in kind:
+            return "float"
+        return ""
+
+    @property
+    def holds_numbers(self) -> bool:
+        """Whether the stored column is a number, whatever kind of variable it is.
+
+        The other question entirely, and the one a filter has to ask. A value
+        compared against a DOUBLE column has to be bound as a number; bound as
+        text, DuckDB refuses the comparison outright rather than guessing which
+        side to convert, and the whole query fails.
+        """
+        return bool(self.number_kind)
+
+    @property
+    def is_datetime(self) -> bool:
+        return self.var_type == "datetime"
+
+
+@dataclass
+class DatasetContext:
+    """Everything the engine needs to query one dataset."""
+
+    dataset_id: str
+    parquet_path: str
+    variables: dict[str, VariableInfo]
+
+    @classmethod
+    def from_model(cls, dataset: Any) -> DatasetContext:
+        variables = {
+            v.name: VariableInfo(
+                name=v.name,
+                label=v.label or "",
+                var_type=getattr(v.var_type, "value", str(v.var_type)),
+                value_labels=v.value_labels or {},
+                missing_tags=list(v.missing_tags or []),
+                storage_type=str(getattr(v, "storage_type", "") or ""),
+            )
+            for v in dataset.variables
+        }
+        return cls(
+            dataset_id=dataset.id,
+            parquet_path=dataset.storage_path,
+            variables=variables,
+        )
+
+    def require(self, name: str) -> VariableInfo:
+        info = self.variables.get(name)
+        if info is None:
+            raise QueryError(f"Unknown variable '{name}' in this dataset")
+        return info
+
+
+# Re-exported from the module that talks to DuckDB, which is where the one
+# definition lives. Every service that builds SQL over a dataset imports it
+# from here, so the name stays where its callers look for it.
+quote_ident = columnar.quote_ident
+_quote_path = columnar.quote_path
+
+
+def ticked_sql(quoted_column: str) -> str:
+    """The SQL for "this tick-all-that-apply option was chosen".
+
+    One definition, because two things have to agree about it: the tabulation
+    that counts a multiple-select question's bars, and the filter made by
+    clicking one of those bars. They disagreed when the filter was a plain
+    equality - an export writes 1 and 0, a CSV round trip can turn those into
+    "1" and "0", and some tools write Yes and No, so on a column holding a
+    mixture `= 1` matched no rows at all and `= '1'` matched only some of what
+    its own bar had counted.
+
+    Total rather than three-valued: a row where the question was never asked
+    reads as not chosen instead of as unknown. A checkbox has a definite
+    answer for somebody who was not asked - they did not tick it - and an
+    UNKNOWN here would survive the `NOT (...)` that a data-quality check wraps
+    the filter tree in, leaving such rows reported by neither "matches" nor
+    "does not match".
+    """
+    return (
+        f"COALESCE(try_cast({quoted_column} AS DOUBLE) = 1 OR "
+        f"lower(trim(cast({quoted_column} AS VARCHAR))) IN ('yes', 'true'), FALSE)"
+    )
+
+
+class SQLBuilder:
+    """Turns a spec into (sql, params)."""
+
+    def __init__(self, ctx: DatasetContext):
+        self.ctx = ctx
+        self.params: list[Any] = []
+
+    # -- column expressions ------------------------------------------------
+    def dimension_expr(self, dim: Dimension) -> str:
+        info = self.ctx.require(dim.variable)
+        col = quote_ident(info.name)
+        if dim.grain:
+            source = col if info.is_datetime else f"try_cast({col} AS TIMESTAMP)"
+            return f"date_trunc('{dim.grain.value}', {source})"
+        if dim.bin_width:
+            if not info.is_numeric:
+                raise QueryError(f"'{dim.variable}' is not numeric, cannot be binned")
+            width = float(dim.bin_width)
+            if width <= 0:
+                raise QueryError("bin_width must be greater than zero")
+            return f"floor({col} / {width}) * {width}"
+        if info.missing_tags and f"{info.name}{MISSING_TAG_SUFFIX}" in self.ctx.variables:
+            # Grouping collapses every kind of missing into one null. Reading the
+            # companion column keeps ".a" apart from a plain blank, which is the
+            # difference between "asked and refused" and "never asked".
+            tag_col = quote_ident(f"{info.name}{MISSING_TAG_SUFFIX}")
+            # Stata only tags missings on numeric variables, so the stored
+            # column is numeric here whatever its semantic type. A whole
+            # number must render as "1", not "1.0": value label keys are
+            # written that way, and a coded variable would otherwise lose
+            # every label it had. The same expression writes a code out when
+            # two rounds disagree about a column's type, so it is one
+            # function rather than two copies to keep in step.
+            as_text = columnar.code_text_sql(col)
+            return (
+                f"CASE WHEN {col} IS NOT NULL THEN {as_text} "
+                f"ELSE COALESCE({tag_col}, '{MISSING_LABEL}') END"
+            )
+        return col
+
+    def measure_expr(self, measure: Measure) -> str:
+        agg = measure.agg
+        weight_col = None
+        if measure.weight:
+            if agg not in (Aggregation.count, Aggregation.share, Aggregation.sum, Aggregation.mean):
+                raise QueryError(f"Survey weights are not supported for {agg.value}")
+            weight_info = self.ctx.require(measure.weight)
+            # Stored as a number, rather than judged to be a quantity. A weight
+            # column is multiplied, so what it is stored as is the whole
+            # requirement - and the picker offers what can be measured, which
+            # asks the same question. Asking the analytical one here meant the
+            # list offered a column the query then refused.
+            if not weight_info.holds_numbers:
+                raise QueryError(
+                    f"Weight '{measure.weight}' must be stored as a number"
+                )
+            weight_col = quote_ident(weight_info.name)
+
+        if agg in (Aggregation.count, Aggregation.share):
+            if weight_col and measure.variable:
+                # The weight of the rows that answered, as the unweighted count
+                # of a variable counts only those. Summed over every row it was
+                # the population of the whole file, so "a percentage of those
+                # who answered" came out the same as "of every record" the
+                # moment it was weighted.
+                col = quote_ident(self.ctx.require(measure.variable).name)
+                return (
+                    f"COALESCE(SUM(CASE WHEN {col} IS NULL THEN NULL ELSE {weight_col} END), 0)"
+                )
+            if weight_col:
+                return f"COALESCE(SUM({weight_col}), 0)"
+            if measure.variable:
+                col = quote_ident(self.ctx.require(measure.variable).name)
+                return f"COUNT({col})"
+            return "COUNT(*)"
+
+        info = self.ctx.require(measure.variable or "")
+        col = quote_ident(info.name)
+        if agg == Aggregation.count_distinct:
+            return f"COUNT(DISTINCT {col})"
+
+        if not info.holds_numbers:
+            # A column of numbers written as text, so that a mean of it is
+            # possible rather than an error. Only for text: a BIGINT or a
+            # DECIMAL carrying value labels is read as a code set and is not a
+            # quantity, but it is still stored as a number, and sending it
+            # through a double would round it. A sum of two BIGINTs either side
+            # of 2**53 comes back two short, and a sum of three DECIMAL(18,3)
+            # comes back 0.6000000000000001.
+            col = f"try_cast({col} AS DOUBLE)"
+
+        if agg == Aggregation.sum:
+            return f"SUM({col} * {weight_col})" if weight_col else f"SUM({col})"
+        if agg == Aggregation.mean:
+            if weight_col:
+                return (
+                    f"SUM({col} * {weight_col}) / NULLIF(SUM(CASE WHEN {col} IS NULL "
+                    f"THEN 0 ELSE {weight_col} END), 0)"
+                )
+            return f"AVG({col})"
+        if agg == Aggregation.median:
+            return f"MEDIAN({col})"
+        if agg == Aggregation.min:
+            return f"MIN({col})"
+        if agg == Aggregation.max:
+            return f"MAX({col})"
+        if agg == Aggregation.stddev:
+            return f"STDDEV_SAMP({col})"
+        if agg in (Aggregation.p25, Aggregation.p75, Aggregation.p90):
+            q = {"p25": 0.25, "p75": 0.75, "p90": 0.90}[agg.value]
+            return f"QUANTILE_CONT({col}, {q})"
+        raise QueryError(f"Unsupported aggregation '{agg}'")
+
+    # -- filters -----------------------------------------------------------
+    def filter_sql(self, group: FilterGroup) -> str:
+        if group.is_empty():
+            return ""
+        parts: list[str] = []
+        for condition in group.conditions:
+            sql = self._condition_sql(condition)
+            if sql:
+                parts.append(sql)
+        for nested in group.groups:
+            sql = self.filter_sql(nested)
+            if sql:
+                parts.append(f"({sql})")
+        if not parts:
+            return ""
+        joiner = " AND " if group.op == "and" else " OR "
+        return joiner.join(parts)
+
+    # The six that mean something between two columns. "is one of" wants a
+    # list and "contains" wants text, and neither reads sensibly against a
+    # whole column, so they are refused rather than quietly reinterpreted.
+    COLUMN_COMPARISONS = {
+        FilterOperator.eq: "=",
+        FilterOperator.ne: "!=",
+        FilterOperator.gt: ">",
+        FilterOperator.gte: ">=",
+        FilterOperator.lt: "<",
+        FilterOperator.lte: "<=",
+    }
+
+    def _condition_sql(self, condition: Condition) -> str:
+        info = self.ctx.require(condition.variable)
+        col = quote_ident(info.name)
+        op = condition.operator
+        value = condition.value
+
+        if condition.formula or condition.other_formula:
+            return self._sum_sql(info, condition)
+
+        if condition.other_variable:
+            return self._column_sql(info, condition)
+
+        if condition.use_label and info.value_labels:
+            # Translate labels back to the stored codes before filtering
+            reverse = {str(v): k for k, v in info.value_labels.items()}
+            if isinstance(value, list):
+                value = [reverse.get(str(v), v) for v in value]
+            else:
+                value = reverse.get(str(value), value)
+
+        if op == FilterOperator.is_null:
+            return f"{col} IS NULL"
+        if op == FilterOperator.is_not_null:
+            return f"{col} IS NOT NULL"
+
+        # A tick-all-that-apply option. No value to compare against and no
+        # label to translate: the column is the answer, so these are placed
+        # above the label translation rather than beside the comparisons.
+        if op == FilterOperator.selected:
+            return ticked_sql(col)
+        if op == FilterOperator.not_selected:
+            return f"NOT {ticked_sql(col)}"
+
+        if op in self.EQUALITY:
+            answered = self._missing_sql(info, op, value)
+            if answered is not None:
+                return answered
+
+        if op in (FilterOperator.on_or_after, FilterOperator.before):
+            # The column as a moment, whatever it is stored as: a date kept as
+            # text compared as text would put "2026-11-04T10:00" before
+            # "2026-11-4" and after "2026-11-04". Unreadable values drop out
+            # rather than failing the query.
+            moment = col if info.is_datetime else f"try_cast({col} AS TIMESTAMP)"
+            self.params.append(str(value))
+            sign = ">=" if op == FilterOperator.on_or_after else "<"
+            return f"{moment} {sign} CAST(? AS TIMESTAMP)"
+
+        if op in (FilterOperator.in_, FilterOperator.not_in):
+            values = value if isinstance(value, list) else [value]
+            if not values:
+                return ""
+            placeholders = ", ".join("?" for _ in values)
+            self.params.extend(self._coerce(info, v) for v in values)
+            negate = "NOT " if op == FilterOperator.not_in else ""
+            return f"{col} {negate}IN ({placeholders})"
+
+        if op == FilterOperator.between:
+            if not isinstance(value, (list, tuple)) or len(value) != 2:
+                raise QueryError("'between' expects a two element list")
+            self.params.extend([self._coerce(info, value[0]), self._coerce(info, value[1])])
+            return f"{col} BETWEEN ? AND ?"
+
+        if op in (
+            FilterOperator.contains,
+            FilterOperator.not_contains,
+            FilterOperator.starts_with,
+            FilterOperator.ends_with,
+        ):
+            text = str(value or "").replace("%", r"\%").replace("_", r"\_")
+            pattern = {
+                FilterOperator.contains: f"%{text}%",
+                FilterOperator.not_contains: f"%{text}%",
+                FilterOperator.starts_with: f"{text}%",
+                FilterOperator.ends_with: f"%{text}",
+            }[op]
+            self.params.append(pattern)
+            negate = "NOT " if op == FilterOperator.not_contains else ""
+            return f"CAST({col} AS VARCHAR) {negate}ILIKE ? ESCAPE '\\'"
+
+        comparison = {
+            FilterOperator.eq: "=",
+            FilterOperator.ne: "!=",
+            FilterOperator.gt: ">",
+            FilterOperator.gte: ">=",
+            FilterOperator.lt: "<",
+            FilterOperator.lte: "<=",
+        }[op]
+        self.params.append(self._coerce(info, value))
+        if op == FilterOperator.ne:
+            # Keep NULLs out of "not equal" results the way analysts expect
+            return f"({col} IS NULL OR {col} != ?)"
+        return f"{col} {comparison} ?"
+
+    EQUALITY = (
+        FilterOperator.eq,
+        FilterOperator.ne,
+        FilterOperator.in_,
+        FilterOperator.not_in,
+    )
+
+    def _missing_sql(self, info: VariableInfo, op: FilterOperator, value: Any) -> str | None:
+        """Equality against a blank, a tagged missing, or text a number cannot be.
+
+        A chart draws the records with no answer as a category of their own,
+        and clicking it, drilling into it or choosing it sends back the text
+        it was drawn with: "(blank)", Stata's ".a", or the "-" a chart prints
+        for an empty cell. None of those is a value of a numeric column, and
+        bound against one DuckDB refused the comparison outright - "Could not
+        convert string '-' to DOUBLE" - which failed every widget on the page
+        that the click filtered. They mean the rows with no answer, or with
+        that kind of no answer, and are asked as that.
+
+        Text that is no number at all, compared with a number column, matches
+        no row rather than failing the page: no number equals "abc".
+
+        None for an ordinary comparison, which the caller makes as it always
+        has, so a filter that never involved a missing value reads the same.
+        """
+        values = value if isinstance(value, list) else [value]
+        numeric = info.holds_numbers
+        tag_column = f"{info.name}{MISSING_TAG_SUFFIX}"
+        tagged = bool(info.missing_tags) and tag_column in self.ctx.variables
+        blank = False
+        tags: list[str] = []
+        kept: list[Any] = []
+        for one in values:
+            text = None if one is None else str(one).strip()
+            if text == MISSING_LABEL or (numeric and text == "-"):
+                blank = True
+            elif tagged and text in info.missing_tags:
+                tags.append(str(text))
+            elif numeric and one is not None and not _is_number(one):
+                continue
+            else:
+                kept.append(one)
+        if not blank and not tags and len(kept) == len(values):
+            return None
+
+        col = quote_ident(info.name)
+        parts: list[str] = []
+        if kept:
+            placeholders = ", ".join("?" for _ in kept)
+            self.params.extend(self._coerce(info, one) for one in kept)
+            parts.append(f"{col} IN ({placeholders})")
+        if blank:
+            # A plain blank, not one of the tagged kinds: a chart of a tagged
+            # column draws those as categories of their own beside it.
+            parts.append(
+                f"({col} IS NULL AND {quote_ident(tag_column)} IS NULL)"
+                if tagged
+                else f"{col} IS NULL"
+            )
+        if tags:
+            self.params.extend(tags)
+            parts.append(f"{quote_ident(tag_column)} IN ({', '.join('?' for _ in tags)})")
+        matched = " OR ".join(parts) if parts else "FALSE"
+        if op in (FilterOperator.ne, FilterOperator.not_in):
+            # Everything the positive leaves out, with the blanks kept unless
+            # they were the thing excluded - as "is not" keeps them elsewhere.
+            return f"NOT coalesce(({matched}), FALSE)"
+        return f"({matched})"
+
+    def _column_sql(self, info: VariableInfo, condition: Condition) -> str:
+        """One column against another.
+
+        Left bare on purpose, with no IS NOT NULL guards. A row missing either
+        value compares as UNKNOWN, and UNKNOWN stays UNKNOWN through the NOT()
+        that "flag rows that do not match" wraps the tree in, so WHERE drops
+        the row in both directions and it is never judged either way. Guarding
+        the sides turns that UNKNOWN into FALSE, and NOT(FALSE) is TRUE: every
+        row with no end date would then be reported as violating
+        `end >= start`, and a logic check would quietly double as a
+        missing-values check. Measured, not reasoned about - a two-row table
+        either way settles it, and the test does exactly that.
+
+        Note this differs from the same operator against a literal, where `ne`
+        deliberately keeps NULLs in: someone filtering "region is not North"
+        wants the blank-region rows, while someone asserting a relation
+        between two columns does not want the rows where it cannot be checked.
+        """
+        other = self.ctx.require(str(condition.other_variable))
+        symbol = self.COLUMN_COMPARISONS.get(condition.operator)
+        if symbol is None:
+            raise QueryError(
+                f"'{condition.operator.value}' cannot compare {info.name} "
+                f"with another variable. Use one of: "
+                f"{', '.join(op.value for op in self.COLUMN_COMPARISONS)}."
+            )
+        left = quote_ident(info.name)
+        right = quote_ident(other.name)
+        return f"({left} {symbol} {right})"
+
+    def _sum_sql(self, info: VariableInfo, condition: Condition) -> str:
+        """Arithmetic on one side or both: `inc2020 - inc2019 > 100`.
+
+        Bare, for the reason `_column_sql` is: a row missing any value the sum
+        needs compares as UNKNOWN and is judged neither way, so a logic check
+        of `total = boys + girls` does not report every household with no
+        count of girls. Division by nought is no value too, as it is in an
+        indicator's formula, rather than an error that fails the whole query.
+        """
+        symbol = self.COLUMN_COMPARISONS.get(condition.operator)
+        if symbol is None:
+            raise QueryError(
+                f"'{condition.operator.value}' cannot compare a sum. Use one of: "
+                f"{', '.join(op.value for op in self.COLUMN_COMPARISONS)}."
+            )
+        left = self._formula_sql(condition.formula) if condition.formula else self._as_number(info)
+        if condition.other_formula:
+            right = self._formula_sql(condition.other_formula)
+        elif condition.other_variable:
+            right = self._as_number(self.ctx.require(str(condition.other_variable)))
+        else:
+            try:
+                number = float(str(condition.value).strip())
+            except (TypeError, ValueError):
+                raise QueryError(
+                    f"A sum is compared with a number, not {condition.value!r}"
+                ) from None
+            self.params.append(number)
+            right = "CAST(? AS DOUBLE)"
+        return f"({left} {symbol} {right})"
+
+    def _formula_sql(self, text: str | None) -> str:
+        """A sum over columns as SQL. Names are quoted, numbers are bound."""
+        try:
+            tree = formula.parse(text or "")
+        except formula.FormulaError as exc:
+            raise QueryError(f"Cannot read {text!r}: {exc}") from None
+
+        def walk(node: Any) -> str:
+            kind, left, right = node
+            if kind == "number":
+                self.params.append(float(left))
+                return "CAST(? AS DOUBLE)"
+            if kind == "name":
+                return self._as_number(self.ctx.require(left))
+            one, other = walk(left), walk(right)
+            if kind == "/":
+                return f"({one} / NULLIF({other}, 0))"
+            return f"({one} {kind} {other})"
+
+        return walk(tree)
+
+    @staticmethod
+    def _as_number(info: VariableInfo) -> str:
+        """A column as a number: as it is, or read as one if it is text."""
+        column = quote_ident(info.name)
+        return column if info.holds_numbers else f"try_cast({column} AS DOUBLE)"
+
+    @staticmethod
+    def _coerce(info: VariableInfo, value: Any) -> Any:
+        """A filter value in the type the stored column will compare against.
+
+        Decided by what the column holds rather than by what kind of variable
+        it is. Those are different questions, and asking the second one here is
+        what made "age over 15" fail on a census: age is stored as a number and
+        classified as a code set, because it carries labels for "don't know"
+        and "refused" - so the 15 stayed a string and DuckDB refused to compare
+        it with a DOUBLE.
+
+        A column that genuinely holds text is left alone, which is the other
+        half of the same rule: an identifier stored as "007" has to go on
+        matching "007" rather than becoming 7.
+
+        The number is read exactly and bound in its own family. Going through
+        `float` would be enough for most survey data and wrong for the rest: a
+        household id past 2**53 and a decimal carrying more digits than a
+        double holds both come back as a near neighbour, and a near neighbour
+        does not fail - it quietly matches the wrong rows.
+        """
+        kind = info.number_kind
+        if value is None or not kind or isinstance(value, bool):
+            return value
+        try:
+            exact = Decimal(str(value))
+        except (TypeError, ValueError, ArithmeticError):
+            # Not a number at all. Bound as it came, so the filter either does
+            # something sensible or says so, rather than turning into a 0.
+            return value
+        if not exact.is_finite():
+            # NaN and the infinities have no exact form to preserve.
+            return float(exact)
+        if kind == "integer":
+            # "2.5" against a column of whole numbers is still a real
+            # comparison; it is only the whole ones that must stay whole.
+            return int(exact) if exact == exact.to_integral_value() else exact
+        if kind == "decimal":
+            return exact
+        return float(exact)
+
+    # -- full statements ---------------------------------------------------
+    def build_aggregate(self, spec: QuerySpec) -> tuple[str, list[Any]]:
+        self.params = []
+        select_parts: list[str] = []
+        group_parts: list[str] = []
+
+        for index, dim in enumerate(spec.dimensions, start=1):
+            expr = self.dimension_expr(dim)
+            select_parts.append(f"{expr} AS {quote_ident(dim.output_name)}")
+            group_parts.append(str(index))
+
+        for measure in spec.measures:
+            select_parts.append(
+                f"{self.measure_expr(measure)} AS {quote_ident(measure.output_name)}"
+            )
+
+        source = f"read_parquet({_quote_path(self.ctx.parquet_path)})"
+        sql = f"SELECT {', '.join(select_parts)} FROM {source}"
+
+        where = self.filter_sql(spec.filters)
+        conditions = [where] if where else []
+        if spec.drop_missing:
+            for dim in spec.dimensions:
+                conditions.append(f"{quote_ident(dim.variable)} IS NOT NULL")
+        if conditions:
+            sql += " WHERE " + " AND ".join(f"({c})" for c in conditions)
+
+        if group_parts:
+            sql += " GROUP BY " + ", ".join(group_parts)
+
+        sql += self._order_by(spec)
+        sql += f" LIMIT {min(spec.limit, MAX_ROWS)}"
+        if spec.offset:
+            sql += f" OFFSET {spec.offset}"
+        return sql, list(self.params)
+
+    def _order_by(self, spec: QuerySpec) -> str:
+        output_names = {d.output_name for d in spec.dimensions} | {
+            m.output_name for m in spec.measures
+        }
+        clauses: list[str] = []
+        for item in spec.sort:
+            if item.field not in output_names:
+                raise QueryError(f"Cannot sort by unknown field '{item.field}'")
+            direction = "DESC" if item.direction == "desc" else "ASC"
+            clauses.append(f"{quote_ident(item.field)} {direction} NULLS LAST")
+        if not clauses and spec.dimensions and spec.measures:
+            first = spec.dimensions[0]
+            if self._reads_as_a_scale(first):
+                # A date or a numeric band only means anything in its own order.
+                # Sorting those by size draws a line that says fieldwork is
+                # collapsing when it is really just the busiest days first.
+                clauses.append(f"{quote_ident(first.output_name)} ASC NULLS LAST")
+            else:
+                # Sensible default: biggest groups first
+                clauses.append(f"{quote_ident(spec.measures[0].output_name)} DESC NULLS LAST")
+        return " ORDER BY " + ", ".join(clauses) if clauses else ""
+
+    def _reads_as_a_scale(self, dim: Dimension) -> bool:
+        """True when the axis runs along a scale rather than across categories."""
+        if dim.limit:
+            # An explicit "keep the N largest" asks for the ranking, and the
+            # collapse into "Other" reads the rows in that order.
+            return False
+        if dim.grain or dim.bin_width:
+            return True
+        info = self.ctx.variables.get(dim.variable)
+        return bool(info and info.is_datetime)
+
+    def build_rows(
+        self,
+        columns: list[str] | None,
+        filters: FilterGroup,
+        limit: int,
+        offset: int,
+        sort: list[tuple[str, str]] | None = None,
+    ) -> tuple[str, list[Any]]:
+        """Raw row listing used by the data preview."""
+        self.params = []
+        if columns:
+            selected = ", ".join(quote_ident(self.ctx.require(c).name) for c in columns)
+        else:
+            selected = "*"
+        sql = f"SELECT {selected} FROM read_parquet({_quote_path(self.ctx.parquet_path)})"
+        where = self.filter_sql(filters)
+        if where:
+            sql += f" WHERE {where}"
+        if sort:
+            clauses = []
+            for name, direction in sort:
+                col = quote_ident(self.ctx.require(name).name)
+                clauses.append(f"{col} {'DESC' if direction == 'desc' else 'ASC'} NULLS LAST")
+            sql += " ORDER BY " + ", ".join(clauses)
+        sql += f" LIMIT {min(limit, MAX_ROWS)} OFFSET {max(offset, 0)}"
+        return sql, list(self.params)
+
+    def build_count(self, filters: FilterGroup) -> tuple[str, list[Any]]:
+        self.params = []
+        sql = f"SELECT COUNT(*) FROM read_parquet({_quote_path(self.ctx.parquet_path)})"
+        where = self.filter_sql(filters)
+        if where:
+            sql += f" WHERE {where}"
+        return sql, list(self.params)
+
+
+# ---------------------------------------------------------------------------
+# Execution
+# ---------------------------------------------------------------------------
+
+
+def _connect() -> duckdb.DuckDBPyConnection:
+    con = duckdb.connect(database=":memory:")
+    con.execute("SET threads TO 4")
+    con.execute("SET memory_limit = '2GB'")
+    return con
+
+
+def run_frame(sql: str) -> pd.DataFrame:
+    """The same query, as a frame, without building a Python object per cell.
+
+    `run_sql` hands back lists, which is right for a handful of rows and very
+    wrong for a whole dataset: every value becomes a Python object, and a
+    200,000 x 40 table costs 14 seconds and 400 MB of heap before anything has
+    been done with it. DuckDB's own conversion goes through Arrow instead and
+    does the same work in a quarter of a second.
+
+    Use this wherever the whole result is wanted as a frame. Where the result
+    is only going back to disk, `copy_to_parquet` is cheaper still - it never
+    enters Python at all.
+    """
+    con = _connect()
+    try:
+        return con.execute(sql).df()
+    except duckdb.Error as exc:
+        logger.warning("DuckDB query failed: %s | sql=%s", exc, sql)
+        raise QueryError(f"Query failed: {exc}") from exc
+    finally:
+        con.close()
+
+
+def copy_to_parquet(sql: str, destination: str) -> None:
+    """Write a query straight to Parquet, without it passing through Python.
+
+    The cheapest of the three: no frame, no objects, no peak. For anything
+    whose next stop is a file this is what to use.
+
+    Written beside the destination and moved into place, so a query that fails
+    halfway leaves nothing behind that a later read would mistake for data.
+    """
+    target = Path(destination)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(f".{target.name}.{uuid4().hex}.tmp.parquet")
+    con = _connect()
+    try:
+        con.execute(
+            f"COPY ({sql}) TO {_quote_path(str(temporary))} "
+            f"(FORMAT PARQUET, COMPRESSION ZSTD)"
+        )
+        os.replace(temporary, target)
+    except duckdb.Error as exc:
+        logger.warning("DuckDB copy failed: %s | sql=%s", exc, sql)
+        raise QueryError(f"Query failed: {exc}") from exc
+    finally:
+        temporary.unlink(missing_ok=True)
+        con.close()
+
+
+def run_sql(sql: str, params: list[Any] | None = None) -> tuple[list[str], list[list[Any]]]:
+    con = _connect()
+    try:
+        cursor = con.execute(sql, params or [])
+        columns = [d[0] for d in cursor.description or []]
+        rows = [list(row) for row in cursor.fetchall()]
+        return columns, rows
+    except duckdb.Error as exc:
+        logger.warning("DuckDB query failed: %s | sql=%s", exc, sql)
+        raise QueryError(f"Query failed: {exc}") from exc
+    finally:
+        con.close()
+
+
+def column_types(path: str) -> dict[str, str]:
+    """What each column is actually stored as, asked of the file itself.
+
+    Not the variable's `var_type`, which is what the interface offers it as: a
+    column of household ids stored as numbers is described categorical, so
+    reading that would call an id text and a 0/1 answer text as well.
+    """
+    _, rows = run_sql(f"DESCRIBE SELECT * FROM read_parquet({_quote_path(path)})")
+    return {str(row[0]): str(row[1]) for row in rows}
+
+
+def kind_of(stored: str) -> str:
+    """A stored type as a person would say it.
+
+    Grouped rather than reported exactly, because what these answer is whether
+    two columns hold the same sort of thing. A key stored DOUBLE on one side and
+    BIGINT on the other is a number both times and joins perfectly well, and
+    saying "DOUBLE is not BIGINT" would refuse something that works.
+
+    Matched on the start of the name and not anywhere in it: INTERVAL contains
+    INT and is not a number, and DECIMAL(18,3) has to be read by its first word
+    rather than the whole of it.
+
+    "a number" means arithmetic can be done on it, which is why BOOLEAN is not
+    one - `floor(BOOLEAN)` is an error, and a caller building arithmetic from
+    this would write SQL DuckDB refuses to bind. Whether a boolean and a number
+    can nonetheless be compared or stacked is a different question, and
+    `compatible` is where it is answered.
+    """
+    upper = (stored or "").strip().upper()
+    if upper.startswith(("DATE", "TIME", "INTERVAL")):
+        return "a date"
+    if upper.startswith("BOOL"):
+        return "true or false"
+    if upper.startswith(
+        (
+            "TINYINT", "SMALLINT", "INTEGER", "INT", "BIGINT", "HUGEINT",
+            "UTINYINT", "USMALLINT", "UINTEGER", "UBIGINT", "UHUGEINT",
+            "DOUBLE", "FLOAT", "REAL", "DECIMAL", "NUMERIC",
+        )
+    ):
+        return "a number"
+    # VARCHAR and friends, and anything unrecognised. A STRUCT or a LIST is
+    # opaque, and text is the safer thing to call it: it stops the column being
+    # silently stacked onto a number.
+    return "text"
+
+
+# Kinds that are different to say and the same to work with.
+INTERCHANGEABLE = ({"a number", "true or false"},)
+
+
+def compatible(one: str, other: str) -> bool:
+    """Whether two kinds can be compared with, or stacked on, each other.
+
+    Not equality: 0/1 and true/false are the same information, and DuckDB
+    compares and stacks them without complaining, so treating them as different
+    would refuse a join and an append that both work.
+    """
+    if one == other:
+        return True
+    return any({one, other} <= group for group in INTERCHANGEABLE)
+
+
+def _is_number(value: Any) -> bool:
+    """Whether a filter value reads as a number, the way `_coerce` reads one."""
+    if isinstance(value, bool):
+        return False
+    try:
+        Decimal(str(value).strip())
+    except (TypeError, ValueError, ArithmeticError):
+        return False
+    return True
+
+
+def _is_missing(info: VariableInfo, value: Any) -> bool:
+    """True for a null, a blank, or one of Stata's tagged missings."""
+    if value is None:
+        return True
+    text = str(value)
+    return text == MISSING_LABEL or text in info.missing_tags
+
+
+def _label_value(info: VariableInfo, value: Any) -> Any:
+    if value is None:
+        return None
+    if not info.value_labels:
+        return value
+    key = value
+    if isinstance(value, float) and value.is_integer():
+        key = int(value)
+    return info.value_labels.get(str(key), value)
+
+
+def category_text(info: VariableInfo | None, value: Any, use_labels: bool = True) -> str:
+    """A category as a table heads it: its label, or else the code as written.
+
+    A column of whole numbers is stored as a double as soon as one interview
+    leaves it blank, which is most ages and most codes. A label is still found,
+    because the lookup above forgives the ".0" - but a value with no label of
+    its own fell through as the double and was printed as one, so an age table
+    read "Less than one year", then "1.0", "2.0", "3.0". A whole number is
+    written the way a code is: "1". A real fraction keeps its decimals.
+    """
+    shown = _label_value(info, value) if use_labels and info is not None else value
+    if isinstance(shown, float) and shown.is_integer():
+        return str(int(shown))
+    return str(shown)
+
+
+def execute_query(ctx: DatasetContext, spec: QuerySpec) -> QueryResult:
+    """Run an aggregate query and post-process labels, shares and top-N."""
+    started = time.perf_counter()
+    builder = SQLBuilder(ctx)
+    sql, params = builder.build_aggregate(spec)
+    column_names, rows = run_sql(sql, params)
+
+    dim_names = [d.output_name for d in spec.dimensions]
+
+    # Replace codes with labels
+    if spec.use_labels:
+        for dim in spec.dimensions:
+            if dim.grain or dim.bin_width:
+                continue
+            info = ctx.variables.get(dim.variable)
+            if not info or not info.value_labels:
+                continue
+            index = column_names.index(dim.output_name)
+            for row in rows:
+                row[index] = _label_value(info, row[index])
+
+    # share measures are computed against the grand total of the result set
+    for measure in spec.measures:
+        if measure.agg != Aggregation.share:
+            continue
+        index = column_names.index(measure.output_name)
+        total = sum(float(r[index] or 0) for r in rows)
+        for row in rows:
+            row[index] = round(float(row[index] or 0) / total * 100, 4) if total else None
+
+    # Top-N collapsing for a single dimension
+    if len(spec.dimensions) == 1 and spec.dimensions[0].limit and spec.measures:
+        rows = _collapse_top_n(rows, column_names, spec)
+
+    columns = [
+        QueryColumn(
+            name=name,
+            label=_column_label(ctx, spec, name),
+            type="dimension" if name in dim_names else "measure",
+            data_type=_column_data_type(ctx, spec, name),
+        )
+        for name in column_names
+    ]
+    duration = int((time.perf_counter() - started) * 1000)
+    return QueryResult(
+        columns=columns,
+        rows=rows,
+        row_count=len(rows),
+        truncated=len(rows) >= min(spec.limit, MAX_ROWS),
+        sql=sql,
+        duration_ms=duration,
+    )
+
+
+def _collapse_top_n(
+    rows: list[list[Any]], column_names: list[str], spec: QuerySpec
+) -> list[list[Any]]:
+    keep = spec.dimensions[0].limit or len(rows)
+    if len(rows) <= keep:
+        return rows
+    measure_indexes = [
+        column_names.index(m.output_name)
+        for m in spec.measures
+        if m.agg in (Aggregation.count, Aggregation.sum, Aggregation.share)
+    ]
+    head, tail = rows[:keep], rows[keep:]
+    if not tail:
+        return head
+    other = [None] * len(column_names)
+    other[column_names.index(spec.dimensions[0].output_name)] = OTHER_LABEL
+    for index in measure_indexes:
+        other[index] = sum(float(r[index] or 0) for r in tail)
+    return head + [other]
+
+
+def _column_label(ctx: DatasetContext, spec: QuerySpec, name: str) -> str:
+    for dim in spec.dimensions:
+        if dim.output_name == name:
+            info = ctx.variables.get(dim.variable)
+            return info.label if info and info.label else dim.variable
+    for measure in spec.measures:
+        if measure.output_name == name:
+            if measure.variable:
+                info = ctx.variables.get(measure.variable)
+                base = info.label if info and info.label else measure.variable
+                return f"{measure.agg.value.replace('_', ' ').title()} of {base}"
+            return measure.agg.value.title()
+    return name
+
+
+def _column_data_type(ctx: DatasetContext, spec: QuerySpec, name: str) -> str:
+    for dim in spec.dimensions:
+        if dim.output_name == name:
+            if dim.grain:
+                return "datetime"
+            info = ctx.variables.get(dim.variable)
+            return info.var_type if info else "text"
+    return "number"
+
+
+def execute_frequency(
+    ctx: DatasetContext,
+    variable: str,
+    filters: FilterGroup | None = None,
+    limit: int = 200,
+    use_labels: bool = True,
+) -> FrequencyResult:
+    """One-way frequency table with valid and cumulative percentages."""
+    info = ctx.require(variable)
+    spec = QuerySpec(
+        dimensions=[Dimension(variable=variable, alias="value")],
+        measures=[Measure(agg=Aggregation.count, alias="count")],
+        filters=filters or FilterGroup(),
+        limit=limit,
+        use_labels=False,
+        sort=[],
+    )
+    builder = SQLBuilder(ctx)
+    sql, params = builder.build_aggregate(spec)
+    _, rows = run_sql(sql, params)
+
+    total = sum(int(r[1] or 0) for r in rows)
+    missing = sum(int(r[1] or 0) for r in rows if _is_missing(info, r[0]))
+    valid_total = total - missing
+
+    # Real answers first, then blanks and tagged missings. Numeric-looking values
+    # sort by value, everything else by frequency.
+    def sort_key(row: list[Any]) -> Any:
+        blank = _is_missing(info, row[0])
+        try:
+            natural = float(row[0]) if row[0] is not None else 0.0
+        except (TypeError, ValueError):
+            natural = None
+        if blank:
+            # "(blank)" first, then .a, .b, ... rather than by count
+            return (True, 0.0, str(row[0]))
+        if natural is not None and info.is_numeric:
+            return (False, natural, "")
+        return (False, float(-int(row[1] or 0)), "")
+
+    try:
+        rows.sort(key=sort_key)
+    except TypeError:
+        rows.sort(key=lambda r: (_is_missing(info, r[0]), str(r[0])))
+
+    result_rows: list[FrequencyRow] = []
+    cumulative = 0.0
+    for value, count in rows:
+        count = int(count or 0)
+        blank = _is_missing(info, value)
+        percent = (count / total * 100) if total else 0.0
+        valid_percent = (count / valid_total * 100) if valid_total and not blank else 0.0
+        if not blank:
+            cumulative += valid_percent
+        if value is None:
+            label = MISSING_LABEL
+        elif blank:
+            # A tag such as ".a" is its own answer category; show it as it is
+            label = str(value)
+        else:
+            label = category_text(info, value, use_labels)
+        result_rows.append(
+            FrequencyRow(
+                value=value,
+                label=label,
+                count=count,
+                percent=round(percent, 3),
+                valid_percent=round(valid_percent, 3),
+                cumulative_percent=round(min(cumulative, 100.0), 3),
+            )
+        )
+
+    return FrequencyResult(
+        variable=variable,
+        label=info.label or variable,
+        rows=result_rows,
+        total=total,
+        missing=missing,
+        distinct=len([r for r in rows if not _is_missing(info, r[0])]),
+    )
+
+
+# The single axis a one-way table gets in place of the variable it does not
+# have. It is a sentinel rather than a real value, so it can never collide with
+# a category that happens to be called "Count".
+_ONE_WAY = object()
+
+
+def _measure_label(measure: Measure) -> str:
+    """What to call the one column of a one-way table.
+
+    A weighted count is not a count. It is an estimate of how many there are
+    in the population the sample stands for, and heading it "Count" invites a
+    reader to add it to an unweighted one or quote it as a number of
+    interviews.
+    """
+    if measure.agg == Aggregation.count:
+        return f"Estimated total ({measure.weight})" if measure.weight else "Count"
+    base = (
+        f"{measure.agg.value} of {measure.variable}"
+        if measure.variable
+        else measure.agg.value
+    )
+    return f"weighted {base}" if measure.weight else base
+
+
+def _suppression_mask(
+    frequencies: list[list[float]], threshold: int
+) -> list[list[bool]]:
+    """Which cells must be withheld, given how many records each rests on.
+
+    Primary suppression is the rule itself: a cell resting on fewer records
+    than the floor can identify them. A zero is left alone - an absence
+    identifies nobody, and blanking it would only tell the reader that
+    somebody is being protected where nobody is.
+
+    Secondary suppression is the part that is easy to forget and fatal to
+    skip. A row whose only withheld cell sits beside published cells and a
+    published total gives that cell back by subtraction, so the withholding
+    was decorative. Where that is the case a second cell goes too, and the
+    smallest one is chosen because it is the one whose loss costs the reader
+    least. Columns are read the same way, which is also what protects a
+    one-way table: its single column is the only direction a reader can
+    subtract along.
+
+    Iterating rather than solving: choosing the cheapest possible set of
+    secondary cells is a hard problem, and the greedy pass is what statistical
+    offices actually use. It terminates because every round withholds at least
+    one more cell, and it stops early if a line has nothing left to give.
+    """
+    rows = len(frequencies)
+    columns = len(frequencies[0]) if rows else 0
+    mask = [
+        [1 <= frequencies[i][j] < threshold for j in range(columns)] for i in range(rows)
+    ]
+    if rows == 0 or columns == 0:
+        return mask
+
+    def protect(line: list[tuple[int, int]]) -> bool:
+        """One row or column. True if this pass withheld another cell."""
+        hidden = [(i, j) for i, j in line if mask[i][j]]
+        if len(hidden) != 1 or len(line) < 2:
+            # Nothing withheld, or two already withheld and neither can be
+            # recovered. A line of one cell has no second cell to subtract
+            # from and is handled by the other direction.
+            return False
+        candidates = [(i, j) for i, j in line if not mask[i][j]]
+        if not candidates:
+            return False
+        i, j = min(candidates, key=lambda cell: frequencies[cell[0]][cell[1]])
+        mask[i][j] = True
+        return True
+
+    # Bounded by the number of cells: each round withholds at least one more.
+    for _ in range(rows * columns + 1):
+        moved = False
+        for i in range(rows):
+            moved |= protect([(i, j) for j in range(columns)])
+        for j in range(columns):
+            moved |= protect([(i, j) for i in range(rows)])
+        if not moved:
+            break
+    return mask
+
+
+def _contributing_columns(measure: Measure) -> list[str]:
+    """The columns a measure's SQL actually reads.
+
+    This decides which records count towards disclosure, so it has to match
+    `SQLBuilder.measure_expr` rather than the request's fields. A weighted
+    count of records is `SUM(weight)` and never mentions a variable, so a
+    variable there would withhold a cell backed by hundreds of weighted
+    households because some optional question beside them went unanswered.
+    A weighted count *of a variable* sums the weights of the rows that
+    answered it, so it reads both: a cell of 12.5 from the one household that
+    answered is one household's answer, however the weight dresses it up.
+
+    Everything else reads its variable, and reads the weight too when it has
+    one - `SUM(col * weight)` is null if either side is.
+    """
+    if measure.agg in (Aggregation.count, Aggregation.share):
+        return [name for name in (measure.variable, measure.weight) if name]
+    return [name for name in (measure.variable, measure.weight) if name]
+
+
+def execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabResult:
+    """A table of one or two variables, with any headings somebody renamed."""
+    return headed(_execute_crosstab(ctx, request), request)
+
+
+def headed(result: CrosstabResult, request: CrosstabRequest) -> CrosstabResult:
+    """Put the headings somebody chose on a finished table.
+
+    Beside the labels rather than over them: a column heading on a dashboard
+    is clickable, and the click filters by the category the label names. A
+    heading of "Men" over the category "Male" has to go on filtering by
+    "Male".
+    """
+    renamed = {
+        key: value.strip()
+        for key, value in (request.column_headings or {}).items()
+        if value and value.strip()
+    }
+    if renamed:
+        result.column_headings = [renamed.get(label, label) for label in result.column_labels]
+    if request.row_heading.strip():
+        result.row_heading = request.row_heading.strip()
+    return result
+
+
+def _execute_crosstab(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabResult:
+    """A table of one or two variables.
+
+    With both a row and a column variable this is the two-way cross-tabulation
+    it has always been, percentages and chi-square included. With only one it
+    is that variable's frequencies, which is what "tabulate this" means before
+    anybody wants it crossed with something - and which used to require picking
+    a second variable you did not want and reading around it.
+
+    A one-way table keeps the two-way shape, with the missing side standing in
+    as a single row or column named after the measure. That way everything
+    downstream - the renderer, the export, the dashboard widget - needs to know
+    nothing about it.
+
+    With no measure at all the stand-in side is dropped instead of printed, and
+    the table is the categories of the one variable it has: no counts, no
+    totals, no chi-square. The values still have to be queried to know which
+    categories occurred, so this is a question about what is shown rather than
+    about what is asked of the data.
+    """
+    if len(request.measures) > 1:
+        return _crosstab_of_measures(ctx, request)
+    row_info = ctx.require(request.row_variable) if request.row_variable else None
+    col_info = ctx.require(request.column_variable) if request.column_variable else None
+    if row_info is None and col_info is None:  # pragma: no cover - schema catches this
+        raise QueryError("A tabulation needs a row variable, a column variable, or both")
+
+    dimensions = []
+    if row_info is not None:
+        dimensions.append(Dimension(variable=request.row_variable, alias="__row"))
+    if col_info is not None:
+        dimensions.append(Dimension(variable=request.column_variable, alias="__col"))
+
+    # With no measure the query still counts: that is how it learns which
+    # categories the data actually has. The counts are simply not shown.
+    measure = request.measure or Measure()
+    spec = QuerySpec(
+        dimensions=dimensions,
+        measures=[Measure(**{**measure.model_dump(), "alias": "__value"})],
+        filters=request.filters,
+        limit=MAX_ROWS,
+        use_labels=False,
+        sort=[],
+    )
+    builder = SQLBuilder(ctx)
+    sql, params = builder.build_aggregate(spec)
+    _, raw = run_sql(sql, params)
+
+    # How many records each cell rests on, which is a different question from
+    # what the cell shows. A mean of two incomes discloses those two people
+    # however large the mean is, and a weighted count of 4,000 can rest on
+    # three households - so disclosure is judged on the unweighted frequency
+    # and a second query is what it takes to know it. Skipped entirely when no
+    # floor is set, which is every deployment that has not asked for one.
+    threshold = max(0, preferences.value("disclosure_threshold"))
+    frequency: dict[tuple[Any, Any], float] = {}
+    if threshold:
+        # Only the records that reach the statistic. Every aggregate ignores
+        # nulls, and a weighted one ignores a null weight as well, so a
+        # category of a hundred people with one reported wage shows that one
+        # person's wage - and counting the hundred would call it safe.
+        guards = _contributing_columns(measure)
+        counts_filters = (
+            FilterGroup(
+                op="and",
+                conditions=[
+                    Condition(variable=name, operator="is_not_null", value=None)
+                    for name in guards
+                ],
+                groups=[request.filters],
+            )
+            if guards
+            else request.filters
+        )
+        counts_sql, counts_params = builder.build_aggregate(
+            spec.model_copy(
+                update={"measures": [Measure(alias="__value")], "filters": counts_filters}
+            )
+        )
+        _, counted = run_sql(counts_sql, counts_params)
+        for record in counted:
+            if row_info is not None and col_info is not None:
+                frequency[(record[0], record[1])] = float(record[2] or 0)
+            elif row_info is not None:
+                frequency[(record[0], _ONE_WAY)] = float(record[1] or 0)
+            else:
+                frequency[(_ONE_WAY, record[0])] = float(record[1] or 0)
+
+    # Normalise to (row key, column key, value) whichever way round it came, so
+    # the counting below is the same for one variable and for two.
+    if row_info is not None and col_info is not None:
+        triples = list(raw)
+    elif row_info is not None:
+        triples = [(r, _ONE_WAY, v) for r, v in raw]
+    else:
+        triples = [(_ONE_WAY, c, v) for c, v in raw]
+
+    measure_name = _measure_label(measure)
+
+    def cell_label(info: Any, value: Any) -> str:
+        if value is _ONE_WAY:
+            return measure_name
+        if value is None:
+            return MISSING_LABEL
+        return category_text(info, value, request.use_labels)
+
+    # dict.fromkeys rather than a list with a membership test in it. The test
+    # was a linear scan of everything seen so far, which is fine for twelve
+    # education levels and quadratic in the number of categories: tabulating
+    # 200,000 interview keys - which the platform offers, and which is how
+    # somebody reads a whole table - spent fifty seconds here and under a
+    # tenth of a second in DuckDB. Both of these keep first-seen order, which
+    # is what the sort below expects.
+    row_keys: list[Any] = list(dict.fromkeys(triple[0] for triple in triples))
+    col_keys: list[Any] = list(dict.fromkeys(triple[1] for triple in triples))
+    table: dict[tuple[Any, Any], float] = {
+        (row_value, col_value): float(value or 0)
+        for row_value, col_value, value in triples
+    }
+
+    all_rows = _sorted_keys(row_keys, row_info)
+    all_cols = _sorted_keys(col_keys, col_info)
+    rows_withheld = 0
+    if request.measure is None:
+        # The axis the table does not have carried a single column of counts.
+        # Nobody asked for those, so it goes rather than being printed empty,
+        # and an empty label list is what tells every renderer downstream that
+        # this table has no value columns.
+        if row_info is None:
+            all_rows = []
+        else:
+            all_cols = []
+        if threshold:
+            # A listing has no cell to blank. Naming a category that three
+            # people are in still says those three exist and where they are,
+            # so a category below the floor is left out of the list instead.
+            listed = all_cols if row_info is None else all_rows
+            kept = []
+            for key in listed:
+                cell = (_ONE_WAY, key) if row_info is None else (key, _ONE_WAY)
+                if not 1 <= frequency.get(cell, 0) < threshold:
+                    kept.append(key)
+            rows_withheld = len(listed) - len(kept)
+            if row_info is None:
+                all_cols = kept
+            else:
+                all_rows = kept
+    row_keys = all_rows[: request.max_rows]
+    col_keys = all_cols[: request.max_columns]
+    rows_omitted = len(all_rows) - len(row_keys)
+    columns_omitted = len(all_cols) - len(col_keys)
+
+    values = [[table.get((r, c)) for c in col_keys] for r in row_keys]
+    row_totals = [sum(v or 0 for v in row) for row in values]
+    column_totals = [
+        sum((values[i][j] or 0) for i in range(len(row_keys))) for j in range(len(col_keys))
+    ]
+    grand_total = sum(row_totals)
+
+    # The totals are the true ones and stay published; that is exactly why a
+    # withheld cell has to be protected from being recovered by subtracting
+    # from them, which is what the secondary pass above does.
+    # The margins are protected in the same pass as the cells, by being part of
+    # the same matrix.
+    #
+    # They have to be. A margin is a line sum, so it is recoverable arithmetic
+    # in both directions: a one-way table's row total is its single cell
+    # exactly, and a totals row is one equation over the column totals. Bolting
+    # a separate rule onto the margins would leave the next chain open, whereas
+    # an extra row and column mean every relationship a reader can subtract
+    # along is a line of one matrix, and the rule above already knows what to
+    # do with a line.
+    #
+    # It is also why the margins come last in the matrix and are the largest
+    # numbers in it: the pass prefers to withhold the smallest candidate, so a
+    # cell goes before a total does.
+    suppressed = [[False] * len(col_keys) for _ in row_keys]
+    row_totals_hidden = [False] * len(row_keys)
+    column_totals_hidden = [False] * len(col_keys)
+    grand_total_hidden = False
+    if threshold and row_keys and col_keys:
+        counts = [[frequency.get((r, c), 0) for c in col_keys] for r in row_keys]
+        extended = [line + [sum(line)] for line in counts]
+        extended.append(
+            [sum(counts[i][j] for i in range(len(row_keys))) for j in range(len(col_keys))]
+            + [sum(sum(line) for line in counts)]
+        )
+        mask = _suppression_mask(extended, threshold)
+        suppressed = [line[: len(col_keys)] for line in mask[: len(row_keys)]]
+        row_totals_hidden = [line[len(col_keys)] for line in mask[: len(row_keys)]]
+        column_totals_hidden = mask[len(row_keys)][: len(col_keys)]
+        grand_total_hidden = mask[len(row_keys)][len(col_keys)]
+
+        values = [
+            [None if suppressed[i][j] else value for j, value in enumerate(row)]
+            for i, row in enumerate(values)
+        ]
+
+    # Pearson's test counts observations. Weighted cells are an estimate of a
+    # population, so feeding them in claims a sample the size of the country
+    # and calls a coin toss significant at four decimal places. A design-based
+    # test is not arithmetic on the finished table, so the honest thing is to
+    # report nothing rather than something confident and wrong.
+    #
+    # It also goes when cells were actually withheld, because a statistic
+    # computed over the full table is a statement about numbers the reader has
+    # been refused. Merely having a floor configured is not enough: a table
+    # with nothing small in it has nothing to protect.
+    withheld_any = any(any(row) for row in suppressed)
+    chi_square = (
+        None
+        if measure.weight or withheld_any
+        else _chi_square(values, row_totals, column_totals, grand_total)
+    )
+
+    one_way = row_info is None or col_info is None
+    if request.percentages != "none" and grand_total:
+        # A one-way table has one meaningful denominator - the total - because
+        # the axis it does not have is a single cell. Asking for "% of row" on
+        # a table one column wide would print 100% down the page.
+        basis = "total" if one_way else request.percentages
+        percent_values: list[list[float | None]] = []
+        for i, row in enumerate(values):
+            new_row: list[float | None] = []
+            for j, value in enumerate(row):
+                if value is None:
+                    new_row.append(None)
+                    continue
+                base = {
+                    "row": row_totals[i],
+                    "column": column_totals[j],
+                    "total": grand_total,
+                }[basis]
+                new_row.append(round(value / base * 100, 2) if base else None)
+            percent_values.append(new_row)
+        values = percent_values
+
+    return CrosstabResult(
+        row_variable=request.row_variable,
+        column_variable=request.column_variable,
+        row_variable_label=(row_info.label if row_info else "") or request.row_variable,
+        column_variable_label=(
+            (col_info.label if col_info else "") or request.column_variable
+        ),
+        row_labels=[cell_label(row_info, k) for k in row_keys],
+        column_labels=[cell_label(col_info, k) for k in col_keys],
+        values=values,
+        row_totals=[
+            None if row_totals_hidden[i] else total for i, total in enumerate(row_totals)
+        ],
+        column_totals=[
+            None if column_totals_hidden[j] else total
+            for j, total in enumerate(column_totals)
+        ],
+        grand_total=None if grand_total_hidden else grand_total,
+        percentages=request.percentages,
+        chi_square=chi_square,
+        rows_omitted=rows_omitted,
+        columns_omitted=columns_omitted,
+        suppressed=suppressed,
+        row_totals_suppressed=row_totals_hidden,
+        column_totals_suppressed=column_totals_hidden,
+        grand_total_suppressed=grand_total_hidden,
+        rows_withheld=rows_withheld,
+        disclosure_threshold=threshold,
+    )
+
+
+def _crosstab_of_measures(ctx: DatasetContext, request: CrosstabRequest) -> CrosstabResult:
+    """Several cell values side by side: one row per category, one column each.
+
+    The sum of rejections by the supervisor beside the sum by headquarters, per
+    interviewer - a table that otherwise took one cross-tab per variable and
+    copying the columns together by hand. It is one grouped query with a
+    measure per column, so every column counts exactly the rows the others do.
+
+    The totals are what each kind of value allows. A column's total is the
+    measure over every row in the table's filters - the overall mean for a
+    mean, which adding up the cells would not give. Along a row, counts and
+    sums add into a total and other values do not, so a row of a mean beside a
+    median has no total rather than a meaningless one, and no chi-square: the
+    columns are not categories of one variable.
+    """
+    row_info = ctx.require(request.row_variable)
+    measures = [
+        Measure(**{**one.model_dump(), "alias": f"__m{index}"})
+        for index, one in enumerate(request.measures)
+    ]
+    labels = [_measure_label(one) for one in request.measures]
+    if len(set(labels)) < len(labels):
+        raise QueryError("The same value is asked for twice. Choose each variable once.")
+
+    spec = QuerySpec(
+        dimensions=[Dimension(variable=request.row_variable, alias="__row")],
+        measures=measures,
+        filters=request.filters,
+        limit=MAX_ROWS,
+        use_labels=False,
+        sort=[],
+    )
+    builder = SQLBuilder(ctx)
+    sql, params = builder.build_aggregate(spec)
+    _, raw = run_sql(sql, params)
+    by_row = {record[0]: [None if v is None else float(v) for v in record[1:]] for record in raw}
+
+    overall_sql, overall_params = SQLBuilder(ctx).build_aggregate(
+        spec.model_copy(update={"dimensions": []})
+    )
+    _, overall = run_sql(overall_sql, overall_params)
+    column_totals: list[float | None] = (
+        [None if v is None else float(v) for v in overall[0]] if overall else [None] * len(labels)
+    )
+
+    all_rows = _sorted_keys(list(by_row), row_info)
+    row_keys = all_rows[: request.max_rows]
+    values: list[list[float | None]] = [list(by_row[key]) for key in row_keys]
+
+    adds = request.adds_across
+    row_totals: list[float | None] = (
+        [sum(v or 0 for v in line) for line in values] if adds else [None] * len(row_keys)
+    )
+    grand_total = sum(v or 0 for v in column_totals) if adds else None
+
+    # Disclosure, as for any other table: judged on the records behind each
+    # cell, which differ by column - a mean reads only those who answered it.
+    threshold = max(0, preferences.value("disclosure_threshold"))
+    suppressed = [[False] * len(labels) for _ in row_keys]
+    row_totals_hidden = [False] * len(row_keys)
+    column_totals_hidden = [False] * len(labels)
+    grand_total_hidden = False
+    if threshold and row_keys:
+        counts = [[0.0] * len(labels) for _ in row_keys]
+        position = {key: index for index, key in enumerate(row_keys)}
+        for column, one in enumerate(request.measures):
+            guards = _contributing_columns(one)
+            counted_filters = (
+                FilterGroup(
+                    op="and",
+                    conditions=[
+                        Condition(variable=name, operator="is_not_null", value=None)
+                        for name in guards
+                    ],
+                    groups=[request.filters],
+                )
+                if guards
+                else request.filters
+            )
+            counts_sql, counts_params = builder.build_aggregate(
+                spec.model_copy(
+                    update={"measures": [Measure(alias="__value")], "filters": counted_filters}
+                )
+            )
+            _, counted = run_sql(counts_sql, counts_params)
+            for record in counted:
+                if record[0] in position:
+                    counts[position[record[0]]][column] = float(record[1] or 0)
+        extended = [line + [sum(line)] for line in counts]
+        extended.append(
+            [sum(counts[i][j] for i in range(len(row_keys))) for j in range(len(labels))]
+            + [sum(sum(line) for line in counts)]
+        )
+        mask = _suppression_mask(extended, threshold)
+        suppressed = [line[: len(labels)] for line in mask[: len(row_keys)]]
+        row_totals_hidden = [line[len(labels)] for line in mask[: len(row_keys)]]
+        column_totals_hidden = mask[len(row_keys)][: len(labels)]
+        grand_total_hidden = mask[len(row_keys)][len(labels)]
+        values = [
+            [None if suppressed[i][j] else value for j, value in enumerate(line)]
+            for i, line in enumerate(values)
+        ]
+
+    if request.percentages != "none":
+        shown: list[list[float | None]] = []
+        for i, line in enumerate(values):
+            out: list[float | None] = []
+            for j, value in enumerate(line):
+                base = {
+                    "row": row_totals[i],
+                    "column": column_totals[j],
+                    "total": grand_total,
+                }[request.percentages]
+                out.append(round(value / base * 100, 2) if value is not None and base else None)
+            shown.append(out)
+        values = shown
+
+    return CrosstabResult(
+        row_variable=request.row_variable,
+        column_variable="",
+        row_variable_label=row_info.label or request.row_variable,
+        column_variable_label="",
+        row_labels=[
+            MISSING_LABEL if key is None else category_text(row_info, key, request.use_labels)
+            for key in row_keys
+        ],
+        column_labels=labels,
+        values=values,
+        row_totals=[
+            None if row_totals_hidden[i] else total for i, total in enumerate(row_totals)
+        ],
+        column_totals=[
+            None if column_totals_hidden[j] else total for j, total in enumerate(column_totals)
+        ],
+        grand_total=None if grand_total_hidden else grand_total,
+        percentages=request.percentages,
+        chi_square=None,
+        rows_omitted=len(all_rows) - len(row_keys),
+        columns_omitted=0,
+        suppressed=suppressed,
+        row_totals_suppressed=row_totals_hidden,
+        column_totals_suppressed=column_totals_hidden,
+        grand_total_suppressed=grand_total_hidden,
+        disclosure_threshold=threshold,
+    )
+
+
+def _sorted_keys(keys: list[Any], info: VariableInfo | None) -> list[Any]:
+    # The one-way sentinel is the only key on its axis, so there is nothing to
+    # sort and nothing it could be compared against.
+    if info is None:
+        return list(keys)
+    non_null = [k for k in keys if k is not None]
+    try:
+        non_null.sort()
+    except TypeError:
+        non_null.sort(key=str)
+    return non_null + ([None] if None in keys else [])
+
+
+def _chi_square(
+    values: list[list[float | None]],
+    row_totals: list[float],
+    column_totals: list[float],
+    grand_total: float,
+) -> dict[str, Any] | None:
+    """Pearson chi-square of independence; useful for quick significance checks."""
+    if grand_total <= 0 or len(row_totals) < 2 or len(column_totals) < 2:
+        return None
+    statistic = 0.0
+    for i, row_total in enumerate(row_totals):
+        for j, col_total in enumerate(column_totals):
+            expected = row_total * col_total / grand_total
+            if expected <= 0:
+                continue
+            observed = values[i][j] or 0
+            statistic += (observed - expected) ** 2 / expected
+    dof = (len(row_totals) - 1) * (len(column_totals) - 1)
+    return {
+        "statistic": round(statistic, 4),
+        "dof": dof,
+        "cramers_v": round(
+            math.sqrt(statistic / (grand_total * min(len(row_totals) - 1, len(column_totals) - 1)))
+            if grand_total and min(len(row_totals), len(column_totals)) > 1
+            else 0.0,
+            4,
+        ),
+    }
+
+
+def execute_summary(
+    ctx: DatasetContext, variables: list[str], filters: FilterGroup | None = None
+) -> list[SummaryStats]:
+    """Descriptive statistics for numeric variables."""
+    results: list[SummaryStats] = []
+    builder = SQLBuilder(ctx)
+    where = builder.filter_sql(filters or FilterGroup())
+    params = list(builder.params)
+    for name in variables:
+        info = ctx.require(name)
+        col = quote_ident(info.name)
+        # Stored as a number, not judged to be a quantity: the same reason the
+        # cast in measure_expr asks that question. A labelled BIGINT is a code
+        # set and still must not be summed through a double.
+        cast = col if info.holds_numbers else f"try_cast({col} AS DOUBLE)"
+        sql = (
+            f"SELECT COUNT({cast}), COUNT(*) - COUNT({cast}), AVG({cast}), "
+            f"STDDEV_SAMP({cast}), MIN({cast}), QUANTILE_CONT({cast}, 0.25), "
+            f"MEDIAN({cast}), QUANTILE_CONT({cast}, 0.75), MAX({cast}), SUM({cast}) "
+            f"FROM read_parquet({_quote_path(ctx.parquet_path)})"
+        )
+        if where:
+            sql += f" WHERE {where}"
+        _, rows = run_sql(sql, params)
+        row = rows[0] if rows else [0] * 10
+
+        def num(value: Any) -> float | None:
+            if value is None:
+                return None
+            try:
+                out = float(value)
+            except (TypeError, ValueError):
+                return None
+            return None if math.isnan(out) or math.isinf(out) else round(out, 6)
+
+        results.append(
+            SummaryStats(
+                variable=name,
+                label=info.label or name,
+                count=int(row[0] or 0),
+                missing=int(row[1] or 0),
+                mean=num(row[2]),
+                std=num(row[3]),
+                min=num(row[4]),
+                p25=num(row[5]),
+                median=num(row[6]),
+                p75=num(row[7]),
+                max=num(row[8]),
+                sum=num(row[9]),
+            )
+        )
+    return results
+
+
+def distinct_values(ctx: DatasetContext, variable: str, limit: int = 500) -> list[Any]:
+    """Populate filter dropdowns in the UI."""
+    info = ctx.require(variable)
+    col = quote_ident(info.name)
+    sql = (
+        f"SELECT {col}, COUNT(*) AS n FROM read_parquet({_quote_path(ctx.parquet_path)}) "
+        f"WHERE {col} IS NOT NULL GROUP BY 1 ORDER BY n DESC LIMIT {int(limit)}"
+    )
+    _, rows = run_sql(sql)
+    return [
+        {"value": value, "label": category_text(info, value), "count": int(count or 0)}
+        for value, count in rows
+    ]

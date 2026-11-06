@@ -1,0 +1,1447 @@
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
+import { Link, Navigate, useNavigate, useParams, useSearchParams } from 'react-router-dom'
+import MoreMenu from '@/components/MoreMenu'
+import { ProjectOverview } from '@/components/ProjectOverview'
+import { api } from '@/lib/api'
+import { useBreadcrumbs } from '@/hooks/useBreadcrumbs'
+import { useDialog } from '@/hooks/useDialog'
+import { useToast } from '@/hooks/useToast'
+import { formatNumber, relativeTime } from '@/lib/format'
+import type {
+  ArchiveCost,
+  Cardinality,
+  Dashboard,
+  Dataset,
+  KeyMatch,
+  Project,
+  ProjectMember,
+  Relationship,
+  Role,
+} from '@/lib/types'
+import RelationshipMap from '@/components/RelationshipMap'
+import {
+  Badge,
+  Card,
+  EmptyState,
+  ErrorNote,
+  Field,
+  Loading,
+  Modal,
+  PageHeader,
+  Tabs,
+} from '@/components/ui'
+
+export type TabId = 'overview' | 'data' | 'model' | 'members'
+const TAB_IDS: TabId[] = ['overview', 'data', 'model', 'members']
+
+/** Which tab a link is asking for. Anyone can put anything in the address,
+ *  so an unknown name opens the project rather than a blank panel. */
+export function tabFromUrl(asked: string | null): TabId {
+  return TAB_IDS.includes(asked as TabId) ? (asked as TabId) : 'overview'
+}
+
+/** Where a link to the project's old script tab goes now.
+ *
+ *  The script was a tab here, called Command, until it moved to the Scripts
+ *  page with every other project's. Links to the tab are in bookmarks, in
+ *  messages people sent each other and in the attention list of an overview
+ *  cached before the move, so they are sent on to the same script there
+ *  rather than left opening the project's front page.
+ */
+export function scriptMovedTo(asked: string | null, projectId: string): string | null {
+  return asked === 'script' ? `/scripts?project=${encodeURIComponent(projectId)}` : null
+}
+
+const PROJECT_ROLES: { value: Role; label: string; description: string }[] = [
+  { value: 'viewer', label: 'Viewer', description: 'Read this project’s dashboards and data' },
+  { value: 'analyst', label: 'Analyst', description: 'Build charts and dashboards here' },
+  { value: 'manager', label: 'Manager', description: 'Manage this project and its members' },
+]
+
+export default function ProjectDetail() {
+  const { id = '' } = useParams()
+  const navigate = useNavigate()
+  const toast = useToast()
+  const queryClient = useQueryClient()
+  const [deleting, setDeleting] = useState(false)
+  const [describing, setDescribing] = useState(false)
+  const [archiving, setArchiving] = useState(false)
+  const [confirmName, setConfirmName] = useState('')
+  // The tab lives in the address rather than in this component, so a refresh,
+  // the back button and a pasted link all keep the tab you were on, which none
+  // of them did.
+  const [params, setParams] = useSearchParams()
+  const asked = params.get('tab')
+  const setTab = (next: TabId) => {
+    // Replace rather than push: flipping between tabs is not a journey to
+    // retrace, and the back button should leave the project, not walk the tabs.
+    setParams(next === 'overview' ? {} : { tab: next }, { replace: true })
+  }
+
+  const project = useQuery({
+    queryKey: ['project', id],
+    queryFn: () => api.get<Project>(`/projects/${id}`),
+  })
+  const datasets = useQuery({
+    queryKey: ['datasets', { project: id }],
+    queryFn: () => api.getAll<Dataset>(`/datasets?project_id=${id}`),
+  })
+  const dashboards = useQuery({
+    queryKey: ['dashboards', { project: id }],
+    queryFn: () => api.get<Dashboard[]>(`/dashboards?project_id=${id}`),
+  })
+  const relationships = useQuery({
+    queryKey: ['relationships', id],
+    queryFn: () => api.get<Relationship[]>(`/relationships?project_id=${id}`),
+  })
+
+  // "manager" here is the role on this project, which is already capped by the
+  // user's own role on the server, so this is the only check the UI needs.
+  const canManage = project.data?.your_role === 'manager' || project.data?.your_role === 'admin'
+
+  const shown = tabFromUrl(asked)
+  const moved = scriptMovedTo(asked, id)
+
+  const archived = project.data?.status === 'archived'
+
+  // Asked only while the dialog is open, because it walks the dataset
+  // directories to add them up and the answer is only wanted when somebody is
+  // about to decide.
+  const cost = useQuery({
+    queryKey: ['project-archive', id],
+    queryFn: () => api.get<ArchiveCost>(`/projects/${id}/archive`),
+    enabled: archiving,
+  })
+
+  const archive = useMutation({
+    mutationFn: () => api.post<{ detail: string }>(`/projects/${id}/archive`, {}),
+    onSuccess: (result) => {
+      toast.push(result.detail, 'success')
+      setArchiving(false)
+      queryClient.invalidateQueries({ queryKey: ['project', id] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['datasets'] })
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  const unarchive = useMutation({
+    mutationFn: () => api.post<{ detail: string }>(`/projects/${id}/unarchive`, {}),
+    onSuccess: (result) => {
+      toast.push(result.detail, 'success')
+      queryClient.invalidateQueries({ queryKey: ['project', id] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['datasets'] })
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  const remove = useMutation({
+    mutationFn: (contents: 'release' | 'delete') =>
+      api.delete<{ detail: string }>(`/projects/${id}?contents=${contents}`),
+    onSuccess: (result) => {
+      toast.push(result.detail, 'success')
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['datasets'] })
+      navigate('/projects')
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  // After the hooks, before waiting for the project: the Scripts page asks
+  // the same questions of it and says the same when it is not there.
+  useBreadcrumbs(project.data ? [{ label: project.data.name }] : null)
+  if (moved) return <Navigate to={moved} replace />
+  if (project.isLoading) return <Loading />
+  if (project.error) return <ErrorNote error={project.error} />
+  if (!project.data) return null
+
+  return (
+    <>
+      <PageHeader
+        title={project.data.name}
+        description={
+          project.data.description ||
+          // Where there is nothing to say, the line offers to say something
+          // to the people who can - rather than a "No description" shown as
+          // if it were the description.
+          (canManage ? (
+            <button
+              className="text-brand-700 hover:underline dark:text-brand-400"
+              onClick={() => setDescribing(true)}
+            >
+              Add a description
+            </button>
+          ) : undefined)
+        }
+        actions={
+          <>
+            <Badge tone={project.data.status === 'active' ? 'success' : 'neutral'}>
+              {archived && project.data.archived_at
+                ? `archived ${new Date(project.data.archived_at).toLocaleDateString()}`
+                : project.data.status}
+            </Badge>
+            {canManage && !archived && (
+              <button className="btn-secondary" onClick={() => setArchiving(true)}>
+                Archive
+              </button>
+            )}
+            {canManage && archived && (
+              <button
+                className="btn-secondary"
+                onClick={() => unarchive.mutate()}
+                disabled={unarchive.isPending}
+              >
+                Unarchive
+              </button>
+            )}
+            {canManage && (
+              // Behind the menu rather than beside Archive: the two are
+              // different promises - archiving keeps the dashboards - and
+              // side by side they were one slip apart.
+              <MoreMenu
+                label={project.data.name}
+                items={[
+                  { label: 'Edit name and description', onClick: () => setDescribing(true) },
+                  { label: 'Delete project…', danger: true, onClick: () => setDeleting(true) },
+                ]}
+              />
+            )}
+          </>
+        }
+      />
+
+      {archived && (
+        <div className="aero-pane aero-pane-warn mt-4 px-4 py-3 pl-5">
+          <p className="text-sm text-ink-800 dark:text-dark-800">
+            This project is archived. Its survey data has been removed to free
+            disk; its datasets, dashboards, charts, indicators, quality checks,
+            relationships and script are all still here, and every figure reads
+            empty until the export is imported again.
+          </p>
+          {canManage && (
+            <p className="mt-1 text-xs text-ink-600 dark:text-dark-600">
+              Unarchive to import the data back in. The datasets kept their
+              names, so a replacement import lands in the same ones and the
+              dashboards pointed at them start working again.
+            </p>
+          )}
+        </div>
+      )}
+
+      {archiving && (
+        <Modal
+          open
+          onClose={() => setArchiving(false)}
+          title={`Archive "${project.data.name}"`}
+          footer={
+            <>
+              <button className="btn-secondary" onClick={() => setArchiving(false)}>
+                Cancel
+              </button>
+              <button
+                className="btn-primary"
+                onClick={() => archive.mutate()}
+                disabled={archive.isPending}
+              >
+                {cost.data ? `Archive and free ${cost.data.human}` : 'Archive'}
+              </button>
+            </>
+          }
+        >
+          <p className="text-sm text-ink-600 dark:text-dark-600">
+            Archiving deletes the survey data and keeps everything built on it.
+            It is what to do with a round that is finished with but whose
+            dashboards you still want.
+          </p>
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <div>
+              <p className="text-xs font-semibold text-ink-700 dark:text-dark-700">
+                Deleted
+              </p>
+              <ul className="mt-1 space-y-0.5 text-xs text-ink-600 dark:text-dark-600">
+                <li>
+                  The data in {cost.data?.datasets ?? project.data.dataset_count}{' '}
+                  dataset(s){cost.data ? `, ${cost.data.human}` : ''}
+                </li>
+                <li>Earlier versions of it kept for rollback</li>
+              </ul>
+            </div>
+            <div>
+              <p className="text-xs font-semibold text-ink-700 dark:text-dark-700">Kept</p>
+              <ul className="mt-1 space-y-0.5 text-xs text-ink-600 dark:text-dark-600">
+                <li>Every dataset's name, variables and row count</li>
+                <li>Dashboards, charts, indicators and their history</li>
+                <li>Quality checks, alert rules, relationships, the script</li>
+                <li>Boundary layers, backgrounds and logos</li>
+              </ul>
+            </div>
+          </div>
+          {(cost.data?.share_links ?? 0) > 0 && (
+            <p className="mt-3 text-xs text-amber-700 dark:text-amber-300">
+              {cost.data?.share_links} open share link(s) will be closed, so nobody
+              opens a dashboard of blank charts. Unarchiving reopens them.
+            </p>
+          )}
+          <p className="mt-3 text-xs text-ink-500">
+            Reversible, but not by itself: unarchiving opens the project for work
+            again and the figures come back when the export is imported.
+          </p>
+        </Modal>
+      )}
+
+      {describing && (
+        <DescribeModal project={project.data} onClose={() => setDescribing(false)} />
+      )}
+
+      {deleting && (
+        <Modal
+          open
+          onClose={() => setDeleting(false)}
+          title={`Delete "${project.data.name}"`}
+          footer={
+            <>
+              <button className="btn-secondary" onClick={() => setDeleting(false)}>
+                Cancel
+              </button>
+              <button
+                className="btn-secondary"
+                onClick={() => remove.mutate('release')}
+                disabled={remove.isPending}
+              >
+                Delete, keep the data
+              </button>
+              <button
+                className="btn-primary bg-red-600 hover:bg-red-700"
+                onClick={() => remove.mutate('delete')}
+                // Typing the name is the guard on the irreversible half: this
+                // destroys the datasets themselves and everything built on them.
+                disabled={remove.isPending || confirmName.trim() !== project.data!.name}
+              >
+                Delete everything
+              </button>
+            </>
+          }
+        >
+          <p className="text-sm text-ink-600">
+            <strong>Delete, keep the data</strong> dissolves the project and moves its datasets
+            and dashboards to the shared area, where they go on working.
+          </p>
+          <p className="mt-2 text-sm text-ink-600">
+            <strong>Delete everything</strong> also destroys those datasets and their files, and
+            everything built on them - charts, indicators and their history, quality checks,
+            alert rules and the alerts they raised, relationships, and this project's dashboards.
+            It cannot be undone. Connections are kept: a connection is a server and its
+            credentials, which outlive the project.
+          </p>
+          <p className="mt-2 text-sm text-ink-600">
+            If what you want is the disk back rather than the project gone,{' '}
+            <strong>Archive</strong> deletes the data and keeps the dashboards.
+          </p>
+          <Field
+            label={`Type "${project.data.name}" to confirm the second one`}
+            hint="Only needed for deleting the data."
+          >
+            <input
+              className="input"
+              value={confirmName}
+              onChange={(event) => setConfirmName(event.target.value)}
+              placeholder={project.data.name}
+              data-suggest=""
+              autoFocus
+            />
+          </Field>
+        </Modal>
+      )}
+
+      <Tabs
+        tabs={[
+          // The project's front page: the whole pipeline, in the order the
+          // data travels, with what needs attention on top.
+          { id: 'overview', label: 'Overview' },
+          {
+            id: 'data',
+            label: 'Data & dashboards',
+            count: (datasets.data?.items.length ?? 0) + (dashboards.data?.length ?? 0),
+          },
+          { id: 'model', label: 'Relationships', count: relationships.data?.length },
+          { id: 'members', label: 'Members', count: project.data.member_count },
+        ]}
+        active={shown}
+        onChange={(next) => setTab(next as TabId)}
+      />
+
+      {shown === 'overview' ? (
+        <ProjectOverview projectId={id} canManage={canManage} openTab={(tab) => setTab(tab)} />
+      ) : shown === 'data' ? (
+        <div className="mt-4 grid gap-4 lg:grid-cols-2">
+          <Card title="Datasets" subtitle="Available as a source for anything in this project">
+            {datasets.isLoading ? (
+              <Loading />
+            ) : !datasets.data?.items.length ? (
+              <EmptyState
+                icon="▤"
+                title="No datasets yet"
+                description="Assign one from the Datasets page, or upload straight into this project."
+              />
+            ) : (
+              <ul className="divide-y divide-ink-100">
+                {datasets.data.items.map((dataset) => (
+                  <li key={dataset.id} className="flex items-center justify-between gap-3 py-2.5">
+                    <Link
+                      to={`/datasets/${dataset.id}`}
+                      className="text-sm font-medium text-ink-800 hover:text-brand-700"
+                    >
+                      {dataset.name}
+                    </Link>
+                    <span className="shrink-0 text-xs tabular-nums text-ink-500">
+                      {/* The count is what the dataset held, and on an archived
+                          project it no longer holds it. Saying the number on its
+                          own would read as data that is still there. */}
+                      {dataset.status === 'archived'
+                        ? `${formatNumber(dataset.row_count)} rows, data archived`
+                        : `${formatNumber(dataset.row_count)} rows`}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+
+          <Card title="Dashboards">
+            {dashboards.isLoading ? (
+              <Loading />
+            ) : !dashboards.data?.length ? (
+              <EmptyState
+                icon="▦"
+                title="No dashboards yet"
+                description="Create one from the Dashboards page and assign it here."
+              />
+            ) : (
+              <ul className="divide-y divide-ink-100">
+                {dashboards.data.map((dashboard) => (
+                  <li key={dashboard.id} className="flex items-center justify-between gap-3 py-2.5">
+                    <Link
+                      to={`/dashboards/${dashboard.id}`}
+                      className="text-sm font-medium text-ink-800 hover:text-brand-700"
+                    >
+                      {dashboard.name}
+                    </Link>
+                    <span className="shrink-0 text-xs text-ink-500">
+                      {relativeTime(dashboard.updated_at)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </Card>
+        </div>
+      ) : shown === 'model' ? (
+        <RelationshipsTab
+          projectId={id}
+          projectName={project.data.name}
+          datasets={datasets.data?.items ?? []}
+          relationships={relationships.data ?? []}
+          canManage={canManage}
+        />
+      ) : (
+        <Members projectId={id} members={project.data.members ?? []} canManage={canManage} />
+      )}
+    </>
+  )
+}
+
+function Members({
+  projectId,
+  members,
+  canManage,
+}: {
+  projectId: string
+  members: ProjectMember[]
+  canManage: boolean
+}) {
+  const toast = useToast()
+  const queryClient = useQueryClient()
+  const [adding, setAdding] = useState(false)
+
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: ['project', projectId] })
+    queryClient.invalidateQueries({ queryKey: ['projects'] })
+  }
+
+  const setRole = useMutation({
+    mutationFn: (payload: { user_id: string; role: Role }) =>
+      api.put(`/projects/${projectId}/members`, payload),
+    onSuccess: refresh,
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+  const remove = useMutation({
+    mutationFn: (userId: string) => api.delete(`/projects/${projectId}/members/${userId}`),
+    onSuccess: () => {
+      toast.push('Member removed', 'success')
+      refresh()
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  return (
+    <Card
+      className="mt-4"
+      title="Members"
+      subtitle="Project managers can add anyone with an account on this server."
+      actions={
+        canManage && (
+          <button className="btn-primary btn-sm" onClick={() => setAdding(true)}>
+            Add member
+          </button>
+        )
+      }
+    >
+      {!members.length ? (
+        <EmptyState
+          icon="◍"
+          title="No members"
+          description="Add someone with a SurveyHQ account to collaborate on this project."
+        />
+      ) : (
+        <ul className="divide-y divide-ink-100">
+          {members.map((member) => (
+            <li key={member.id} className="flex flex-wrap items-center gap-3 py-3">
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-ink-800">
+                  {member.full_name || member.email}
+                </p>
+                {member.full_name && (
+                  <p className="truncate text-xs text-ink-500">{member.email}</p>
+                )}
+              </div>
+              {canManage ? (
+                <select
+                  className="input w-32"
+                  value={member.role}
+                  onChange={(event) =>
+                    setRole.mutate({ user_id: member.user_id, role: event.target.value as Role })
+                  }
+                >
+                  {PROJECT_ROLES.map((role) => (
+                    <option key={role.value} value={role.value}>
+                      {role.label}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <Badge>{member.role}</Badge>
+              )}
+              {canManage && (
+                <button
+                  className="btn-ghost btn-sm text-red-600"
+                  onClick={() => remove.mutate(member.user_id)}
+                >
+                  Remove
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {adding && (
+        <AddMemberModal
+          projectId={projectId}
+          members={members}
+          onClose={() => setAdding(false)}
+          onAdded={() => {
+            toast.push('Member added', 'success')
+            refresh()
+            setAdding(false)
+          }}
+        />
+      )}
+    </Card>
+  )
+}
+
+interface DirectoryEntry {
+  id: string
+  username: string
+  full_name: string
+  email: string
+}
+
+/**
+ * Choosing who to add.
+ *
+ * This used to be one box asking for an exact username, which worked while
+ * anybody could sign themselves up and had picked one. With self-service
+ * sign-up off, an administrator creates every account and the username is
+ * derived from the email address and shown nowhere at all - so the box was
+ * asking for something nobody, the administrator included, could look up.
+ *
+ * So the ordinary case is a list of the people on this server. The username
+ * box is still here for the deployments that do allow sign-up, where the
+ * server will not hand out a list of accounts it did not create.
+ */
+function AddMemberModal({
+  projectId,
+  members,
+  onClose,
+  onAdded,
+}: {
+  projectId: string
+  members: ProjectMember[]
+  onClose: () => void
+  onAdded: () => void
+}) {
+  const toast = useToast()
+  const [search, setSearch] = useState('')
+  const [chosen, setChosen] = useState<DirectoryEntry | null>(null)
+  const [username, setUsername] = useState('')
+  const [role, setRole] = useState<Role>('viewer')
+
+  const directory = useQuery({
+    queryKey: ['user-directory'],
+    queryFn: () => api.get<DirectoryEntry[]>('/users/directory'),
+    // A server that allows sign-up answers 403 on purpose. That is the answer,
+    // not a failure to reach it, so there is nothing to retry.
+    retry: false,
+    staleTime: 60_000,
+  })
+
+  const byUsername = directory.isError
+  const already = new Set(members.map((member) => member.user_id))
+
+  const add = useMutation({
+    mutationFn: async () => {
+      if (byUsername) {
+        const account = await api.get<{ id: string }>(
+          `/users/lookup/${encodeURIComponent(username.trim().toLowerCase())}`,
+        )
+        return api.put(`/projects/${projectId}/members`, { user_id: account.id, role })
+      }
+      return api.put(`/projects/${projectId}/members`, { user_id: chosen?.id, role })
+    },
+    onSuccess: onAdded,
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  const term = search.trim().toLowerCase()
+  const people = (directory.data ?? []).filter(
+    (person) =>
+      !term ||
+      person.full_name.toLowerCase().includes(term) ||
+      person.email.toLowerCase().includes(term) ||
+      person.username.toLowerCase().includes(term),
+  )
+
+  const ready = byUsername ? username.trim().length >= 3 : chosen !== null
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Add a member"
+      footer={
+        <>
+          <button className="btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="btn-primary"
+            onClick={() => add.mutate()}
+            disabled={!ready || add.isPending}
+          >
+            {add.isPending ? 'Adding…' : 'Add member'}
+          </button>
+        </>
+      }
+    >
+      {byUsername ? (
+        <Field
+          label="Username"
+          hint="Enter the exact SurveyHQ username. The person must already have an account."
+        >
+          <input
+            className="input"
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
+            placeholder="mosese"
+            autoComplete="off"
+            autoFocus
+          />
+        </Field>
+      ) : (
+        <Field label="Who">
+          <input
+            className="input"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Search by name or email address"
+            autoComplete="off"
+            autoFocus
+          />
+          {/* Under the input rather than in the Field's hint, which renders
+              after the children and would put this below a tall list, reading
+              as a note about nothing. */}
+          <p className="mt-1.5 text-xs text-ink-500">
+            Everyone with an account on this server
+          </p>
+          <div className="mt-2 max-h-64 overflow-y-auto rounded-lg border border-ink-100">
+            {directory.isLoading ? (
+              <Loading />
+            ) : !people.length ? (
+              <p className="p-3 text-sm text-ink-500">
+                {directory.data?.length
+                  ? 'Nobody here matches that.'
+                  : 'There is nobody else on this server yet. An administrator creates accounts under Administration.'}
+              </p>
+            ) : (
+              <ul className="divide-y divide-ink-100">
+                {people.map((person) => {
+                  const member = already.has(person.id)
+                  const picked = chosen?.id === person.id
+                  return (
+                    <li key={person.id}>
+                      <button
+                        type="button"
+                        disabled={member}
+                        onClick={() => setChosen(person)}
+                        className={`flex w-full items-center justify-between gap-3 px-3 py-2 text-left ${
+                          member
+                            ? 'cursor-not-allowed opacity-50'
+                            : picked
+                              ? 'bg-brand-50'
+                              : 'hover:bg-ink-50'
+                        }`}
+                      >
+                        <span className="min-w-0">
+                          <span className="block truncate text-sm font-medium text-ink-800">
+                            {person.full_name || person.email}
+                          </span>
+                          {person.full_name && (
+                            <span className="block truncate text-xs text-ink-500">
+                              {person.email}
+                            </span>
+                          )}
+                        </span>
+                        {member ? (
+                          <span className="shrink-0 text-xs text-ink-500">already a member</span>
+                        ) : picked ? (
+                          <span className="shrink-0 text-xs font-semibold text-brand-700">
+                            selected
+                          </span>
+                        ) : null}
+                      </button>
+                    </li>
+                  )
+                })}
+              </ul>
+            )}
+          </div>
+        </Field>
+      )}
+      <Field
+        label="Role on this project"
+        hint={PROJECT_ROLES.find((r) => r.value === role)?.description}
+      >
+        <select
+          className="input"
+          value={role}
+          onChange={(event) => setRole(event.target.value as Role)}
+        >
+          {PROJECT_ROLES.map((option) => (
+            <option key={option.value} value={option.value}>
+              {option.label}
+            </option>
+          ))}
+        </select>
+      </Field>
+    </Modal>
+  )
+}
+
+/**
+ * The project's data model: which datasets link to which, and on what.
+ *
+ * Detection is offered rather than run automatically, because it writes
+ * relationships and a user should be the one to ask for that. Detected links
+ * are marked as such and stop being marked the moment they are corrected, so
+ * running detection again never quietly reverts a decision.
+ */
+function RelationshipsTab({
+  projectId,
+  projectName,
+  datasets,
+  relationships,
+  canManage,
+}: {
+  projectId: string
+  projectName: string
+  datasets: Dataset[]
+  relationships: Relationship[]
+  canManage: boolean
+}) {
+  const toast = useToast()
+  const ask = useDialog()
+  const queryClient = useQueryClient()
+  const [selected, setSelected] = useState<Relationship | null>(null)
+  const [merging, setMerging] = useState<Relationship | null>(null)
+  const [adding, setAdding] = useState(false)
+  const [clearing, setClearing] = useState(false)
+
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: ['relationships', projectId] })
+    queryClient.invalidateQueries({ queryKey: ['datasets'] })
+  }
+
+  const detect = useMutation({
+    mutationFn: () =>
+      api.post<{ proposed: unknown[]; created: number }>(
+        `/relationships/detect?project_id=${projectId}`,
+      ),
+    onSuccess: (result) => {
+      toast.push(
+        result.created
+          ? `Found ${result.created} new relationship${result.created === 1 ? '' : 's'}`
+          : 'No new relationships found',
+        result.created ? 'success' : 'info',
+      )
+      refresh()
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  const update = useMutation({
+    mutationFn: ({ id, patch }: { id: string; patch: Record<string, unknown> }) =>
+      api.patch(`/relationships/${id}`, patch),
+    onSuccess: () => {
+      refresh()
+      setSelected(null)
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  const remove = useMutation({
+    mutationFn: (id: string) => api.delete(`/relationships/${id}`),
+    onSuccess: () => {
+      toast.push('Relationship removed', 'success')
+      refresh()
+      setSelected(null)
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  const clearAll = useMutation({
+    mutationFn: (detectedOnly: boolean) =>
+      api.post<{ detail: string }>(
+        `/relationships/clear?project_id=${projectId}&detected_only=${detectedOnly}`,
+      ),
+    onSuccess: (result) => {
+      toast.push(result.detail, 'success')
+      refresh()
+      setSelected(null)
+      setClearing(false)
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  return (
+    <Card
+      className="mt-4"
+      title="Data model"
+      subtitle="How this project's datasets link to each other"
+      actions={
+        canManage && (
+          <>
+            <button
+              className="btn-secondary btn-sm"
+              onClick={() => detect.mutate()}
+              disabled={detect.isPending || datasets.length < 2}
+            >
+              {detect.isPending ? 'Looking…' : 'Detect'}
+            </button>
+            <button
+              className="btn-secondary btn-sm"
+              onClick={() => setAdding(true)}
+              disabled={datasets.length < 2}
+            >
+              Add by hand
+            </button>
+            {relationships.length > 0 && (
+              <button className="btn-ghost btn-sm text-red-600" onClick={() => setClearing(true)}>
+                Clear
+              </button>
+            )}
+          </>
+        )
+      }
+    >
+      {datasets.length < 2 ? (
+        <EmptyState
+          icon="◫"
+          title="Not enough datasets to relate"
+          description="A relationship links two datasets, so this needs at least two in the project."
+        />
+      ) : (
+        <>
+          <RelationshipMap
+            datasets={datasets}
+            relationships={relationships}
+            selectedId={selected?.id ?? null}
+            storageKey={projectId}
+            // Dropped from the front of every box. Eight tables all called
+            // "National Census 2025 something" spend most of their width saying
+            // what the page already says at the top.
+            projectName={projectName}
+            onSelect={setSelected}
+          />
+
+          {!relationships.length && (
+            <p className="mt-4 text-sm text-ink-500">
+              No relationships yet.{' '}
+              {canManage
+                ? 'Detect them from the data, or add one by hand.'
+                : 'A project manager can detect them from the data.'}
+            </p>
+          )}
+
+          {adding && (
+            <ManualRelationshipModal
+              datasets={datasets}
+              onClose={() => setAdding(false)}
+              onCreated={() => {
+                refresh()
+                setAdding(false)
+              }}
+            />
+          )}
+
+          {clearing && (
+            <Modal
+              open
+              onClose={() => setClearing(false)}
+              title="Clear relationships"
+              footer={
+                <>
+                  <button className="btn-secondary" onClick={() => setClearing(false)}>
+                    Cancel
+                  </button>
+                  <button
+                    className="btn-secondary"
+                    onClick={() => clearAll.mutate(true)}
+                    disabled={clearAll.isPending}
+                  >
+                    Only the detected ones
+                  </button>
+                  <button
+                    className="btn-primary"
+                    onClick={() => clearAll.mutate(false)}
+                    disabled={clearAll.isPending}
+                  >
+                    Clear all {relationships.length}
+                  </button>
+                </>
+              }
+            >
+              <p className="text-sm text-ink-600">
+                Detection is a guess made from the data, and a wrong guess is easier to clear
+                out than to correct one at a time. Datasets already merged keep their data -
+                they hold their own copy - but they can no longer be re-run from a
+                relationship that is gone.
+              </p>
+              <p className="mt-2 text-sm text-ink-600">
+                {relationships.filter((r) => !r.detected).length} of these were made or
+                corrected by hand.
+              </p>
+            </Modal>
+          )}
+
+          {selected && (
+            <div className="mt-4 rounded-card border border-brand-200 bg-brand-50 p-4">
+              <p className="text-sm font-medium text-ink-900">
+                {selected.left_name} → {selected.right_name}
+              </p>
+              <p className="mt-0.5 text-xs text-ink-600">
+                Joined on <code>{selected.left_variable}</code> ={' '}
+                <code>{selected.right_variable}</code>
+              </p>
+
+              {canManage && (
+                <div className="mt-3 flex flex-wrap items-end gap-3">
+                  <Field label="Cardinality">
+                    <select
+                      className="input w-44"
+                      value={selected.cardinality}
+                      onChange={(event) =>
+                        update.mutate({
+                          id: selected.id,
+                          patch: { cardinality: event.target.value as Cardinality },
+                        })
+                      }
+                    >
+                      <option value="one_to_one">One to one</option>
+                      <option value="one_to_many">One to many</option>
+                      <option value="many_to_one">Many to one</option>
+                      <option value="many_to_many">Many to many</option>
+                    </select>
+                  </Field>
+                  <Field label="Match keys">
+                    <select
+                      className="input w-52"
+                      value={selected.key_match}
+                      onChange={(event) =>
+                        update.mutate({
+                          id: selected.id,
+                          patch: { key_match: event.target.value as KeyMatch },
+                        })
+                      }
+                    >
+                      <option value="exact">Exactly, as stored</option>
+                      <option value="text">As text</option>
+                      <option value="number">As numbers</option>
+                    </select>
+                  </Field>
+                  <label className="mb-4 flex items-center gap-2 text-sm text-ink-700">
+                    <input
+                      type="checkbox"
+                      checked={selected.is_active}
+                      onChange={(event) =>
+                        update.mutate({
+                          id: selected.id,
+                          patch: { is_active: event.target.checked },
+                        })
+                      }
+                    />
+                    Use for merging
+                  </label>
+                  <button
+                    className="btn-primary btn-sm mb-4"
+                    disabled={
+                      !selected.is_active || selected.cardinality === 'many_to_many'
+                    }
+                    title={
+                      selected.cardinality === 'many_to_many'
+                        ? 'Joining these would multiply rows rather than add columns'
+                        : undefined
+                    }
+                    onClick={() => setMerging(selected)}
+                  >
+                    Merge into a new dataset
+                  </button>
+                  <button
+                    className="btn-ghost btn-sm mb-4 text-red-600"
+                    onClick={async () => {
+                      const sure = await ask.confirm({
+                        title: 'Remove this relationship?',
+                        message: 'Both datasets stay. Anything built on the join stops working.',
+                        confirmLabel: 'Remove',
+                        tone: 'danger',
+                      })
+                      if (sure) remove.mutate(selected.id)
+                    }}
+                  >
+                    Remove
+                  </button>
+                </div>
+              )}
+
+              {selected.key_match !== 'exact' && (
+                <p className="mt-1 text-xs text-ink-600 dark:text-dark-600">
+                  The keys are converted to{' '}
+                  {selected.key_match === 'text' ? 'text' : 'numbers'} on both sides
+                  before they are compared, so <code>41</code> and{' '}
+                  <code>&quot;41&quot;</code> count as the same household. Ids that differ
+                  by more than how they are written still will not match, and the merge
+                  says so when nothing lines up.
+                </p>
+              )}
+            </div>
+          )}
+        </>
+      )}
+
+      {merging && (
+        <MergeModal
+          relationship={merging}
+          onClose={() => setMerging(null)}
+          onDone={() => {
+            refresh()
+            setMerging(null)
+          }}
+        />
+      )}
+    </Card>
+  )
+}
+
+function MergeModal({
+  relationship,
+  onClose,
+  onDone,
+}: {
+  relationship: Relationship
+  onClose: () => void
+  onDone: () => void
+}) {
+  const toast = useToast()
+  const [name, setName] = useState(
+    `${relationship.left_name} + ${relationship.right_name}`,
+  )
+  const [how, setHow] = useState<'left' | 'inner'>('left')
+  const [prefix, setPrefix] = useState('')
+
+  const right = useQuery({
+    queryKey: ['dataset', relationship.right_dataset_id],
+    queryFn: () => api.get<Dataset>(`/datasets/${relationship.right_dataset_id}`),
+  })
+  const [columns, setColumns] = useState<string[]>([])
+
+  const merge = useMutation({
+    mutationFn: () =>
+      api.post<Dataset>('/relationships/merge', {
+        name,
+        relationship_id: relationship.id,
+        how,
+        columns,
+        prefix,
+      }),
+    onSuccess: (dataset) => {
+      toast.push(`Created "${dataset.name}" with ${dataset.row_count} rows`, 'success')
+      onDone()
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  const available = (right.data?.variables ?? []).filter(
+    (v) => v.name !== relationship.right_variable && !v.is_hidden,
+  )
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title={`Merge ${relationship.right_name} into ${relationship.left_name}`}
+      wide
+      footer={
+        <>
+          <button className="btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="btn-primary"
+            onClick={() => merge.mutate()}
+            disabled={!name.trim() || merge.isPending}
+          >
+            Create merged dataset
+          </button>
+        </>
+      }
+    >
+      <Field label="Name">
+        <input
+          className="input"
+          value={name}
+          onChange={(event) => setName(event.target.value)}
+        />
+      </Field>
+
+      <Field
+        label="Rows to keep"
+        hint={
+          how === 'left'
+            ? `Every row of ${relationship.left_name}, whether or not it has a match.`
+            : 'Only rows that match on both sides.'
+        }
+      >
+        <select
+          className="input"
+          value={how}
+          onChange={(event) => setHow(event.target.value as 'left' | 'inner')}
+        >
+          <option value="left">All of {relationship.left_name}</option>
+          <option value="inner">Only matching rows</option>
+        </select>
+      </Field>
+
+      <Field
+        label="Prefix for the added columns"
+        hint="Optional, e.g. “hh_”. A name that would clash gets “__right” either way."
+      >
+        <input
+          className="input"
+          value={prefix}
+          onChange={(event) => setPrefix(event.target.value)}
+          placeholder="none"
+        />
+      </Field>
+
+      <Field
+        label={`Columns to take from ${relationship.right_name}`}
+        hint={
+          columns.length
+            ? `${columns.length} selected`
+            : 'None selected means every column.'
+        }
+      >
+        <div className="max-h-52 overflow-auto rounded-card border border-ink-200 p-2">
+          {available.map((variable) => (
+            <label
+              key={variable.name}
+              className="flex items-center gap-2 py-0.5 text-sm text-ink-700"
+            >
+              <input
+                type="checkbox"
+                checked={columns.includes(variable.name)}
+                onChange={(event) =>
+                  setColumns(
+                    event.target.checked
+                      ? [...columns, variable.name]
+                      : columns.filter((c) => c !== variable.name),
+                  )
+                }
+              />
+              <span className="truncate">
+                {variable.label ? `${variable.name} - ${variable.label}` : variable.name}
+              </span>
+            </label>
+          ))}
+        </div>
+      </Field>
+
+      <p className="mt-2 text-xs text-ink-500">
+        The merge is saved with the new dataset, so it can be re-run from the dataset
+        page whenever either source is updated.
+      </p>
+    </Modal>
+  )
+}
+
+
+/**
+ * A relationship somebody knows about that detection did not find.
+ *
+ * Detection matches obvious keys - interview__id to interview__id, a name that
+ * appears on both sides with enough values in common. It cannot know that this
+ * survey's household id is called `hhid` on one file and `HH_SERIAL` on the
+ * other, which is exactly the case the analyst can settle in ten seconds.
+ */
+function ManualRelationshipModal({
+  datasets,
+  onClose,
+  onCreated,
+}: {
+  datasets: Dataset[]
+  onClose: () => void
+  onCreated: () => void
+}) {
+  const toast = useToast()
+  const [leftId, setLeftId] = useState(datasets[0]?.id ?? '')
+  const [rightId, setRightId] = useState(datasets[1]?.id ?? '')
+  const [leftVariable, setLeftVariable] = useState('')
+  const [rightVariable, setRightVariable] = useState('')
+  const [cardinality, setCardinality] = useState('one_to_many')
+
+  const left = useQuery({
+    queryKey: ['dataset', leftId],
+    queryFn: () => api.get<Dataset>(`/datasets/${leftId}`),
+    enabled: Boolean(leftId),
+  })
+  const right = useQuery({
+    queryKey: ['dataset', rightId],
+    queryFn: () => api.get<Dataset>(`/datasets/${rightId}`),
+    enabled: Boolean(rightId),
+  })
+
+  const create = useMutation({
+    mutationFn: () =>
+      api.post('/relationships', {
+        left_dataset_id: leftId,
+        right_dataset_id: rightId,
+        left_variable: leftVariable,
+        right_variable: rightVariable,
+        cardinality,
+      }),
+    onSuccess: () => {
+      toast.push('Relationship added', 'success')
+      onCreated()
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  const columns = (dataset: Dataset | undefined) =>
+    (dataset?.variables ?? []).filter((v) => !v.is_hidden)
+
+  const ready = leftId && rightId && leftId !== rightId && leftVariable && rightVariable
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Add a relationship"
+      wide
+      footer={
+        <>
+          <button className="btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="btn-primary"
+            onClick={() => create.mutate()}
+            disabled={!ready || create.isPending}
+          >
+            Add relationship
+          </button>
+        </>
+      }
+    >
+      <div className="grid gap-x-4 sm:grid-cols-2">
+        <Field label="From dataset">
+          <select
+            className="input"
+            value={leftId}
+            onChange={(event) => {
+              setLeftId(event.target.value)
+              setLeftVariable('')
+            }}
+          >
+            {datasets.map((dataset) => (
+              <option key={dataset.id} value={dataset.id}>
+                {dataset.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="To dataset">
+          <select
+            className="input"
+            value={rightId}
+            onChange={(event) => {
+              setRightId(event.target.value)
+              setRightVariable('')
+            }}
+          >
+            {datasets.map((dataset) => (
+              <option key={dataset.id} value={dataset.id}>
+                {dataset.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+
+        <Field label="Joined on">
+          <select
+            className="input"
+            value={leftVariable}
+            onChange={(event) => setLeftVariable(event.target.value)}
+          >
+            <option value="">Choose a column…</option>
+            {columns(left.data).map((variable) => (
+              <option key={variable.name} value={variable.name}>
+                {variable.label ? `${variable.name} - ${variable.label}` : variable.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="equals">
+          <select
+            className="input"
+            value={rightVariable}
+            onChange={(event) => setRightVariable(event.target.value)}
+          >
+            <option value="">Choose a column…</option>
+            {columns(right.data).map((variable) => (
+              <option key={variable.name} value={variable.name}>
+                {variable.label ? `${variable.name} - ${variable.label}` : variable.name}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+
+      <Field
+        label="How they line up"
+        hint="One-to-many is the usual shape: one interview, several people."
+      >
+        <select
+          className="input"
+          value={cardinality}
+          onChange={(event) => setCardinality(event.target.value)}
+        >
+          <option value="one_to_one">One to one</option>
+          <option value="one_to_many">One to many</option>
+          <option value="many_to_one">Many to one</option>
+          <option value="many_to_many">Many to many</option>
+        </select>
+      </Field>
+
+      {leftId === rightId && (
+        <p className="text-xs text-amber-700">A dataset cannot be related to itself.</p>
+      )}
+    </Modal>
+  )
+}
+
+/** A project's name and what it is for, as the people running it put it. */
+function DescribeModal({ project, onClose }: { project: Project; onClose: () => void }) {
+  const toast = useToast()
+  const queryClient = useQueryClient()
+  const [name, setName] = useState(project.name)
+  const [description, setDescription] = useState(project.description ?? '')
+
+  const save = useMutation({
+    mutationFn: () =>
+      api.patch<Project>(`/projects/${project.id}`, {
+        name: name.trim(),
+        description: description.trim(),
+      }),
+    onSuccess: () => {
+      toast.push('Saved', 'success')
+      queryClient.invalidateQueries({ queryKey: ['project', project.id] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      onClose()
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Name and description"
+      footer={
+        <>
+          <button className="btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="btn-primary"
+            onClick={() => save.mutate()}
+            disabled={!name.trim() || save.isPending}
+          >
+            Save
+          </button>
+        </>
+      }
+    >
+      <Field label="Name">
+        <input
+          className="input"
+          value={name}
+          autoFocus
+          onChange={(event) => setName(event.target.value)}
+        />
+      </Field>
+      <Field
+        label="Description"
+        hint="What this survey or round is, and anything a newcomer to it should know. Shown under its name."
+      >
+        <textarea
+          className="input"
+          rows={3}
+          value={description}
+          onChange={(event) => setDescription(event.target.value)}
+        />
+      </Field>
+    </Modal>
+  )
+}

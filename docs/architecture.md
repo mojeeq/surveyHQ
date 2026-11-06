@@ -1,0 +1,922 @@
+# Architecture
+
+## The shape of it
+
+```
+Browser ── nginx ── FastAPI ── Postgres   (metadata)
+                       │
+                       ├────── DuckDB ── Parquet files   (survey data)
+                       │
+                       └────── Redis ─── Celery worker + beat
+```
+
+Six containers: `web` (nginx), `api` (FastAPI), `worker` and `beat` (Celery, same
+image as the API), `postgres` and `redis`.
+
+## Why the census/survey data does not live in Postgres
+
+A survey dataset is wide (hundreds of columns), read-only after import, and
+queried with aggregates rather than row lookups. Loading it into Postgres means
+either a table per dataset - schema migrations every time someone uploads a file
+- or a tall key/value table, which makes every cross-tab a self-join.
+
+Instead each dataset is written once to a Parquet file and queried in-process
+with DuckDB. Parquet is columnar and compressed, so a tabulation touches only the
+columns it needs. A 100,000-row survey answers a cross-tab in single-digit
+milliseconds, and adding a dataset is a file write, not a migration.
+
+Postgres keeps what is genuinely relational: users, projects and their members,
+datasets, variables and their labels, connections, charts, dashboards,
+indicators, snapshots, alerts, quality rules and results, jobs, audit entries.
+
+## The query specification
+
+Every chart, indicator, widget and ad-hoc analysis compiles from the same JSON
+specification:
+
+```json
+{
+  "dimensions": [{"variable": "region", "grain": null, "bin_width": null}],
+  "measures":   [{"agg": "mean", "variable": "income", "weight": "hhweight"}],
+  "filters": {
+    "op": "and",
+    "conditions": [{"variable": "age", "operator": "gte", "value": 18}],
+    "groups": []
+  },
+  "sort":  [{"field": "mean_income", "direction": "desc"}],
+  "limit": 100,
+  "use_labels": true
+}
+```
+
+Being declarative means the same object can be stored on a chart, replayed by a
+scheduled job, rebuilt in the query builder, and exported - without the server
+templating SQL strings from user input.
+
+### How injection is prevented
+
+The compiler in `backend/app/services/query_engine.py` works to two rules:
+
+1. **Identifiers are allowlisted.** Every variable name in a specification is
+   looked up in the dataset's registered variables. An unknown name raises
+   `QueryError` before any SQL is built, so no caller-supplied string ever
+   reaches the query as an identifier.
+2. **Literals are parameters.** Filter values are bound with `?` placeholders,
+   never interpolated.
+3. **Arithmetic is parsed, not passed.** A condition can carry a sum on either
+   side of its comparison - `formula` on the left, `other_formula` on the right
+   (`inc2020 - inc2019 > 100`, `total != boys + girls`). The text is read by
+   `services/formula.py`, the reader an indicator's formula uses: numbers,
+   names, `+ - * /` and brackets, into a tree of tuples. The SQL is built from
+   that tree - each name through rule 1, each number through rule 2, division as
+   `NULLIF` so nought gives no value rather than an error. The schema refuses a
+   sum that does not parse before any of this runs.
+
+`test_query_engine.py` asserts the first two, including that a name like
+`region"; DROP TABLE users; --` is rejected rather than escaped, and
+`test_filter_formulas.py` the third, with `inc2020; DROP TABLE x` as the sum.
+
+### A filter typed as an expression
+
+The filter builder also takes a filter as one line of text, written the way a
+Survey Solutions condition is: `age.InRange(15, 49) && sex == "Female"`. That
+text never reaches the server. `frontend/src/lib/filter-expression.ts` reads it
+in the browser into exactly the `FilterGroup` the row builder makes - `&&` and
+`||` into groups, `!` pushed down to the conditions by swapping each operator for
+its opposite, a label into its code, a sum into `formula` - and prints a saved
+filter back as text. So the server has one grammar to defend, the structured
+one, and a filter written either way can be edited the other.
+
+## Labels
+
+Stata and SPSS files carry variable labels ("Age of respondent") and value labels
+(1 = Male). `pyreadstat` reads both; pandas is the fallback. They are stored on
+the `variables` table and applied when results are returned, so the analyst sees
+"Female" while the query still groups on the stored code.
+
+Filters can work either way: `use_label` on a condition translates a label back
+to its code before the comparison.
+
+## Replacing data in place
+
+The platform exists to be pointed at a survey that is still in the field, so the
+central operation is not "add a dataset" but "this dataset, but newer". An
+export arrives every morning with the same variables and more interviews.
+
+An archive is therefore unpacked to one dataset per file inside it - the
+interview level, each roster level, the paradata - and each file is sent to the
+dataset already holding that name. The default is **replace**: the Parquet file
+is rewritten and the dataset keeps its id, so every relationship, merge, chart,
+indicator, quality rule and dashboard widget that references it goes on
+referencing it. Append is the alternative, for exports that really are
+incremental.
+
+Keeping the id is only half of it. Three things are not in the export file and
+would be lost every morning if they were not put back:
+
+1. **Labels written by hand.** The variable rows are deleted and rebuilt from
+   the file on every import, so hand-written labels are kept on the dataset's
+   own metadata as well and reapplied afterwards.
+2. **Derived variables.** The commands recorded on the dataset are re-run, in
+   order, immediately after the new data lands - before the import checks which
+   variables went missing, so a variable a command restores is not reported as
+   lost.
+3. **Merged datasets, and variables brought in.** `derived.py` puts
+   everything built from other datasets in one order - merges, and datasets
+   bringing variables in from another (`linked_variables.py`) - each after
+   what it is built from, and does each once. A dataset bringing variables in
+   keeps its own id and rows; the variables are joined in by key, left join,
+   in the dataset's own row order, with the earlier copy dropped first so a
+   refresh is never stale. A replaced dataset has them brought in as it
+   lands, before its recorded commands are replayed, so a command can use
+   them.
+
+### One order, whichever way the data came
+
+`pipeline.after_import` is the one place that decides what follows new data,
+and every way data arrives calls it - an upload read in the request, a queued
+upload, a Survey Solutions sync, a folder connection, a reviewed import and
+`app.cli import`. In order: the recorded commands are applied again to what
+was replaced; the merges standing on anything that changed are rebuilt -
+appended to as well as replaced, since an append changes a join as surely;
+the saved project scripts reading any of it are re-run; and the indicators,
+alert rules and quality checks on all of it are evaluated, so a dashboard
+tile moves with the data rather than at the next scheduled tick.
+
+Each path used to carry its own copy of this, and the copies drifted: the
+sync rebuilt merges and never ran a script, an append rebuilt nothing, and
+none of them refreshed an indicator. Each step is now written onto the job as
+it starts and finishes (`Job.stages`), which is what the activity panel in the
+top bar shows.
+
+A merged dataset carries its own recipe - which datasets, which keys - copied
+from the relationship it was made from. It used to carry only that
+relationship's id, so deleting the relationship, or clearing and detecting
+relationships again, left the merge with no way to be rebuilt, and every
+import passed it over without a word. A merge made before recipes were copied
+is recovered from the dataset names it was built from, when exactly one
+relationship joins them now; one that still cannot be rebuilt is reported in
+the job and on its card, with the reason.
+
+## Where an upload is read
+
+Small uploads are read in the request. Anything over 48 MB is written to disk,
+handed to the worker as a job, and answered with that job, which the browser
+polls. Two reasons, both of which a census roster export hits at once: reading
+it takes longer than any proxy holds a request open, and reading it in the API
+process takes memory away from every other request being served.
+
+The size limit is checked in middleware, from the declared content length,
+before the body is read. It used to be checked in the route - which runs only
+after the whole multipart body has been received and written to disk - so an
+over-limit file was transferred in full and then refused, and nginx, left
+holding a body nobody was reading any more, reported the refusal as a bad
+gateway. nginx now enforces no ceiling of its own (`client_max_body_size 0`):
+one place decides, and it is the place that can say what the limit is.
+
+## Appending onto stored data
+
+Two things have to be true before a frame can be concatenated onto a dataset,
+and both were once left to luck.
+
+The columns have to be in the same namespace. Ingest cleans names on the way
+in, so a stored dataset's columns are the cleaned ones while an incoming file's
+are whatever the file says. Concatenating the two aligns on the name, so any
+name cleaning changes becomes two columns - the old rows under one, the new
+rows under the other, both half empty. The incoming frame is cleaned first now.
+
+And the variable metadata has to be replaced, not added to. It used to be
+deleted through the dataset's own `variables` collection, which still holds the
+previous pass's objects when two archives are imported in one transaction: the
+second pass deleted nothing and added a second row per variable. The delete is
+a statement now, and the collection is expired behind it. Two rows per variable
+is what makes a dataset look like its columns have been shuffled - the listing
+shows everything twice, and a lookup by name lands on whichever row came first.
+
+A third thing is checked rather than fixed: a questionnaire revised between
+rounds can reuse a code for a different answer. The rows append cleanly, but
+they are then displayed under the labels the dataset already had - so the
+conflict is reported instead of being left to be noticed in a tabulation.
+
+## One survey, several questionnaire versions
+
+A form revised during fieldwork exports as separate versions holding the same
+member file names, and they belong in one dataset per file. That is a do-file
+every survey statistician has written: open the newest, append the others, stamp
+each with the version it came from.
+
+Several archives in one upload do it directly. They are imported in order - the
+first under the mode asked for, the rest appended - so each archive's member
+file meets the dataset holding that name, and the per-archive report is folded
+into one report for the upload. Differing variables are unioned rather than
+refused, because a variable added in a later version is genuinely absent from
+the earlier rows rather than an error, and the import says which ones that was.
+
+The stamp is the part that makes the result analysable: a column carrying each
+archive's label, so the versions stay tellable apart once they are one table.
+It gives way to a variable of the same name already in the data and reports
+that it did - writing a version number over an answer would be a silent loss,
+and the whole point of the column is to add information rather than replace it.
+
+A connection stamps `questionnaire_version` by itself, from the version the
+export was taken at, so the same combined dataset builds itself from scheduled
+imports without anybody naming anything.
+
+## Derived variables: the Stata command box
+
+`stata.py` runs a subset of Stata's data-preparation commands against one
+dataset: `gen`, `replace`, `egen` (aggregate with `by()`, and the row-wise
+family), `label variable` / `define` / `values`, `rename`, `destring`, `drop`
+and `keep`, each with the `if` that makes them worth having.
+
+Dataset-scoped rather than project-scoped, and that is the right shape for
+this command set: every one of these operates on the variables of a single
+table, so there is nothing here that wants to read two.
+
+### Nothing reaches the database as text
+
+`stata_expr.py` is the whole of the safety argument. An expression is
+tokenised and parsed; every identifier has to be a variable of this dataset;
+only a listed set of functions is understood; and the SQL is built from the
+parse rather than from the string. A command that cannot be parsed is a message
+about the piece that was not understood. The same parse is what makes a typo
+readable instead of a database error.
+
+That is why this needs no sandbox, no separate binary and no setting to turn
+on. There is no interpreter here: a command is translated to the same DuckDB
+SQL the rest of the platform runs, and nothing else can be expressed.
+
+### Why it parses rather than rewrites
+
+It would be shorter to translate an expression by substituting operator for
+operator, and that is what this did until missing values were looked at
+properly. Stata treats a missing number as larger than any number; SQL treats
+NULL as unknown and a condition reads unknown as no. The two disagree on nearly
+every comparison, and silently.
+
+The cost was not theoretical. `replace lfs = 3 if !inlist(lfs, 1, 2)` ends
+every recode cascade - "everything not yet classified" - and reached DuckDB as
+`NOT ("lfs" IN (1, 2))`, which is NULL for the rows it existed to catch. The
+command reported success and changed nothing.
+
+The rule depends on where in an expression you are, which is what a parse
+knows and a substitution cannot: missing orders high in a comparison, keeps
+propagating through arithmetic, and has to be visible as a NULL to
+`missing()`. So comparisons are emitted NULL-aware from one helper, and
+`inlist`, `inrange` and `!` are defined in terms of it rather than given rules
+of their own - which is also why `inlist(x, 1, .)` is true for a missing `x`
+without anybody writing that case down.
+
+Being faithful means inheriting the traps: after `gen adult = age >= 18`,
+somebody with no recorded age is an adult here exactly as in Stata. The
+alternative is a platform whose figures disagree with the do-file that produced
+them. `tests/test_stata_missing.py` holds the truth table, taken from Stata's
+rule rather than from this implementation, and runs each row against DuckDB.
+
+### The record, and the replay
+
+Each command is appended to `datasets.meta["commands"]` - a JSON column, which
+is why turning this feature off and on again has never needed a migration in
+either direction.
+
+After a newer export replaces a dataset, `stata.replay` re-runs the list in
+order. It is passed as `after_replace` to `load_archive_as_datasets`, so it
+runs while the import is still assembling its report: a variable that is about
+to exist again is therefore not announced as lost. Failures are collected as
+warnings rather than raised, because the data is already in and a step that no
+longer applies is a note beside the import rather than a failure of it.
+
+Only the archive path replays. A single uploaded file always creates a dataset
+of its own rather than replacing one, so it has no history to put back.
+
+Row order is preserved through every command by carrying an explicit
+`__row_order` column while one runs. A window function - `egen` with `by()` -
+is otherwise free to return rows grouped, which would silently reorder the
+dataset under everything that reads it by position.
+
+
+## Dashboards
+
+A dashboard is a set of widgets on a grid, across named pages. Widgets carry a
+`page` index into the dashboard's `pages` list, so moving one between pages is a
+field change rather than a re-layout, and every dashboard from before pages
+existed is a dashboard with one unnamed page.
+
+That index is also why reordering and deleting pages are server-side calls
+rather than a page list the browser rewrites: the list and the widgets have to
+move together. Rewriting only the list leaves every widget on whichever page
+took its old number - which is what deleting a page used to do to the pages
+after it.
+
+Every widget type renders through one `POST /dashboards/{id}/data` call, each
+branch returning a shape its component knows: a chart or cross-tab re-runs its
+stored spec, an indicator returns its value, status and optional breakdown, a
+map returns coordinates grouped by point, freshness returns a report per
+dataset, and text, countdown and HTML return their configuration.
+
+**Filters** are declared on the dashboard and belong to a page. A control names
+a variable, which not every widget's dataset necessarily has, so each widget
+receives only the conditions its own dataset can answer and reports the rest as
+ignored - the alternative being a filter that silently does nothing to half the
+page.
+
+**Click-to-filter** turns a mark into a condition. A rendered chart reports the
+variables it groups on, so a click carries a variable as well as a category,
+and the category is matched as a label rather than a code because the label is
+what was on the axis. The selection is folded into the page's own filters, so
+the two compose rather than compete.
+
+One widget is excluded: the one clicked, named by `every_widget_but` on the
+render call. It renders unfiltered because it is the thing being clicked -
+collapsing it to the one bar just chosen would take away the means of choosing
+another. That is a query parameter rather than part of the body so the body
+stays the bare filter group everything already sends.
+
+**Drill-down** is a hierarchy declared on the dashboard - province, district,
+enumeration area - and a click at one level narrows the page to what was
+clicked *and* regroups every chart at the next level down. The level is a query
+parameter on the render call, so the stored spec is never rewritten: a chart's
+saved grouping is what it goes back to when the drill is let go. A chart
+grouped on something outside the hierarchy keeps its own grouping and only
+narrows, since a chart of submissions per day is still that inside one
+province.
+
+**Saved views** are a named `{page, filters, drill}` state stored against the
+dashboard rather than in the browser, so everyone opening the board - shared
+links included - sees the same readings, and one of them can be the default the
+board opens in.
+
+**Widget comments** hang off a widget and, optionally, off the view they were
+made under: "this looks wrong" means something different under the national
+figures than under one province's. A comment with no view is the board's own
+and shows under every view. Deleting a view clears the `view_id` on its
+comments rather than taking them with it, done explicitly because SQLite does
+not enforce `ON DELETE SET NULL`.
+
+**Appearance** is one JSON column rather than a set of columns: background
+colour, image, fit and fade, canvas width, grid columns, row height, widget
+opacity, tab-strip colour. It is presentation, it changes often, and nothing
+queries it.
+
+A dashboard also dresses its own header: a logo, and the title's size, face,
+colour and alignment. The faces are named stacks the frontend resolves rather
+than CSS carried in the record, because a dashboard is rendered for people who
+did not write it - and every stack is already on the machine, so a field office
+screen with no internet renders in the face it was designed in.
+
+Two more fields in the same column decide the frame around all of it: a
+**title band** behind the name, which turns the header into a masthead and
+moves the toolbar to a row below it, and a **page ground** behind the whole
+page. Each is one colour or two for a gradient. The ground is written as a CSS
+custom property on the document and read by whichever shell is on screen - the
+app's own or the shared link's - because the element that has to be painted is
+outside the dashboard, and leaving the board removes it.
+
+Background and logo images are stored on disk, one file per dashboard per kind,
+and their type is sniffed from the leading bytes rather than trusted from the
+filename or the browser's content type. SVG is refused: it is a document that can carry script,
+and the file is served back from the API's own origin. Embedded HTML is
+rendered in a sandboxed frame, so what it contains is between its author and
+that frame.
+
+### Widget groups
+
+A group is a named box round some of a board's widgets. Its heading bar is an
+ordinary grid item, so dragging, resizing and collision are react-grid-layout's
+rather than a second implementation of them; a widget belongs to a group
+through its own `group_id`; and the frame is drawn behind the grid
+(`components/dashboard/WidgetGroups.tsx`) as the box round the bar and every
+member, from the positions the grid has actually packed them to rather than the
+stored ones, so it follows a widget while it is being dragged.
+
+- **The bar stays above its members.** The grid packs items upwards in order of
+  their stored rows, bars included, so a bar whose stored row had gone stale
+  was packed after its widgets and drawn at the foot of its own group.
+  `barsAbove` places each bar a row above its highest member whatever is
+  stored, and a drag saves the rows the bars were moved to.
+- **Membership follows the drop.** A widget dropped inside a group's box joins
+  it, and one dragged clear of it leaves (`groupAt`). Taking a widget out
+  through its menu moves it below the box, which is otherwise where it would
+  still appear to be.
+- **The frame lies on the grid's lines** and the members are padded in from it
+  on the sides that touch it (`insets`), so two groups side by side, or a group
+  and the widget beside it, are as far apart as any two widgets.
+
+The downloaded copy draws a group as a full-width band of its own, with the
+same heading, colours and folding.
+
+## How recent is the data
+
+Two questions, and `freshness.py` answers both: when the platform last received
+data, and how recent the newest record in it is. An import that runs faithfully
+every morning and collects nothing new passes the first and fails the second,
+which is the failure worth catching.
+
+The second needs a date column, and picking the wrong one is worse than picking
+none: reading a date of birth reports a survey taken this morning as thirty
+years stale. Candidate columns are therefore scored - names suggesting when a
+record happened (interview, submitted, sync, starttime) score up; names that are
+answers or questionnaire configuration (birth, death, reference period, the
+simulated dates a template ships with) are disqualified outright - and nothing
+scoring above zero means the widget says so rather than guessing. The choice can
+be overridden per dataset on the widget.
+
+## Background work
+
+Celery handles anything that outlives a request:
+
+| Task | Trigger |
+|---|---|
+| `run_connection_sync` | On demand, or by the scheduler |
+| `schedule_due_syncs` | Every `SYNC_TICK_MINUTES` - decides which connections are due |
+| `refresh_all_indicators` | Every `MONITOR_TICK_MINUTES` - recomputes indicators, stores a snapshot, evaluates alert rules |
+| `run_all_quality_checks` | Every six hours. The checks on a dataset also run at the end of every import that changes it, as a step of `pipeline.after_import` |
+| `take_due_snapshots` | Every ten minutes - keeps a copy of each dashboard whose time has come, and prunes past what it keeps |
+| `reap_stale_jobs` | Every ten minutes - fails jobs still claiming to be running past any limit a task could have run to |
+| `prune_history` | Nightly - trims snapshots, resolved alerts, old results and jobs, and sweeps the report zips those jobs were the only way to reach |
+
+The first two intervals are settings rather than numbers: beat is handed a
+schedule object that reads the interval when it is asked rather than one
+captured at start-up, and `beat_max_loop_interval` is a minute, so a change
+made under Administration -> Settings takes hold within a minute without a
+restart. Everything else an administrator can change is read at the moment it
+is used, through `services/preferences.py`, which holds what it read for
+twenty seconds - so a change reaches the API, the workers and the scheduler
+within half a minute. What is stored wins; `.env` holds the defaults. Two
+tests keep the arrangement honest: one refuses a changeable setting read
+straight off the configuration anywhere in the app, and one refuses a
+property on `Settings` that derives anything from one.
+
+An indicator's value is read off the indicator rather than queried when a
+dashboard draws it, because opening a board must not set a query going for
+every tile on it. That makes the stored value part of the data: whenever a
+dataset's data changes - an import, a replacement, a replayed command, a merge
+rebuilt - `_apply_ingest` recomputes the indicators that read it, so the
+numbers move when the data does rather than at the next tick. No snapshot is
+written there; the trend stays a record of the scheduled moments.
+
+Indicator snapshots are what make trends possible: each refresh writes a
+timestamped value, so every indicator carries its own history without anyone
+configuring a time series. A dashboard copy is a different thing that shares the
+name: a whole board frozen to a file, rendered by the same code as the HTML
+export, kept so a figure quoted on a Monday can be shown again as it was read.
+
+A task that raises records its own failure on the job it was running. A task
+whose process is *killed* cannot: nothing in it runs again. Celery notices in
+the main process, and a `task_failure` handler writes the failure onto the job
+instead, so an import stopped by the kernel says so rather than leaving a job
+that claims to be running for ever. `reap_stale_jobs` is the backstop for the
+case that handler cannot cover, where the whole container went away and there
+was nothing left to fire it.
+
+A connection is due either on an interval - every N minutes since its last
+import - or at times of day it lists, read in its own timezone.
+`services/scheduling.py` answers the second by asking when the most recent
+listed time last came round in that zone, and whether the last import was
+before it. That is a comparison against wall-clock history rather than a cron
+expression, so the scheduler ticking at any interval finer than a day cannot
+miss an occurrence, and cannot fire the same one twice.
+
+Times are read in the connection's zone because fieldwork happens somewhere:
+06:00 means six in the morning there, which at UTC+11 is five the previous
+afternoon in UTC. Getting it wrong is not an hour's error, it is a day's.
+
+Each run's export zip is kept under `sync-archives/`, the last five per
+connection, so a run's history is a list of real files that can be downloaded
+and re-uploaded like any other archive.
+
+Report bursts under `reports/` are bounded the same way, and have to be: a
+burst is one HTML report per province for every widget on a board, so a board
+bursting weekly writes a zip a week for ever. Each finished burst prunes its
+own board back to the last five (`services/reports.py`), and because a zip is
+named for the job that wrote it and recorded nowhere else, `prune_history`
+sweeps any file whose job row has since been deleted by age - the download
+route reads the path off that row, so a file outliving it is unreachable disk.
+The row stays when the file goes: the run keeps its list of what it wrote, and
+the download answers that the zip is no longer there.
+
+## Monitoring model
+
+- **Indicator** - one query producing one number, plus a target, a warning and a
+  critical threshold, and a direction (higher or lower is better). The direction
+  decides which side of a threshold counts as bad.
+- **Alert rule** - watches an indicator with a comparison and a threshold. On a
+  match it raises an alert and notifies by in-app message and optionally email.
+  A cooldown stops one ongoing problem generating a stream of alerts. When the
+  value recovers, open alerts for that rule resolve themselves.
+- **Quality rule** - one of nine check types with a tolerance. The check fails
+  when the share of offending rows exceeds it. Seven ask a fixed question;
+  `logic` carries a condition the rule's author wrote, as a `FilterGroup`
+  compiled by the same builder that compiles a query filter; and
+  `likely_duplicates` scores pairs of records field by field (spelling by
+  Jaro-Winkler, numbers and dates within a tolerance) and flags the pairs
+  above a similarity, its offending rows being the records in at least one.
+
+## Project scope
+
+A project owns datasets and dashboards, and nothing else. Charts, indicators,
+quality rules and alert rules already reference a dataset, so they take their
+project from it - which means a resource's project is recorded in exactly one
+place and the two cannot disagree.
+
+`project_id` being null is the shared area, visible to every user. That is what
+the whole platform was before projects existed, so an upgraded database, where
+every row is null, behaves exactly as it did. `restricted_to_projects` on a user
+shuts the shared area off for them, which is what makes "this person sees one
+project and nothing else" expressible without first assigning everything else to
+a project.
+
+Connections are scoped by the project their imports land in, and alert rules by
+what they watch - the indicator's dataset, their own, or, tied to neither, the
+shared area. Both are reached by id from every route that acts on them, so both
+check on the id rather than trusting a filtered listing. A connection is worth
+saying out loud: it names a server, it can be made to import, and its runs hand
+back the raw export, so an unscoped one is not a stale row in a list.
+
+`services/projects.py` answers the two questions every endpoint has - which rows
+may this user see, and may they change this one - so neither is re-derived,
+slightly differently, per endpoint. Enforcement sits in the lookups
+(`get_dataset`, `_get_dashboard`, `_get_chart`) rather than in each route,
+because filtering the listings alone would leave a dataset readable to anyone who
+knew its id: the query endpoints take one directly. Anything out of scope answers
+404, never 403, so a response cannot confirm that a project exists.
+
+A member's role is capped by their own role (`effective_role` takes the lower of
+the two), so membership widens what someone can reach and never what they may do.
+
+Deleting a project takes an argument, because both answers are right for
+different rounds. `contents="release"` (the default) nulls its datasets' and
+dashboards' `project_id` explicitly rather than relying on `ON DELETE SET
+NULL`. The column reaches an existing database through `ALTER TABLE ADD
+COLUMN`, which carries no foreign key, so the constraint would never fire there
+and the rows would be stranded - pointing at a project that no longer exists,
+and visible to nobody but an administrator.
+
+`contents="delete"` destroys the lot: the project's datasets and their stored
+files, and everything hanging off them - charts, indicators and their
+snapshots, quality rules and results, alert rules and their alerts,
+relationships, and any dataset merged out of them - plus its dashboards and
+their widgets. Those dependants are deleted explicitly rather than left to
+`ON DELETE CASCADE`, for the same reason plus one more: SQLite does not enforce
+foreign keys by default, so a cascade that works in production would silently
+do nothing under the test suite. Connections are released rather than deleted -
+a connection is a server and a set of credentials, which outlive the project
+pointed at it.
+
+## Layout of the code
+
+```
+backend/app/
+  core/         config, logging, password hashing, JWTs, secret encryption
+  db/           SQLAlchemy engine, session, bootstrap, Alembic migrations
+  models/       tables: user, project, dataset, connection, analytics,
+                monitoring, system
+  schemas/      pydantic request/response models, including the query spec
+  api/v1/       endpoints, grouped by area
+  services/     the substance:
+
+                getting data in
+                  ingest.py           files -> Parquet + metadata
+                  datasets.py         creating and refreshing them, and the
+                                      metadata bookkeeping around it
+                  archives.py         a zip -> one dataset per file in it
+                  import_review.py    prepare candidates, publish the reviewed
+                  dataset_versions.py retained versions of a dataset's data
+                  survey_solutions.py the CAPI server client
+                  file_source.py      a folder of exports read as a
+                                      source, and the fence around it
+                  scheduling.py       when the next import is due
+
+                querying it
+                  query_engine.py     spec -> DuckDB SQL -> result
+                  columnar.py         the DuckDB and Parquet helpers under it
+                  multiselect.py      0/1 columns -> one "tick all" question
+                  relationships.py    detecting and storing the links
+                  derived.py          merges, and rebuilding what depends
+                  linked_variables.py another dataset's variables brought
+                                      into this one, in place, kept up to
+                                      date
+                  pipeline.py         what follows new data in, in order
+                  staged_uploads.py   a large upload sent in pieces
+                  project_overview.py a project read as its pipeline
+                  freshness.py        how recent a dataset's data is
+                  date_ranges.py      a date filter's choice, as conditions
+
+                preparing it
+                  stata.py            the command engine for a project script
+                  stata_expr.py       its expression language
+                  stata_macros.py     names for pieces of script text
+                  stata_frame.py      the frame a script works on
+                  project_script.py   where a project's script lives, and
+                                      when it runs again
+                  script_language.py  the language, described for the
+                                      editor that colours and completes it
+
+                monitoring it
+                  monitoring.py       indicators, thresholds, alerts
+                  formula.py          the arithmetic an indicator can be
+                                      written as, parsed rather than run -
+                                      and a filter's sums, read the same way
+                  field_progress.py   the automatic monitoring views
+                  monitoring_precompute.py  those views, computed on import
+                  quality.py          the nine checks
+                  likely_duplicates.py records alike enough to be one
+                                      person entered twice, scored pair
+                                      by pair
+                  quality_failures.py the rows behind a failing one
+
+                publishing it
+                  static_export.py    a dashboard as one HTML file
+                  export_document.py  the same board as a Word report
+                  export_tables.py    a widget's numbers for that report
+                  export_backgrounds.py the ready-made grounds, in CSS
+                  export_lib.py       the drawing libraries it carries
+                  export_fonts.py     the fonts it carries
+                  export_appearance.py how it is dressed
+                  reports.py          one export per value of a filter
+                  snapshots.py        a dashboard as it stood
+                  sharing.py          share links, passwords, expiry
+                  publishing/         that HTML file put on GitHub Pages or
+                                      a web server over SFTP or FTP, and
+                                      put there again after each import
+                  hostnames.py        a dashboard's own subdomain
+                  dashboard_assets.py background and logo images
+                  exporters.py        a result as CSV, Excel or Stata
+                  download.py         a whole dataset as a file
+
+                the map
+                  geo.py              GPS points, grouped, for the map,
+                                      and its quality layers: duplicates,
+                                      a second location, lines, coverage
+                  geometry.py         GeoJSON/GeoPackage/shapefile -> features
+                  boundaries.py       which area a point falls in
+                  boundary_store.py   boundary layers on disk, with a cache
+
+                the rest
+                  preferences.py      the settings an administrator may
+                                      change without a restart
+                  projects.py         who may see and change what
+                  accounts.py         usernames and account identity
+                  archive.py          archiving a project: data goes, the
+                                      rest stays
+                  operation_lock.py   locks held until the transaction ends
+                  net_guard.py        what an outbound request may reach
+                  mailer.py           alert email
+                  audit.py            who did what
+
+                the performance runtime (see below)
+                  query_runtime.py    installs the fast paths at start-up
+                  fast_ingest.py      the implementations it installs
+  workers/      Celery app and tasks
+
+frontend/src/
+  lib/          API client, types, formatting, the ECharts option builder,
+                the chart palettes, the sidebar ink, and the small pure
+                pieces the pages are tested through - among them
+                filter-expression.ts (a filter as text, both ways),
+                map-layers.ts (a map's layers and its key) and looks.ts
+                (the ready-made looks, flag colour ones included)
+  hooks/        auth, theme, toasts, the platform's own dialogs, project
+                scope, remembered preferences
+  components/   layout, chart card, data table, filter builder and the
+                expression box beside it, the map, widget groups, dashboard
+                appearance, widget comments, the script editor, UI primitives
+  pages/        one per route
+  help/         the documentation, rendered into the bundle at build time
+```
+
+
+## The performance runtime
+
+A deployment does not run every function in `services/`. At start-up, before
+the endpoint and task modules are imported, `install_query_runtime()` swaps
+faster implementations into place: the columnar append, batched metadata
+scans, DuckDB's own CSV reader for large delimited files, a Redis cache keyed
+by dataset version, a direct Parquet-to-Parquet join for merges, and the
+precomputed field-monitoring views.
+
+It is done by replacement rather than by a second set of endpoints so that
+there is one contract per operation rather than two, and one set of schemas.
+The cost is that the code which runs is not always the code that reads
+first - so each replaced function keeps its original under its own name:
+`append_frame_pandas`, `build_metadata_per_column`. Those are not leftovers.
+They are what lets a test hold both implementations to the same contract,
+which is the rule here: **both have to behave the same way**.
+
+That rule is enforced rather than hoped for. The `append_implementation`
+fixture runs the append tests under each in turn, and it earns its keep: it
+found a questionnaire version stored as `"1"` by one path and `1` by the
+other, and a round that exported a number as text taking the whole variable
+to text on one path and not the other. Before it existed, the same labelling
+fault was fixed twice, a day apart, in two files.
+
+A deployment can turn the cache off (`ANALYTICS_CACHE_ENABLED`) and the
+precomputation off (`MONITORING_PRECOMPUTE_ENABLED`); the rest is always
+installed. The test suite imports the app, so it runs with the runtime
+installed too.
+
+## A dashboard with its own address
+
+A shared dashboard can answer on a subdomain of one configured domain -
+`labour-force.dash.example.org`. One domain rather than any domain is the whole
+design: it makes the deployment a single wildcard DNS record and a single
+wildcard certificate, so naming a dashboard is a field in the interface rather
+than work on the server.
+
+The bundle is served for every hostname, so the browser cannot tell from the
+URL whether it is looking at the platform or at somebody's results page. It
+asks `/public/site`, which reads the request's `Host` header and answers only
+for a host explicitly assigned to a shared dashboard - the header is looked up,
+never trusted. The check is skipped for anyone already signed in, since they
+are using the app and it would delay every load; for a visitor with no session
+it runs first, because otherwise a published page would flash a sign-in form
+before finding itself.
+
+What changes with a name is the security model, and it changes in kind. A share
+token is 64 random characters: the address *is* the secret, which is what makes
+it safe to send to one person. A name is meant to be typed from memory, so
+anyone who guesses it is in. Naming is therefore publishing, and the platform
+treats it that way: only an already-shared dashboard can be named, unsharing
+removes the name (a DNS record resolving to something nobody may read is worse
+than a dead one), the platform's own hostname and a list of reserved labels are
+refused, and the interface says all of this at the point of naming rather than
+leaving it to be discovered.
+
+Uniqueness is checked in Python as well as declared on the column, because the
+column reaches an existing database through `ALTER TABLE ADD COLUMN`. That used
+to carry no index with it at all; start-up now creates the indexes an upgraded
+database is missing, so the constraint is real again, and the Python check stays
+as the one that produces a sentence rather than a database error.
+
+### What a visitor may ask a shared dashboard
+
+A widget is drawn from a whole dataset, and a filter is evaluated against that
+dataset rather than against the widget. So an unrestricted filter on a public
+link is a question about any column in the file, including the ones the
+dashboard deliberately does not show - and a count is an answer. Filter to one
+respondent's identifier and the tile says whether that person is in the data.
+Repeat, and a read-only link is a lookup service for a file nobody published.
+
+So the public render route holds a filter to what the dashboard displays: the
+variables its widgets group on, plus the filter controls its author put on it.
+Both are publishing decisions, and together they are exactly what the shared
+page's UI can produce - a click on a mark, or a choice from a dropdown that was
+put there to be chosen from. Anything else is dropped rather than refused: a
+`422` for a column that exists and a different answer for one that does not
+would itself be the lookup, and no honest visitor can send one, because the
+shared page has no way to compose it.
+
+The check reads every column a condition reads, not only the one it is filed
+under. A condition names a column in `variable`, and can name more through
+`other_variable` and through either sum; `Condition.variables()` lists them all,
+and a condition is admitted only when every one of them is on the page. Filed
+under a visible `province` but comparing against a hidden `phone`, it is a
+lookup of `phone` like any other, and is dropped like any other. The same list
+decides which conditions a dataset can honour at all on a board drawn from
+several.
+
+The restriction belongs to the link, not to the dashboard. A signed-in analyst
+keeps the whole filter grammar on the same dashboard, because they already have
+the dataset and narrowing them would protect nothing.
+
+## Reading a whole table, and a whole map
+
+Two ceilings existed because a browser has to draw what comes back, and both
+were set where a table stops being readable rather than where it stops being
+possible. That is the wrong place for them: reading is what a scroll bar and an
+export are for.
+
+A cross-tabulation now returns up to 5,000 rows and 1,000 columns - enough to
+tabulate by interview key or enumeration area - and reports how many categories
+it left out when it does cut, because a cut table's totals still add up and
+nothing else on screen would say the rest is missing.
+
+A map returns up to 50,000 points, already grouped by coordinate. What made the
+old figure necessary was the browser rather than the query: one SVG node per
+point, each with a popup string built whether or not anybody opens it. The map
+now draws on a canvas and builds each popup when it is opened, which is what
+makes a number that size a map rather than a freeze.
+
+### A data quality map
+
+A map widget can carry the layers a field office's own GPS check is made of:
+each record's recorded area against the area its reading falls in, readings
+within a set distance of another record, a second location entered by hand and
+checked on its own, a line between the two where they are far apart, and the
+areas the fieldwork has reached. All of them are worked out in
+`services/geo.py`, on the server, before anything is grouped into pins: each is
+a question about where one record is, and a pin standing for a cell of ground
+has stopped saying that. So any of these layers reads the coordinates as
+recorded, as the area check always has, and `into_cells` groups them afterwards,
+carrying how many places in each cell were flagged.
+
+- **Duplicates** are found through a grid of cells as wide as the distance, so
+  each location is measured against the few in the cells around it rather than
+  against every other location, and the count at one stops at 99.
+- **The second location** is a query of its own, over every record that has
+  one - a GPS reading beside it or not, since a record with no fix is the one
+  whose location was entered by hand. It is grouped with the GPS reading beside
+  it, so each distance is the record's own, and checked against the areas with
+  the same function as the first.
+- **Lines** are those distances over the widget's threshold, longest first, at
+  most 5,000.
+- **Coverage** counts records per area by the area's position in the layer,
+  which is the order the layer is served to the browser in, so the counts need
+  no key of their own to be matched up.
+
+In the browser each finding is a Leaflet layer group, registered in the map's
+layer box with a swatch and its count, so the list of tick-boxes is the key.
+Whether a layer is ticked is read from whether it is on the map, not from
+Leaflet's events, which fire the same for code adding a layer as for a reader
+clicking one. What each layer is called, its colour and its count are decided
+in `frontend/src/lib/map-layers.ts`, apart from Leaflet, where they are tested
+without a browser - and where the names, which can carry a variable's name,
+are escaped before Leaflet writes them as markup.
+
+## The look of it
+
+The interface is **SurveyHQ**: its own mark - a point becoming a distribution,
+which is what the platform does to an export - on a palette that follows
+Redash's own theme values - `#2196f3` primary, `#edecec`
+page, `#e8e8e8` borders, `#595959` text on `#333` headings, 13px system font,
+3px panels and 2px controls, and the `#191c22` navy its sidebar has always
+been. They live as Tailwind tokens in `tailwind.config.js`, so the palette is
+changed in one place rather than component by component.
+
+The chart series palette is deliberately not from there. Page furniture can be
+any colour; a chart's colours carry meaning, and the palette in `lib/charts.ts`
+is validated for colour-vision deficiency separation. See below.
+
+### The gloss
+
+The furniture is finished in the Windows Aero manner, which is four things and
+not a filter over everything:
+
+1. **A hard midline.** Every raised surface is light over its top half and dark
+   over its bottom half, meeting on a line rather than fading. The crease is
+   the effect; a smooth fade reads as a blur. One rule, `.aero-gloss` in
+   `index.css`, holds it.
+2. **A bevel of two hairlines** - white inside the top edge, shadow inside the
+   bottom - which is what makes a control look raised off the page rather than
+   printed on it.
+3. **Raised or sunk, never flat.** Buttons and cards are raised; inputs carry
+   an inset shadow across their top edge, because a field you type into is a
+   hole in the surface. Pressing a button moves its highlight to the bottom,
+   which is the same surface seen from underneath.
+4. **Glass where something passes behind it** - the header over the scrolling
+   page, and the sidebar. Both keep a solid-enough colour underneath, because a
+   browser without `backdrop-filter` would otherwise render the header as a
+   see-through strip with the page running through the text.
+
+The navigation icons are drawn in the same grammar, as small tiles rather than
+bare glyphs: `components/AppIcon.tsx`, in SVG, so they are exact at any size
+and in either theme. They are vectors rather than slices of a reference sheet
+on purpose - a slice arrives with the compression of whatever it was exported
+as, at one size, and can never be sharp on a screen with a different pixel
+ratio.
+
+None of this reaches the charts. A gloss over a bar changes the colour the eye
+reads off it, and those colours are the data.
+
+### Dark mode, and the safety net under it
+
+There are two palettes: `ink`, which is the light one, and `dark`, which is
+the surfaces a dark page is built from. Components pair them by hand -
+`bg-white dark:bg-dark-50`, `text-ink-700 dark:text-dark-700` - and most do.
+
+The ones that do not are the problem, and there are hundreds of them: an
+element that says `text-ink-900` and nothing else keeps near-black when the
+page goes dark. Rather than a `dark:` twin on every class attribute, which
+is an edit nobody finishes and anybody can forget, `index.css` carries one
+rule per shade under `.dark` in the components layer: ink resolves to the
+same number in the dark palette. Because it is in that layer, an explicit
+`dark:` on an element still wins - this is the default for what was not
+thought about, not an override of what was.
+
+The net covers text, borders, dividers and the light surfaces. It cannot
+cover `bg-white`, because a swatch previewing a light dashboard wants white
+in dark mode, so those pair themselves and `scripts/dark-mode-net.mjs`
+fails the build if one does not. `.on-light` is the opt-out in the other
+direction: a white tile on a dark board re-asserts the light palette inside
+itself, which is what keeps a table drawn for white paper readable on it.
+
+The net was written twice from measurement rather than from reading the
+classes: a sweep of the running app that walks every element, computes the
+luminance of its background and border, and reports anything light on a dark
+page. The second sweep found every panel on Explore outlined in #e8e8e8.
+
+## Chart colour
+
+Series colour uses a categorical palette validated for colour-vision deficiency
+separation against the app's white surface. Two rules follow from that:
+
+- Hues are assigned in a **fixed order and never cycled**, so a series keeps its
+  colour when a filter changes how many series are on screen. Past eight
+  categories the tail folds into "Other" rather than inventing a ninth hue.
+- Three of the eight slots sit below 3:1 contrast on white, so identity never
+  rests on colour alone: charts carry a legend, and every chart has a **table
+  toggle** exposing the same numbers.
+
+Sequential encodings (heatmaps) use a single blue ramp, light to dark. Status
+colours - ok, warning, critical - are reserved, never reused as a series colour,
+and always paired with an icon and a word.

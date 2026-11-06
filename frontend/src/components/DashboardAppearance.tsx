@@ -1,0 +1,1102 @@
+/**
+ * How a dashboard is dressed: background colour, background image, and how
+ * much the image is faded so the widgets on top of it stay readable.
+ *
+ * A monitoring board is often left on a screen in a fieldwork office, and the
+ * thing on that screen is usually meant to look like it belongs to the survey
+ * it reports on rather than to the tool that drew it.
+ */
+import { useEffect, useRef, useState } from 'react'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { api } from '@/lib/api'
+import { useToast } from '@/hooks/useToast'
+import type { Appearance, Widget } from '@/lib/types'
+import { Field, Modal, Section, useOpenSections } from '@/components/ui'
+import ColorPicker from '@/components/ColorPicker'
+import { FONTS, fontStack } from '@/lib/fonts'
+import { BACKGROUNDS, ground } from '@/lib/backgrounds'
+import { FAMILIES, LOOKS } from '@/lib/looks'
+import { themeColors } from '@/lib/charts'
+import { withoutBackground } from '@/lib/logo'
+
+// The looks were defined here until the list grew past two dozen, which is
+// more table than component. They are re-exported because this module is
+// where everything else already imports its appearance pieces from.
+export { LOOKS } from '@/lib/looks'
+export { BACKGROUNDS } from '@/lib/backgrounds'
+
+/** Ready-made grounds, so a usable background does not need a colour picker. */
+export function titleFontStack(value?: string): string | undefined {
+  return fontStack(value)
+}
+
+/** Whether text on this colour has to be light. Null means no colour is set. */
+// Moved to lib/colour so the shell can ask the same question without importing
+// this module. Re-exported because the dashboard already imports it from here.
+export { isDark } from '@/lib/colour'
+
+/**
+ * The dashboard's background image as an object URL.
+ *
+ * The image is behind the API's auth, and an <img> or a CSS url() cannot send
+ * a bearer token, so it is fetched and handed to the browser as a blob. The
+ * version stamp is in the dependencies: the file name never changes, so
+ * replacing the image would otherwise go on showing the old one.
+ */
+export function useBackgroundImage(
+  basePath: string,
+  appearance: Appearance | undefined,
+  kind: 'background' | 'logo' | 'logo_right' = 'background',
+) {
+  const [url, setUrl] = useState<string | null>(null)
+  const name =
+    kind === 'logo'
+      ? appearance?.logo_image
+      : kind === 'logo_right'
+        ? appearance?.logo_right_image
+        : appearance?.background_image
+  const version =
+    kind === 'logo'
+      ? appearance?.logo_version
+      : kind === 'logo_right'
+        ? appearance?.logo_right_version
+        : appearance?.background_version
+
+  useEffect(() => {
+    if (!name) {
+      setUrl(null)
+      return
+    }
+    let objectUrl: string | null = null
+    let cancelled = false
+    api
+      .getBlob(`${basePath}/${kind === 'logo_right' ? 'logo-right' : kind}`)
+      .then((blob) => {
+        if (cancelled) return
+        objectUrl = URL.createObjectURL(blob)
+        setUrl(objectUrl)
+      })
+      // A missing or unreadable background is not worth an error banner over
+      // the dashboard it is only the backdrop to.
+      .catch(() => setUrl(null))
+    return () => {
+      cancelled = true
+      if (objectUrl) URL.revokeObjectURL(objectUrl)
+    }
+  }, [basePath, kind, name, version])
+
+  return url
+}
+
+/**
+ * A flat colour or a two-colour gradient, as one CSS background.
+ *
+ * The gloss on top is the same curve the cards and buttons carry, laid over
+ * the colour in the same property rather than added as a class: `.aero-gloss`
+ * sets `background-image`, and so does a gradient, so one of the two would
+ * have won and the other would have been the one that disappeared.
+ */
+export function bandStyle(
+  from?: string,
+  to?: string,
+  angle?: number,
+  gloss = true,
+): React.CSSProperties | undefined {
+  if (!from) return undefined
+  const sheen = gloss
+    ? 'linear-gradient(to bottom, rgba(255,255,255,0.16) 0%, rgba(255,255,255,0.03) 46%, ' +
+      'rgba(0,0,0,0.02) 54%, rgba(0,0,0,0.07) 100%),'
+    : ''
+  const colour = to
+    ? `linear-gradient(${angle ?? 135}deg, ${from}, ${to})`
+    : `linear-gradient(${from}, ${from})`
+  return { backgroundColor: from, backgroundImage: `${sheen}${colour}` }
+}
+
+/**
+ * Paint the ground the whole page sits on, for as long as this board is open.
+ *
+ * Written as a custom property on the document rather than as a style on an
+ * element, because the thing that has to be painted is the shell around the
+ * board - the margin outside <main> - and a dashboard does not own that
+ * element. The shell opts in by carrying `.app-ground`; every other page is
+ * untouched, and leaving the dashboard puts the grey back.
+ */
+export function usePageGround(image?: string) {
+  useEffect(() => {
+    if (!image) return
+    const root = document.documentElement
+    root.style.setProperty('--app-ground', image)
+    return () => {
+      root.style.removeProperty('--app-ground')
+    }
+  }, [image])
+}
+
+/** The CSS for a canvas carrying this appearance, image included. */
+export function canvasStyle(
+  appearance: Appearance | undefined,
+  imageUrl: string | null,
+): React.CSSProperties | undefined {
+  const color = appearance?.background_color
+  const chosen = ground(appearance?.background_pattern)
+  if (!color && !imageUrl && !chosen) return undefined
+
+  const fit = appearance?.background_fit ?? 'cover'
+  const fade = Number(appearance?.fade ?? 0)
+  const style: React.CSSProperties = { backgroundColor: color || chosen?.tint || undefined }
+  // A ready-made ground is CSS under the widgets, and an uploaded image stands
+  // in front of it: a pattern nobody can see is not worth the rule.
+  if (!imageUrl && chosen) {
+    style.backgroundImage = chosen.layers
+    if (chosen.size) style.backgroundSize = chosen.size
+  }
+  if (imageUrl) {
+    // The veil is a gradient of one colour laid over the image in the same
+    // property, which is how an image is dimmed without a second element
+    // sitting between the background and the widgets.
+    const veil = fade > 0 ? `linear-gradient(rgba(255,255,255,${fade}),rgba(255,255,255,${fade})),` : ''
+    style.backgroundImage = `${veil}url(${imageUrl})`
+    style.backgroundSize = fit === 'tile' ? 'auto' : fit
+    style.backgroundRepeat = fit === 'tile' ? 'repeat' : 'no-repeat'
+    style.backgroundPosition = 'center'
+  }
+  return style
+}
+
+/**
+ * The two colours and the angle that make one band.
+ *
+ * A second colour is what turns a flat panel into a gradient, so the angle
+ * only appears once there is something for it to run between - an angle
+ * control on a single colour is a control that does nothing.
+ */
+function BandFields({
+  label,
+  hint,
+  from,
+  to,
+  angle,
+  onChange,
+}: {
+  label: string
+  hint: string
+  from: string
+  to: string
+  angle: number
+  onChange: (next: { from?: string; to?: string; angle?: number }) => void
+}) {
+  return (
+    <Field label={label} hint={hint}>
+      <div className="space-y-2">
+        {/* Two identical grids of swatches one above the other are two grids
+            nobody can tell apart, and the picker's own label is read out
+            rather than drawn. So each one is captioned. */}
+        <p className="text-[11px] uppercase tracking-wide text-ink-500">Colour</p>
+        <ColorPicker
+          label={`${label} colour`}
+          value={from}
+          onChange={(next) => onChange({ from: next, ...(next ? {} : { to: '' }) })}
+          allowNone
+          noneLabel="None"
+        />
+        {from && (
+          <>
+            <p className="pt-1 text-[11px] uppercase tracking-wide text-ink-500">
+              Second colour, for a gradient
+            </p>
+            <ColorPicker
+              label={`${label} second colour`}
+              value={to}
+              onChange={(next) => onChange({ to: next })}
+              allowNone
+              noneLabel="Flat, with no gradient"
+            />
+            {to && (
+              <label className="block text-xs text-ink-500">
+                Gradient angle: {angle}&deg;
+                <input
+                  type="range"
+                  className="w-full"
+                  min={0}
+                  max={350}
+                  step={10}
+                  value={angle}
+                  onChange={(event) => onChange({ angle: Number(event.target.value) })}
+                />
+              </label>
+            )}
+          </>
+        )}
+        <div
+          className="h-10 rounded-control border border-ink-200"
+          style={bandStyle(from || '#e6e8ec', to || undefined, angle)}
+          aria-hidden="true"
+        />
+      </div>
+    </Field>
+  )
+}
+
+export default function AppearanceModal({
+  dashboardId,
+  name,
+  description,
+  appearance,
+  widgets,
+  onClose,
+}: {
+  dashboardId: string
+  /**
+   * The dashboard's own name and subtitle.
+   *
+   * They are here because this is the dialog the title itself opens, and a
+   * dialog you reach by clicking a title should let you change that title.
+   * Without them it offered the title's size, font and colour and no way to
+   * write it, so a dashboard could be named once, when it was created, and
+   * never again - the API has always accepted the change.
+   */
+  name: string
+  description: string
+  appearance: Appearance
+  /** Every widget, so a change of column count can carry them with it. */
+  widgets: Widget[]
+  onClose: () => void
+}) {
+  const toast = useToast()
+  const queryClient = useQueryClient()
+  const fileInput = useRef<HTMLInputElement>(null)
+  const [title, setTitle] = useState(name)
+  const [subtitle, setSubtitle] = useState(description)
+  const [draft, setDraft] = useState<Appearance>({
+    background_fit: 'cover',
+    fade: 0,
+    columns: 12,
+    row_height: 74,
+    canvas_width: 0,
+    widget_opacity: 1,
+    ...appearance,
+  })
+
+  // The chart palette that came with a country's look, saved with the rest
+  // when the dialog is. Picking any other look forgets it again, and leaves
+  // the board's charts in whatever colours they were.
+  const [theme, setTheme] = useState<string | null>(null)
+
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: ['dashboard', dashboardId] })
+    // The listing carries the name as well, and a rename that shows on the
+    // board but not in the list it was renamed from reads as a failed save.
+    queryClient.invalidateQueries({ queryKey: ['dashboards'] })
+  }
+
+  const save = useMutation({
+    mutationFn: (next: Appearance) => {
+      // Sent only when they actually changed, so saving a colour does not
+      // rewrite the name with itself in the audit log.
+      const named: { name?: string; description?: string } = {}
+      if (title.trim() !== name) named.name = title.trim()
+      if (subtitle !== description) named.description = subtitle
+
+      const before = Number(appearance.columns) || 12
+      const after = Number(next.columns) || 12
+      const coloured = theme ? { theme } : {}
+      if (before === after) {
+        return api.patch(`/dashboards/${dashboardId}`, { ...named, ...coloured, appearance: next })
+      }
+      // Widget positions are in columns, not pixels, so changing the count
+      // without moving them would halve every widget on the way to 24 and
+      // overflow every one on the way back. Scaled, they stay where they look.
+      const scale = after / before
+      return api.patch(`/dashboards/${dashboardId}`, {
+        ...named,
+        ...coloured,
+        appearance: next,
+        widgets: widgets.map((widget) => {
+          const layout = widget.layout ?? {}
+          const w = Math.max(1, Math.min(after, Math.round(Number(layout.w ?? 6) * scale)))
+          return {
+            id: widget.id,
+            title: widget.title,
+            widget_type: widget.widget_type,
+            chart_id: widget.chart_id,
+            indicator_id: widget.indicator_id,
+            dataset_id: widget.dataset_id,
+            config: widget.config,
+            position: widget.position,
+            page: widget.page ?? 0,
+            layout: {
+              ...layout,
+              x: Math.max(0, Math.min(after - w, Math.round(Number(layout.x ?? 0) * scale))),
+              w,
+            },
+          }
+        }),
+      })
+    },
+    onSuccess: () => {
+      toast.push('Appearance saved', 'success')
+      refresh()
+      onClose()
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  const upload = useMutation({
+    mutationFn: (file: File) => {
+      const form = new FormData()
+      form.append('file', file)
+      return api.put<{ appearance: Appearance }>(`/dashboards/${dashboardId}/background`, form)
+    },
+    onSuccess: (updated) => {
+      // The stamp the server just wrote has to reach the draft, or saving the
+      // rest of this form afterwards would overwrite the image away again.
+      setDraft((current) => ({ ...current, ...updated.appearance }))
+      toast.push('Background image uploaded', 'success')
+      refresh()
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  const removeImage = useMutation({
+    mutationFn: () => api.delete<{ appearance: Appearance }>(`/dashboards/${dashboardId}/background`),
+    onSuccess: (updated) => {
+      setDraft((current) => ({
+        ...current,
+        ...updated.appearance,
+        background_image: undefined,
+        background_version: undefined,
+      }))
+      toast.push('Background image removed', 'info')
+      refresh()
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  // Only the Title section starts open. The rest say what they hold on their
+  // closed row, which is what makes folding help rather than just hide.
+  const [open, toggle] = useOpenSections('appearance', ['title'])
+
+  /** A few words per section, for when it is closed. */
+  const summaries = {
+    title: [title.trim() || 'Untitled', subtitle.trim() ? 'with a subtitle' : '']
+      .filter(Boolean)
+      .join(', '),
+    header: [
+      draft.logo_image && draft.logo_right_image ? 'two logos' : draft.logo_image || draft.logo_right_image ? 'logo' : '',
+      draft.header_background ? 'title band' : '',
+      draft.title_font ? FONTS.find((f) => f.id === draft.title_font)?.label ?? '' : '',
+      draft.title_size ? `${draft.title_size}px` : '',
+      draft.title_align === 'center' ? 'centred' : '',
+      draft.hide_subtitle ? 'subtitle hidden' : '',
+    ]
+      .filter(Boolean)
+      .join(', '),
+    page: draft.page_background ? 'coloured ground' : '',
+    canvas: [
+      draft.background_image ? 'image' : '',
+      draft.background_color ? 'colour' : '',
+      draft.canvas_width ? `${draft.canvas_width}px wide` : '',
+      draft.columns && draft.columns !== 12 ? `${draft.columns} columns` : '',
+    ]
+      .filter(Boolean)
+      .join(', '),
+  }
+
+  const color = draft.background_color ?? ''
+
+  return (
+    <Modal
+      open
+      onClose={onClose}
+      title="Dashboard title and appearance"
+      footer={
+        <>
+          <button className="btn-secondary" onClick={onClose}>
+            Cancel
+          </button>
+          <button
+            className="btn-primary"
+            // A dashboard with no name cannot be found again in a list of
+            // dashboards, so an empty one is refused rather than saved.
+            disabled={!title.trim() || save.isPending}
+            onClick={() => save.mutate(draft)}
+          >
+            {save.isPending ? 'Saving…' : 'Save'}
+          </button>
+        </>
+      }
+    >
+      <Section title="Title" summary={summaries.title} open={open.has('title')} onToggle={(o) => toggle('title', o)}>
+
+      <Field label="Dashboard name" hint="What it is called here and in every listing.">
+        <input
+          className="input"
+          value={title}
+          maxLength={200}
+          onChange={(event) => setTitle(event.target.value)}
+          placeholder="National Labour Force Survey"
+        />
+      </Field>
+
+      <Field
+        label="Subtitle"
+        hint="Optional, shown under the name. Hidden by the switch further down."
+      >
+        <input
+          className="input"
+          value={subtitle}
+          maxLength={500}
+          onChange={(event) => setSubtitle(event.target.value)}
+          placeholder="Round 1 fieldwork, February 2026"
+        />
+      </Field>
+
+      </Section>
+
+      <Section title="Ready-made looks" open={open.has('looks')} onToggle={(o) => toggle('looks', o)}>
+
+      <Field
+        label="Start from one of these"
+        hint="Each one sets the page, the title band, the board and the filter bar together; a Pacific country's look sets its chart colours too. Everything below stays editable afterwards."
+      >
+        {/*
+          Two dozen of them, so they are banded by what a reader is actually
+          choosing between: a board for reading indoors, one for a wall screen
+          in a dim room, or one that belongs to a programme rather than to an
+          office. An unbanded run of twenty-six swatches is a wall of colour
+          nobody finishes scanning.
+        */}
+        <div className="space-y-3">
+          {FAMILIES.map((family) => (
+            <div key={family.id}>
+              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-ink-500 dark:text-dark-500">
+                {family.label}
+              </p>
+              <div className="flex flex-wrap gap-2">
+                {LOOKS.filter((look) => look.family === family.id).map((look) => (
+                  <button
+                    key={look.key}
+                    className="w-[104px] overflow-hidden rounded-control border border-ink-200 p-0 text-left hover:border-brand-500 dark:border-dark-200"
+                    title={look.note}
+                    onClick={() => {
+                      setDraft({ ...draft, ...look.patch })
+                      setTheme(look.theme ?? null)
+                    }}
+                  >
+                    <span
+                      className="block h-7"
+                      style={bandStyle(
+                        look.patch.header_background || '#e6e8ec',
+                        look.patch.header_background_2 || undefined,
+                        look.patch.header_angle,
+                      )}
+                    />
+                    {/* The board's own ground, pattern included, between the
+                        masthead and the page: a swatch that showed only the
+                        two bands said nothing about the surface the widgets
+                        actually sit on. */}
+                    <span
+                      className="block h-5"
+                      style={
+                        canvasStyle(look.patch, null) ?? {
+                          backgroundColor: '#f7f8fa',
+                        }
+                      }
+                    />
+                    <span
+                      className="block h-4"
+                      style={bandStyle(
+                        look.patch.page_background || '#eceef1',
+                        look.patch.page_background_2 || undefined,
+                        look.patch.page_angle,
+                        false,
+                      )}
+                    />
+                    {/* A country's look brings its chart colours with it,
+                        so its swatch shows them. */}
+                    {look.theme && (
+                      <span className="flex h-1.5">
+                        {themeColors(look.theme).map((colour) => (
+                          <span key={colour} className="flex-1" style={{ backgroundColor: colour }} />
+                        ))}
+                      </span>
+                    )}
+                    <span className="block bg-white px-2 py-1 text-[11px] text-ink-700 dark:bg-dark-50 dark:text-dark-700">
+                      {look.label}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Field>
+
+      </Section>
+
+      <Section title="Header" summary={summaries.header} open={open.has('header')} onToggle={(o) => toggle('header', o)}>
+
+      <BandFields
+        label="Title band"
+        hint="A band behind the dashboard's name. With one set, the buttons move to a row of their own underneath it."
+        from={draft.header_background ?? ''}
+        to={draft.header_background_2 ?? ''}
+        angle={draft.header_angle ?? 135}
+        onChange={(next) =>
+          setDraft({
+            ...draft,
+            ...(next.from === undefined ? {} : { header_background: next.from }),
+            ...(next.to === undefined ? {} : { header_background_2: next.to }),
+            ...(next.angle === undefined ? {} : { header_angle: next.angle }),
+          })
+        }
+      />
+
+      <LogoSlot
+        dashboardId={dashboardId}
+        label="Logo"
+        hint="Beside the title, or above it when the title is centred - or at the left end of the band when there is a second logo. On the shared link and in downloaded and published copies too. PNG, JPEG, GIF or WebP, up to 8 MB."
+        path="logo"
+        present={Boolean(draft.logo_image)}
+        onChange={(patch) => setDraft((current) => ({ ...current, ...patch }))}
+        cleared={{ logo_image: undefined, logo_version: undefined }}
+        refresh={refresh}
+      />
+
+      <LogoSlot
+        dashboardId={dashboardId}
+        label="Second logo"
+        hint="At the right end of the band, with the first at the left and the title between them: a country's arms and a regional body's mark, say."
+        path="logo-right"
+        present={Boolean(draft.logo_right_image)}
+        onChange={(patch) => setDraft((current) => ({ ...current, ...patch }))}
+        cleared={{ logo_right_image: undefined, logo_right_version: undefined }}
+        refresh={refresh}
+      />
+
+      {(draft.logo_image || draft.logo_right_image) && (
+        <Field
+          label={`Logo height: ${draft.logo_height ?? 32}px`}
+          hint="Both logos, so a pair stands level. The band grows to fit."
+        >
+          <input
+            type="range"
+            className="w-full"
+            min={20}
+            max={200}
+            step={4}
+            value={draft.logo_height ?? 32}
+            onChange={(event) =>
+              setDraft({ ...draft, logo_height: Number(event.target.value) })
+            }
+          />
+        </Field>
+      )}
+
+      <div className="grid grid-cols-2 gap-3">
+        <Field label={`Title size: ${draft.title_size ?? 24}px`}>
+          <input
+            type="range"
+            className="w-full"
+            min={16}
+            max={64}
+            step={2}
+            value={draft.title_size ?? 24}
+            onChange={(event) => setDraft({ ...draft, title_size: Number(event.target.value) })}
+          />
+        </Field>
+        <Field label="Title font">
+          <select
+            className="input"
+            value={draft.title_font ?? ''}
+            onChange={(event) => setDraft({ ...draft, title_font: event.target.value })}
+          >
+            {FONTS.map((font) => (
+              <option
+                key={font.id}
+                value={font.id}
+                style={font.stack ? { fontFamily: font.stack } : undefined}
+              >
+                {font.label}
+              </option>
+            ))}
+          </select>
+        </Field>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Title colour">
+          <div className="flex items-center gap-2">
+            <input
+              type="color"
+              className="h-9 w-12 cursor-pointer rounded-control border border-ink-200"
+              value={draft.title_color || '#333333'}
+              onChange={(event) => setDraft({ ...draft, title_color: event.target.value })}
+            />
+            {draft.title_color && (
+              <button
+                className="btn-ghost btn-sm"
+                onClick={() => setDraft({ ...draft, title_color: undefined })}
+              >
+                Default
+              </button>
+            )}
+          </div>
+        </Field>
+        <Field label="Alignment">
+          <select
+            className="input"
+            value={draft.title_align ?? 'left'}
+            onChange={(event) =>
+              setDraft({ ...draft, title_align: event.target.value as 'left' | 'center' })
+            }
+          >
+            <option value="left">Left</option>
+            <option value="center">Centred</option>
+          </select>
+        </Field>
+      </div>
+
+      <label className="mb-3 flex items-center gap-2 text-sm text-ink-700">
+        <input
+          type="checkbox"
+          checked={Boolean(draft.header_rule)}
+          onChange={(event) => setDraft({ ...draft, header_rule: event.target.checked })}
+        />
+        A rule under the header
+      </label>
+      <label className="mb-4 flex items-center gap-2 text-sm text-ink-700">
+        <input
+          type="checkbox"
+          checked={Boolean(draft.hide_subtitle)}
+          onChange={(event) => setDraft({ ...draft, hide_subtitle: event.target.checked })}
+        />
+        Hide the description under the title
+      </label>
+
+      </Section>
+
+      <Section title="Page" summary={summaries.page} open={open.has('page')} onToggle={(o) => toggle('page', o)}>
+
+      <BandFields
+        label="Page ground"
+        hint="What is painted behind the whole page, around the board. It stays on this dashboard: every other page keeps the usual grey."
+        from={draft.page_background ?? ''}
+        to={draft.page_background_2 ?? ''}
+        angle={draft.page_angle ?? 160}
+        onChange={(next) =>
+          setDraft({
+            ...draft,
+            ...(next.from === undefined ? {} : { page_background: next.from }),
+            ...(next.to === undefined ? {} : { page_background_2: next.to }),
+            ...(next.angle === undefined ? {} : { page_angle: next.angle }),
+          })
+        }
+      />
+
+      </Section>
+
+      <Section title="Canvas" summary={summaries.canvas} open={open.has('canvas')} onToggle={(o) => toggle('canvas', o)}>
+
+      <Field
+        label="Canvas width"
+        hint="Wider than the window gives more room to spread out, and scrolls sideways to reach it."
+      >
+        <select
+          className="input"
+          value={String(draft.canvas_width ?? 0)}
+          onChange={(event) =>
+            setDraft({ ...draft, canvas_width: Number(event.target.value) })
+          }
+        >
+          <option value="0">Fit the window</option>
+          <option value="1600">Wide (1600px)</option>
+          <option value="2000">Wider (2000px)</option>
+          <option value="2600">Widest (2600px)</option>
+        </select>
+      </Field>
+
+      <div className="grid gap-x-4 sm:grid-cols-2">
+        <Field
+          label="Columns"
+          hint="More columns place widgets more finely. Existing widgets move with it."
+        >
+          <select
+            className="input"
+            value={String(draft.columns ?? 12)}
+            onChange={(event) => setDraft({ ...draft, columns: Number(event.target.value) })}
+          >
+            <option value="12">12 - standard</option>
+            <option value="16">16 - finer</option>
+            <option value="24">24 - finest</option>
+          </select>
+        </Field>
+        <Field label="Row height" hint="Taller rows make every widget taller.">
+          <select
+            className="input"
+            value={String(draft.row_height ?? 74)}
+            onChange={(event) => setDraft({ ...draft, row_height: Number(event.target.value) })}
+          >
+            <option value="56">Compact</option>
+            <option value="74">Standard</option>
+            <option value="96">Tall</option>
+          </select>
+        </Field>
+      </div>
+
+      <Field
+        label={`Widget transparency: ${Math.round((1 - (draft.widget_opacity ?? 1)) * 100)}%`}
+        hint="Lets the background through the widgets. It stops at 70% because the text on them has to stay readable."
+      >
+        <input
+          type="range"
+          className="w-full"
+          min={0}
+          max={0.7}
+          step={0.05}
+          value={1 - (draft.widget_opacity ?? 1)}
+          onChange={(event) =>
+            setDraft({ ...draft, widget_opacity: 1 - Number(event.target.value) })
+          }
+        />
+      </Field>
+
+      <Field
+        label="Behind the page tabs"
+        hint="A band under the tab strip. Worth setting when the background is close to the colour of the text on it."
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            className={`h-8 rounded border-2 px-3 text-xs ${
+              draft.tab_background ? 'border-ink-200 text-ink-600' : 'border-brand-600 text-brand-700'
+            }`}
+            onClick={() => setDraft({ ...draft, tab_background: '' })}
+          >
+            None
+          </button>
+          {['#ffffff', '#0f172a', '#334155', '#f8fafc'].map((colour) => (
+            <button
+              key={colour}
+              type="button"
+              aria-label={`Tab band ${colour}`}
+              aria-pressed={draft.tab_background === colour}
+              onClick={() => setDraft({ ...draft, tab_background: colour })}
+              className={`h-8 w-8 rounded border-2 ${
+                draft.tab_background === colour
+                  ? 'border-brand-600 ring-2 ring-brand-200'
+                  : 'border-ink-200'
+              }`}
+              style={{ backgroundColor: colour }}
+            />
+          ))}
+          <input
+            type="color"
+            className="h-8 w-12 cursor-pointer rounded border border-ink-200 bg-white"
+            title="Any other colour"
+            value={draft.tab_background || '#ffffff'}
+            onChange={(event) => setDraft({ ...draft, tab_background: event.target.value })}
+          />
+        </div>
+      </Field>
+
+      <Field label="Background colour">
+        <ColorPicker
+          value={color}
+          onChange={(next) => setDraft({ ...draft, background_color: next })}
+          allowNone
+          noneLabel="No background colour"
+        />
+      </Field>
+
+      <Field
+        label="Filter bar colour"
+        hint="The strip of filters above the widgets. White by default, which can float oddly over a coloured background."
+      >
+        <ColorPicker
+          value={draft.filter_background ?? ''}
+          onChange={(next) => setDraft({ ...draft, filter_background: next })}
+          allowNone
+          noneLabel="White"
+        />
+      </Field>
+
+      <Field
+        label="Filter label colour"
+        hint="The names beside the dropdowns. Left alone they are grey, which a dark filter bar swallows."
+      >
+        <ColorPicker
+          value={draft.filter_color ?? ''}
+          onChange={(next) => setDraft({ ...draft, filter_color: next })}
+          allowNone
+          noneLabel="Default grey"
+        />
+      </Field>
+
+      <Field
+        label="Page tab colour"
+        hint="The page names. Left alone the platform picks black or white from what is behind them, which is usually right and occasionally not."
+      >
+        <ColorPicker
+          value={draft.tab_color ?? ''}
+          onChange={(next) => setDraft({ ...draft, tab_color: next })}
+          allowNone
+          noneLabel="Choose it for me"
+        />
+      </Field>
+
+      <Field
+        label="Ready-made ground"
+        hint="Drawn rather than uploaded, so it travels in an exported file and prints without fetching anything. An uploaded image covers it."
+      >
+        <div className="flex flex-wrap gap-2">
+          <button
+            className={`w-[72px] overflow-hidden rounded-control border p-0 text-left ${
+              draft.background_pattern
+                ? 'border-ink-200 hover:border-brand-500 dark:border-dark-200'
+                : 'border-brand-500 ring-1 ring-brand-500'
+            }`}
+            title="No ground: the board is the colour above, or white."
+            onClick={() => setDraft({ ...draft, background_pattern: '' })}
+          >
+            <span className="block h-8 bg-white dark:bg-dark-100" />
+            <span className="block bg-white px-1.5 py-1 text-[11px] text-ink-700 dark:bg-dark-50 dark:text-dark-700">
+              None
+            </span>
+          </button>
+          {BACKGROUNDS.map((one) => (
+            <button
+              key={one.id}
+              className={`w-[72px] overflow-hidden rounded-control border p-0 text-left ${
+                draft.background_pattern === one.id
+                  ? 'border-brand-500 ring-1 ring-brand-500'
+                  : 'border-ink-200 hover:border-brand-500 dark:border-dark-200'
+              }`}
+              title={one.note}
+              onClick={() =>
+                setDraft({
+                  ...draft,
+                  background_pattern: one.id,
+                  // A texture is translucent, so a board that already has a
+                  // colour keeps it and gets the texture over it. A ground
+                  // that is its own colour brings that colour with it, or it
+                  // would be drawn over whatever the board happened to carry.
+                  background_color:
+                    one.tintable && draft.background_color
+                      ? draft.background_color
+                      : one.tint,
+                })
+              }
+            >
+              <span
+                className="block h-8"
+                style={{
+                  backgroundColor: one.tint,
+                  backgroundImage: one.layers,
+                  ...(one.size ? { backgroundSize: one.size } : {}),
+                }}
+              />
+              <span className="block bg-white px-1.5 py-1 text-[11px] text-ink-700 dark:bg-dark-50 dark:text-dark-700">
+                {one.label}
+              </span>
+            </button>
+          ))}
+        </div>
+      </Field>
+
+      <Field
+        label="Background image"
+        hint="PNG, JPEG, GIF or WebP, up to 8 MB. It sits behind the widgets, over any ground chosen above."
+      >
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            ref={fileInput}
+            type="file"
+            accept="image/png,image/jpeg,image/gif,image/webp"
+            className="hidden"
+            onChange={(event) => {
+              const file = event.target.files?.[0]
+              if (file) upload.mutate(file)
+              event.target.value = ''
+            }}
+          />
+          <button
+            className="btn-secondary btn-sm"
+            onClick={() => fileInput.current?.click()}
+            disabled={upload.isPending}
+          >
+            {upload.isPending
+              ? 'Uploading…'
+              : draft.background_image
+                ? 'Replace image'
+                : 'Choose an image'}
+          </button>
+          {draft.background_image && (
+            <button
+              className="btn-ghost btn-sm text-red-600"
+              onClick={() => removeImage.mutate()}
+              disabled={removeImage.isPending}
+            >
+              Remove image
+            </button>
+          )}
+        </div>
+      </Field>
+
+      {draft.background_image && (
+        <>
+          <Field label="How the image fills the page">
+            <select
+              className="input"
+              value={draft.background_fit ?? 'cover'}
+              onChange={(event) =>
+                setDraft({ ...draft, background_fit: event.target.value as Appearance['background_fit'] })
+              }
+            >
+              <option value="cover">Fill the page, cropping if it has to</option>
+              <option value="contain">Fit the whole image in</option>
+              <option value="tile">Repeat it</option>
+            </select>
+          </Field>
+          <Field
+            label={`Fade: ${Math.round((draft.fade ?? 0) * 100)}%`}
+            hint="Washes the image out so charts and tables on top of it stay readable."
+          >
+            <input
+              type="range"
+              className="w-full"
+              min={0}
+              max={0.9}
+              step={0.05}
+              value={draft.fade ?? 0}
+              onChange={(event) => setDraft({ ...draft, fade: Number(event.target.value) })}
+            />
+          </Field>
+        </>
+      )}
+      </Section>
+    </Modal>
+  )
+}
+
+/**
+ * One of the masthead's logos: upload, replace, remove.
+ *
+ * With the option ticked, the plain colour round the picture's edges is made
+ * transparent before it is sent - the black or white square a logo so often
+ * arrives on, which otherwise sits on the masthead as a box. It is done in the
+ * browser, on a copy: the file on the reader's own computer is untouched.
+ */
+function LogoSlot({
+  dashboardId,
+  label,
+  hint,
+  path,
+  present,
+  onChange,
+  cleared,
+  refresh,
+}: {
+  dashboardId: string
+  label: string
+  hint: string
+  path: 'logo' | 'logo-right'
+  present: boolean
+  onChange: (patch: Appearance) => void
+  /** The appearance keys this slot empties when it is removed. */
+  cleared: Appearance
+  refresh: () => void
+}) {
+  const toast = useToast()
+  const input = useRef<HTMLInputElement>(null)
+  const [plain, setPlain] = useState(false)
+
+  const upload = useMutation({
+    mutationFn: async (picked: File) => {
+      const { file, cleared: pixels } = plain
+        ? await withoutBackground(picked)
+        : { file: picked, cleared: 0 }
+      const form = new FormData()
+      form.append('file', file)
+      const updated = await api.put<{ appearance: Appearance }>(
+        `/dashboards/${dashboardId}/${path}`,
+        form,
+      )
+      return { updated, pixels }
+    },
+    onSuccess: ({ updated, pixels }) => {
+      onChange(updated.appearance)
+      toast.push(
+        !plain
+          ? `${label} uploaded`
+          : pixels
+            ? `${label} uploaded, with its plain background made transparent`
+            : `${label} uploaded as it is: its corners are not one plain colour, so there was no background to clear`,
+        'success',
+      )
+      refresh()
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  const remove = useMutation({
+    mutationFn: () => api.delete<{ appearance: Appearance }>(`/dashboards/${dashboardId}/${path}`),
+    onSuccess: (updated) => {
+      onChange({ ...updated.appearance, ...cleared })
+      toast.push(`${label} removed`, 'info')
+      refresh()
+    },
+    onError: (error: Error) => toast.push(error.message, 'error'),
+  })
+
+  return (
+    <Field label={label} hint={hint}>
+      <input
+        ref={input}
+        type="file"
+        accept="image/png,image/jpeg,image/gif,image/webp"
+        className="hidden"
+        aria-label={label}
+        onChange={(event) => {
+          const file = event.target.files?.[0]
+          if (file) upload.mutate(file)
+          event.target.value = ''
+        }}
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          className="btn-secondary btn-sm"
+          onClick={() => input.current?.click()}
+          disabled={upload.isPending}
+        >
+          {upload.isPending ? 'Uploading…' : present ? `Replace ${label.toLowerCase()}` : `Upload ${label.toLowerCase()}`}
+        </button>
+        {present && (
+          <button
+            className="btn-ghost btn-sm text-red-600"
+            onClick={() => remove.mutate()}
+            disabled={remove.isPending}
+          >
+            Remove
+          </button>
+        )}
+      </div>
+      <label className="mt-2 flex items-start gap-2 text-sm text-ink-700 dark:text-dark-700">
+        <input
+          type="checkbox"
+          className="mt-0.5"
+          checked={plain}
+          onChange={(event) => setPlain(event.target.checked)}
+        />
+        <span>
+          Make a plain background transparent
+          <span className="block text-xs text-ink-500 dark:text-dark-500">
+            The black or white square a logo often arrives on. Done to a copy as it uploads; your
+            own file is untouched.
+          </span>
+        </span>
+      </label>
+    </Field>
+  )
+}

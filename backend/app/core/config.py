@@ -1,0 +1,255 @@
+"""Application settings, loaded from environment variables."""
+
+from __future__ import annotations
+
+import json
+from functools import lru_cache
+from pathlib import Path
+
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+DEFAULT_SECRET_KEYS = {"insecure-development-key-change-me"}
+DEFAULT_FIRST_ADMIN_EMAILS = {"admin@example.com"}
+DEFAULT_FIRST_ADMIN_PASSWORDS = {"changeme", "CHANGE-ME-strong-password"}
+NON_PRODUCTION_ENVIRONMENTS = {"development", "dev", "test", "testing", "local"}
+
+
+class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=".env", env_file_encoding="utf-8", extra="ignore", case_sensitive=False
+    )
+
+    # General
+    project_name: str = "SurveyHQ"
+    environment: str = "production"
+    public_url: str = "http://localhost:8080"
+    # The domain shared dashboards are named under, e.g. "dash.example.org",
+    # so a dashboard can answer on labour-force.dash.example.org. Empty turns
+    # the feature off, because without a wildcard DNS record and a wildcard
+    # certificate for it, a name would resolve to nothing.
+    dashboard_domain: str = ""
+    log_level: str = "INFO"
+    api_v1_prefix: str = "/api/v1"
+
+    # Security
+    secret_key: str = "insecure-development-key-change-me"
+    encryption_key: str = ""
+    access_token_expire_minutes: int = 60 * 24
+    algorithm: str = "HS256"
+    # Comma separated, e.g. "https://a.example,https://b.example". Held as a
+    # plain string on purpose: pydantic-settings JSON-decodes environment values
+    # for list-typed fields before any validator runs, so a bare
+    # "http://host:8080" raises SettingsError and the process dies at start-up.
+    # Read it through cors_origin_list, never directly.
+    cors_origins: str = "http://localhost:5173"
+
+    # Whether anyone who can reach the sign-in page may create their own
+    # account. Off by default, and deliberately so: a self-service account is a
+    # manager, a manager may create a project, and a manager of a project may
+    # run R in it - which is a program on this server with this server's
+    # permissions. Open registration therefore hands arbitrary code execution
+    # to the internet on any deployment that has R enabled, and read of every
+    # survey on disk to one that has not. Turn it on for a workspace whose
+    # sign-in page is not public, or once R is off.
+    signup_enabled: bool = False
+
+    # Bootstrap admin
+    first_admin_email: str = "admin@example.com"
+    first_admin_password: str = "changeme"
+    first_admin_name: str = "Administrator"
+
+    # Database
+    postgres_user: str = "surveyhq"
+    postgres_password: str = "surveyhq"
+    postgres_db: str = "surveyhq"
+    postgres_host: str = "postgres"
+    postgres_port: int = 5432
+    database_url_override: str = ""
+
+    # Redis / Celery
+    redis_url: str = "redis://redis:6379/0"
+
+    # Analytics / DuckDB. Zero threads means choose a conservative value from
+    # the machine's CPU count. Keeping these deployment settings rather than
+    # literals in query_engine lets an 8-core VM and a 32-core analytical host
+    # use very different resource envelopes without rebuilding the image.
+    duckdb_threads: int = 0
+    duckdb_memory_limit: str = "2GB"
+    duckdb_temp_dir: str = ""
+    analytics_cache_enabled: bool = True
+    analytics_cache_ttl_seconds: int = 300
+    # Large delimited Survey Solutions members bypass pandas and are parsed by
+    # DuckDB directly once they cross this on-disk threshold.
+    duckdb_csv_above_mb: int = 32
+    monitoring_precompute_enabled: bool = True
+
+    # Statistical disclosure control.
+    #
+    # A published table whose cell rests on two households can identify them.
+    # Every statistics office has a floor below which a cell is withheld, and
+    # it is a rule of the office rather than a preference of whoever is making
+    # the table - so it lives here, with the deployment, where a user cannot
+    # turn it off to get a prettier table.
+    #
+    # Zero is off, which is what every existing deployment gets. A census or
+    # labour force office publishing from this should set it: 5 is the common
+    # floor, 3 and 10 both occur.
+    disclosure_threshold: int = 0
+
+    # Rate limiting. On by default; the switch exists so a test can run a
+    # hundred logins without tripping it, and so an operator behind a proxy that
+    # collapses every visitor onto one address can turn it off knowingly.
+    rate_limit_enabled: bool = True
+
+    # Storage
+    storage_dir: str = "/data"
+    # 20 GB. A census export of a whole country's households in Stata form runs
+    # to several gigabytes, and the point of this platform is that such a file
+    # goes in without being split by hand. The transfer itself is streamed to
+    # disk a megabyte at a time and imported by the worker, so the ceiling costs
+    # disk rather than memory - but note it costs it twice over while an upload
+    # is in flight, since the multipart body is spooled to a temporary file
+    # before it is copied into place.
+    max_upload_mb: int = 20480
+    # The backstop on how far a zip may expand once it is opened. The budget is
+    # a multiple of the upload limit, which is a sound rule at a small limit and
+    # runaway at a large one: at 20 GB it came to 400 GB, past any disk an
+    # archive would be unpacked onto, so the guard had stopped guarding. The
+    # smaller of the two bounds wins, which leaves the proportional rule in
+    # charge wherever it was already doing its job.
+    max_extracted_gb: int = 64
+
+    # Where a folder connection may read from.
+    #
+    # A folder connection names a directory on this server and imports what
+    # lands in it, which without a fence is a way for anyone who may add a
+    # connection to read any file the API container can reach - /etc, the
+    # storage directory, another project's data. So the directory has to sit
+    # inside one of these roots, and nothing else on the machine is reachable
+    # however the path is written. The default is the one directory the
+    # compose file already mounts for hand-staged imports.
+    import_roots: str = "/incoming"
+    # How settled a file has to be before it is read, in seconds.
+    #
+    # A 40 MB export copied in over a network link exists, with its final
+    # name, long before it is whole: importing it at that moment reads half an
+    # archive and fails, or worse, imports half a survey. Waiting until it has
+    # stopped changing is the cheap version of a lock file that the thing
+    # doing the copying does not have to know about.
+    import_settle_seconds: int = 60
+
+    # Mail
+    smtp_host: str = ""
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    smtp_tls: bool = True
+    smtp_from: str = "SurveyHQ <no-reply@example.com>"
+
+
+    # Scheduler
+    sync_tick_minutes: int = 5
+    monitor_tick_minutes: int = 15
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        raw = self.cors_origins.strip()
+        # A JSON array is also accepted: it was the workaround while the plain
+        # comma separated form crashed, so deployments still carry it.
+        if raw.startswith("["):
+            try:
+                parsed = json.loads(raw)
+            except json.JSONDecodeError:
+                return []
+            return [str(item).strip() for item in parsed if str(item).strip()]
+        return [item.strip() for item in raw.split(",") if item.strip()]
+
+    @property
+    def database_url(self) -> str:
+        if self.database_url_override:
+            return self.database_url_override
+        return (
+            f"postgresql+psycopg2://{self.postgres_user}:{self.postgres_password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
+
+    @property
+    def import_root_paths(self) -> list[Path]:
+        """The directories a folder connection may be pointed at."""
+        return [
+            Path(item.strip()).resolve()
+            for item in self.import_roots.split(",")
+            if item.strip()
+        ]
+
+    @property
+    def storage_path(self) -> Path:
+        return Path(self.storage_dir)
+
+    @property
+    def datasets_path(self) -> Path:
+        return self.storage_path / "datasets"
+
+    @property
+    def uploads_path(self) -> Path:
+        return self.storage_path / "uploads"
+
+    @property
+    def exports_path(self) -> Path:
+        return self.storage_path / "exports"
+
+    @property
+    def boundaries_path(self) -> Path:
+        return self.storage_path / "boundaries"
+
+    @property
+    def duckdb_temp_path(self) -> Path:
+        if self.duckdb_temp_dir:
+            return Path(self.duckdb_temp_dir)
+        return self.storage_path / "duckdb_tmp"
+
+    @property
+    def workspaces_path(self) -> Path:
+        """Where each project's R workspace lives.
+
+        Kept between runs on purpose: a project is an environment, so an object
+        saved with saveRDS, a lookup table written to disk, or a package
+        installed into the project's own library is still there next time.
+        """
+        return self.storage_path / "workspaces"
+
+    def ensure_directories(self) -> None:
+        for path in (
+            self.datasets_path,
+            self.uploads_path,
+            self.exports_path,
+            self.boundaries_path,
+            self.workspaces_path,
+            self.duckdb_temp_path,
+        ):
+            path.mkdir(parents=True, exist_ok=True)
+
+    def validate_security_settings(self) -> None:
+        if self.environment.lower() in NON_PRODUCTION_ENVIRONMENTS:
+            return
+        problems: list[str] = []
+        if self.secret_key in DEFAULT_SECRET_KEYS:
+            problems.append("SECRET_KEY is using an insecure default value")
+        if self.first_admin_email.lower() in DEFAULT_FIRST_ADMIN_EMAILS:
+            problems.append("FIRST_ADMIN_EMAIL is using a default placeholder")
+        if self.first_admin_password in DEFAULT_FIRST_ADMIN_PASSWORDS:
+            problems.append("FIRST_ADMIN_PASSWORD is using a default placeholder")
+        if problems:
+            raise ValueError(
+                "Unsafe production configuration: "
+                + "; ".join(problems)
+                + ". Set strong non-default values before starting the application."
+            )
+
+
+@lru_cache
+def get_settings() -> Settings:
+    return Settings()
+
+
+settings = get_settings()

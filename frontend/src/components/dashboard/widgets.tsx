@@ -1,0 +1,973 @@
+import { useQuery } from "@tanstack/react-query";
+
+import { useEffect, useState } from "react";
+
+import "react-grid-layout/css/styles.css";
+
+import "react-resizable/css/styles.css";
+
+import { api } from "@/lib/api";
+
+
+import { STATUS_COLORS } from "@/lib/charts";
+
+import type { BuildOptions } from "@/lib/charts";
+
+import { formatNumber, formatValue, relativeTime } from "@/lib/format";
+import {
+  breakdownRows,
+  orderBreakdown,
+  type BreakdownOrder,
+} from '@/lib/breakdown-order';
+import { BreakdownTable } from '@/components/dashboard/BreakdownTable';
+import IndicatorMovement from "@/components/monitoring/IndicatorMovement";
+
+import {
+  CHARTED_VIEWS,
+  CHECK_COLOURS,
+  PER_CHECK_VIEWS,
+  TREND_VIEWS,
+  checkState,
+  countResult,
+  mixColours,
+  mixResult,
+  failingBySeverity,
+  qualityChartType,
+  rateResult,
+  severityPane,
+  topChecks,
+  trendResult,
+  worstFirst,
+} from "@/lib/quality";
+
+import type { Widget } from "@/lib/types";
+
+import ChartCard from "@/components/ChartCard";
+
+import MapWidget, { type BoundaryOverlay } from "@/components/MapWidget";
+
+import { DEFAULT_PANEL_TEXT, DEFAULT_TILE_TEXT } from "@/components/dashboard/shared";
+import { useFittedText, useHeight } from "@/hooks/useFittedText";
+
+/** Below this, an indicator's breakdown chart is too short to read. */
+const BREAKDOWN_MIN_HEIGHT = 80;
+
+/**
+ * What an indicator tile can do without, in the order it goes when the tile
+ * is too short for everything at the text size chosen: the sparkline first,
+ * the biggest and the least exact; then when it was updated; the progress bar,
+ * which draws the variance line again; where the pace leads; and last how it
+ * has moved. The number and how far it is from target always stay.
+ */
+const INDICATOR_TILE_DROPS = ["sparkline", "updated", "progress", "outlook", "change"] as const;
+import { Badge } from "@/components/ui";
+
+/**
+ * Time left until a deadline, ticking.
+ *
+ * Fieldwork is run against dates - the day enumeration closes, the day the
+ * report is due - and a board that reports progress is read against how much
+ * of that time is left. The number is computed in the browser rather than sent
+ * by the server, so it goes on counting down on a screen nobody is touching.
+ */
+/**
+ * Whatever markup the dashboard's author pasted in.
+ *
+ * It runs in a sandboxed frame with no same-origin privilege, so scripts in it
+ * execute in an opaque origin: they cannot read this page, its storage or its
+ * session, which is what makes accepting arbitrary markup from one user and
+ * showing it to another safe to do at all. That is also why it is a frame
+ * rather than dangerouslySetInnerHTML, which would run it right here.
+ */
+/**
+ * A map, with its boundary outlines fetched separately from its pins.
+ *
+ * Two requests rather than one on purpose. The pins change with every filter
+ * and every refresh; the outlines are a national frame that changes when
+ * somebody uploads a new one, which is to say almost never. Sending the frame
+ * down with each refresh of the pins would be megabytes an hour to redraw
+ * something identical.
+ *
+ * It goes through the dashboard's own path so a shared link draws its outlines
+ * too - the reader of a shared board has no account to check.
+ */
+export function BoundedMap({
+  payload,
+  widget,
+  basePath,
+}: {
+  payload: any;
+  widget: Widget;
+  basePath: string;
+}) {
+  const boundary = payload.boundary as BoundaryOverlay | undefined;
+  const areas = useQuery({
+    queryKey: ["dashboard-boundary", basePath, boundary?.id],
+    queryFn: () =>
+      api.get<{ type: string; features: never[] }>(
+        `${basePath}/boundaries/${boundary!.id}`,
+      ),
+    enabled: Boolean(boundary?.id),
+    // The frame does not move. Refetching it on every window focus would be
+    // the one thing on this page reliably wasting the field office's bandwidth.
+    staleTime: 60 * 60 * 1000,
+  });
+
+  return (
+    <MapWidget
+      points={payload.points ?? []}
+      detail={payload.detail ?? []}
+      measure={payload.measure}
+      basemap={widget.config?.basemap as string | undefined}
+      icon={widget.config?.point_icon as string | undefined}
+      pointColor={widget.config?.point_color as string | undefined}
+      pointSize={widget.config?.point_size as number | undefined}
+      pointOpacity={widget.config?.point_opacity as number | undefined}
+      sizeByValue={widget.config?.size_by_value !== false}
+      tiles={widget.config?.tiles as string | undefined}
+      truncated={payload.truncated}
+      grouped={payload.grouped}
+      boundary={boundary}
+      areas={areas.data}
+      areaVariable={payload.area_check?.variable}
+      areaCounts={payload.area_check?.counts}
+      duplicates={payload.duplicates}
+      manual={payload.manual}
+      lines={payload.lines}
+      coverage={payload.coverage}
+      labelsAlways={widget.config?.boundary_labels === "always"}
+      manualName={(widget.config?.manual_name as string | undefined) || "Manual"}
+    />
+  );
+}
+
+export function HtmlWidget({ html }: { html: string }) {
+  if (!html.trim()) {
+    return (
+      <p className="py-6 text-center text-sm text-ink-500">
+        This embed is empty
+      </p>
+    );
+  }
+  return (
+    <iframe
+      title="Embedded content"
+      srcDoc={html}
+      sandbox="allow-scripts allow-popups allow-forms"
+      referrerPolicy="no-referrer"
+      className="h-full min-h-[120px] w-full border-0"
+    />
+  );
+}
+
+/**
+ * How recent the data is, which is two questions.
+ *
+ * When the platform last received data says whether the import is running.
+ * When the newest record in it was collected says whether the field teams are
+ * still sending anything - and an import that runs faithfully every morning
+ * and collects nothing new is healthy by the first measure and broken by the
+ * second, which is the failure this widget exists to catch.
+ */
+export function FreshnessWidget({ payload }: { payload: any }) {
+  const lines: any[] = payload.datasets ?? [];
+  return (
+    <div className="flex h-full flex-col gap-2 overflow-auto">
+      {lines.map((line) => {
+        const colour =
+          STATUS_COLORS[line.status as keyof typeof STATUS_COLORS] ??
+          STATUS_COLORS.unknown;
+        return (
+          <div key={line.dataset_id} className="flex items-start gap-2.5">
+            <span
+              className="mt-1.5 h-2.5 w-2.5 shrink-0 rounded-full"
+              style={{ backgroundColor: colour }}
+              // The dot is colour; the words beside it carry the same meaning,
+              // so it is never the only thing saying whether this is stale.
+              aria-hidden
+            />
+            <div className="min-w-0 flex-1">
+              <p className="truncate text-sm font-medium text-ink-800">
+                {line.name}
+              </p>
+              <p className="text-xs text-ink-500">
+                Imported {relativeTime(line.imported_at)}
+                {line.latest_record_at ? (
+                  <>
+                    {" · newest record "}
+                    {relativeTime(line.latest_record_at)}
+                  </>
+                ) : line.date_variable ? null : (
+                  <span className="text-ink-500">
+                    {" "}
+                    · no date column to read
+                  </span>
+                )}
+              </p>
+              {line.error && (
+                <p className="text-xs text-amber-700">{line.error}</p>
+              )}
+            </div>
+            <span className="shrink-0 text-xs tabular-nums text-ink-500">
+              {formatNumber(line.rows)} rows
+            </span>
+          </div>
+        );
+      })}
+      {!lines.length && (
+        <p className="py-6 text-center text-sm text-ink-500">
+          Nothing to report
+        </p>
+      )}
+    </div>
+  );
+}
+
+export function CountdownWidget({
+  payload,
+  textSize,
+}: {
+  payload: any;
+  /** The widget's text size: the line under the count. Blank is 14px. */
+  textSize?: number;
+}) {
+  const target = payload.target ? new Date(payload.target).getTime() : NaN;
+  const [now, setNow] = useState(() => Date.now());
+  // The size chosen is the most the tile uses; a tile too small for it gets
+  // smaller text rather than a countdown cut off at the bottom.
+  const [box, fitted] = useFittedText<HTMLDivElement>(textSize ?? DEFAULT_TILE_TEXT, 10, [
+    payload.label,
+    now > target,
+  ]);
+  const size = { fontSize: fitted };
+
+  useEffect(() => {
+    if (!Number.isFinite(target)) return;
+    const timer = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, [target]);
+
+  if (!Number.isFinite(target)) {
+    return (
+      <p className="py-6 text-center text-sm text-ink-500">
+        No date set for this countdown
+      </p>
+    );
+  }
+
+  const remaining = target - now;
+  if (remaining <= 0) {
+    return (
+      <div
+        ref={box}
+        className="flex h-full flex-col items-center gap-1 text-center [justify-content:safe_center]"
+        style={size}
+      >
+        <p className="text-[1.714em] font-semibold leading-[1.33] text-red-600">
+          {payload.expired_text || "Time is up"}
+        </p>
+        <p className="text-[0.857em] text-ink-500">
+          {payload.label || new Date(target).toLocaleString()}
+        </p>
+      </div>
+    );
+  }
+
+  const seconds = Math.floor(remaining / 1000);
+  const parts = [
+    { value: Math.floor(seconds / 86400), unit: "days" },
+    { value: Math.floor((seconds % 86400) / 3600), unit: "hours" },
+    { value: Math.floor((seconds % 3600) / 60), unit: "min" },
+    { value: seconds % 60, unit: "sec" },
+  ];
+
+  return (
+    <div
+      ref={box}
+      className="flex h-full flex-col items-center gap-2 text-center [justify-content:safe_center]"
+      style={size}
+    >
+      <div className="flex items-end gap-3">
+        {parts.map((part) => (
+          <div key={part.unit}>
+            <div className="text-[2.143em] font-semibold leading-[1.2] tabular-nums text-ink-900">
+              {String(part.value).padStart(2, "0")}
+            </div>
+            <div className="text-[0.786em] uppercase tracking-wide text-ink-500">
+              {part.unit}
+            </div>
+          </div>
+        ))}
+      </div>
+      <p className="text-[0.857em] text-ink-500">
+        {payload.label || `until ${new Date(target).toLocaleString()}`}
+      </p>
+    </div>
+  );
+}
+
+
+export function QualityWidget({
+  payload,
+  view,
+  chart,
+  limit = 0,
+  theme,
+  display,
+}: {
+  payload: any;
+  /** Which of the panel's forms this widget was saved showing. */
+  view: string;
+  /** How that form is drawn, where the form is a chart. */
+  chart?: string;
+  /** How many checks the chart draws, worst first. Nought draws them all. */
+  limit?: number;
+  theme: string;
+  display?: BuildOptions;
+}) {
+  const failing = failingBySeverity(payload.checks);
+  const stale = payload.oldest_run_at;
+  const charted = CHARTED_VIEWS.has(view);
+  const chartType = qualityChartType(view, chart);
+  // Drawn from the runs already stored rather than from the checks as they
+  // stand, which is what the filters on the page reach.
+  const trending = TREND_VIEWS.has(view);
+  // A horizontal bar's categories read bottom-up, so the worst check goes last
+  // in the data; every other form reads from the top left and wants it first.
+  const horizontal = chartType === "horizontal_bar";
+  // Colouring a mark by its finding is for the bars only, where a bar is a
+  // check. A table has no marks, and a pie of checks is read for how the
+  // flagged rows divide between them: paint its slices by state and every
+  // failing check comes out the same red, which leaves the legend as the only
+  // thing telling one slice from the next. The mix is the exception, because
+  // there the slices are the states.
+  const marked = chartType === "horizontal_bar" || chartType === "bar";
+  const measure = (check: any) =>
+    view === "rows" ? (check.failed_rows ?? 0) : (check.failure_rate ?? 0);
+  // The checks this chart draws. Cut to the worst few where the panel asked
+  // for that, and only on the views that are one mark per check.
+  const shown = PER_CHECK_VIEWS.has(view)
+    ? topChecks(payload.checks, measure, limit)
+    : payload.checks;
+  const withheld = payload.checks.length - shown.length;
+  return (
+    // One size for the whole panel, and every part of it sized in em from
+    // there: a finding is read at a glance from wherever the board is, and
+    // what "big enough" means depends on whether that is a desk or a wall.
+    // The widget's own text size sets it where one was chosen.
+    <div
+      className="flex h-full flex-col [&_.chip]:text-[0.8em]"
+      style={{ fontSize: `${display?.fontSize ?? DEFAULT_PANEL_TEXT}px` }}
+    >
+      {/* No "N failing" count. The list underneath is the failing checks,
+          named and numbered, so the badge was a label for something already on
+          the screen - and a red pill at the top of every quality panel made a
+          board of them read as an emergency. What is left says what the list
+          cannot: how many checks passed, and how many have never run.
+
+          Except on a chart, where there is no list to be redundant with. The
+          trend view draws history in the categorical palette and names no
+          state at all, so without this a panel of failing checks looks exactly
+          like a panel of passing ones. It reads as a count beside the others
+          rather than as an alarm.
+
+          And not over the mix, which is these three counts drawn: the badges
+          there are the chart written out again, in the same order, directly
+          above itself.
+
+          The row goes entirely when it has nothing to say, rather than sitting
+          there as an empty strip with a margin under it. */}
+      {view !== "mix" &&
+      ((charted && payload.failing > 0) ||
+        payload.passing > 0 ||
+        payload.never_run > 0) ? (
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          {charted && payload.failing > 0 && (
+            <Badge tone="neutral">{payload.failing} failing</Badge>
+          )}
+          {payload.passing > 0 && (
+            <Badge tone="neutral">{payload.passing} passing</Badge>
+          )}
+          {payload.never_run > 0 && (
+            <Badge tone="warning">{payload.never_run} never run</Badge>
+          )}
+        </div>
+      ) : null}
+
+      {!payload.checks.length ? (
+        <p className="text-ink-500">No active checks on {payload.name}.</p>
+      ) : charted ? (
+        // A table drawn here is the panel's data like any other form of it, so
+        // it takes the panel's text size. Nothing else in the widget has to
+        // ask: the size is set on the panel and everything under it is in em.
+        // A table is not - `.table-base` pins 13px and its headings 12px, for
+        // the tables on every other page, where there is no such setting - so
+        // the two rules are put back in em from here. Reaching in by class is
+        // the cheap half of the alternative, which is a size prop threaded
+        // through ChartCard into a component that has never needed one.
+        <div
+          className={`min-h-0 flex-1 ${
+            chartType === "table"
+              ? "[&_.table-base]:text-[1em] [&_.table-base_thead_th]:text-[0.8em]"
+              : ""
+          }`}
+        >
+          {trending && !payload.history ? (
+            <p className="text-ink-500">
+              No runs stored yet. The checks run with every import and every
+              few hours besides, and a line needs two days of them.
+            </p>
+          ) : (
+            <ChartCard
+              fill
+              showToggle={false}
+              theme={theme}
+              chartType={chartType}
+              result={
+                view === "mix"
+                  ? mixResult(payload, horizontal)
+                  : trending
+                    ? trendResult(
+                        payload.history,
+                        view === "rows_trend" ? "rows" : "values",
+                      )
+                    : view === "rows"
+                      ? countResult(shown, horizontal)
+                      : rateResult(shown, horizontal)
+              }
+              display={{
+                ...display,
+                showValues: display?.showValues ?? !trending,
+                sort: "none",
+                // The two views of a rate are read to a decimal place. Rows,
+                // rows over time and a count of checks are whole things, and
+                // "480.00" of them reads as a measurement rather than a count.
+                decimals: view === "rate" || view === "trend" ? 2 : 0,
+                // Colour is the finding here. A mark's hue says whether that
+                // check is passing, which is the thing being looked for, so it
+                // is not left to the palette's order.
+                ...(trending
+                  ? // No axis title: the legend needs the top of the plot, the
+                    // footnote below says what the numbers are, and the two
+                    // were landing on each other at widget width.
+                    { showLegend: true, smooth: false }
+                  : view === "mix"
+                    ? {
+                        // Every form of the mix but the table, the pie
+                        // included: its slices are the three states.
+                        ...(chartType === "table"
+                          ? {}
+                          : { pointColors: mixColours(payload, horizontal) }),
+                      }
+                    : marked
+                      ? {
+                          pointColors: worstFirst(
+                            shown,
+                            measure,
+                            horizontal,
+                          ).map((check: any) => CHECK_COLOURS[checkState(check)]),
+                        }
+                      : {}),
+              }}
+            />
+          )}
+        </div>
+      ) : (
+        // Room round the panes for a failing one's glow, taken back by the
+        // negative margin so nothing moves: a list that scrolls clips whatever
+        // is drawn outside it, and the halo came out as a shadow underneath.
+        <ul className="-mx-3 -mt-2 min-h-0 flex-1 space-y-3 overflow-auto px-3 pb-3 pt-2">
+          {/* Each failing check glows in the colour of how much it matters -
+              red, amber or blue - and a clean bill glows green. White like
+              the rest of the board, a failure was the last thing on it
+              anybody noticed. */}
+          {failing.map((check: any) => {
+            const look = severityPane(check);
+            return (
+            <li
+              key={check.id}
+              className={`aero-pane aero-pane-glow px-3 py-2 pl-4 ${look.pane}`}
+            >
+              <div className="flex items-start justify-between gap-2">
+                <p className={`min-w-0 font-medium ${look.name}`}>
+                  {check.name}
+                </p>
+                {/* The number the check turns on, where the eye lands after
+                    the name. It is what a supervisor acts on, and reading it
+                    out of the middle of a sentence is slower than reading it
+                    off the right-hand edge of every box in the column. */}
+                {check.failure_rate > 0 && (
+                  <span className={`chip shrink-0 font-semibold tabular-nums ${look.chip}`}>
+                    {(check.failure_rate * 100).toFixed(
+                      check.failure_rate < 0.01 ? 2 : 0,
+                    )}
+                    %
+                  </span>
+                )}
+              </div>
+              <p className={`mt-0.5 text-[0.87em] ${look.message}`}>
+                {check.message}
+              </p>
+              {payload.filtered && check.total_rows > 0 && (
+                <p className={`mt-0.5 text-[0.8em] ${look.message}`}>
+                  {formatNumber(check.failed_rows)} of{" "}
+                  {formatNumber(check.total_rows)} rows in view
+                </p>
+              )}
+            </li>
+            );
+          })}
+          {!failing.length && (
+            <li className="aero-pane aero-pane-ok aero-pane-glow px-3 py-2 pl-4 text-emerald-600 dark:text-emerald-400">
+              <p className="font-medium text-emerald-900 dark:text-emerald-200">
+                Every active check passed
+              </p>
+              <p className="mt-0.5 text-[0.87em] text-emerald-800/90 dark:text-emerald-200/80">
+                {payload.name}
+              </p>
+            </li>
+          )}
+        </ul>
+      )}
+
+      {/* Which few of the checks the chart is drawing. A panel cut to its
+          worst ten is not a panel of ten checks, and the difference is the
+          whole reason to trust the one above it. */}
+      {withheld > 0 && (
+        <p className="mt-2 text-[0.8em] text-ink-500">
+          The {shown.length} worst of {payload.checks.length} checks
+        </p>
+      )}
+
+      {trending ? (
+        <p className="mt-2 text-[0.8em] text-ink-500">
+          {/* The line is drawn from what the scheduled runs stored, and those
+              counted the whole dataset. A filter cannot reach backwards into
+              them, and a line that quietly ignored the page's filter while the
+              widgets around it obeyed it would be read as agreeing with them. */}
+          The last run of each day, over the whole dataset
+          {payload.filtered ? ". The filters on this page do not reach it" : ""}
+        </p>
+      ) : payload.filtered ? (
+        <p className="mt-2 text-[0.8em] text-ink-500">
+          {/* Counted against the page's filter just now, so there is no "last
+              run" to date it by - and saying which it is matters, because the
+              two answer different questions about the same rule. */}
+          Counted for the filters on this page
+        </p>
+      ) : (
+        stale && (
+          <p className="mt-2 text-[0.8em] text-ink-500">
+            {/* Results are shown as last run, not recomputed on open, so say when. */}
+            Oldest result {relativeTime(stale)}
+          </p>
+        )
+      )}
+    </div>
+  );
+}
+
+/** The recent history of one number, drawn small enough to sit in a tile.
+ *
+ *  Inline SVG rather than a chart: a sparkline has no axes, no legend and no
+ *  tooltip, and building a whole chart to draw one polyline in a 40px strip
+ *  costs more than it draws. The shape is the message.
+ */
+export function Sparkline({
+  points,
+  color,
+  height = 32,
+}: {
+  points: { at: string; value: number | null }[];
+  color: string;
+  height?: number;
+}) {
+  const values = points
+    .map((point) => point.value)
+    .filter(
+      (value): value is number => value !== null && Number.isFinite(value),
+    );
+  if (values.length < 2) return null;
+
+  const low = Math.min(...values);
+  const high = Math.max(...values);
+  // A flat line has no range to scale by, and dividing by it would put every
+  // point at the top of the box. Drawn down the middle instead, which is what
+  // a number that has not moved looks like.
+  const span = high - low || 1;
+  const width = 100;
+  const path = values
+    .map((value, index) => {
+      const x = (index / (values.length - 1)) * width;
+      const y = height - ((value - low) / span) * (height - 4) - 2;
+      return `${index ? "L" : "M"}${x.toFixed(2)},${y.toFixed(2)}`;
+    })
+    .join(" ");
+  const last = values[values.length - 1];
+  const lastX = width;
+  const lastY = height - ((last - low) / span) * (height - 4) - 2;
+
+  return (
+    <svg
+      viewBox={`0 0 ${width} ${height}`}
+      preserveAspectRatio="none"
+      className="mt-2 h-8 w-full shrink-0"
+      role="img"
+      aria-label={`Trend over the last ${values.length} runs`}
+    >
+      <path
+        d={path}
+        fill="none"
+        stroke={color}
+        strokeWidth="1.5"
+        vectorEffect="non-scaling-stroke"
+      />
+      {/* Where it has got to, so the eye lands on the current value rather
+          than wandering the line looking for the end of it. */}
+      <circle
+        cx={lastX}
+        cy={lastY}
+        r="2"
+        fill={color}
+        vectorEffect="non-scaling-stroke"
+      />
+    </svg>
+  );
+}
+
+/** How far off target, said in words rather than left as a subtraction.
+ *
+ *  No coloured circle: the wording and the tint carry it, and a status dot
+ *  beside a number that already says "63 behind" is decoration.
+ */
+export function Variance({
+  variance,
+  percent,
+  format,
+  unit,
+  lowerIsBetter,
+}: {
+  variance: number;
+  percent: number | null | undefined;
+  format: string;
+  unit: string;
+  lowerIsBetter: boolean;
+}) {
+  // Over target is good news when higher is better and bad news when it is a
+  // ceiling, so which way is "good" is the indicator's to say, not the sign's.
+  const good = lowerIsBetter ? variance <= 0 : variance >= 0;
+  const over = variance >= 0;
+  const word = lowerIsBetter
+    ? over
+      ? "over the limit"
+      : "under the limit"
+    : over
+      ? "ahead of target"
+      : "behind target";
+  return (
+    <p
+      className={`mt-1 text-[1em] font-medium ${
+        good
+          ? "text-emerald-700 dark:text-emerald-400"
+          : "text-rose-700 dark:text-rose-400"
+      }`}
+    >
+      {over ? "+" : "-"}
+      {formatValue(Math.abs(variance), format, unit)} {word}
+      {percent !== null && percent !== undefined && (
+        <span className="ml-1 font-normal opacity-70">
+          ({over ? "+" : "-"}
+          {Math.abs(percent).toFixed(percent >= 10 || percent <= -10 ? 0 : 1)}%)
+        </span>
+      )}
+    </p>
+  );
+}
+
+export function IndicatorWidget({
+  payload,
+  theme,
+  display,
+  onSelect,
+  textSize,
+}: {
+  payload: any;
+  theme: string;
+  /** The tile's own font, ink and text size, for the chart under the number. */
+  display?: BuildOptions;
+  /** Filter the page by a category of this indicator's breakdown. */
+  onSelect?: (variable: string, value: string) => void;
+  /** The widget's text size: the lines under the number. Blank is 14px. */
+  textSize?: number;
+}) {
+  const color =
+    STATUS_COLORS[payload.status as keyof typeof STATUS_COLORS] ??
+    STATUS_COLORS.unknown;
+  const breakdown: Record<string, number> = payload.breakdown ?? {};
+  const asChart = Object.keys(breakdown).length > 0 && payload.breakdown_view !== "table";
+  // The text size set on the tile is kept: where the lines under the number
+  // would run out of the bottom, the least needed of them are left out.
+  const [box, fitted] = useFittedText<HTMLDivElement>(
+    textSize ?? DEFAULT_TILE_TEXT,
+    10,
+    [payload],
+    INDICATOR_TILE_DROPS,
+  );
+  // And the breakdown chart only where there is room to read it. Squeezed
+  // into what was left, it drew its group names over its own axis.
+  const [room, roomHeight] = useHeight<HTMLDivElement>([asChart]);
+  const roomForChart = roomHeight === null || roomHeight >= BREAKDOWN_MIN_HEIGHT;
+
+  /**
+   * Each group's progress towards its own quota, drawn as one bar.
+   *
+   * Stacking the actual on top of the target would be arithmetic nonsense -
+   * 86 interviews plus a quota of 100 is not 186 of anything. What a quota
+   * chart has to show is how much of the target is done and how much is left,
+   * so the bar IS the target, split into what has been achieved and what is
+   * still to go. Read across, the coloured part is the actual and the whole
+   * bar is the quota, which is the comparison being asked for.
+   *
+   * Overshoot gets its own segment rather than being clipped: a region at 120
+   * of 100 must not look identical to one that has landed exactly on its quota.
+   *
+   * Only when some group actually has a target. An indicator broken down for
+   * interest would otherwise grow a "still to go" segment of nothing.
+   */
+  const progress: Record<
+    string,
+    {
+      value: number;
+      target: number | null;
+      percent: number | null;
+      status: string;
+    }
+  > = payload.breakdown_progress ?? {};
+  // A breakdown arrives in the order the query answered in, which is no order
+  // at all on a chart of sixty areas. The default asks the monitoring
+  // question - who is behind - and the widget can be set to any of the others.
+  const groups = orderBreakdown(
+    Object.entries(breakdown),
+    progress,
+    (payload.breakdown_order as BreakdownOrder) || 'behind',
+  );
+  const hasTargets = groups.some(
+    ([key]) => (progress[key]?.target ?? null) !== null,
+  );
+
+  // "Lower is better" reads the other way round. A rejection rate with a
+  // target of 5% is a ceiling, not something to work towards: the space under
+  // it is headroom nobody is trying to fill, so there is no "still to go" -
+  // only whether the limit has been passed, which is bad rather than good.
+  const lowerIsBetter = payload.direction === "lower_is_better";
+
+  /** The stored runs behind the number, for the line under it. Empty unless
+   *  the widget asked, and never beside a filtered value: those runs counted
+   *  the whole dataset and the number above them does not. */
+  const trend: { at: string; value: number | null }[] = payload.trend ?? [];
+
+  const overLabel = lowerIsBetter ? "Over the limit" : "Over target";
+  const achievedLabel = lowerIsBetter ? "Within the limit" : "Achieved";
+  // Two segments when lower is better, three otherwise. Carrying a "still to
+  // go" of zero would put a series in the legend that can never be drawn.
+  const quotaSeries = lowerIsBetter
+    ? [achievedLabel, overLabel]
+    : [achievedLabel, "Still to go", overLabel];
+
+  // Sixty bars in a tile the size of a postcard is a smear. The same sixty as
+  // lines of figures is a list somebody can read down and quote from, so the
+  // widget can be set to either; both are drawn from the same numbers.
+  const asTable = payload.breakdown_view === "table";
+  const tableRows = breakdownRows(groups, progress);
+
+  const quotaRows = groups.map(([key, value]) => {
+    const target = progress[key]?.target ?? null;
+    const within = target === null ? value : Math.min(value, target);
+    const over = target === null ? 0 : Math.max(value - target, 0);
+    const left = target === null ? 0 : Math.max(target - value, 0);
+    return lowerIsBetter ? [key, within, over] : [key, within, left, over];
+  });
+
+  return (
+    // Every size in the tile is a share of one, set here: the number at 15/7
+    // of it, the lines under it at 6/7 and 11/14. That is 30px, 12 and 11 by
+    // default, exactly as before, and a tile somebody has made bigger grows
+    // in proportion rather than leaving the number the size it was.
+    //
+    // Centred safely: text made bigger than its tile runs down into the
+    // scroll rather than off the top, where nothing can scroll to it and the
+    // number - the line that matters - was the one lost.
+    <div
+      ref={box}
+      className={`flex h-full flex-col ${groups.length ? "" : "[justify-content:safe_center]"}`}
+      style={{ fontSize: fitted }}
+    >
+      <p className="text-[2.143em] font-semibold leading-[1.2] tabular-nums text-ink-900">
+        {formatValue(payload.value, payload.value_format, payload.unit)}
+      </p>
+      {/* The number on its own answers nothing. How far off target it is, and
+          which way it has been moving, are what the tile is on the wall for. */}
+      {typeof payload.variance === "number" && (
+        <Variance
+          variance={payload.variance}
+          percent={payload.variance_percent}
+          format={payload.value_format}
+          unit={payload.unit}
+          lowerIsBetter={lowerIsBetter}
+        />
+      )}
+      {/* Since yesterday, this week, and when the pace gets it there. */}
+      <IndicatorMovement
+        movement={payload.movement}
+        format={payload.value_format}
+        unit={payload.unit}
+        direction={payload.direction}
+        target={payload.target_value}
+        scaled
+      />
+      {/* Neutral on purpose. The status colour beside a variance that says
+          the opposite - a green line under "283 behind target" - reads as a
+          contradiction, and the shape of the line is the message anyway. */}
+      {trend.length > 1 && (
+        <div data-fit="sparkline" className="shrink-0">
+          <Sparkline points={trend} color="#94a3b8" />
+        </div>
+      )}
+      {payload.target_value !== null && payload.target_value !== undefined && (
+        <div data-fit="progress" className="shrink-0">
+          {/* shrink-0: this sits in a column flex container, which would otherwise
+              compress the track to zero height in a short widget. */}
+          <div className="mt-3 h-2 shrink-0 overflow-hidden rounded-full bg-ink-100">
+            <div
+              className="h-full rounded-full"
+              style={{
+                width: `${Math.min(payload.progress_percent ?? 0, 100)}%`,
+                backgroundColor: color,
+              }}
+            />
+          </div>
+          <p className="mt-1.5 text-[0.857em] text-ink-500">
+            {payload.progress_percent?.toFixed(0) ?? "-"}% of{" "}
+            {formatNumber(payload.target_value)}
+          </p>
+        </div>
+      )}
+      {payload.filtered ? (
+        /* Computed against the page's filter just now, so there is no "last
+           run" to date it by. Saying which it is matters: a tile that reports
+           the whole survey while the page is narrowed to one province is
+           answering a question nobody asked. Never left out of a short
+           tile, for the same reason. */
+        <p className="mt-2 text-[0.786em] text-ink-500">
+          Counted for the filters on this page
+        </p>
+      ) : (
+        payload.computed_at && (
+          <p data-fit="updated" className="mt-2 text-[0.786em] text-ink-500">
+            Updated {relativeTime(payload.computed_at)}
+          </p>
+        )
+      )}
+
+      {/* The headline is an average of something. Which regions or teams are
+          behind it is the next question, and it used to need another page. */}
+      {groups.length > 0 && asTable && (
+        <div className="mt-3 min-h-0 flex-1 overflow-auto">
+          <BreakdownTable
+            rows={tableRows}
+            variable={payload.breakdown_variable}
+            name={payload.name}
+            valueFormat={payload.value_format}
+            unit={payload.unit}
+            lowerIsBetter={lowerIsBetter}
+            onSelect={onSelect}
+          />
+        </div>
+      )}
+
+      {groups.length > 0 && !asTable && (
+        <div ref={room} className="mt-3 min-h-0 flex-1">
+          {!roomForChart ? (
+            <p className="text-[0.786em] text-ink-500">
+              Make the tile taller to see it by {payload.breakdown_variable || "group"}.
+            </p>
+          ) : (
+          <ChartCard
+            showToggle={false}
+            chartType="horizontal_bar"
+            fill
+            theme={theme}
+            result={{
+              columns: hasTargets
+                ? [
+                    {
+                      name: "group",
+                      label: payload.breakdown_variable || "Group",
+                      type: "dimension",
+                      data_type: "text",
+                    },
+                    ...quotaSeries.map((label) => ({
+                      name: label,
+                      label,
+                      type: "measure" as const,
+                      data_type: "number" as const,
+                    })),
+                  ]
+                : [
+                    {
+                      name: "group",
+                      label: payload.breakdown_variable || "Group",
+                      type: "dimension",
+                      data_type: "text",
+                    },
+                    {
+                      name: "value",
+                      label: payload.name ?? "Value",
+                      type: "measure",
+                      data_type: "number",
+                    },
+                  ],
+              rows: hasTargets
+                ? quotaRows
+                : groups.map(([key, value]) => [key, value]),
+              row_count: groups.length,
+              truncated: false,
+              sql: "",
+              duration_ms: 0,
+            }}
+            display={{
+              ...display,
+              // Numbers on the marks only without targets. On the stacked form
+              // they would be printed on each segment, including the empty
+              // ones, and three labels across a short bar is a smear.
+              showValues: !hasTargets,
+              stacked: hasTargets,
+              showLegend: hasTargets,
+              // "Still to go" is an absence rather than a category, so it
+              // takes a neutral instead of a hue competing with the value
+              // beside it. Overshoot is not given a colour that asserts good
+              // or bad on its own: passing the target is good news for "higher
+              // is better" and bad news for "lower is better", so where it is
+              // bad it takes the warning tone and otherwise a paler tint of
+              // the achieved colour - more of the same thing, not a new one.
+              seriesColors: hasTargets
+                ? lowerIsBetter
+                  ? ["", STATUS_COLORS.critical]
+                  : ["", "#e1e0d9", "#9ec5f4"]
+                : undefined,
+            }}
+            // An indicator's breakdown is a chart of a variable like any other,
+            // so clicking a bar filters the page by it. It used to be the one
+            // chart on a dashboard that did nothing when clicked.
+            onSelect={
+              onSelect && payload.breakdown_variable
+                ? (category) => onSelect(payload.breakdown_variable, category)
+                : undefined
+            }
+          />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}

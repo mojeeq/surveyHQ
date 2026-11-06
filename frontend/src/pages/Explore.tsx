@@ -1,0 +1,271 @@
+import { useQuery } from '@tanstack/react-query'
+
+import { useEffect,useMemo,useState } from 'react'
+
+import { Link, useSearchParams } from 'react-router-dom'
+
+import { measurable } from '@/lib/measures'
+import { api } from '@/lib/api'
+import { formatNumber } from '@/lib/format'
+
+import { useAuth } from '@/hooks/useAuth'
+
+import { useToast } from '@/hooks/useToast'
+
+
+import type {
+Chart,
+Dataset,
+Project
+} from '@/lib/types'
+
+
+
+
+
+
+import { AggregateBuilder } from '@/components/explore/AggregateBuilder'
+import { CrosstabBuilder } from '@/components/explore/CrosstabBuilder'
+import { MultiSelectBuilder } from '@/components/explore/MultiSelectBuilder'
+import { Mode,modeOf,openedIn } from '@/components/explore/shared'
+import {
+Card,
+EmptyState,
+ErrorNote,
+Loading,
+PageHeader,
+Tabs
+} from '@/components/ui'
+
+
+export default function Explore() {
+  const [params, setParams] = useSearchParams()
+  const toast = useToast()
+  const { can } = useAuth()
+  const [mode, setMode] = useState<Mode>('aggregate')
+
+  const datasets = useQuery({
+    queryKey: ['datasets', 'all'],
+    queryFn: () => api.getAll<Dataset>('/datasets?status=ready'),
+  })
+  const projects = useQuery({
+    queryKey: ['projects'],
+    queryFn: () => api.get<Project[]>('/projects'),
+  })
+
+  // Both live in the URL, so a link to an analysis lands on the same two
+  // choices rather than resetting to whatever happens to be first.
+  const projectId = params.get('project') ?? ''
+  const inProject = useMemo(
+    () =>
+      (datasets.data?.items ?? []).filter((item) =>
+        projectId === ''
+          ? true
+          : projectId === 'none'
+            ? item.project_id === null
+            : item.project_id === projectId,
+      ),
+    [datasets.data, projectId],
+  )
+
+  // Editing a saved chart opens it here, which is where its query was built
+  // in the first place. Everything is prefilled, so "change the variable" is
+  // changing the variable rather than rebuilding the chart from memory.
+  const editingId = params.get('chart') ?? ''
+  const editing = useQuery({
+    queryKey: ['chart', editingId],
+    queryFn: () => api.get<Chart>(`/dashboards/charts/${editingId}`),
+    enabled: Boolean(editingId),
+  })
+
+  // A saved chart is edited in whichever builder made it, so opening one has
+  // to switch to that tab first.
+  useEffect(() => {
+    if (editing.data) setMode(modeOf(editing.data))
+  }, [editing.data])
+
+  const requested = editing.data?.dataset_id || (params.get('dataset') ?? '')
+  // A dataset from another project stops being a valid choice the moment the
+  // project filter changes, so fall back rather than showing an empty picker.
+  const datasetId = inProject.some((item) => item.id === requested)
+    ? requested
+    : (inProject[0]?.id ?? '')
+
+  const dataset = useQuery({
+    queryKey: ['dataset', datasetId],
+    queryFn: () => api.get<Dataset>(`/datasets/${datasetId}`),
+    enabled: Boolean(datasetId),
+  })
+
+  const variables = dataset.data?.variables ?? []
+  // Every variable can be grouped on, including the ones with a value per row.
+  // Hiding them was meant to keep a 20,000-row tabulation out of the way, but
+  // it hid interview__key - and "one row per interview, with these columns" is
+  // a thing people legitimately want to tabulate. The count travels with the
+  // name instead, and the row limit still decides how much comes back.
+  const groupable = useMemo(() => variables.filter((v) => !v.is_hidden), [variables])
+  // Anything stored as a number, not only what the importer judged to be a
+  // quantity: it calls any whole-number column with few distinct values a code
+  // set, which made household size, rooms and years of schooling unmeasurable.
+  // See lib/measures.
+  const numeric = useMemo(() => measurable(variables), [variables])
+
+  if (datasets.isLoading) return <Loading />
+  if (!datasets.data?.items.length) {
+    return (
+      <Card>
+        <EmptyState
+          icon="▤"
+          title="No datasets ready to analyse"
+          description="Upload a data file or import from a Survey Solutions server first."
+        />
+      </Card>
+    )
+  }
+
+  return (
+    <>
+      <PageHeader
+        title={editing.data ? `Editing “${editing.data.name}”` : 'Analyse'}
+        description={
+          editing.data
+            ? 'Change the grouping, the measure, the filters or the chart type. Saving writes back to this chart, so every dashboard showing it follows.'
+            : 'Build tabulations and charts against any dataset.'
+        }
+        actions={
+          <div className="flex flex-wrap items-center gap-2">
+            {editing.data && (
+              <button
+                className="btn-secondary"
+                onClick={() => {
+                  const next = new URLSearchParams(params)
+                  next.delete('chart')
+                  setParams(next)
+                }}
+              >
+                Stop editing
+              </button>
+            )}
+          </div>
+        }
+      />
+
+      {/* What is being analysed, first and named. The dataset decides every
+          variable offered below it, and it was a small unlabelled box in the
+          top corner, the last thing on the page anybody looked at. */}
+      <div className="mb-4 flex flex-wrap items-center gap-x-3 gap-y-2 rounded-card border border-ink-200 bg-white px-4 py-3 dark:border-dark-200 dark:bg-dark-50">
+        <label
+          htmlFor="analyse-dataset"
+          className="text-sm font-semibold text-ink-800 dark:text-dark-800"
+        >
+          Dataset
+        </label>
+        <select
+          id="analyse-dataset"
+          className="input w-72"
+          value={datasetId}
+          disabled={!inProject.length}
+          onChange={(event) =>
+            setParams(
+              projectId
+                ? { project: projectId, dataset: event.target.value }
+                : { dataset: event.target.value },
+            )
+          }
+        >
+          {inProject.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.name}
+            </option>
+          ))}
+        </select>
+        <label htmlFor="analyse-project" className="text-sm text-ink-600 dark:text-dark-600">
+          in
+        </label>
+        <select
+          id="analyse-project"
+          className="input w-52"
+          aria-label="Project"
+          value={projectId}
+          onChange={(event) =>
+            setParams(
+              event.target.value ? { project: event.target.value } : {},
+            )
+          }
+        >
+          <option value="">All projects</option>
+          <option value="none">Shared area</option>
+          {projects.data?.map((project) => (
+            <option key={project.id} value={project.id}>
+              {project.name}
+            </option>
+          ))}
+        </select>
+        {dataset.data && (
+          <span className="text-xs text-ink-600 dark:text-dark-600">
+            {formatNumber(dataset.data.row_count)} rows · {dataset.data.column_count} variables ·{' '}
+            <Link to={`/datasets/${dataset.data.id}`} className="hover:underline">
+              open the dataset
+            </Link>
+          </span>
+        )}
+      </div>
+
+      <Tabs
+        tabs={[
+          { id: 'aggregate', label: 'Tabulate & chart' },
+          { id: 'crosstab', label: 'Cross-tabulation' },
+          { id: 'multiselect', label: 'Tick all that apply' },
+        ]}
+        active={mode}
+        onChange={(id) => setMode(id as Mode)}
+      />
+
+      {!inProject.length ? (
+        <Card className="mt-4">
+          <EmptyState
+            icon="▤"
+            title="Nothing to analyse in this project"
+            description="Assign a dataset to it from the Datasets page, or upload straight into it."
+          />
+        </Card>
+      ) : dataset.isLoading ? (
+        <Loading />
+      ) : !dataset.data ? (
+        <ErrorNote error={new Error('Dataset could not be loaded')} />
+      ) : mode === 'aggregate' ? (
+        <AggregateBuilder
+          key={editingId || datasetId}
+          datasetId={datasetId}
+          datasetName={dataset.data.name}
+          groupable={groupable}
+          numeric={numeric}
+          allVariables={variables}
+          canSave={can('analyst')}
+          editing={openedIn('aggregate', editing.data)}
+          onSaved={() => toast.push('Chart saved', 'success')}
+        />
+      ) : mode === 'crosstab' ? (
+        <CrosstabBuilder
+          key={editingId || datasetId}
+          datasetId={datasetId}
+          datasetName={dataset.data.name}
+          groupable={groupable}
+          numeric={numeric}
+          allVariables={variables}
+          canSave={can('analyst')}
+          editing={openedIn('crosstab', editing.data)}
+        />
+      ) : (
+        <MultiSelectBuilder
+          key={editingId || datasetId}
+          datasetId={datasetId}
+          datasetName={dataset.data.name}
+          allVariables={variables}
+          canSave={can('analyst')}
+          editing={openedIn('multiselect', editing.data)}
+        />
+      )}
+    </>
+  )
+}

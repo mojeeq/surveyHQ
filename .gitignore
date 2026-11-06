@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+htmlcov/
+.coverage
+
+# Node
+node_modules/
+dist/
+.vite/
+*.local
+
+# Env & secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# Data & runtime
+data/
+storage/
+uploads/
+*.parquet
+*.duckdb
+*.dta
+*.sav
+postgres-data/
+redis-data/
+
+# Editors / OS
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+logs/
+
+# TypeScript incremental build state - a build artifact, not source
+frontend/tsconfig.tsbuildinfo
+
+frontend/playwright-report/
+frontend/test-results/
+
+# Built from docs/ by scripts/build-help.mjs on dev, build and lint.
+# Generated rather than committed so the in-app help cannot drift from
+# the documentation it is made of.
+frontend/src/help/content.generated.ts
+
+# The Word manual is built from scripts/build_manual.py and the screenshots in
+# docs/manual/, the same way the help pane is built from docs/. Three megabytes
+# of binary that goes stale the moment the interface moves, and did: the copy
+# that used to live here still called the Indicators page "Monitoring".
+#   pip install python-docx pillow && python scripts/build_manual.py
+docs/SurveyHQ-user-manual.docx
+
+# Files staged for 'make import'. The directory is kept, its contents are not.
+incoming/*
+!incoming/README.md
+# The production stack's staging folder, when one runs beside development.
+incoming-prod/
+
+# Backup archives carry the database and a copy of the env file's secrets.
+backups/

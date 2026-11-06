@@ -1,0 +1,459 @@
+"""The SQL compiler and its safety guarantees."""
+
+from __future__ import annotations
+
+from decimal import Decimal
+
+import pytest
+
+from app.schemas.query import (
+    Aggregation,
+    Condition,
+    Dimension,
+    FilterGroup,
+    FilterOperator,
+    Measure,
+    QuerySpec,
+    SortSpec,
+)
+from app.services.query_engine import (
+    DatasetContext,
+    QueryError,
+    SQLBuilder,
+    VariableInfo,
+    quote_ident,
+)
+
+
+@pytest.fixture
+def ctx() -> DatasetContext:
+    return DatasetContext(
+        dataset_id="d1",
+        parquet_path="/data/d1/data.parquet",
+        variables={
+            "region": VariableInfo("region", "Region", "categorical", {"1": "North"}),
+            "age": VariableInfo("age", "Age", "numeric"),
+            "income": VariableInfo("income", "Income", "numeric"),
+            "weight": VariableInfo("weight", "Weight", "numeric"),
+            "visited_at": VariableInfo("visited_at", "Visit date", "datetime"),
+        },
+    )
+
+
+def test_unknown_variable_is_rejected(ctx):
+    spec = QuerySpec(dimensions=[Dimension(variable="does_not_exist")])
+    with pytest.raises(QueryError, match="Unknown variable"):
+        SQLBuilder(ctx).build_aggregate(spec)
+
+
+def test_injection_via_variable_name_is_blocked(ctx):
+    spec = QuerySpec(dimensions=[Dimension(variable='region"; DROP TABLE users; --')])
+    with pytest.raises(QueryError, match="Unknown variable"):
+        SQLBuilder(ctx).build_aggregate(spec)
+
+
+def test_identifier_quoting_escapes_double_quotes():
+    assert quote_ident('we"ird') == '"we""ird"'
+
+
+def test_filter_values_are_parameterised(ctx):
+    spec = QuerySpec(
+        dimensions=[Dimension(variable="region")],
+        filters=FilterGroup(
+            conditions=[
+                Condition(
+                    variable="age", operator=FilterOperator.gte, value="'; DELETE FROM x --"
+                )
+            ]
+        ),
+    )
+    sql, params = SQLBuilder(ctx).build_aggregate(spec)
+    assert "DELETE" not in sql
+    assert params == ["'; DELETE FROM x --"]
+
+
+def test_aggregate_sql_shape(ctx):
+    spec = QuerySpec(
+        dimensions=[Dimension(variable="region")],
+        measures=[
+            Measure(agg=Aggregation.count, alias="n"),
+            Measure(agg=Aggregation.mean, variable="income", alias="avg_income"),
+        ],
+        sort=[SortSpec(field="n", direction="desc")],
+        limit=25,
+    )
+    sql, _ = SQLBuilder(ctx).build_aggregate(spec)
+    assert 'COUNT(*) AS "n"' in sql
+    assert 'AVG("income") AS "avg_income"' in sql
+    assert "GROUP BY 1" in sql
+    assert 'ORDER BY "n" DESC NULLS LAST' in sql
+    assert "LIMIT 25" in sql
+
+
+def test_weighted_mean_uses_weight_column(ctx):
+    spec = QuerySpec(
+        measures=[Measure(agg=Aggregation.mean, variable="income", weight="weight")]
+    )
+    sql, _ = SQLBuilder(ctx).build_aggregate(spec)
+    assert 'SUM("income" * "weight")' in sql
+    assert 'NULLIF' in sql
+
+
+def test_weighted_count_sums_the_weight(ctx):
+    spec = QuerySpec(measures=[Measure(agg=Aggregation.count, weight="weight", alias="n")])
+    sql, _ = SQLBuilder(ctx).build_aggregate(spec)
+    assert 'SUM("weight")' in sql
+
+
+def test_date_grain_truncates(ctx):
+    spec = QuerySpec(dimensions=[Dimension(variable="visited_at", grain="month")])
+    sql, _ = SQLBuilder(ctx).build_aggregate(spec)
+    assert "date_trunc('month', \"visited_at\")" in sql
+
+
+def test_binning_requires_numeric(ctx):
+    spec = QuerySpec(dimensions=[Dimension(variable="region", bin_width=10)])
+    with pytest.raises(QueryError, match="not numeric"):
+        SQLBuilder(ctx).build_aggregate(spec)
+
+
+def test_binning_numeric_variable(ctx):
+    spec = QuerySpec(dimensions=[Dimension(variable="age", bin_width=10)])
+    sql, _ = SQLBuilder(ctx).build_aggregate(spec)
+    assert 'floor("age" / 10.0) * 10.0' in sql
+
+
+def test_sorting_by_unknown_field_is_rejected(ctx):
+    spec = QuerySpec(
+        dimensions=[Dimension(variable="region")],
+        sort=[SortSpec(field="not_selected", direction="asc")],
+    )
+    with pytest.raises(QueryError, match="Cannot sort by unknown field"):
+        SQLBuilder(ctx).build_aggregate(spec)
+
+
+def test_in_filter_expands_placeholders(ctx):
+    spec = QuerySpec(
+        filters=FilterGroup(
+            conditions=[
+                Condition(variable="region", operator=FilterOperator.in_, value=["a", "b", "c"])
+            ]
+        )
+    )
+    sql, params = SQLBuilder(ctx).build_aggregate(spec)
+    assert "IN (?, ?, ?)" in sql
+    assert params == ["a", "b", "c"]
+
+
+def test_between_requires_two_values(ctx):
+    spec = QuerySpec(
+        filters=FilterGroup(
+            conditions=[Condition(variable="age", operator=FilterOperator.between, value=[5])]
+        )
+    )
+    with pytest.raises(QueryError, match="two element list"):
+        SQLBuilder(ctx).build_aggregate(spec)
+
+
+def test_contains_escapes_wildcards(ctx):
+    spec = QuerySpec(
+        filters=FilterGroup(
+            conditions=[
+                Condition(variable="region", operator=FilterOperator.contains, value="50%_x")
+            ]
+        )
+    )
+    _, params = SQLBuilder(ctx).build_aggregate(spec)
+    assert params == [r"%50\%\_x%"]
+
+
+def test_not_equal_keeps_null_rows(ctx):
+    spec = QuerySpec(
+        filters=FilterGroup(
+            conditions=[Condition(variable="region", operator=FilterOperator.ne, value="North")]
+        )
+    )
+    sql, _ = SQLBuilder(ctx).build_aggregate(spec)
+    assert '"region" IS NULL OR "region" != ?' in sql
+
+
+def test_nested_filter_groups(ctx):
+    spec = QuerySpec(
+        filters=FilterGroup(
+            op="and",
+            conditions=[Condition(variable="age", operator=FilterOperator.gte, value=18)],
+            groups=[
+                FilterGroup(
+                    op="or",
+                    conditions=[
+                        Condition(variable="region", operator=FilterOperator.eq, value="N"),
+                        Condition(variable="region", operator=FilterOperator.eq, value="S"),
+                    ],
+                )
+            ],
+        )
+    )
+    sql, params = SQLBuilder(ctx).build_aggregate(spec)
+    assert " OR " in sql and " AND " in sql
+    assert params == [18.0, "N", "S"]
+
+
+def test_measure_requiring_a_variable_is_validated():
+    with pytest.raises(ValueError, match="requires a variable"):
+        Measure(agg=Aggregation.mean)
+
+
+def test_label_filter_translates_to_stored_code(ctx):
+    spec = QuerySpec(
+        filters=FilterGroup(
+            conditions=[
+                Condition(
+                    variable="region",
+                    operator=FilterOperator.eq,
+                    value="North",
+                    use_label=True,
+                )
+            ]
+        )
+    )
+    _, params = SQLBuilder(ctx).build_aggregate(spec)
+    assert params == ["1"]
+
+
+def test_default_measure_is_a_count():
+    assert QuerySpec().measures[0].agg == Aggregation.count
+
+
+def test_date_axis_keeps_its_own_order(ctx):
+    """A time series sorted by size draws a fake decline."""
+    spec = QuerySpec(
+        dimensions=[Dimension(variable="visited_at")],
+        measures=[Measure(agg=Aggregation.count, alias="Interviews")],
+    )
+    sql, _ = SQLBuilder(ctx).build_aggregate(spec)
+    assert 'ORDER BY "visited_at" ASC NULLS LAST' in sql
+
+
+def test_date_grain_keeps_its_own_order(ctx):
+    spec = QuerySpec(
+        dimensions=[Dimension(variable="visited_at", grain="month", alias="Month")],
+        measures=[Measure(agg=Aggregation.count, alias="Interviews")],
+    )
+    sql, _ = SQLBuilder(ctx).build_aggregate(spec)
+    assert 'ORDER BY "Month" ASC NULLS LAST' in sql
+
+
+def test_binned_numbers_keep_their_own_order(ctx):
+    spec = QuerySpec(
+        dimensions=[Dimension(variable="age", bin_width=10)],
+        measures=[Measure(agg=Aggregation.count, alias="People")],
+    )
+    sql, _ = SQLBuilder(ctx).build_aggregate(spec)
+    assert 'ORDER BY "age" ASC NULLS LAST' in sql
+
+
+def test_categories_still_come_biggest_first(ctx):
+    spec = QuerySpec(
+        dimensions=[Dimension(variable="region")],
+        measures=[Measure(agg=Aggregation.count, alias="n")],
+    )
+    sql, _ = SQLBuilder(ctx).build_aggregate(spec)
+    assert 'ORDER BY "n" DESC NULLS LAST' in sql
+
+
+def test_top_n_on_a_date_axis_still_ranks_by_size(ctx):
+    """An explicit limit collapses the rest into Other, which needs the ranking."""
+    spec = QuerySpec(
+        dimensions=[Dimension(variable="visited_at", limit=5)],
+        measures=[Measure(agg=Aggregation.count, alias="n")],
+    )
+    sql, _ = SQLBuilder(ctx).build_aggregate(spec)
+    assert 'ORDER BY "n" DESC NULLS LAST' in sql
+
+
+def test_an_explicit_sort_still_wins_on_a_date_axis(ctx):
+    spec = QuerySpec(
+        dimensions=[Dimension(variable="visited_at")],
+        measures=[Measure(agg=Aggregation.count, alias="n")],
+        sort=[SortSpec(field="n", direction="desc")],
+    )
+    sql, _ = SQLBuilder(ctx).build_aggregate(spec)
+    assert 'ORDER BY "n" DESC NULLS LAST' in sql
+
+
+# --- what a filter value is compared against --------------------------------
+#
+# Whether a variable is numeric and whether its column holds numbers are two
+# different questions, and only the second one decides how a filter value has
+# to be bound. Asking the first is what made "age over 15" fail on a census:
+# age is stored as a number and classified as a code set, because it carries
+# labels for "don't know" and "refused".
+
+
+def _one(info: VariableInfo, operator: FilterOperator, value: object) -> list:
+    """The parameters a single-condition filter binds."""
+    ctx = DatasetContext(
+        dataset_id="d", parquet_path="/data/d.parquet", variables={info.name: info}
+    )
+    builder = SQLBuilder(ctx)
+    builder.params = []
+    builder.filter_sql(
+        FilterGroup(
+            op="and",
+            conditions=[Condition(variable=info.name, operator=operator, value=value)],
+        )
+    )
+    return builder.params
+
+
+@pytest.mark.parametrize("stored", ["DOUBLE", "float64", "BIGINT", "int64", "DECIMAL(18,3)"])
+def test_a_numeric_column_read_as_a_code_set_still_compares_as_a_number(stored):
+    """The reported failure, in both vocabularies the two ingest paths write."""
+    age = VariableInfo(
+        name="age",
+        label="Age",
+        var_type="categorical",
+        value_labels={"98": "Don't know", "99": "Refused"},
+        storage_type=stored,
+    )
+    assert age.is_numeric is False, "it is a code set to the analyst"
+    assert age.holds_numbers is True, "and a number to the database"
+    (bound,) = _one(age, FilterOperator.gt, "15")
+    assert bound == 15
+    assert not isinstance(bound, str), "bound as a number, not as text"
+
+
+def test_a_column_that_holds_text_is_left_alone():
+    """The other half of the same rule.
+
+    An identifier stored as "007" has to go on matching "007". Coercing it to
+    7.0 would not merely be wasteful; it would stop the filter matching.
+    """
+    ident = VariableInfo(
+        name="hh_id", label="Household", var_type="categorical", storage_type="VARCHAR"
+    )
+    assert ident.holds_numbers is False
+    assert _one(ident, FilterOperator.eq, "007") == ["007"]
+
+
+@pytest.mark.parametrize("stored", ["datetime64[ns]", "TIMESTAMP", "DATE"])
+def test_a_date_is_not_a_number(stored):
+    """"datetime64" carries digits and none of them make it a quantity."""
+    when = VariableInfo(name="seen", var_type="datetime", storage_type=stored)
+    assert when.holds_numbers is False
+
+
+def test_an_unrecorded_storage_type_falls_back_to_the_variable_kind():
+    """A dataset from an ingest too old to have written one.
+
+    Nothing is known about the column, so the decision is the one this used to
+    make on its own - no worse than before, and put right by a re-import.
+    """
+    numeric = VariableInfo(name="age", var_type="numeric", storage_type="")
+    coded = VariableInfo(name="status", var_type="categorical", storage_type="")
+    assert numeric.holds_numbers is True
+    assert coded.holds_numbers is False
+
+
+def test_every_comparison_binds_the_number(ctx):
+    """Not only greater-than: between and IN reach the same coercion."""
+    age = VariableInfo(
+        name="age", var_type="categorical", value_labels={"99": "Refused"},
+        storage_type="DOUBLE",
+    )
+    assert _one(age, FilterOperator.between, ["15", "64"]) == [15.0, 64.0]
+    assert _one(age, FilterOperator.in_, ["15", "16"]) == [15.0, 16.0]
+    assert _one(age, FilterOperator.lte, "64") == [64.0]
+
+
+# --- and bound in the column's own family -----------------------------------
+#
+# Reading the value as a number is the first half. Binding it in the family the
+# column is stored in is the second: a value that goes through `float` on its
+# way to a wide integer or a long decimal arrives as a near neighbour, and a
+# near neighbour does not fail - it matches the wrong rows.
+
+
+def test_a_wide_integer_keeps_every_digit():
+    """2**53 + 1, the first whole number a double cannot hold.
+
+    As a float it becomes 9007199254740992.0, which is a different household.
+    """
+    household = VariableInfo(
+        name="hh_id", var_type="categorical", storage_type="BIGINT"
+    )
+    (bound,) = _one(household, FilterOperator.eq, "9007199254740993")
+    assert bound == 9007199254740993
+    assert float(bound) != bound or isinstance(bound, int)
+    assert str(bound) == "9007199254740993", "not 9007199254740992"
+
+
+def test_a_long_decimal_keeps_every_digit():
+    """A decimal with more significant digits than a double carries."""
+    amount = VariableInfo(
+        name="amount", var_type="numeric", storage_type="DECIMAL(38,10)"
+    )
+    (bound,) = _one(amount, FilterOperator.eq, "1234567890123456.1234567891")
+    assert bound == Decimal("1234567890123456.1234567891")
+    assert str(bound) == "1234567890123456.1234567891"
+
+
+def test_a_fraction_against_a_column_of_whole_numbers_is_not_truncated():
+    """"age >= 2.5" has to stay 2.5.
+
+    Rounding it down to 2 would let every 2 through, which is the same class of
+    silent mismatch the other way round.
+    """
+    age = VariableInfo(name="age", var_type="categorical", storage_type="int64")
+    (bound,) = _one(age, FilterOperator.gte, "2.5")
+    assert bound == Decimal("2.5")
+
+
+def test_a_float_column_is_still_bound_as_a_float():
+    """Nothing is gained by making every filter carry a Decimal."""
+    height = VariableInfo(name="height", var_type="numeric", storage_type="DOUBLE")
+    (bound,) = _one(height, FilterOperator.gt, "1.75")
+    assert isinstance(bound, float)
+
+
+def test_a_value_that_is_not_a_number_matches_nothing_and_is_never_a_nought():
+    """No number equals "unknown", so the comparison matches no row.
+
+    Turning it into a 0 would be the worst answer: a filter that runs and
+    answers the wrong question. Binding it as it came was the next worst: DuckDB
+    refused to compare it with the number column and failed the whole query,
+    and with it every widget a page's filter reached.
+    """
+    age = VariableInfo(name="age", var_type="numeric", storage_type="BIGINT")
+    ctx = DatasetContext(dataset_id="d", parquet_path="/data/d.parquet", variables={"age": age})
+    builder = SQLBuilder(ctx)
+    where = builder.filter_sql(
+        FilterGroup(
+            op="and",
+            conditions=[Condition(variable="age", operator=FilterOperator.eq, value="unknown")],
+        )
+    )
+    assert builder.params == [] and "FALSE" in where
+    # None is not text that is no number; it goes through as it always has.
+    assert _one(age, FilterOperator.eq, None) == [None]
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [
+        ("BIGINT", "integer"),
+        ("int64", "integer"),
+        ("HUGEINT", "integer"),
+        ("uint8", "integer"),
+        ("DECIMAL(18,3)", "decimal"),
+        ("NUMERIC", "decimal"),
+        ("DOUBLE", "float"),
+        ("float64", "float"),
+        ("REAL", "float"),
+        ("VARCHAR", ""),
+        ("BOOLEAN", ""),
+        ("TIMESTAMP", ""),
+    ],
+)
+def test_the_storage_families(stored, expected):
+    assert VariableInfo(name="v", storage_type=stored).number_kind == expected

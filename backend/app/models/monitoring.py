@@ -1,0 +1,289 @@
+"""Indicators, alerts and data quality rules - the monitoring core."""
+
+from __future__ import annotations
+
+import datetime as dt
+import enum
+
+from sqlalchemy import (
+    JSON,
+    BigInteger,
+    Boolean,
+    Date,
+    DateTime,
+    Enum,
+    Float,
+    ForeignKey,
+    Integer,
+    String,
+    Text,
+    text,
+)
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.db.base import Base, TimestampMixin, UUIDMixin
+
+
+class Direction(str, enum.Enum):
+    """Whether a rising value is good or bad, used for colour coding."""
+
+    higher_is_better = "higher_is_better"
+    lower_is_better = "lower_is_better"
+    neutral = "neutral"
+
+
+class Severity(str, enum.Enum):
+    info = "info"
+    warning = "warning"
+    critical = "critical"
+
+
+class AlertStatus(str, enum.Enum):
+    open = "open"
+    acknowledged = "acknowledged"
+    resolved = "resolved"
+
+
+# Three tables share the severity type; declare it once.
+severity_type = Enum(Severity, name="alert_severity")
+
+
+class CheckType(str, enum.Enum):
+    missing_rate = "missing_rate"
+    value_range = "value_range"
+    duplicates = "duplicates"
+    outliers = "outliers"
+    consistency = "consistency"
+    interview_duration = "interview_duration"
+    gps_missing = "gps_missing"
+    constant_value = "constant_value"
+    logic = "logic"
+    # Records alike enough to be one person or household entered twice: names
+    # spelled differently, an age a year apart. See services/likely_duplicates.
+    likely_duplicates = "likely_duplicates"
+
+
+class Indicator(UUIDMixin, TimestampMixin, Base):
+    """A single tracked number, e.g. 'completed interviews' or 'mean age'."""
+
+    __tablename__ = "indicators"
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="")
+    dataset_id: Mapped[str] = mapped_column(
+        ForeignKey("datasets.id", ondelete="CASCADE"), index=True
+    )
+    # A query spec producing exactly one measure and at most one dimension
+    spec: Mapped[dict] = mapped_column(JSON, default=dict)
+    unit: Mapped[str] = mapped_column(String(40), default="")
+    value_format: Mapped[str] = mapped_column(String(40), default="number")
+    target_value: Mapped[float | None] = mapped_column(Float)
+    # The day the target is meant to be met by, if there is one: the end of
+    # fieldwork. With it the tile can say how many a day it now takes, which
+    # is the figure a field manager plans the week around.
+    target_date: Mapped[dt.date | None] = mapped_column(Date, nullable=True)
+    warning_threshold: Mapped[float | None] = mapped_column(Float)
+    critical_threshold: Mapped[float | None] = mapped_column(Float)
+    direction: Mapped[Direction] = mapped_column(
+        Enum(Direction, name="indicator_direction"), default=Direction.higher_is_better
+    )
+    # Optional variable used to break the indicator down (region, team, ...)
+    breakdown_variable: Mapped[str] = mapped_column(String(300), default="")
+    # A target per category of that breakdown: {"Male": 1200, "Female": 1300}.
+    # A survey's quota is rarely one number - it is so many interviews in each
+    # region, so many of each sex - and judging every group against the single
+    # headline target called a group on track when it was not, because the
+    # headline is the sum of quotas that are not equal. Categories with no
+    # entry here fall back to the headline target, which is what an indicator
+    # broken down purely for interest should do.
+    breakdown_targets: Mapped[dict] = mapped_column(
+        JSON, default=dict, server_default=text("'{}'")
+    )
+    # A shared target set, which wins over the inline targets above. Inline
+    # targets stay for the indicators that already carry them and for the small
+    # case - four provinces typed in once - where a separate record would be
+    # ceremony. Set this and the list lives in one place for every indicator
+    # reading it.
+    target_set_id: Mapped[str | None] = mapped_column(
+        ForeignKey("target_sets.id", ondelete="SET NULL"), index=True, nullable=True
+    )
+    # An indicator defined as arithmetic over named parts instead of as one
+    # aggregate: {"expression": "done / issued * 100", "parts": [...]}, each
+    # part an aggregate with its own filter. Empty for an indicator defined the
+    # plain way, which is most of them and all of the old ones. A rate between
+    # two different counts - refusals per interview, the share among those who
+    # answered - cannot be written as one aggregate and a denominator of every
+    # row, and that is the shape most of a survey office's real indicators have.
+    formula: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'"))
+    # What the value is a percentage of, if it is one. Empty means it is a
+    # plain number. "all_rows" divides by every row in the dataset before the
+    # indicator's own filters, which is how "% of interviews completed" is
+    # expressed: the filters pick the completed ones, this says what they are a
+    # share of. "answered" divides by the rows that answered the measured
+    # variable, which is the same question asked of a variable rather than of
+    # the file - the share among those who were asked.
+    percent_of: Mapped[str] = mapped_column(
+        String(20), default="", server_default=text("''")
+    )
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    display_order: Mapped[int] = mapped_column(Integer, default=0)
+
+    last_value: Mapped[float | None] = mapped_column(Float)
+    last_computed_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Loaded with the indicator rather than on demand: every list of
+    # indicators asks each one for its quotas, and a lazy load there is a query
+    # per tile on the page.
+    target_set: Mapped[TargetSet | None] = relationship(lazy="selectin")
+
+    snapshots: Mapped[list[IndicatorSnapshot]] = relationship(
+        back_populates="indicator",
+        cascade="all, delete-orphan",
+        order_by="desc(IndicatorSnapshot.computed_at)",
+    )
+
+
+class TargetSet(UUIDMixin, TimestampMixin, Base):
+    """A quota per category of one variable, kept as a thing of its own.
+
+    A census carries its targets as a list: so many households in each of two
+    thousand enumeration areas. That list is not an attribute of one indicator.
+    It is prepared before fieldwork, by somebody who is not watching a
+    dashboard, it outlives the indicators that read it, and the same list is
+    usually read by several of them - households enumerated, questionnaires
+    received, interviews verified, all against the same area quotas.
+
+    Kept inside an indicator it had to be retyped for each one and could be
+    looked at only through that indicator's tile. So it is its own record,
+    pointed at by the indicators that use it, and free to be drawn however the
+    reader wants.
+
+    `targets` is {category: number}, keyed by the value as the data holds it.
+    Two thousand entries is a 40 KB JSON column, which is nothing to Postgres
+    and far simpler than a row per category: nothing joins against it, nothing
+    queries inside it, and it is always read whole.
+    """
+
+    __tablename__ = "target_sets"
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="")
+    # The dataset the categories belong to, which is also what decides who can
+    # see the set: a target list is as sensitive as the survey it is for.
+    dataset_id: Mapped[str] = mapped_column(
+        ForeignKey("datasets.id", ondelete="CASCADE"), index=True
+    )
+    # The variable whose values the keys are: "EA_Id", "province", "sex".
+    variable: Mapped[str] = mapped_column(String(300), default="")
+    targets: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'"))
+
+
+class IndicatorSnapshot(UUIDMixin, Base):
+    """Historical values, so the platform can show trends over the field period."""
+
+    __tablename__ = "indicator_snapshots"
+
+    indicator_id: Mapped[str] = mapped_column(
+        ForeignKey("indicators.id", ondelete="CASCADE"), index=True
+    )
+    value: Mapped[float | None] = mapped_column(Float)
+    breakdown: Mapped[dict] = mapped_column(JSON, default=dict)
+    computed_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
+
+    indicator: Mapped[Indicator] = relationship(back_populates="snapshots")
+
+
+class AlertRule(UUIDMixin, TimestampMixin, Base):
+    __tablename__ = "alert_rules"
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str] = mapped_column(Text, default="")
+    indicator_id: Mapped[str | None] = mapped_column(
+        ForeignKey("indicators.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    dataset_id: Mapped[str | None] = mapped_column(
+        ForeignKey("datasets.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    # {"operator": "lt", "value": 100} evaluated against the indicator value
+    condition: Mapped[dict] = mapped_column(JSON, default=dict)
+    severity: Mapped[Severity] = mapped_column(severity_type, default=Severity.warning)
+    # ["in_app", "email"]
+    channels: Mapped[list] = mapped_column(JSON, default=lambda: ["in_app"])
+    recipients: Mapped[list] = mapped_column(JSON, default=list)
+    cooldown_minutes: Mapped[int] = mapped_column(Integer, default=60)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_triggered_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
+    alerts: Mapped[list[Alert]] = relationship(
+        back_populates="rule", cascade="all, delete-orphan"
+    )
+
+
+class Alert(UUIDMixin, Base):
+    __tablename__ = "alerts"
+
+    rule_id: Mapped[str | None] = mapped_column(
+        ForeignKey("alert_rules.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    title: Mapped[str] = mapped_column(String(300), default="")
+    message: Mapped[str] = mapped_column(Text, default="")
+    severity: Mapped[Severity] = mapped_column(severity_type, default=Severity.warning)
+    status: Mapped[AlertStatus] = mapped_column(
+        Enum(AlertStatus, name="alert_status"), default=AlertStatus.open, index=True
+    )
+    payload: Mapped[dict] = mapped_column(JSON, default=dict)
+    created_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    acknowledged_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    acknowledged_by: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    resolved_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+
+    rule: Mapped[AlertRule | None] = relationship(back_populates="alerts")
+
+
+class QualityRule(UUIDMixin, TimestampMixin, Base):
+    """Automated data quality check run against a dataset."""
+
+    __tablename__ = "quality_rules"
+
+    name: Mapped[str] = mapped_column(String(200), nullable=False)
+    dataset_id: Mapped[str] = mapped_column(
+        ForeignKey("datasets.id", ondelete="CASCADE"), index=True
+    )
+    check_type: Mapped[CheckType] = mapped_column(Enum(CheckType, name="check_type"))
+    # Check specific parameters, e.g. {"variable": "age", "min": 0, "max": 120}
+    config: Mapped[dict] = mapped_column(JSON, default=dict)
+    # Restricts the check to part of the dataset - one region, completed
+    # interviews only, one round. Both the failing rows and the total are
+    # counted within it, so the failure rate stays a rate of what was checked.
+    filters: Mapped[dict] = mapped_column(
+        JSON, default=dict, server_default=text("'{}'")
+    )
+    severity: Mapped[Severity] = mapped_column(severity_type, default=Severity.warning)
+    # Fail the check when the share of offending rows exceeds this fraction
+    threshold: Mapped[float] = mapped_column(Float, default=0.0)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+
+    results: Mapped[list[QualityResult]] = relationship(
+        back_populates="rule",
+        cascade="all, delete-orphan",
+        order_by="desc(QualityResult.run_at)",
+    )
+
+
+class QualityResult(UUIDMixin, Base):
+    __tablename__ = "quality_results"
+
+    rule_id: Mapped[str] = mapped_column(
+        ForeignKey("quality_rules.id", ondelete="CASCADE"), index=True
+    )
+    run_at: Mapped[dt.datetime] = mapped_column(DateTime(timezone=True), index=True)
+    passed: Mapped[bool] = mapped_column(Boolean, default=True)
+    failed_rows: Mapped[int] = mapped_column(BigInteger, default=0)
+    total_rows: Mapped[int] = mapped_column(BigInteger, default=0)
+    failure_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    details: Mapped[dict] = mapped_column(JSON, default=dict)
+    message: Mapped[str] = mapped_column(Text, default="")
+
+    rule: Mapped[QualityRule] = relationship(back_populates="results")

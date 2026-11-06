@@ -1,0 +1,1926 @@
+// Builds ECharts options from a QueryResult.
+//
+// Colour follows the validated categorical palette below: hues are assigned in a
+// fixed order and never cycled, so a series keeps its colour when a filter
+// changes the series count. Three of the eight slots fall under 3:1 contrast on
+// a white surface, which is why every chart ships a legend and a table view
+// (ChartCard's "Table" toggle) rather than relying on colour alone.
+
+import type { EChartsOption } from 'echarts'
+import type { ChartType, QueryResult } from './types'
+import { escapeHtml, formatCell, formatNumber } from './format'
+
+/**
+ * Categorical themes: the same eight validated hues in different fixed orders.
+ *
+ * A theme is an *ordering*, not a new set of colours - the hues have already
+ * passed the lightness, chroma, colour-vision and contrast checks, and inventing
+ * new ones would mean re-earning all of that. What the order controls is how
+ * well *adjacent* series separate, since those are the ones a reader compares.
+ *
+ * These orders were not chosen by eye. Random orderings were fed to the
+ * palette validator and scored on their worst adjacent separation under
+ * simulated colour-vision deficiency; the figures below are that score, in
+ * OKLab ΔE ×100, measured against the light chart surface. Higher is better and
+ * 8 is the floor.
+ *
+ * Three of the eight hues sit under 3:1 contrast on white whichever order they
+ * are in, which is why every chart carries a legend and a table view rather
+ * than relying on colour alone.
+ */
+export const CHART_THEMES = {
+  // The original order. Kept as the default so that switching versions does not
+  // repaint every existing dashboard.
+  default: {
+    label: 'Default',
+    description: 'Blue-led, the order dashboards were built in',
+    colors: [
+      '#2a78d6', // blue
+      '#eb6834', // orange
+      '#1baf7a', // aqua
+      '#eda100', // yellow
+      '#e87ba4', // magenta
+      '#008300', // green
+      '#4a3aa7', // violet
+      '#e34948', // red
+    ],
+  },
+  // Worst adjacent ΔE 15.3 (protan), normal-vision 20.8 - the best separation
+  // found, and a clear improvement on the default's 9.1.
+  vivid: {
+    label: 'High separation',
+    description: 'Adjacent series stay furthest apart for colour-blind readers',
+    colors: [
+      '#e87ba4', // magenta
+      '#008300', // green
+      '#eda100', // yellow
+      '#e34948', // red
+      '#4a3aa7', // violet
+      '#1baf7a', // aqua
+      '#2a78d6', // blue
+      '#eb6834', // orange
+    ],
+  },
+  // Worst adjacent ΔE 15.2 (protan), normal-vision 15.6.
+  bold: {
+    label: 'Bold',
+    description: 'Warm lead, near-equal separation',
+    colors: [
+      '#e34948', // red
+      '#2a78d6', // blue
+      '#1baf7a', // aqua
+      '#008300', // green
+      '#e87ba4', // magenta
+      '#eda100', // yellow
+      '#4a3aa7', // violet
+      '#eb6834', // orange
+    ],
+  },
+  // --- The Pacific Island members of the Pacific Community (SPC) ---------
+  //
+  // One for each of the 22 countries and territories, led by its flag's own
+  // colours - deepened where a flag's yellow or light blue would vanish as a
+  // bar on white - and filled out to eight with hues set apart from them, so a
+  // chart of eight series still tells each from the next. Each goes with the
+  // country's look in lib/looks.ts, which chooses it when the look is.
+  american_samoa: {
+    label: 'American Samoa',
+    description: "From the flag: navy, red and the eagle's gold",
+    group: 'pacific',
+    colors: [
+      '#002b7f',
+      '#bf0a30',
+      '#c8961e',
+      '#4f86c6',
+      '#8c5a2b',
+      '#2e8b57',
+      '#7a5195',
+      '#e07b39',
+    ],
+  },
+  cook_islands: {
+    label: 'Cook Islands',
+    description: 'From the flag: the blue ensign and its ring of white stars',
+    group: 'pacific',
+    colors: [
+      '#00247d',
+      '#cf142b',
+      '#2a9d8f',
+      '#f4a300',
+      '#4f86c6',
+      '#2e8b57',
+      '#8e5ba6',
+      '#e76f51',
+    ],
+  },
+  micronesia: {
+    label: 'Federated States of Micronesia',
+    description: 'From the flag: light blue and four white stars',
+    group: 'pacific',
+    colors: [
+      '#1f6fb2',
+      '#e07b39',
+      '#75b2dd',
+      '#2e8b57',
+      '#c99700',
+      '#7a5195',
+      '#c8102e',
+      '#5b6b7f',
+    ],
+  },
+  fiji: {
+    label: 'Fiji',
+    description: "From the flag: light blue, the Union's navy and the shield's red and gold",
+    group: 'pacific',
+    colors: [
+      '#1c8cc4',
+      '#002868',
+      '#ce1126',
+      '#f2a900',
+      '#2e8b57',
+      '#7a5195',
+      '#e76f51',
+      '#5b6b7f',
+    ],
+  },
+  french_polynesia: {
+    label: 'French Polynesia',
+    description: "From the flag: red and white, with the emblem's gold and sea blue",
+    group: 'pacific',
+    colors: [
+      '#ce1126',
+      '#003f87',
+      '#e3a600',
+      '#2a9d8f',
+      '#7a5195',
+      '#e07b39',
+      '#2e8b57',
+      '#5b6b7f',
+    ],
+  },
+  guam: {
+    label: 'Guam',
+    description: "From the flag: deep blue, the red border and the emblem's palm and sand",
+    group: 'pacific',
+    colors: [
+      '#00297b',
+      '#c62139',
+      '#3a9bdc',
+      '#2e8b57',
+      '#d4a017',
+      '#7a5195',
+      '#e07b39',
+      '#5b6b7f',
+    ],
+  },
+  kiribati: {
+    label: 'Kiribati',
+    description: 'From the flag: the red sky, the golden sun and frigatebird, and the blue sea',
+    group: 'pacific',
+    colors: [
+      '#ce1126',
+      '#003f87',
+      '#e0a800',
+      '#3a9bdc',
+      '#2e8b57',
+      '#7a5195',
+      '#e07b39',
+      '#5b6b7f',
+    ],
+  },
+  marshall_islands: {
+    label: 'Marshall Islands',
+    description: 'From the flag: blue, with its orange and white rays',
+    group: 'pacific',
+    colors: [
+      '#003893',
+      '#dd7500',
+      '#7fa7d9',
+      '#2e8b57',
+      '#b8860b',
+      '#c8102e',
+      '#6a4c93',
+      '#5b6b7f',
+    ],
+  },
+  nauru: {
+    label: 'Nauru',
+    description: 'From the flag: blue, the golden line of the equator and the white star',
+    group: 'pacific',
+    colors: [
+      '#002b7f',
+      '#e8a800',
+      '#4f86c6',
+      '#c8102e',
+      '#2e8b57',
+      '#6a4c93',
+      '#e07b39',
+      '#5b6b7f',
+    ],
+  },
+  new_caledonia: {
+    label: 'New Caledonia',
+    description: 'From the flag: the blue, red and green of the Kanak flag, and its yellow sun',
+    group: 'pacific',
+    colors: [
+      '#0035ad',
+      '#ed2939',
+      '#009543',
+      '#e0b000',
+      '#3a3a3a',
+      '#7a5195',
+      '#3a9bdc',
+      '#e07b39',
+    ],
+  },
+  niue: {
+    label: 'Niue',
+    description: "From the flag: gold, with the Union's navy and red",
+    group: 'pacific',
+    colors: [
+      '#d4a900',
+      '#012169',
+      '#c8102e',
+      '#3a9bdc',
+      '#2e8b57',
+      '#7a5195',
+      '#e07b39',
+      '#5b6b7f',
+    ],
+  },
+  northern_mariana: {
+    label: 'Northern Mariana Islands',
+    description: 'From the flag: blue, the white star and the grey latte stone',
+    group: 'pacific',
+    colors: [
+      '#0071bc',
+      '#e07b39',
+      '#808b96',
+      '#2e8b57',
+      '#c8102e',
+      '#d4a017',
+      '#6a4c93',
+      '#0f8b8d',
+    ],
+  },
+  palau: {
+    label: 'Palau',
+    description: 'From the flag: ocean blue and the golden full moon',
+    group: 'pacific',
+    colors: [
+      '#1e88b8',
+      '#e3b500',
+      '#0f4c75',
+      '#2e8b57',
+      '#e07b39',
+      '#7a5195',
+      '#c8102e',
+      '#5b6b7f',
+    ],
+  },
+  png: {
+    label: 'Papua New Guinea',
+    description: 'From the flag: black and red, with the golden bird of paradise',
+    group: 'pacific',
+    colors: [
+      '#ce1126',
+      '#222222',
+      '#e0a800',
+      '#3a9bdc',
+      '#2e8b57',
+      '#7a5195',
+      '#e07b39',
+      '#8c6d4f',
+    ],
+  },
+  pitcairn: {
+    label: 'Pitcairn Islands',
+    description: 'From the flag: the blue ensign and the green and gold of the arms',
+    group: 'pacific',
+    colors: [
+      '#012169',
+      '#2e8b57',
+      '#c8102e',
+      '#e0a800',
+      '#3a9bdc',
+      '#7a5195',
+      '#e07b39',
+      '#5b6b7f',
+    ],
+  },
+  samoa: {
+    label: 'Samoa',
+    description: 'From the flag: red, with the blue canton and the Southern Cross',
+    group: 'pacific',
+    colors: [
+      '#ce1126',
+      '#002b7f',
+      '#e0a800',
+      '#3a9bdc',
+      '#2e8b57',
+      '#7a5195',
+      '#e07b39',
+      '#5b6b7f',
+    ],
+  },
+  solomon_islands: {
+    label: 'Solomon Islands',
+    description: 'From the flag: blue sea and green land, with the yellow sunlit band',
+    group: 'pacific',
+    colors: [
+      '#0051ba',
+      '#215b33',
+      '#e0a800',
+      '#3a9bdc',
+      '#c8102e',
+      '#7a5195',
+      '#6fae4b',
+      '#e07b39',
+    ],
+  },
+  tokelau: {
+    label: 'Tokelau',
+    description: 'From the flag: blue, the yellow canoe and the Southern Cross',
+    group: 'pacific',
+    colors: [
+      '#00247d',
+      '#e0a800',
+      '#3a9bdc',
+      '#c8102e',
+      '#2e8b57',
+      '#7a5195',
+      '#e07b39',
+      '#5b6b7f',
+    ],
+  },
+  tonga: {
+    label: 'Tonga',
+    description: 'From the flag: crimson and white',
+    group: 'pacific',
+    colors: [
+      '#c10000',
+      '#5b6b7f',
+      '#e0a800',
+      '#1f6fb2',
+      '#2e8b57',
+      '#7a5195',
+      '#e07b39',
+      '#0f8b8d',
+    ],
+  },
+  tuvalu: {
+    label: 'Tuvalu',
+    description: "From the flag: sky blue, the Union's navy and nine gold stars",
+    group: 'pacific',
+    colors: [
+      '#0089b8',
+      '#e0a800',
+      '#012169',
+      '#c8102e',
+      '#2e8b57',
+      '#7a5195',
+      '#e07b39',
+      '#5b6b7f',
+    ],
+  },
+  vanuatu: {
+    label: 'Vanuatu',
+    description: "From the flag: green, red and black, with the golden boar's tusk",
+    group: 'pacific',
+    colors: [
+      '#009543',
+      '#d21034',
+      '#e0a800',
+      '#2b2b2b',
+      '#3a9bdc',
+      '#7a5195',
+      '#e07b39',
+      '#5b6b7f',
+    ],
+  },
+  wallis_futuna: {
+    label: 'Wallis and Futuna',
+    description: "From the flag: red and white, with the tricolour's blue",
+    group: 'pacific',
+    colors: [
+      '#ed2939',
+      '#002395',
+      '#e0a800',
+      '#3a9bdc',
+      '#2e8b57',
+      '#7a5195',
+      '#e07b39',
+      '#5b6b7f',
+    ],
+  },
+} as const
+
+export type ChartTheme = keyof typeof CHART_THEMES
+
+export function themeColors(theme: string | null | undefined): readonly string[] {
+  return (CHART_THEMES[(theme ?? 'default') as ChartTheme] ?? CHART_THEMES.default).colors
+}
+
+/** The default order, for callers that do not carry a theme. */
+export const SERIES_COLORS = CHART_THEMES.default.colors
+
+/** Single-hue ramp for magnitude (heatmaps). Light to dark. */
+export const SEQUENTIAL_RAMP = ['#cde2fb', '#9ec5f4', '#6da7ec', '#3987e5', '#256abf', '#184f95']
+
+export const STATUS_COLORS = {
+  ok: '#0ca30c',
+  good: '#0ca30c',
+  warning: '#fab219',
+  serious: '#ec835a',
+  critical: '#d03b3b',
+  unknown: '#898781',
+} as const
+
+const INK = {
+  muted: '#898781',
+  grid: '#e1e0d9',
+  axis: '#c3c2b7',
+  surface: '#ffffff',
+  primary: '#0b0b0b',
+}
+
+// Charts asked for Inter for a long time while nothing loaded it, so every
+// chart silently drew in the next entry down. Inter is on the server now and
+// is one of the fonts a board can be set in, but a chart with no font of its
+// own should match the interface rather than pick a face - so the stack here
+// is the interface's own, and nothing else.
+const BASE_TEXT = {
+  fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif',
+  fontSize: 12,
+}
+
+/**
+ * The five numbers a box plot is drawn from, in the order ECharts wants them.
+ *
+ * Named rather than positional: a saved chart can carry its measures in any
+ * order, and matching on the column name is what stops a box drawn upside down
+ * when somebody reorders them in the builder. Every one of these is an
+ * aggregation the query engine already had, so a box plot is a way of drawing
+ * a query rather than a new thing to compute.
+ */
+export const BOX_MEASURES = [
+  { alias: 'box_min', agg: 'min', label: 'Minimum' },
+  { alias: 'box_p25', agg: 'p25', label: 'Lower quartile' },
+  { alias: 'box_median', agg: 'median', label: 'Median' },
+  { alias: 'box_p75', agg: 'p75', label: 'Upper quartile' },
+  { alias: 'box_max', agg: 'max', label: 'Maximum' },
+] as const
+
+/** More than this many categories and the tail is folded into "Other". */
+export const MAX_SERIES = 8
+
+function axisCommon(rotate = 0) {
+  return {
+    axisLine: { lineStyle: { color: INK.axis } },
+    axisTick: { show: false },
+    axisLabel: { color: INK.muted, ...BASE_TEXT, rotate, hideOverlap: true },
+    splitLine: { show: false },
+  }
+}
+
+function valueAxis(name = '') {
+  return {
+    type: 'value' as const,
+    name,
+    nameTextStyle: { color: INK.muted, ...BASE_TEXT },
+    axisLine: { show: false },
+    axisTick: { show: false },
+    axisLabel: {
+      color: INK.muted,
+      ...BASE_TEXT,
+      // Ticks that cannot both be read are not both drawn. At 20px on a narrow
+      // widget the labels of a 0-3 axis land on top of each other, and a smear
+      // of overlapping digits is worse than four ticks instead of seven.
+      hideOverlap: true,
+      // Small ranges (coordinates, rates) need decimals, or consecutive ticks
+      // round to the same label. Large ones get the compact k/M form.
+      formatter: (value: number) =>
+        Math.abs(value) < 10 && !Number.isInteger(value)
+          ? value.toLocaleString(undefined, { maximumFractionDigits: 2 })
+          : formatNumber(value),
+    },
+    // Recessive hairline grid
+    splitLine: { lineStyle: { color: INK.grid, width: 1 } },
+  }
+}
+
+const tooltipBase = {
+  backgroundColor: '#ffffff',
+  borderColor: INK.grid,
+  borderWidth: 1,
+  padding: [8, 12] as [number, number],
+  textStyle: { color: INK.primary, ...BASE_TEXT },
+  extraCssText: 'box-shadow: 0 10px 30px rgba(15,23,42,.12); border-radius: 8px;',
+  // Hung off <body> rather than off the chart, so it is not cut in half by the
+  // widget it belongs to.
+  //
+  // ECharts keeps a tooltip inside its chart while it fits, so most of them
+  // never had a problem. One wider than the chart cannot be kept inside, and
+  // that one got as far as the widget's edge and was cut: a donut of interview
+  // statuses in a quarter-width panel showed "rovedByHeadquarters" and half a
+  // percentage, which is the one widget on the board where the label is the
+  // whole point. A dashboard widget is a card with its contents clipped, which
+  // is right for the contents and wrong for a tooltip, and a tooltip is not
+  // contents - it is a thing that floats over the page.
+  //
+  // ECharts gives the floating element a z-index far above anything this
+  // interface uses, so it also reads over an expanded widget and over a modal.
+  appendToBody: true,
+}
+
+export interface BuildOptions {
+  horizontal?: boolean
+  stacked?: boolean
+  showLegend?: boolean
+  /** Which categorical ordering to use; see CHART_THEMES. */
+  theme?: string
+  /** How the categories are ordered along the axis. */
+  sort?: 'none' | 'value_desc' | 'value_asc' | 'label_asc' | 'label_desc'
+  /** Keep the largest N categories and fold the rest into one "Other" bar. */
+  topN?: number
+  /** Print the number on the mark. Bars and slices only - see below. */
+  showValues?: boolean
+  /** Stack to 100%, for reading composition rather than magnitude. */
+  percentStack?: boolean
+  /**
+   * How one series of bars is drawn.
+   *
+   * - `bars`, the default.
+   * - `lollipop`: a dot on a thin stem. The same lengths with a tenth of the
+   *   ink, which is what keeps twenty options readable in a quarter tile.
+   * - `track`: each bar on a pale bar running the whole axis - to 100 where
+   *   the figures are percentages - so each is read as a share of everyone
+   *   rather than against the longest. That is the right reading of a "tick
+   *   all that apply" question, whose shares do not add to a whole.
+   *
+   * Several series, or a stack, are always plain bars: a lollipop per series
+   * is a cloud of dots, and a track per stack segment means nothing.
+   */
+  barStyle?: 'bars' | 'lollipop' | 'track'
+  /** A heatmap's first dimension down the side rather than along the bottom,
+   *  which is where long names - a question's options - have room. */
+  transpose?: boolean
+  /**
+   * Names down the side wrap onto a second line rather than being cut short.
+   *
+   * Cutting keeps the start of a name, which is the part that says least
+   * when several begin alike: three combinations that all start "Soap and
+   * single lever type tap + ..." were three identical labels. Past two lines
+   * the name is cut after all, so one long label cannot run into the next.
+   */
+  wrapLabels?: boolean
+  smooth?: boolean
+  valueTitle?: string
+  valueMin?: number | null
+  valueMax?: number | null
+  /** A line across the plot, e.g. the target this chart is read against. */
+  referenceValue?: number | null
+  referenceLabel?: string
+  decimals?: number
+  /**
+   * The colour this widget's chart leads with.
+   *
+   * It takes the front of the theme's order rather than replacing it. A chart
+   * with one series is then simply the colour asked for; a chart with several
+   * keeps distinct hues behind it, because painting every series one colour
+   * would leave nothing but the legend telling them apart.
+   */
+  seriesColor?: string
+  /**
+   * Colours for specific series, by position. An empty entry keeps the theme's
+   * colour for that slot, so only the series that need pinning are named.
+   *
+   * For the one case where a series is not a category: "still to go" on a
+   * quota chart is an absence, and giving it a hue would set it competing with
+   * the value beside it.
+   */
+  seriesColors?: string[]
+  /**
+   * A colour per mark, by position, for the case where the marks are not a
+   * series but a set of states: a data quality chart, where each mark is a
+   * check that is passing or failing, or the split between those states, and
+   * the colour is the finding rather than decoration. Ignored on bars where
+   * there is more than one series, since colour is carrying the series there.
+   */
+  pointColors?: (string | undefined)[]
+  /**
+   * How much width a category label may take, in pixels, before it is cut
+   * short with an ellipsis. Set from the drawn width of the chart, because it
+   * is the only place that knows it: a horizontal bar chart of long names -
+   * data quality checks, questions - otherwise gives the labels whatever they
+   * ask for and leaves the bars a sliver at the right, and the larger the text
+   * the less is left.
+   */
+  maxLabelWidth?: number
+  /**
+   * How wide the chart was drawn, in pixels, where the caller measured it.
+   *
+   * Only the category labels under an upright bar use it, and they need the
+   * width itself rather than `maxLabelWidth`: what bounds a label there is the
+   * slot its own bar stands in, which is the plot divided by how many bars
+   * there are, not a fixed share of the chart.
+   */
+  chartWidth?: number
+  /** Font for this widget's chart text. */
+  fontFamily?: string
+  /** Colour for this widget's chart text: axes, their names, and the legend. */
+  fontColor?: string
+  /**
+   * How big the chart's text is, in pixels. Blank leaves it at 12.
+   *
+   * One size for the axes, the legend and the numbers printed on the marks,
+   * rather than a control for each: what makes somebody reach for this is a
+   * board on a wall across the room, or a widget shrunk to a quarter tile,
+   * and in both cases it is all of the text that is the wrong size.
+   */
+  fontSize?: number
+}
+
+/**
+ * Put a widget's chosen font and text colour through a built option.
+ *
+ * The alternative was threading two more arguments into every axis, legend and
+ * tooltip helper in this file. Only text-bearing keys are touched, and marks
+ * are left alone: a bar's own colour is data, not text.
+ *
+ * The value printed beside a mark is text like any other and takes the colour
+ * too. The one printed *on* a mark does not: it is white because it sits on a
+ * filled shape, and recolouring it to match the axis is how it disappears into
+ * the bar it is labelling.
+ *
+ * Neither does the tooltip. It is a pale card floating over the chart, not
+ * part of the widget: a colour chosen to read against a dark dashboard is
+ * white on white there, which is why hovering a chart on a black background
+ * showed a tooltip with nothing written in it. The typeface still travels,
+ * since a typeface is never unreadable.
+ */
+const TEXT_KEYS = ['textStyle', 'axisLabel', 'nameTextStyle', 'subtextStyle', 'label']
+
+function applyTextStyle(node: unknown, font?: string, color?: string, size?: number): void {
+  if (!font && !color && !size) return
+  if (Array.isArray(node)) {
+    for (const item of node) applyTextStyle(item, font, color, size)
+    return
+  }
+  if (!node || typeof node !== 'object') return
+  const record = node as Record<string, unknown>
+  for (const key of TEXT_KEYS) {
+    const target = record[key]
+    if (target && typeof target === 'object' && !Array.isArray(target)) {
+      const text = target as Record<string, unknown>
+      // A label sitting on a filled mark keeps its white, but not its size:
+      // the reason it is excluded is that recolouring it makes it vanish into
+      // the bar, and being the same size as the rest is exactly what it wants.
+      const insideMark = key === 'label' && text.position === 'inside'
+      // A copy into the option, never a write into the object found there.
+      // Some of them are module constants shared by every chart on the page:
+      // colouring one in place set the colour for all of them and kept it
+      // until the tab was reloaded, so styling one widget quietly restyled
+      // the labels of every other widget on the board.
+      record[key] = {
+        ...text,
+        ...(font ? { fontFamily: font } : {}),
+        ...(color && !insideMark ? { color } : {}),
+        ...(size ? { fontSize: size } : {}),
+      }
+    }
+  }
+  for (const [key, value] of Object.entries(record)) {
+    applyTextStyle(value, font, key === 'tooltip' ? undefined : color, size)
+  }
+}
+
+/** A fixed value-axis range, when one is asked for. */
+function bounds(options: BuildOptions) {
+  return {
+    ...(options.valueMin === null || options.valueMin === undefined
+      ? {}
+      : { min: options.valueMin }),
+    ...(options.valueMax === null || options.valueMax === undefined
+      ? {}
+      : { max: options.valueMax }),
+  }
+}
+
+/** A horizontal rule across the plot, for the target a chart is read against. */
+function referenceLine(options: BuildOptions) {
+  if (options.referenceValue === null || options.referenceValue === undefined) return undefined
+  return {
+    silent: true,
+    symbol: 'none',
+    label: {
+      formatter: options.referenceLabel || `Target ${formatNumber(options.referenceValue)}`,
+      // At the left end: at the right it runs off the edge of the plot, since
+      // nothing reserves room for it there.
+      position: 'insideStartTop' as const,
+      color: INK.muted,
+      ...BASE_TEXT,
+    },
+    lineStyle: { color: INK.axis, width: 2, type: 'dashed' as const },
+    data: [{ yAxis: options.referenceValue }],
+  }
+}
+
+/** Data labels, in a text token rather than the series colour.
+ *
+ * Off past a couple of dozen marks whatever was asked for: a number on every
+ * one of forty bars is a wall of digits that overlap each other, and the axis
+ * and the tooltip already carry them.
+ */
+const MAX_LABELLED = 24
+
+function markLabel(
+  options: BuildOptions,
+  position: 'top' | 'right' | 'inside',
+  marks = 0,
+  limit = MAX_LABELLED,
+) {
+  if (!options.showValues || marks > limit) return { show: false }
+  return {
+    show: true,
+    position,
+    color: position === 'inside' ? '#fff' : INK.muted,
+    ...BASE_TEXT,
+    // A mark's value is not always a bare number: a scatter point is [x, y]
+    // and a heatmap cell is [x, y, value], and Number() on either is NaN,
+    // which ECharts draws as a dash. The measure is the last element.
+    formatter: (params: any) => {
+      const raw = Array.isArray(params.value) ? params.value[params.value.length - 1] : params.value
+      return formatNumber(Number(raw), options.decimals ?? 0)
+    },
+  }
+}
+
+/**
+ * Shape a result into { categories, series }.
+ *
+ * One dimension + N measures -> one series per measure.
+ * Two dimensions + one measure -> one series per value of the second dimension.
+ */
+function pivot(result: QueryResult, fold = true) {
+  const dimensions = result.columns.filter((c) => c.type === 'dimension')
+  const measures = result.columns.filter((c) => c.type === 'measure')
+  const names = result.columns.map((c) => c.name)
+
+  if (dimensions.length >= 2 && measures.length >= 1) {
+    const rowIndex = names.indexOf(dimensions[0].name)
+    const colIndex = names.indexOf(dimensions[1].name)
+    const valIndex = names.indexOf(measures[0].name)
+
+    // Sets alongside the lists, not includes(). The membership test was a
+    // scan of everything seen so far, which is nothing for twelve education
+    // levels and quadratic in the number of categories - and a table of
+    // interview keys is tens of thousands of them. The lists are kept because
+    // first-seen order is the order the axis is built in.
+    const categories: string[] = []
+    const seriesNames: string[] = []
+    const seenCategory = new Set<string>()
+    const seenSeries = new Set<string>()
+    const lookup = new Map<string, number>()
+    // The cells the result itself left empty, as against ones it never
+    // mentioned. Only a heatmap tells them apart: "nobody chose both" is a
+    // nought, and "of those who chose it, all chose it" is not a figure at
+    // all. Every other mark draws both as nothing, as it always has.
+    const blank = new Set<string>()
+
+    for (const row of result.rows) {
+      const category = formatCell(row[rowIndex])
+      const seriesName = formatCell(row[colIndex])
+      if (!seenCategory.has(category)) {
+        seenCategory.add(category)
+        categories.push(category)
+      }
+      if (!seenSeries.has(seriesName)) {
+        seenSeries.add(seriesName)
+        seriesNames.push(seriesName)
+      }
+      if (row[valIndex] === null || row[valIndex] === undefined) blank.add(`${category}||${seriesName}`)
+      lookup.set(`${category}||${seriesName}`, Number(row[valIndex] ?? 0))
+    }
+    // Folded, not sliced. The tail used to be cut off here, so a cross-tab of
+    // twelve education levels drew eight of them: every stacked bar came up a
+    // third short, and nothing on the chart said the rest of the people were
+    // missing. Categories have always folded into "Other" a few lines down -
+    // this is the same rule for the series, and it keeps the count inside the
+    // palette, which is the reason there is a limit at all.
+    const valueOf = (name: string, category: string) =>
+      lookup.get(`${category}||${name}`) ?? null
+    const total = (name: string) =>
+      categories.reduce((sum, category) => sum + Number(valueOf(name, category) ?? 0), 0)
+
+    let drawn = seriesNames.map((name) => ({
+      name,
+      data: categories.map((category) => valueOf(name, category)),
+    }))
+    // Not where the figures are shares, though. Adding up the ninth group's
+    // percentage and the tenth's gives a number that is a share of nothing,
+    // drawn as if it were one.
+    if (fold && seriesNames.length > MAX_SERIES) {
+      const biggest = [...seriesNames].sort((a, b) => total(b) - total(a))
+      const kept = new Set(biggest.slice(0, MAX_SERIES - 1))
+      const rest = seriesNames.filter((name) => !kept.has(name))
+      drawn = [
+        ...seriesNames
+          .filter((name) => kept.has(name))
+          .map((name) => ({
+            name,
+            data: categories.map((category) => valueOf(name, category)),
+          })),
+        {
+          name: `Other (${rest.length})`,
+          // Null only where every folded series was null for that category, so
+          // a gap stays a gap and does not become a zero.
+          data: categories.map((category) =>
+            rest.every((name) => valueOf(name, category) === null)
+              ? null
+              : rest.reduce((sum, name) => sum + Number(valueOf(name, category) ?? 0), 0),
+          ),
+        },
+      ]
+    }
+
+    return {
+      categories,
+      series: drawn,
+      valueLabel: measures[0].label || measures[0].name,
+      categoryLabel: dimensions[0].label || dimensions[0].name,
+      seriesLabel: dimensions[1].label || dimensions[1].name,
+      blank,
+    }
+  }
+
+  const dimensionIndex = dimensions.length ? names.indexOf(dimensions[0].name) : -1
+  const categories = result.rows.map((row, index) =>
+    dimensionIndex >= 0 ? formatCell(row[dimensionIndex]) : `#${index + 1}`,
+  )
+  return {
+    categories,
+    series: measures.map((measure) => ({
+      name: measure.label || measure.name,
+      data: result.rows.map((row) => {
+        const value = row[names.indexOf(measure.name)]
+        return value === null || value === undefined ? null : Number(value)
+      }),
+    })),
+    valueLabel: measures.length === 1 ? measures[0].label || measures[0].name : '',
+    categoryLabel: dimensions.length ? dimensions[0].label || dimensions[0].name : '',
+    seriesLabel: '',
+    blank: new Set<string>(),
+  }
+}
+
+/**
+ * Compare two category labels, as numbers when they are numbers.
+ *
+ * Age bands come back as "0", "5", "10", ... and sorting those as text puts 5
+ * between 45 and 50, which on a pyramid is a chart nobody can read.
+ */
+function byLabel(left: string, right: string): number {
+  const [x, y] = [Number(left), Number(right)]
+  if (left !== '' && right !== '' && Number.isFinite(x) && Number.isFinite(y)) return x - y
+  return left.localeCompare(right)
+}
+
+/**
+ * Whether the axis has an order of its own rather than being a set of names.
+ *
+ * A date runs in time and a number runs low to high. Everything else - a
+ * province, a status, a question's answers - has no order but the one a
+ * reader is given, which is what the sort option is for.
+ */
+export function readsAsAScale(result: QueryResult): boolean {
+  const first = result.columns.find((column) => column.type === 'dimension')
+  return first?.data_type === 'datetime' || first?.data_type === 'numeric'
+}
+
+/**
+ * Order the categories, and fold the tail into one "Other".
+ *
+ * Both are reading aids rather than data changes: a bar chart of forty
+ * provinces sorted by name answers nothing, and the ninth series is never a
+ * new colour - it folds into Other, which is also what keeps a palette inside
+ * the range it was validated over.
+ */
+function shape(
+  categories: string[],
+  series: { name: string; data: (number | null)[] }[],
+  options: BuildOptions,
+  scale = false,
+) {
+  const totals = categories.map((_, index) =>
+    series.reduce((sum, entry) => sum + Number(entry.data[index] ?? 0), 0),
+  )
+  let order = categories.map((_, index) => index)
+
+  // An axis with an order of its own is read along it, whatever the sort
+  // option says. That option is a reading aid for a set of categories, where
+  // nothing but size or name can put them in a line; a date or a number is
+  // already in a line, and drawing July after August is not a different view
+  // of the same chart, it is one that cannot be read.
+  if (scale) {
+    // byLabel reads a pair of numbers as numbers and everything else as
+    // text: bands arrive as 0, 10, 20, and a moment arrives as an ISO date,
+    // where the text order is the time order.
+    return laidOut(
+      order.sort((a, b) => byLabel(categories[a], categories[b])),
+      categories,
+      series,
+      totals,
+      options,
+    )
+  }
+
+  switch (options.sort) {
+    case 'value_desc':
+      order = order.sort((a, b) => totals[b] - totals[a])
+      break
+    case 'value_asc':
+      order = order.sort((a, b) => totals[a] - totals[b])
+      break
+    case 'label_asc':
+      order = order.sort((a, b) => byLabel(categories[a], categories[b]))
+      break
+    case 'label_desc':
+      order = order.sort((a, b) => byLabel(categories[b], categories[a]))
+      break
+    default:
+      break
+  }
+
+  return laidOut(order, categories, series, totals, options)
+}
+
+/** The categories in the order decided, with the tail folded and stacked. */
+function laidOut(
+  order: number[],
+  categories: string[],
+  series: { name: string; data: (number | null)[] }[],
+  totals: number[],
+  options: BuildOptions,
+) {
+  const top = options.topN && options.topN > 0 ? options.topN : 0
+  let names = order.map((index) => categories[index])
+  let rows = series.map((entry) => ({
+    name: entry.name,
+    data: order.map((index) => entry.data[index]),
+  }))
+
+  if (top && names.length > top) {
+    // Ranked by size for the fold, whatever order the axis is in: "Other"
+    // means the small ones, not the last ones alphabetically.
+    const ranked = [...order].sort((a, b) => totals[b] - totals[a])
+    const kept = new Set(ranked.slice(0, top))
+    const keptOrder = order.filter((index) => kept.has(index))
+    const rest = order.filter((index) => !kept.has(index))
+    names = [...keptOrder.map((index) => categories[index]), `Other (${rest.length})`]
+    rows = series.map((entry) => ({
+      name: entry.name,
+      data: [
+        ...keptOrder.map((index) => entry.data[index]),
+        rest.reduce((sum, index) => sum + Number(entry.data[index] ?? 0), 0),
+      ],
+    }))
+  }
+
+  if (options.percentStack) {
+    // Each category summing to 100, which is what a composition is read as.
+    const columnTotals = names.map((_, index) =>
+      rows.reduce((sum, entry) => sum + Number(entry.data[index] ?? 0), 0),
+    )
+    rows = rows.map((entry) => ({
+      name: entry.name,
+      data: entry.data.map((value, index) =>
+        columnTotals[index] ? (Number(value ?? 0) / columnTotals[index]) * 100 : null,
+      ),
+    }))
+  }
+
+  return { categories: names, series: rows }
+}
+
+/**
+ * A translucent wash of a chart colour, for a fill that has an outline over it.
+ *
+ * A box plot is the one mark here that is drawn rather than filled: the outline
+ * and the median line inside it carry the reading, so the body behind them has
+ * to be faint. Taking the series colour down in alpha rather than mixing it
+ * toward white is what keeps it faint on a dark dashboard too.
+ */
+function tint(colour: string, alpha: number): string {
+  const hex = colour.replace('#', '')
+  if (hex.length !== 6) return colour
+  const [r, g, b] = [0, 2, 4].map((at) => parseInt(hex.slice(at, at + 2), 16))
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+}
+
+/**
+ * Read the five numbers of each box out of a result.
+ *
+ * Matched by the aliases the builder writes, and by position when they are not
+ * there, so five measures put in min-to-max order by hand draw too. A group
+ * missing any of the five is dropped rather than drawn short: half a box is
+ * read as a whole one by everybody who looks at it.
+ */
+function boxes(result: QueryResult, options: BuildOptions) {
+  const names = result.columns.map((column) => column.name)
+  const measures = result.columns.filter((column) => column.type === 'measure')
+  if (measures.length < BOX_MEASURES.length) return null
+
+  const byName = BOX_MEASURES.map((measure) => names.indexOf(measure.alias))
+  const columns = byName.every((index) => index >= 0)
+    ? byName
+    : BOX_MEASURES.map((_, index) => names.indexOf(measures[index].name))
+
+  const dimensions = result.columns.filter((column) => column.type === 'dimension')
+  const labelIndex = dimensions.length ? names.indexOf(dimensions[0].name) : -1
+
+  // "Median of Age at last birthday" names the axis better as the variable it
+  // is five summaries of. Nothing rests on the strip: a label that does not
+  // start that way is simply used as it is.
+  const valueLabel = (result.columns[columns[2]]?.label ?? '').replace(/^median of /i, '')
+
+  let groups = result.rows.flatMap((row, index) => {
+    const five = columns.map((column) => Number(row[column]))
+    if (five.some((value) => !Number.isFinite(value))) return []
+    return [
+      {
+        // Ungrouped, this is one box over the whole dataset, and the variable
+        // is the only name it has.
+        name:
+          labelIndex >= 0
+            ? formatCell(row[labelIndex])
+            : result.rows.length === 1
+              ? valueLabel
+              : `#${index + 1}`,
+        five,
+        middle: five[2],
+      },
+    ]
+  })
+  if (!groups.length) return null
+
+  switch (options.sort) {
+    case 'value_desc':
+      groups = [...groups].sort((a, b) => b.middle - a.middle)
+      break
+    case 'value_asc':
+      groups = [...groups].sort((a, b) => a.middle - b.middle)
+      break
+    case 'label_asc':
+      groups = [...groups].sort((a, b) => byLabel(a.name, b.name))
+      break
+    case 'label_desc':
+      groups = [...groups].sort((a, b) => byLabel(b.name, a.name))
+      break
+    default:
+      break
+  }
+
+  // Kept rather than folded, unlike everywhere else: two boxes cannot be added
+  // into a third, so "Other" would be a box drawn from numbers nobody measured.
+  const top = options.topN && options.topN > 0 ? options.topN : 0
+  if (top && groups.length > top) {
+    const ranked = [...groups].sort((a, b) => b.middle - a.middle).slice(0, top)
+    const kept = new Set(ranked)
+    groups = groups.filter((group) => kept.has(group))
+  }
+
+  return {
+    names: groups.map((group) => group.name),
+    data: groups.map((group) => group.five),
+    valueLabel,
+  }
+}
+
+export function buildChartOption(
+  result: QueryResult,
+  chartType: ChartType,
+  options: BuildOptions = {},
+): EChartsOption {
+  const option = buildOption(result, chartType, options)
+  applyTextStyle(option, options.fontFamily, options.fontColor, options.fontSize)
+  return option
+}
+
+function buildOption(
+  result: QueryResult,
+  chartType: ChartType,
+  options: BuildOptions = {},
+): EChartsOption {
+  const themePalette = themeColors(options.theme)
+  const lead = options.seriesColor?.toLowerCase()
+  const ordered = lead
+    ? [options.seriesColor!, ...themePalette.filter((c) => c.toLowerCase() !== lead)]
+    : themePalette
+  const palette = options.seriesColors
+    ? ordered.map((colour, index) => options.seriesColors![index] || colour)
+    : ordered
+  const shares = result.columns.find((c) => c.type === 'measure')?.data_type === 'percent'
+  // A heatmap colours by value rather than by series, so it has no palette to
+  // stay inside and every group keeps a row of its own.
+  const pivoted = pivot(result, chartType !== 'heatmap' && !shares)
+  const valueLabelText = pivoted.valueLabel
+  const { categories, series } = shape(
+    pivoted.categories,
+    pivoted.series,
+    options,
+    readsAsAScale(result),
+  )
+  const multiSeries = series.length > 1
+  // A single series is named by the chart title, so it needs no legend box -
+  // and can be given one on request. Two or more always keep theirs, whatever
+  // is asked for: without it the only thing telling the series apart is their
+  // colour, which is exactly what a colour-blind reader cannot use.
+  const legend = multiSeries || (options.showLegend ?? false)
+
+  const common: EChartsOption = {
+    color: [...palette],
+    textStyle: { ...BASE_TEXT },
+    animationDuration: 400,
+    grid: { left: 8, right: 16, top: legend ? 40 : 16, bottom: 8, containLabel: true },
+    legend: legend
+      ? {
+          type: 'scroll',
+          top: 0,
+          left: 0,
+          icon: 'roundRect',
+          itemWidth: 10,
+          itemHeight: 10,
+          itemGap: 16,
+          textStyle: { color: '#52514e', ...BASE_TEXT },
+        }
+      : { show: false },
+  }
+
+  switch (chartType) {
+    case 'pie':
+    case 'donut': {
+      const values = categories.map((name, index) => ({
+        name,
+        value: Number(series[0]?.data[index] ?? 0),
+        // A named colour for this slice, where the caller has one, which it
+        // does when the slices are states rather than categories: passing,
+        // failing and never run are green, red and grey wherever they are
+        // drawn. The border survives it, because ECharts merges a datum's
+        // style over the series' rather than replacing it.
+        ...(options.pointColors?.[index]
+          ? { itemStyle: { color: options.pointColors[index] } }
+          : {}),
+      }))
+      return {
+        ...common,
+        grid: undefined,
+        tooltip: {
+          ...tooltipBase,
+          trigger: 'item',
+          formatter: (params: any) =>
+            `${params.marker} ${escapeHtml(params.name)}<br/><b>${formatNumber(
+              params.value,
+            )}</b> (${params.percent}%)`,
+        },
+        // Legend along the bottom: a side legend collides with the slice labels.
+        legend: {
+          type: 'scroll',
+          orient: 'horizontal',
+          bottom: 0,
+          left: 'center',
+          icon: 'roundRect',
+          itemWidth: 10,
+          itemHeight: 10,
+          itemGap: 16,
+          textStyle: { color: '#52514e', ...BASE_TEXT },
+        },
+        series: [
+          {
+            type: 'pie',
+            radius: chartType === 'donut' ? ['48%', '70%'] : ['0%', '68%'],
+            center: ['50%', '45%'],
+            avoidLabelOverlap: true,
+            // 2px surface gap between adjacent segments
+            itemStyle: { borderColor: INK.surface, borderWidth: 2, borderRadius: 3 },
+            // The legend carries the names, so the slice label is the value only
+            label: options.showValues
+              ? {
+                  color: '#52514e',
+                  ...BASE_TEXT,
+                  formatter: (params: any) =>
+                    `${formatNumber(Number(params.value), options.decimals ?? 0)} (${params.percent}%)`,
+                }
+              : { color: '#52514e', ...BASE_TEXT, formatter: '{d}%' },
+            labelLine: { length: 8, length2: 8, lineStyle: { color: INK.axis } },
+            data: values,
+          },
+        ],
+      }
+    }
+
+    case 'scatter': {
+      const [x, y] = series
+      return {
+        ...common,
+        tooltip: {
+          ...tooltipBase,
+          trigger: 'item',
+          formatter: (params: any) =>
+            `${params.marker} ${escapeHtml(categories[params.dataIndex] ?? '')}<br/>` +
+            `${formatNumber(params.value[0], 2)} / ${formatNumber(params.value[1], 2)}`,
+        },
+        // scale: true keeps the axes on the data's own range. Forcing zero on a
+        // coordinate pair squashes every point into a corner.
+        xAxis: { ...valueAxis(x?.name ?? ''), scale: true },
+        yAxis: { ...valueAxis(y?.name ?? ''), scale: true },
+        series: [
+          {
+            type: 'scatter',
+            symbolSize: 10,
+            label: markLabel(options, 'top', categories.length),
+            // 2px surface ring so overlapping points stay separable
+            itemStyle: { color: palette[0], borderColor: INK.surface, borderWidth: 2 },
+            data: categories.map((_, index) => [
+              Number(x?.data[index] ?? 0),
+              Number(y?.data[index] ?? 0),
+            ]),
+          },
+        ],
+      }
+    }
+
+    case 'heatmap': {
+      const seriesNames = series.map((s) => s.name)
+      // Across the bottom and down the side. The first dimension goes along
+      // the bottom unless asked otherwise.
+      const across = options.transpose ? seriesNames : categories
+      const down = options.transpose ? categories : seriesNames
+      const values: [number, number, number][] = []
+      let max = 0
+      series.forEach((entry, seriesIndex) => {
+        entry.data.forEach((value, categoryIndex) => {
+          // Left empty by the result itself: drawn as no cell at all.
+          if (pivoted.blank.has(`${categories[categoryIndex]}||${entry.name}`)) return
+          const numeric = Number(value ?? 0)
+          max = Math.max(max, numeric)
+          values.push(
+            options.transpose
+              ? [seriesIndex, categoryIndex, numeric]
+              : [categoryIndex, seriesIndex, numeric],
+          )
+        })
+      })
+      // Long names along the bottom are turned and cut, as an upright bar's
+      // are; the tooltip still carries the whole of each. Short ones - five
+      // district names - stand upright, where they are easier to read.
+      const crowded = across.length > 6 || across.some((name) => name.length > 12)
+      const bottomAxis = axisCommon(crowded ? 30 : 0)
+      const sideAxis = axisCommon(0)
+      const named = (label: string, value: string) =>
+        `${label ? `${escapeHtml(label)}: ` : ''}<b>${escapeHtml(value)}</b>`
+      // Each number sits inside its own cell, so they do not run into each
+      // other the way forty bar-end labels do; it takes a far larger map
+      // before the cells are too small to hold one.
+      const label = markLabel(options, 'inside', values.length, 300)
+      return {
+        ...common,
+        legend: { show: false },
+        grid: { left: 8, right: 16, top: 16, bottom: 56, containLabel: true },
+        tooltip: {
+          ...tooltipBase,
+          trigger: 'item',
+          formatter: (params: any) => {
+            const [x, y, v] = params.value
+            const category = options.transpose ? down[y] : across[x]
+            const seriesName = options.transpose ? across[x] : down[y]
+            return (
+              `${named(pivoted.categoryLabel, category)}<br/>` +
+              `${named(pivoted.seriesLabel, seriesName)}<br/>` +
+              `${valueLabelText ? `${escapeHtml(valueLabelText)}: ` : ''}<b>${formatNumber(v)}</b>`
+            )
+          },
+        },
+        xAxis: {
+          type: 'category',
+          data: across,
+          ...bottomAxis,
+          axisLabel: {
+            ...bottomAxis.axisLabel,
+            ...(crowded ? { interval: 0, width: 110, overflow: 'truncate' as const } : {}),
+          },
+        },
+        yAxis: {
+          type: 'category',
+          data: down,
+          ...sideAxis,
+          // Read top to bottom in the order given, as a table is.
+          inverse: true,
+          axisLabel: {
+            ...sideAxis.axisLabel,
+            ...(options.wrapLabels
+              ? wrapped(options.maxLabelWidth ?? 180, options.fontSize)
+              : { width: options.maxLabelWidth ?? 180, overflow: 'truncate' as const }),
+          },
+        },
+        visualMap: {
+          min: 0,
+          max: max || 1,
+          orient: 'horizontal',
+          left: 'center',
+          bottom: 0,
+          itemWidth: 12,
+          itemHeight: 90,
+          // What the ends of the ramp stand for; a key without numbers says
+          // only that darker is more.
+          text: [formatNumber(max || 1), '0'],
+          textStyle: { color: INK.muted, ...BASE_TEXT },
+          inRange: { color: SEQUENTIAL_RAMP },
+        },
+        series: [
+          {
+            type: 'heatmap',
+            // White on the dark cells and ink on the pale ones: one colour
+            // for every cell left the numbers unreadable on half the ramp.
+            //
+            // Each cell carries the category it belongs to by name, which is
+            // what a click filters by. Looked up by the cell's place in this
+            // list instead, it named some other row of the result: the list
+            // runs series by series, and leaves the blank cells out.
+            data: values.map((cell) => ({
+              name: options.transpose ? down[cell[1]] : across[cell[0]],
+              value: cell,
+              label: { color: cell[2] / (max || 1) > 0.55 ? '#ffffff' : INK.primary },
+            })),
+            // A heatmap's cells are large and few, so the number goes inside
+            // rather than above. The count is cells, not categories.
+            label,
+            itemStyle: { borderColor: INK.surface, borderWidth: 2, borderRadius: 3 },
+          },
+        ],
+      }
+    }
+
+    case 'funnel':
+      return {
+        ...common,
+        grid: undefined,
+        tooltip: { ...tooltipBase, trigger: 'item' },
+        series: [
+          {
+            type: 'funnel',
+            left: '10%',
+            width: '80%',
+            gap: 2,
+            label: {
+              position: 'inside',
+              color: '#fff',
+              ...BASE_TEXT,
+              ...(options.showValues
+                ? {
+                    formatter: (params: any) =>
+                      `${params.name}  ${formatNumber(Number(params.value), options.decimals ?? 0)}`,
+                  }
+                : {}),
+            },
+            itemStyle: { borderColor: INK.surface, borderWidth: 2 },
+            data: categories.map((name, index) => ({
+              name,
+              value: Number(series[0]?.data[index] ?? 0),
+            })),
+          },
+        ],
+      }
+
+    case 'line':
+    case 'area':
+      return {
+        ...common,
+        tooltip: {
+          ...tooltipBase,
+          trigger: 'axis',
+          // Crosshair, per the interaction rules for time series
+          axisPointer: { type: 'line', lineStyle: { color: INK.axis, width: 1 } },
+        },
+        xAxis: { type: 'category', data: categories, boundaryGap: false, ...axisCommon() },
+        yAxis: {
+          ...valueAxis(options.valueTitle ?? (multiSeries ? '' : valueLabelText)),
+          ...bounds(options),
+        },
+        series: series.map((entry, index) => ({
+          name: entry.name,
+          type: 'line',
+          data: entry.data,
+          smooth: Boolean(options.smooth),
+          // Labels reach here too now, on request. A number on every point of
+          // a dense line is unreadable, which is why this is off by default
+          // and why markLabel drops it past MAX_LABELLED marks - but on a
+          // twelve-month series it is exactly what a report wants.
+          label: markLabel(options, 'top', categories.length),
+          ...(index === 0 ? { markLine: referenceLine(options) } : {}),
+          symbol: 'circle',
+          symbolSize: 8,
+          showSymbol: entry.data.length <= 40,
+          lineStyle: { width: 2 },
+          itemStyle: { borderColor: INK.surface, borderWidth: 2 },
+          ...(chartType === 'area'
+            ? {
+                areaStyle: {
+                  opacity: 0.16,
+                  color: palette[index % palette.length],
+                },
+                stack: options.stacked ? 'total' : undefined,
+              }
+            : {}),
+        })),
+      }
+
+    case 'population_pyramid': {
+      // Two groups back to back on a shared age axis. The left one is drawn
+      // negative and the axis labelled with absolute numbers, which is the
+      // only trick in it: nobody reads "-4,000 men".
+      if (series.length !== 2) {
+        return {
+          ...common,
+          legend: { show: false },
+          title: {
+            text: 'A pyramid needs exactly two groups',
+            subtext:
+              series.length < 2
+                ? 'Add a second grouping - sex, usually - alongside the age bands.'
+                : `This has ${series.length}. Filter it down to two, or use a bar chart.`,
+            left: 'center',
+            top: 'middle',
+            textStyle: { color: INK.muted, ...BASE_TEXT, fontSize: 13 },
+            subtextStyle: { color: INK.muted, ...BASE_TEXT },
+          },
+          xAxis: { show: false },
+          yAxis: { show: false },
+          series: [],
+        }
+      }
+      const [left, right] = series
+      const magnitude = (value: unknown) => Math.abs(Number(value ?? 0))
+      return {
+        ...common,
+        grid: { left: 8, right: 24, top: 40, bottom: 8, containLabel: true },
+        tooltip: {
+          ...tooltipBase,
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          formatter: (params: any) => {
+            const list = Array.isArray(params) ? params : [params]
+            const rows = list
+              .map(
+                (p: any) =>
+                  `${p.marker} ${escapeHtml(p.seriesName)}: <b>${formatNumber(
+                    magnitude(p.value),
+                    options.decimals ?? 0,
+                  )}</b>`,
+              )
+              .join('<br/>')
+            return `${escapeHtml(list[0]?.axisValueLabel ?? '')}<br/>${rows}`
+          },
+        },
+        xAxis: {
+          ...valueAxis(options.valueTitle ?? ''),
+          axisLabel: {
+            color: INK.muted,
+            ...BASE_TEXT,
+            formatter: (value: number) => formatNumber(Math.abs(value)),
+          },
+        },
+        yAxis: { type: 'category', data: categories, ...axisCommon(0) },
+        series: [
+          {
+            name: left.name,
+            type: 'bar',
+            stack: 'pyramid',
+            data: left.data.map((value) => -magnitude(value)),
+            barMaxWidth: 42,
+            itemStyle: { borderRadius: [4, 0, 0, 4] },
+            label: options.showValues
+              ? {
+                  show: categories.length <= MAX_LABELLED,
+                  position: 'left',
+                  color: INK.muted,
+                  ...BASE_TEXT,
+                  formatter: (params: any) =>
+                    formatNumber(magnitude(params.value), options.decimals ?? 0),
+                }
+              : { show: false },
+          },
+          {
+            name: right.name,
+            type: 'bar',
+            stack: 'pyramid',
+            data: right.data.map((value) => magnitude(value)),
+            barMaxWidth: 42,
+            itemStyle: { borderRadius: [0, 4, 4, 0] },
+            label: options.showValues
+              ? {
+                  show: categories.length <= MAX_LABELLED,
+                  position: 'right',
+                  color: INK.muted,
+                  ...BASE_TEXT,
+                  formatter: (params: any) =>
+                    formatNumber(magnitude(params.value), options.decimals ?? 0),
+                }
+              : { show: false },
+          },
+        ],
+      }
+    }
+
+    case 'boxplot': {
+      // Read from the result rather than from the pivot above: the pivot names
+      // its series from the measure labels, and "Median of Age" is not a name
+      // this can match on.
+      const box = boxes(result, options)
+      if (!box) {
+        return {
+          ...common,
+          legend: { show: false },
+          title: {
+            text: 'A box plot needs five numbers for each group',
+            subtext:
+              'Choose Box plot in the builder and pick the variable to summarise; the minimum, ' +
+              'quartiles, median and maximum are measured for you.',
+            left: 'center',
+            top: 'middle',
+            textStyle: { color: INK.muted, ...BASE_TEXT, fontSize: 13 },
+            subtextStyle: { color: INK.muted, ...BASE_TEXT },
+          },
+          xAxis: { show: false },
+          yAxis: { show: false },
+          series: [],
+        }
+      }
+      const horizontal = Boolean(options.horizontal)
+      const groupAxis = {
+        type: 'category' as const,
+        data: box.names,
+        ...axisCommon(horizontal ? 0 : box.names.length > 8 ? 30 : 0),
+      }
+      const numberAxis = {
+        ...valueAxis(options.valueTitle ?? box.valueLabel),
+        ...bounds(options),
+        // On its own range, not from zero: the spread inside the box is the
+        // whole point, and a wage box forced down to zero is a flat line.
+        scale: options.valueMin === null || options.valueMin === undefined,
+      }
+      return {
+        ...common,
+        legend: { show: false },
+        tooltip: {
+          ...tooltipBase,
+          trigger: 'item',
+          formatter: (params: any) => {
+            // The five, read from the end: ECharts puts the category index in
+            // front of them in some arrangements and not in others.
+            const five = (params.value as unknown[]).slice(-5).map(Number)
+            const rows = BOX_MEASURES.map(
+              (measure, index) =>
+                `${measure.label}<span style="float:right;padding-left:20px"><b>${formatNumber(
+                  five[index],
+                  options.decimals ?? 2,
+                )}</b></span>`,
+            )
+            // Largest at the top, the way the box is drawn.
+            return `${params.marker} ${escapeHtml(params.name)}<br/>${[...rows]
+              .reverse()
+              .join('<br/>')}`
+          },
+        },
+        xAxis: horizontal ? numberAxis : groupAxis,
+        yAxis: horizontal ? groupAxis : numberAxis,
+        series: [
+          {
+            type: 'boxplot',
+            data: box.data,
+            boxWidth: [8, 48],
+            itemStyle: {
+              color: tint(palette[0], 0.18),
+              borderColor: palette[0],
+              borderWidth: 2,
+            },
+            emphasis: { itemStyle: { borderWidth: 3 } },
+            // The target line runs across the value axis, and referenceLine
+            // draws it against y - which is the value axis only when the boxes
+            // stand upright.
+            ...(horizontal ? {} : { markLine: referenceLine(options) }),
+          },
+        ],
+      }
+    }
+
+    case 'bar':
+    case 'horizontal_bar':
+    case 'stacked_bar':
+    case 'horizontal_stacked_bar':
+    default: {
+      const horizontal =
+        chartType === 'horizontal_bar' ||
+        chartType === 'horizontal_stacked_bar' ||
+        options.horizontal
+      const stacked =
+        chartType === 'stacked_bar' ||
+        chartType === 'horizontal_stacked_bar' ||
+        options.stacked
+      const style = series.length === 1 && !stacked ? (options.barStyle ?? 'bars') : 'bars'
+      // A track runs to a hundred where the figures are shares of a hundred,
+      // which is the point of it; otherwise to the end of the axis. Read off
+      // what the result says its numbers are, not off their size: counts of
+      // 3 and 6 are not out of a hundred because none of them passed it.
+      const toHundred = style === 'track' && shares && options.valueMax == null
+      const valueBounds = { ...bounds(options), ...(toHundred ? { max: 100 } : {}) }
+      // Past eight categories the labels under an upright bar are turned on
+      // their side, which is the axis' own answer to names that will not fit
+      // beside each other.
+      const rotated = !horizontal && categories.length > 8
+      const common_ = axisCommon(rotated ? 30 : 0)
+      // What one category has to itself under an upright bar.
+      //
+      // The plot's own width is not known here - only the chart's - and the
+      // difference is mostly the value axis, which is about as wide as its
+      // longest number. So that number is worked out and measured: an axis
+      // running to 12 costs two digits and leaves the labels nearly the whole
+      // chart, while one counting households costs four and leaves less.
+      //
+      // Erring narrow is the safe way round. A label bounded tighter than its
+      // slot is shorter than it needed to be; one bounded looser overlaps its
+      // neighbour, and ECharts answers that by hiding one of the two.
+      const widest = Math.max(
+        0,
+        ...(stacked
+          ? categories.map((_, at) =>
+              series.reduce((total, entry) => total + Number(entry.data[at] ?? 0), 0),
+            )
+          : series.flatMap((entry) => entry.data.map((value) => Number(value ?? 0)))),
+      )
+      const textSize = options.fontSize ?? 12
+      // Never under four characters: the axis is labelled by its ticks, not by
+      // its largest value, and an axis running to 1 is ticked "0.25".
+      const digits = Math.max(4, formatNumber(widest).length)
+      const axisGutter = digits * textSize * 0.62 + 8
+      const slot =
+        options.chartWidth && categories.length
+          ? // 8 and 24 are the grid's own gutters, set below.
+            Math.floor((options.chartWidth - axisGutter - 32) / categories.length)
+          : 0
+      const categoryAxis = {
+        type: 'category' as const,
+        data: categories,
+        ...common_,
+        axisLabel: {
+          ...common_.axisLabel,
+          ...(horizontal
+            ? options.wrapLabels
+              ? wrapped(options.maxLabelWidth ?? 220, options.fontSize)
+              : options.maxLabelWidth
+                ? { width: options.maxLabelWidth, overflow: 'truncate' as const }
+                : {}
+            : // Under the bars, what bounds a label is the slot its own bar
+              // stands in. ECharts' answer to a label wider than that is to
+              // drop it and every second one after it, which on a chart of
+              // long names - data quality checks, questions, province names -
+              // leaves two labels hanging over the ends of the axis and no way
+              // to tell which bar is which. Cutting each name to its slot
+              // keeps them all, and the tooltip still carries the whole one.
+              //
+              // A name shorter than its slot is drawn whole, so this costs
+              // the charts that already fitted nothing: the bound only bites
+              // where a name was going to be dropped.
+              //
+              // Only while the labels are upright and a slot is wide enough to
+              // hold something worth reading, though. A turned label is not
+              // bounded by its own slot at all - it runs diagonally under its
+              // neighbour's - so cutting it to that width would shorten a name
+              // the axis had room to draw. And below the width, the axis' own
+              // thinning is the better of the two, because forty checks across
+              // a quarter tile would be forty ellipses.
+              !rotated && slot >= 44
+              ? { interval: 0, width: slot - 4, overflow: 'truncate' as const }
+              : {}),
+        },
+      }
+      return {
+        ...common,
+        grid: {
+          left: 8,
+          // Room for a number printed off the end of the longest bar, which
+          // grows with the text: at 20px "45.15" needs three times the gutter
+          // a 12px one does, and without it the last digits are cut off by the
+          // edge of the widget.
+          right:
+            options.showValues && horizontal
+              ? Math.max(24, (options.fontSize ?? 12) * 3.5)
+              : 24,
+          // The same headroom above the tallest bar, for the upright form.
+          top: legend
+            ? 40
+            : options.showValues
+              ? Math.max(28, (options.fontSize ?? 12) * 2)
+              : 16,
+          bottom: 8,
+          containLabel: true,
+        },
+        tooltip: {
+          ...tooltipBase,
+          trigger: 'axis',
+          axisPointer: { type: 'shadow' },
+          formatter: (params: any) => {
+            // A lollipop is a stem and a dot under one name; said once.
+            const list = (Array.isArray(params) ? params : [params]).filter(
+              (p: any, at: number, all: any[]) =>
+                all.findIndex((q: any) => q.seriesName === p.seriesName) === at,
+            )
+            const rows = list
+              .filter((p: any) => p.value !== null && p.value !== undefined)
+              .map(
+                (p: any) =>
+                  `${p.marker} ${escapeHtml(p.seriesName)}: <b>${formatNumber(
+                    Number(p.value),
+                    2,
+                  )}</b>`,
+              )
+              .join('<br/>')
+            const head = escapeHtml(list[0]?.axisValueLabel ?? list[0]?.name ?? '')
+            return `${head}<br/>${rows}`
+          },
+        },
+        xAxis: horizontal
+          ? { ...valueAxis(options.valueTitle ?? ''), ...valueBounds }
+          : categoryAxis,
+        yAxis: horizontal
+          ? categoryAxis
+          : {
+              ...valueAxis(options.valueTitle ?? (multiSeries ? '' : valueLabelText)),
+              // Anchored at the axis rather than centred over it. ECharts puts
+              // the name above the top tick and centres it there, and nothing
+              // in the layout reserves room for it, so "% of rows failing"
+              // over a narrow axis of two-digit ticks hung off the left edge
+              // of the widget and was cut to "of rows failing".
+              nameTextStyle: { color: INK.muted, ...BASE_TEXT, align: 'left' },
+              ...valueBounds,
+            },
+        series: style === 'lollipop' ? lollipop(series[0], categories, palette[0], Boolean(horizontal), options) : series.map((entry, index) => ({
+          name: entry.name,
+          type: 'bar',
+          data:
+            options.pointColors && series.length === 1
+              ? entry.data.map((value, at) => ({
+                  value,
+                  ...(options.pointColors![at]
+                    ? { itemStyle: { color: options.pointColors![at] } }
+                    : {}),
+                }))
+              : entry.data,
+          stack: stacked ? 'total' : undefined,
+          barMaxWidth: style === 'track' ? 18 : 42,
+          ...(style === 'track'
+            ? {
+                // The whole of the axis behind each bar, faint enough to read
+                // on a dark board as on a white one.
+                showBackground: true,
+                backgroundStyle: {
+                  color: 'rgba(137, 135, 129, 0.16)',
+                  borderRadius: horizontal ? [0, 4, 4, 0] : [4, 4, 0, 0],
+                },
+              }
+            : {}),
+          label: markLabel(options, horizontal ? 'right' : 'top', categories.length),
+          // 4px rounded data-end anchored to the baseline
+          itemStyle: stacked
+            ? { borderColor: INK.surface, borderWidth: 2 }
+            : { borderRadius: horizontal ? [0, 4, 4, 0] : [4, 4, 0, 0] },
+          // One reference line, on the first series, or it is drawn once per
+          // series and the plot grows a ladder of identical rules.
+          ...(index === 0 && !horizontal ? { markLine: referenceLine(options) } : {}),
+        })),
+      }
+    }
+  }
+}
+
+/**
+ * A category label wrapped to two lines of this width, and cut after them.
+ *
+ * Broken here rather than by ECharts, whose axis labels wrap to as many lines
+ * as a name needs: a third line runs into the next category, and the axis
+ * answers that by hiding every other label. The line length is estimated
+ * from the text size; each line is still truncated to the width in case a
+ * single word is longer than that.
+ */
+function wrapped(width: number, fontSize = 12) {
+  const perLine = Math.max(8, Math.floor(width / (fontSize * 0.56)))
+  return {
+    width,
+    overflow: 'truncate' as const,
+    lineHeight: Math.round(fontSize * 1.2),
+    formatter: (value: string) => twoLines(String(value), perLine),
+  }
+}
+
+/** The words of a name on at most two lines of about this many characters. */
+export function twoLines(text: string, perLine: number): string {
+  const lines: string[] = []
+  let line = ''
+  for (const word of text.split(/\s+/).filter(Boolean)) {
+    const next = line ? `${line} ${word}` : word
+    if (next.length <= perLine || !line) {
+      line = next
+      continue
+    }
+    lines.push(line)
+    line = word
+  }
+  if (line) lines.push(line)
+  if (lines.length <= 2) return lines.join('\n')
+  const second = lines.slice(1).join(' ')
+  return `${lines[0]}\n${second.slice(0, Math.max(1, perLine - 1)).trimEnd()}…`
+}
+
+/**
+ * A dot on a thin stem for each category: the stem is a bar two pixels wide,
+ * the dot a point at its end, both under the series' one name.
+ *
+ * The dot is placed by [value, category] rather than by position, because a
+ * point's own data is what a click and a label read, and a category axis on
+ * the side does not tell a bare number which row it belongs to.
+ */
+function lollipop(
+  entry: { name: string; data: (number | null)[] },
+  categories: string[],
+  colour: string,
+  horizontal: boolean,
+  options: BuildOptions,
+) {
+  const label = markLabel(options, horizontal ? 'right' : 'top', categories.length)
+  return [
+    {
+      name: entry.name,
+      type: 'bar' as const,
+      data: entry.data,
+      barWidth: 2,
+      itemStyle: { color: colour },
+      label: { show: false },
+    },
+    {
+      name: entry.name,
+      type: 'scatter' as const,
+      symbolSize: 12,
+      z: 3,
+      itemStyle: { color: colour, borderColor: INK.surface, borderWidth: 1.5 },
+      data: entry.data.map((value, at) =>
+        value === null
+          ? null
+          : { name: categories[at], value: horizontal ? [value, at] : [at, value] },
+      ),
+      label: label.show
+        ? {
+            ...label,
+            distance: 8,
+            formatter: (params: any) =>
+              formatNumber(
+                Number(horizontal ? params.value[0] : params.value[1]),
+                options.decimals ?? 0,
+              ),
+          }
+        : label,
+    },
+  ]
+}
+
+/** Sparkline used inside indicator tiles. */
+export function buildSparkline(
+  points: { t: string; v: number | null }[],
+  theme?: string,
+): EChartsOption {
+  const palette = themeColors(theme)
+  return {
+    grid: { left: 0, right: 0, top: 4, bottom: 0 },
+    xAxis: { type: 'category', show: false, data: points.map((p) => p.t) },
+    yAxis: { type: 'value', show: false, scale: true },
+    tooltip: {
+      ...tooltipBase,
+      trigger: 'axis',
+      formatter: (params: any) => {
+        const point = Array.isArray(params) ? params[0] : params
+        return `${new Date(point.axisValue).toLocaleDateString()}<br/><b>${formatNumber(
+          Number(point.value),
+        )}</b>`
+      },
+    },
+    series: [
+      {
+        type: 'line',
+        data: points.map((p) => p.v),
+        smooth: false,
+        symbol: 'none',
+        lineStyle: { width: 2, color: palette[0] },
+        areaStyle: { opacity: 0.12, color: palette[0] },
+      },
+    ],
+  }
+}

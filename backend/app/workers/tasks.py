@@ -1,0 +1,1243 @@
+"""Background tasks: server sync, indicator refresh, quality checks, housekeeping."""
+
+from __future__ import annotations
+
+import datetime as dt
+import shutil
+import tempfile
+from pathlib import Path
+from typing import Any
+
+from celery.signals import task_failure
+from sqlalchemy import select
+
+from app.core.config import settings
+from app.core.crypto import decrypt
+from app.core.logging import get_logger
+from app.db.base import utcnow
+from app.db.session import session_scope
+from app.models import (
+    Alert,
+    AlertRule,
+    AlertStatus,
+    Connection,
+    Dashboard,
+    Dataset,
+    DatasetSource,
+    FolderImport,
+    Indicator,
+    IndicatorSnapshot,
+    Job,
+    JobStatus,
+    QualityResult,
+    QualityRule,
+    SourceKind,
+    SyncRun,
+    SyncStatus,
+)
+from app.services import file_source, snapshots, staged_uploads, stata
+from app.services.datasets import (
+    ArchiveImport,
+    load_archive_as_datasets,
+    load_file_into_dataset,
+    merge_imports,
+)
+from app.services.ingest import IngestError
+from app.services.monitoring import evaluate_alert_rule, refresh_indicator
+from app.services.pipeline import AFTER_IMPORT, Progress, after_import
+from app.services.quality import execute_rule
+from app.services.scheduling import is_due
+from app.services.survey_solutions import (
+    SurveySolutionsClient,
+    SurveySolutionsError,
+)
+from app.workers.celery_app import celery_app
+
+logger = get_logger(__name__)
+
+SNAPSHOT_RETENTION_DAYS = 180
+ALERT_RETENTION_DAYS = 90
+QUALITY_RESULT_RETENTION_DAYS = 90
+JOB_RETENTION_DAYS = 30
+
+
+@celery_app.task(name="app.workers.tasks.run_connection_sync", bind=True)
+def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
+    """Export the configured questionnaires from a server and import them."""
+    with session_scope() as db:
+        job = db.get(Job, job_id)
+        if job is None:
+            return {"error": "job not found"}
+        job.status = JobStatus.running
+        job.started_at = utcnow()
+        job.celery_task_id = getattr(self.request, "id", "") or ""
+        params = dict(job.params or {})
+        db.flush()
+
+    connection_id = params.get("connection_id")
+    questionnaires: list[str] = list(params.get("questionnaires") or [])
+    interview_status = params.get("interview_status") or "All"
+    mode = params.get("mode") or "replace"
+
+    summary: dict[str, Any] = {"datasets": [], "errors": [], "rows": 0}
+    workdir = Path(tempfile.mkdtemp(prefix="surveyhq-sync-"))
+    progress = Progress(
+        job_id, [("download", "Download from Survey Solutions and read the files"), *AFTER_IMPORT]
+    )
+
+    try:
+        progress.start(None, "download", "Connecting to the server")
+        progress.save_now()
+        with session_scope() as db:
+            connection = db.get(Connection, connection_id)
+            if connection is None:
+                raise SurveySolutionsError("The connection no longer exists")
+            credentials = {
+                "base_url": connection.base_url,
+                "username": connection.username,
+                "password": decrypt(connection.password_encrypted),
+                "workspace": connection.workspace,
+                "verify_ssl": connection.verify_ssl,
+            }
+            # The import's own choice, or the connection's where it made none.
+            export_format = params.get("export_format") or connection.export_format.value
+            connection.last_sync_status = SyncStatus.running
+            connection_name = connection.name
+            project_id = params.get("project_id") or connection.project_id
+
+        with SurveySolutionsClient(**credentials) as client:
+            catalogue = {q.identity: q for q in client.list_questionnaires()}
+
+            plan = plan_version_imports(
+                questionnaires,
+                {identity: q.version for identity, q in catalogue.items()},
+                mode,
+            )
+
+            # The datasets this plan REPLACED, so the commands recorded on
+            # them are replayed once at the end rather than per version.
+            #
+            # Replaced, not merely touched. A replacement wipes the generated
+            # columns, so re-running the whole history over it is right. An
+            # append leaves them in place, so the same replay would apply every
+            # command a second time to rows that already carry it: `replace
+            # score = score + 1` would add two, and a recorded `gen` would fail
+            # outright because its column already exists.
+            replaced: list[str] = []
+            # Every dataset the plan wrote - created, appended to or replaced.
+            # What is built on the data follows all of them; see pipeline.
+            changed: list[str] = []
+
+            for number, (identity, identity_mode) in enumerate(plan, start=1):
+                questionnaire = catalogue.get(identity)
+                title = questionnaire.title if questionnaire else identity
+                said = f"'{title}'" + (f" ({number} of {len(plan)})" if len(plan) > 1 else "")
+
+                def preparing(export: Any, said: str = said) -> None:
+                    # Called on every poll of the export job. The server's own
+                    # percentage, because preparing the export on Survey
+                    # Solutions is usually the longest wait of the whole sync.
+                    progress.start(
+                        None, "download",
+                        f"Survey Solutions is preparing {said}: {export.progress}%",
+                    )
+                    progress.save_now()
+
+                progress.start(None, "download", f"Asking the server to export {said}")
+                progress.save_now()
+                with session_scope() as db:
+                    run = SyncRun(
+                        connection_id=connection_id,
+                        questionnaire=title,
+                        status=SyncStatus.running,
+                        started_at=utcnow(),
+                        export_format=export_format,
+                    )
+                    db.add(run)
+                    db.flush()
+                    run_id = run.id
+
+                try:
+                    # Kept where it can be downloaded again, and named after the
+                    # run so a connection's history is a list of real archives.
+                    archive = archives_path() / f"{run_id}.zip"
+                    client.export_to_file(
+                        identity,
+                        archive,
+                        export_type=export_format,  # type: ignore[arg-type]
+                        interview_status=interview_status,  # type: ignore[arg-type]
+                        on_progress=preparing,
+                    )
+                    progress.start(None, "download", f"Reading the files of {said}")
+                    progress.save_now()
+                    outcome = _import_export_archive(
+                        connection_id=str(connection_id),
+                        connection_name=connection_name,
+                        title=title,
+                        archive=archive,
+                        project_id=project_id,
+                        mode=identity_mode,
+                        # A questionnaire revised mid-fieldwork exports as a
+                        # separate version, and importing several of them in
+                        # append mode is how they become one dataset. Without
+                        # this there would be nothing in the rows to say which
+                        # version each interview was answered on.
+                        version=questionnaire.version if questionnaire else None,
+                        summary=summary,
+                    )
+                    with session_scope() as db:
+                        run = db.get(SyncRun, run_id)
+                        if run:
+                            run.status = SyncStatus.success
+                            run.finished_at = utcnow()
+                            run.rows_imported = outcome["rows"]
+                            run.datasets_created = outcome["datasets"]
+                            run.archive_path = str(archive)
+                            run.message = (
+                                f"Imported {outcome['rows']:,} records into "
+                                f"{outcome['datasets']} dataset(s)"
+                            )
+                            run.log = outcome["log"]
+                    replaced.extend(outcome.get("replaced_ids") or [])
+                    changed.extend(outcome.get("changed_ids") or [])
+                except (SurveySolutionsError, IngestError) as exc:
+                    logger.error("Sync failed for %s: %s", identity, exc)
+                    summary["errors"].append({"questionnaire": title, "error": str(exc)})
+                    with session_scope() as db:
+                        run = db.get(SyncRun, run_id)
+                        if run:
+                            run.status = SyncStatus.failed
+                            run.finished_at = utcnow()
+                            run.message = str(exc)
+
+            # Now that every version of every questionnaire is in, put back
+            # what was derived from the data. Deferred to here because the
+            # versions of one questionnaire arrive as a replacement followed by
+            # appends: replaying on the replacement alone would compute a
+            # generated variable over the first version's rows and leave it
+            # blank on the rest, and a recorded `drop if` would never reach
+            # them. Then the merges, the scripts and the indicators, in that
+            # order - see pipeline.after_import.
+            progress.finish(
+                None,
+                "download",
+                f"{summary['rows']:,} records into {len(summary['datasets'])} dataset(s)"
+                + (
+                    f"; {len(summary['errors'])} questionnaire(s) failed"
+                    if summary["errors"]
+                    else ""
+                ),
+                status="warning" if summary["errors"] else "done",
+                items=_imported(summary["datasets"])
+                + [
+                    {"name": entry["questionnaire"], "status": "failed", "detail": entry["error"]}
+                    for entry in summary["errors"]
+                ],
+            )
+            progress.save_now()
+            if changed:
+                with session_scope() as db:
+                    aftermath = after_import(
+                        db,
+                        changed=changed,
+                        replaced=replaced,
+                        replay=True,
+                        progress=progress,
+                    )
+                    # The counts were read per version, before these commands
+                    # ran, so a recorded `drop if` left the job reporting the
+                    # file's rows rather than the dataset's.
+                    for entry in summary["datasets"]:
+                        dataset = db.get(Dataset, entry["id"])
+                        if dataset is not None:
+                            entry["rows"] = dataset.row_count
+                    notes = aftermath.notes()
+                    if notes:
+                        summary.setdefault("warnings", []).extend(notes)
+            else:
+                progress.skip_rest(None, "Nothing was imported")
+                progress.save_now()
+
+        prune_archives(str(connection_id))
+
+        with session_scope() as db:
+            connection = db.get(Connection, connection_id)
+            if connection:
+                connection.last_sync_at = utcnow()
+                connection.last_sync_status = (
+                    SyncStatus.failed if summary["errors"] else SyncStatus.success
+                )
+                connection.last_sync_error = (
+                    summary["errors"][0]["error"] if summary["errors"] else ""
+                )
+            job = db.get(Job, job_id)
+            if job:
+                job.status = (
+                    JobStatus.failed
+                    if summary["errors"] and not summary["datasets"]
+                    else JobStatus.success
+                )
+                job.finished_at = utcnow()
+                job.progress = 100.0
+                job.result = summary
+                if summary["errors"]:
+                    job.error = summary["errors"][0]["error"]
+        return summary
+
+    except Exception as exc:  # noqa: BLE001 - always record why a job died
+        logger.exception("Sync job %s failed", job_id)
+        progress.skip_rest(None, f"Stopped: {exc}")
+        progress.save_now()
+        with session_scope() as db:
+            job = db.get(Job, job_id)
+            if job:
+                job.status = JobStatus.failed
+                job.finished_at = utcnow()
+                job.error = str(exc)
+            connection = db.get(Connection, connection_id)
+            if connection:
+                connection.last_sync_status = SyncStatus.failed
+                connection.last_sync_error = str(exc)
+                connection.last_sync_at = utcnow()
+        return {"error": str(exc)}
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+def _imported(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """The datasets an import wrote, as the activity panel lists them."""
+    return [
+        {"name": entry["name"], "status": "imported", "detail": f"{entry['rows'] or 0:,} rows"}
+        for entry in entries
+    ]
+
+
+ARCHIVES_KEPT = 5
+
+# Written onto every row a sync imports, so three questionnaire versions
+# appended into one dataset stay tellable apart afterwards. Named for what it
+# is rather than "version", which a questionnaire may well use itself.
+QUESTIONNAIRE_VERSION_COLUMN = "questionnaire_version"
+
+
+def archives_path() -> Path:
+    return settings.storage_path / "sync-archives"
+
+
+def prune_archives(connection_id: str, keep: int = ARCHIVES_KEPT) -> None:
+    """Keep the last few export zips per connection and delete the rest.
+
+    An export is tens of megabytes and a connection syncing every six hours
+    produces four a day, so keeping all of them fills the disk of the machine
+    the platform runs on. The recent ones are the ones anybody downloads.
+    """
+    with session_scope() as db:
+        runs = db.scalars(
+            select(SyncRun)
+            .where(SyncRun.connection_id == connection_id, SyncRun.archive_path != "")
+            .order_by(SyncRun.started_at.desc())
+        ).all()
+        for run in runs[keep:]:
+            Path(run.archive_path).unlink(missing_ok=True)
+            run.archive_path = ""
+
+
+def plan_version_imports(
+    identities: list[str],
+    versions: dict[str, int],
+    mode: str,
+) -> list[tuple[str, str]]:
+    """Decide the order to import questionnaire versions in, and how.
+
+    A questionnaire revised mid-fieldwork lives on the server as several
+    versions of one questionnaire - v1, v2, v3 - with the interviews spread
+    across them. They are one survey and belong in one dataset, which is what
+    appending three exported zips by hand achieves.
+
+    So: version order, and only the first version of each questionnaire settles
+    what happens to what is already stored. Every later one is appended,
+    whatever the run asked for. Applying "replace" to each version in turn was
+    the bug: v2 wiped out v1 and v3 wiped out v2, and a run that reported
+    importing three versions left a dataset holding only the last. Nothing
+    announced it - the row count was just quietly too low.
+
+    An identity is ``guid$version``; the part before the ``$`` is the
+    questionnaire, and the same questionnaire under two versions is two
+    identities. An identity the catalogue does not know sorts first and is
+    otherwise treated normally, so an unknown version cannot silently drop out.
+
+    A bare ``guid``, with no ``$version`` on it, means every version of that
+    questionnaire - which is what a saved selection has to be able to say. A
+    list of exact identities is right for one import and wrong for a repeating
+    one: a questionnaire revised again next month publishes a version the
+    stored list has never heard of, and a scheduled import would go on pulling
+    v1 to v3 while the fieldwork moved on to v4, with nothing saying so.
+    """
+    wanted: list[str] = []
+    for choice in identities:
+        if "$" in choice:
+            wanted.append(choice)
+            continue
+        every = [i for i in versions if i.split("$")[0] == choice]
+        # A questionnaire the catalogue no longer lists keeps its own entry, so
+        # the run fails against it and says so rather than quietly importing
+        # nothing at all.
+        wanted.extend(every or [choice])
+
+    ordered = sorted(dict.fromkeys(wanted), key=lambda i: (i.split("$")[0], versions.get(i, 0)))
+    seen: set[str] = set()
+    plan: list[tuple[str, str]] = []
+    for identity in ordered:
+        questionnaire = identity.split("$")[0]
+        plan.append((identity, "append" if questionnaire in seen else mode))
+        seen.add(questionnaire)
+    return plan
+
+
+@celery_app.task(name="app.workers.tasks.run_folder_import", bind=True)
+def run_folder_import(self: Any, job_id: str) -> dict[str, Any]:
+    """Import whatever is new in a folder connection's directory.
+
+    The same import a server connection runs, with the download taken out: a
+    file somebody put there stands where the export would have been, and
+    everything after it - one dataset per roster level, replaced in place,
+    derived columns replayed - is the same code.
+    """
+    with session_scope() as db:
+        job = db.get(Job, job_id)
+        if job is None:
+            return {"error": "job not found"}
+        job.status = JobStatus.running
+        job.started_at = utcnow()
+        job.celery_task_id = getattr(self.request, "id", "") or ""
+        params = dict(job.params or {})
+        db.flush()
+
+    connection_id = params.get("connection_id")
+    mode = params.get("mode") or "replace"
+    summary: dict[str, Any] = {"datasets": [], "errors": [], "rows": 0, "skipped": 0}
+    progress = Progress(job_id, [("read", "Read new files in the folder"), *AFTER_IMPORT])
+
+    try:
+        progress.start(None, "read", "Looking for new files")
+        progress.save_now()
+        with session_scope() as db:
+            connection = db.get(Connection, connection_id)
+            if connection is None:
+                raise file_source.FolderError("The connection no longer exists")
+            folder = file_source.resolve(connection.folder_path)
+            connection.last_sync_status = SyncStatus.running
+            connection_name = connection.name
+            project_id = params.get("project_id") or connection.project_id
+            seen = {
+                record.digest
+                for record in db.scalars(
+                    select(FolderImport).where(FolderImport.connection_id == connection_id)
+                ).all()
+            }
+
+        waiting = 0
+        pending: list[Any] = []
+        for found in file_source.listing(folder):
+            if not found.settled:
+                # Still being copied in. It will be picked up on the next run,
+                # which is a minute away, rather than read half-written now.
+                waiting += 1
+                continue
+            if found.digest in seen:
+                summary["skipped"] += 1
+                continue
+            pending.append(found)
+
+        replaced: list[str] = []
+        changed: list[str] = []
+        for number, found in enumerate(pending, start=1):
+            progress.start(None, "read", f"Reading {found.name} ({number} of {len(pending)})")
+            progress.save_now()
+            with session_scope() as db:
+                run = SyncRun(
+                    connection_id=connection_id,
+                    questionnaire=found.name,
+                    status=SyncStatus.running,
+                    started_at=utcnow(),
+                    export_format="",
+                )
+                db.add(run)
+                db.flush()
+                run_id = run.id
+            try:
+                outcome = _import_export_archive(
+                    connection_id=str(connection_id),
+                    connection_name=connection_name,
+                    title=Path(found.name).stem,
+                    archive=found.path,
+                    project_id=project_id,
+                    mode=mode,
+                    summary=summary,
+                )
+                with session_scope() as db:
+                    run = db.get(SyncRun, run_id)
+                    if run:
+                        run.status = SyncStatus.success
+                        run.finished_at = utcnow()
+                        run.rows_imported = outcome["rows"]
+                        run.datasets_created = outcome["datasets"]
+                        # Deliberately no archive_path: the file is the
+                        # operator's own, sitting where they put it, and the
+                        # pruning that keeps five archives per connection must
+                        # never reach into their folder and delete it.
+                        run.message = (
+                            f"Imported {found.name}: {outcome['rows']:,} records into "
+                            f"{outcome['datasets']} dataset(s)"
+                        )
+                        run.log = outcome["log"]
+                    db.add(
+                        FolderImport(
+                            connection_id=str(connection_id),
+                            file_name=found.name,
+                            digest=found.digest,
+                            size=found.size,
+                            modified_at=found.modified,
+                            imported_at=utcnow(),
+                            run_id=run_id,
+                        )
+                    )
+                replaced.extend(outcome.get("replaced_ids") or [])
+                changed.extend(outcome.get("changed_ids") or [])
+            except (IngestError, OSError) as exc:
+                logger.error("Folder import failed for %s: %s", found.name, exc)
+                summary["errors"].append({"questionnaire": found.name, "error": str(exc)})
+                with session_scope() as db:
+                    run = db.get(SyncRun, run_id)
+                    if run:
+                        run.status = SyncStatus.failed
+                        run.finished_at = utcnow()
+                        run.message = str(exc)
+                    # Recorded even though it failed, so a file that cannot be
+                    # read is not retried every five minutes for a week. A
+                    # corrected file is a different file and will be seen.
+                    db.add(
+                        FolderImport(
+                            connection_id=str(connection_id),
+                            file_name=found.name,
+                            digest=found.digest,
+                            size=found.size,
+                            modified_at=found.modified,
+                            imported_at=utcnow(),
+                            run_id=run_id,
+                        )
+                    )
+
+        progress.finish(
+            None,
+            "read",
+            (
+                f"{len(pending)} new file(s), {summary['rows']:,} records"
+                if pending
+                else "No new files"
+            )
+            + (f"; {waiting} still being copied in" if waiting else ""),
+            status="warning" if summary["errors"] else ("done" if pending else "skipped"),
+            items=[
+                {"name": entry["questionnaire"], "status": "failed", "detail": entry["error"]}
+                for entry in summary["errors"]
+            ],
+        )
+        progress.save_now()
+        if changed:
+            with session_scope() as db:
+                # Replayed, then merges, then scripts, then indicators: the
+                # same order a sync owes, because this is the sync with the
+                # download taken out. See pipeline.after_import.
+                aftermath = after_import(
+                    db, changed=changed, replaced=replaced, replay=True, progress=progress
+                )
+                # The counts were read before those commands ran, so a dropped
+                # row would leave the job reporting the file's rows rather than
+                # the dataset's.
+                for entry in summary["datasets"]:
+                    dataset = db.get(Dataset, entry["id"])
+                    if dataset is not None:
+                        entry["rows"] = dataset.row_count
+                notes = aftermath.notes()
+                if notes:
+                    summary.setdefault("warnings", []).extend(notes)
+        else:
+            progress.skip_rest(None, "Nothing was imported")
+            progress.save_now()
+
+        with session_scope() as db:
+            connection = db.get(Connection, connection_id)
+            if connection:
+                connection.last_sync_at = utcnow()
+                connection.last_sync_status = (
+                    SyncStatus.failed if summary["errors"] else SyncStatus.success
+                )
+                connection.last_sync_error = (
+                    summary["errors"][0]["error"] if summary["errors"] else ""
+                )
+            job = db.get(Job, job_id)
+            if job:
+                # A run where every file failed imported nothing, and a job
+                # that reports success for it hides the whole import from
+                # whoever is watching the job list.
+                job.status = (
+                    JobStatus.failed
+                    if summary["errors"] and not summary["datasets"]
+                    else JobStatus.success
+                )
+                job.finished_at = utcnow()
+                job.progress = 100.0
+                job.result = {
+                    "imported": len(summary["datasets"]),
+                    "rows": summary["rows"],
+                    "already_imported": summary["skipped"],
+                    "still_arriving": waiting,
+                    "errors": summary["errors"],
+                    "warnings": summary.get("warnings", []),
+                }
+                if summary["errors"]:
+                    job.error = summary["errors"][0]["error"]
+        return {"imported": len(summary["datasets"]), "rows": summary["rows"]}
+
+    except file_source.FolderError as exc:
+        logger.error("Folder import failed: %s", exc)
+        progress.skip_rest(None, f"Stopped: {exc}")
+        progress.save_now()
+        with session_scope() as db:
+            connection = db.get(Connection, connection_id)
+            if connection:
+                connection.last_sync_status = SyncStatus.failed
+                connection.last_sync_error = str(exc)
+                connection.last_sync_at = utcnow()
+            job = db.get(Job, job_id)
+            if job:
+                _fail_job(db, job, str(exc))
+        return {"error": str(exc)}
+
+
+def _import_export_archive(
+    *,
+    connection_id: str,
+    connection_name: str,
+    title: str,
+    archive: Path,
+    project_id: str | None,
+    mode: str,
+    summary: dict[str, Any],
+    version: int | None = None,
+) -> dict[str, Any]:
+    """Import a whole export, the same way an uploaded archive is imported.
+
+    A Survey Solutions export is one file per roster level plus the paradata,
+    and this used to keep only the first of them - so everything below the
+    interview level, and every record of how the fieldwork went, was downloaded
+    and thrown away. Sending the archive through the same path an upload takes
+    also means a re-import replaces each dataset in place, keeping the ids that
+    charts, indicators and merges are built on.
+    """
+    with session_scope() as db:
+        result = load_archive_as_datasets(
+            db,
+            archive_path=archive,
+            archive_name=f"{title}.zip",
+            project_id=project_id,
+            created_by=None,
+            name_prefix="",
+            mode=mode,
+            stamp=(QUESTIONNAIRE_VERSION_COLUMN, str(version)) if version else None,
+            # No replay here, deliberately. A questionnaire revised mid
+            # fieldwork arrives as several versions: the first replaces what is
+            # stored and the rest are appended onto it, and `after_replace`
+            # fires only on the replacement. Replaying here would therefore
+            # compute a generated variable over the first version's rows and
+            # leave it blank on every later one, and a recorded `drop if`
+            # would never reach them at all. The caller replays once the whole
+            # plan has been imported; see run_connection_sync.
+        )
+        db.flush()
+        for dataset in result.datasets:
+            summary["datasets"].append(
+                {"id": dataset.id, "name": dataset.name, "rows": dataset.row_count}
+            )
+        summary["rows"] += result.rows
+        log = result.created + result.replaced + result.appended
+        # The connection is recorded on each dataset so a later sync of the same
+        # questionnaire finds them, and so the UI can say where they came from.
+        for dataset in result.datasets:
+            dataset.connection_id = connection_id
+            if dataset.source == DatasetSource.upload:
+                dataset.source = DatasetSource.survey_solutions
+            tags = list(dataset.tags or [])
+            if connection_name and "survey-solutions" not in tags:
+                tags.append("survey-solutions")
+                dataset.tags = tags
+        return {
+            "rows": result.rows,
+            "datasets": len(result.datasets),
+            "replaced_ids": list(result.replaced_ids),
+            "changed_ids": [dataset.id for dataset in result.datasets],
+            "log": log + result.warnings,
+        }
+
+
+@celery_app.task(name="app.workers.tasks.run_report_burst", bind=True)
+def run_report_burst(self: Any, job_id: str) -> dict[str, Any]:
+    """One pinned export per value of a filter, zipped.
+
+    On the worker because it is the same work as an export repeated once per
+    value: fourteen provinces is fourteen passes over the dataset for every
+    widget on the board, which is minutes rather than the seconds a request
+    should take.
+    """
+    # Imported here, as the snapshot task does: the renderer lives with the
+    # API, and importing it at module scope would have the worker pull in the
+    # whole endpoint layer at start-up.
+    from app.api.v1.endpoints.dashboards import _render_widget
+    from app.services import reports
+
+    with session_scope() as db:
+        job = db.get(Job, job_id)
+        if job is None:
+            return {"error": "job not found"}
+        job.status = JobStatus.running
+        job.started_at = utcnow()
+        job.celery_task_id = getattr(self.request, "id", "") or ""
+        params = dict(job.params or {})
+        db.flush()
+
+    dashboard_id = str(params.get("dashboard_id") or "")
+    variable = str(params.get("variable") or "")
+
+    try:
+        with session_scope() as db:
+            dashboard = db.get(Dashboard, dashboard_id)
+            if dashboard is None:
+                raise LookupError("The dashboard no longer exists.")
+
+            def progress(done: int, total: int) -> None:
+                # Its own session: the burst holds the one above open for
+                # minutes, and a progress bar nobody can read until the end
+                # is not a progress bar.
+                with session_scope() as tick:
+                    watching = tick.get(Job, job_id)
+                    if watching is not None:
+                        watching.progress = done / total if total else 1.0
+
+            summary = reports.burst(
+                db,
+                dashboard,
+                variable,
+                render=lambda widget, filters: _render_widget(db, widget, filters),
+                destination=reports.directory() / f"{job_id}.zip",
+                on_progress=progress,
+            )
+    except Exception as error:  # noqa: BLE001 - recorded on the job and reported
+        logger.exception("Report burst failed for dashboard %s", dashboard_id)
+        with session_scope() as db:
+            job = db.get(Job, job_id)
+            if job is not None:
+                job.status = JobStatus.failed
+                job.error = str(error)
+                job.finished_at = utcnow()
+        return {"error": str(error)}
+
+    with session_scope() as db:
+        job = db.get(Job, job_id)
+        if job is not None:
+            job.status = JobStatus.success
+            job.progress = 1.0
+            job.result = summary
+            job.finished_at = utcnow()
+        # Flushed first because these sessions do not autoflush: the prune
+        # counts the runs whose zips are still on disk, and the run that just
+        # finished is the newest of them.
+        db.flush()
+        reports.prune_bursts(db, dashboard_id)
+    return {"written": len(summary["written"]), "skipped": len(summary["skipped"])}
+
+
+@celery_app.task(name="app.workers.tasks.schedule_due_syncs")
+def schedule_due_syncs() -> dict[str, Any]:
+    """Queue the automatic imports that are due.
+
+    Runs every few minutes, and each connection decides for itself whether its
+    moment has arrived - an elapsed interval, or a clock time in its own zone
+    that has passed with nothing having run since.
+    """
+    queued: list[tuple[str, SourceKind]] = []
+    now = utcnow()
+    with session_scope() as db:
+        connections = db.scalars(
+            select(Connection).where(
+                Connection.is_active.is_(True), Connection.sync_enabled.is_(True)
+            )
+        ).all()
+        for connection in connections:
+            # A server connection with nothing ticked has nothing to ask for.
+            # A folder connection does not choose questionnaires: what is in
+            # the folder is what there is.
+            if (
+                connection.source_kind != SourceKind.folder
+                and not connection.questionnaires
+            ):
+                continue
+            if connection.last_sync_status == SyncStatus.running:
+                continue
+            if not is_due(
+                mode=connection.sync_mode or "interval",
+                times=list(connection.sync_times or []),
+                timezone=connection.sync_timezone or "UTC",
+                interval_minutes=connection.sync_interval_minutes,
+                last_sync_at=connection.last_sync_at,
+                now=now,
+            ):
+                continue
+
+            job = Job(
+                job_type="sync",
+                status=JobStatus.queued,
+                title=f"Scheduled import from {connection.name}",
+                params={
+                    "connection_id": connection.id,
+                    "questionnaires": list(connection.questionnaires),
+                    "interview_status": connection.interview_status,
+                    "project_id": connection.project_id,
+                    "mode": "replace",
+                    "source_kind": connection.source_kind.value,
+                },
+            )
+            db.add(job)
+            db.flush()
+            queued.append((job.id, connection.source_kind))
+
+    for job_id, kind in queued:
+        if kind == SourceKind.folder:
+            run_folder_import.delay(job_id)
+        else:
+            run_connection_sync.delay(job_id)
+    if queued:
+        logger.info("Queued %s scheduled sync job(s)", len(queued))
+    return {"queued": len(queued)}
+
+
+@celery_app.task(name="app.workers.tasks.refresh_all_indicators")
+def refresh_all_indicators() -> dict[str, Any]:
+    """Recompute indicators, store a snapshot, then evaluate alert rules."""
+    refreshed = 0
+    triggered = 0
+    with session_scope() as db:
+        indicators = db.scalars(select(Indicator).where(Indicator.is_active.is_(True))).all()
+        for indicator in indicators:
+            try:
+                refresh_indicator(db, indicator)
+                refreshed += 1
+            except Exception as exc:  # noqa: BLE001 - one bad spec must not stop the rest
+                logger.warning("Indicator '%s' failed to refresh: %s", indicator.name, exc)
+
+        rules = db.scalars(select(AlertRule).where(AlertRule.is_active.is_(True))).all()
+        for rule in rules:
+            try:
+                if evaluate_alert_rule(db, rule) is not None:
+                    triggered += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Alert rule '%s' failed: %s", rule.name, exc)
+
+    logger.info("Refreshed %s indicator(s); %s alert(s) fired", refreshed, triggered)
+    return {"refreshed": refreshed, "alerts_triggered": triggered}
+
+
+@celery_app.task(name="app.workers.tasks.run_all_quality_checks")
+def run_all_quality_checks() -> dict[str, Any]:
+    passed = failed = 0
+    with session_scope() as db:
+        rules = db.scalars(select(QualityRule).where(QualityRule.is_active.is_(True))).all()
+        for rule in rules:
+            try:
+                result = execute_rule(db, rule)
+                if result.passed:
+                    passed += 1
+                else:
+                    failed += 1
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("Quality rule '%s' failed to run: %s", rule.name, exc)
+                failed += 1
+    logger.info("Quality checks complete: %s passed, %s failed", passed, failed)
+    return {"passed": passed, "failed": failed}
+
+
+@celery_app.task(name="app.workers.tasks.run_upload_import", bind=True)
+def run_upload_import(self: Any, job_id: str) -> dict[str, Any]:
+    """Import a file somebody uploaded, off the request that carried it.
+
+    A census roster export is hundreds of megabytes: reading it takes longer
+    than any proxy will hold a request open, and reading it in the API process
+    takes memory from every other request. Here it costs the worker a slot and
+    the browser a job to watch.
+    """
+    with session_scope() as db:
+        job = db.get(Job, job_id)
+        if job is None:
+            return {"error": "job not found"}
+        job.status = JobStatus.running
+        job.started_at = utcnow()
+        params = dict(job.params or {})
+        created_by = job.created_by
+
+    upload_paths = [Path(str(one)) for one in (params.get("upload_paths") or [])]
+    password = params.get("password") or None
+    filenames = [str(one) for one in (params.get("filenames") or [])]
+    if not filenames:
+        filenames = [path.name for path in upload_paths]
+    labels = [str(one) for one in (params.get("labels") or [])]
+    version_column = str(params.get("version_column") or "")
+    archive = bool(upload_paths) and upload_paths[0].suffix.lower() == ".zip"
+    summary: dict[str, Any] = {}
+    review = bool(params.get("review"))
+    candidates = []
+    progress = Progress(job_id, [("read", "Read the uploaded files"), *AFTER_IMPORT])
+
+    try:
+        if not upload_paths or not all(path.is_file() for path in upload_paths):
+            raise IngestError("The uploaded file is no longer on the server.")
+        progress.start(None, "read", ", ".join(filenames))
+        progress.save_now()
+        with session_scope() as db:
+            from app.services.import_review import baseline, prepare
+
+            before = baseline(db, params.get("project_id") or None) if review else {}
+            if archive:
+                outcome = ArchiveImport()
+                mode = str(params.get("mode") or "replace")
+                for index, (path, one) in enumerate(zip(upload_paths, filenames, strict=True)):
+                    step = load_archive_as_datasets(
+                        db,
+                        archive_path=path,
+                        archive_name=one,
+                        project_id=str(params.get("project_id") or "") or None,
+                        created_by=created_by,
+                        combine_all=bool(params.get("combine_all")),
+                        name_prefix=str(params.get("name_prefix") or ""),
+                        # The first lands under the mode asked for; the rest are
+                        # appended onto what it produced.
+                        mode=mode if index == 0 else "append",
+                        stamp=(version_column, labels[index]) if version_column else None,
+                        # A variable somebody generated is not in the export
+                        # that just landed, so the commands recorded on each
+                        # replaced dataset are run again over the new data.
+                        # Not while reviewing: nothing has been published yet.
+                        after_replace=None if review else stata.replay,
+                        password=password,
+                    )
+                    outcome = merge_imports(outcome, step)
+                db.flush()
+                warnings = list(outcome.warnings)
+                if not review:
+                    # Committed here, by the first step's save: the files are
+                    # read, and what follows them is saved step by step.
+                    progress.finish(
+                        db,
+                        "read",
+                        f"{outcome.rows:,} records into {len(outcome.datasets)} dataset(s)",
+                        items=_imported(
+                            [{"name": d.name, "rows": d.row_count} for d in outcome.datasets]
+                        ),
+                    )
+                    aftermath = after_import(
+                        db,
+                        changed=[d.id for d in outcome.datasets],
+                        replaced=outcome.replaced_ids,
+                        progress=progress,
+                    )
+                    warnings.extend(aftermath.notes())
+                summary = {
+                    "datasets": [
+                        {"id": d.id, "name": d.name, "rows": d.row_count} for d in outcome.datasets
+                    ],
+                    "created": outcome.created,
+                    "replaced": outcome.replaced,
+                    "appended": outcome.appended,
+                    "skipped": outcome.skipped,
+                    "warnings": sorted(
+                        set(warnings)
+                        | {w for d in outcome.datasets for w in (d.meta or {}).get("warnings", [])}
+                    ),
+                    "rows": outcome.rows,
+                }
+            else:
+                # One record per file. dataset_id is the single-record shape the
+                # previous release queued with, read here so a job already
+                # waiting when this one starts is still finished rather than
+                # failed.
+                wanted = [str(one) for one in (params.get("dataset_ids") or [])]
+                if not wanted:
+                    wanted = [str(params.get("dataset_id") or "")]
+                targets = [db.get(Dataset, one) for one in wanted]
+                if not targets or any(one is None for one in targets):
+                    raise IngestError("The dataset record for this upload is gone.")
+                if len(targets) != len(upload_paths):
+                    raise IngestError("This upload no longer matches the datasets it was for.")
+                for one, path in zip(targets, upload_paths, strict=True):
+                    load_file_into_dataset(db, one, path)
+                db.flush()
+                if not review:
+                    # A file always makes a dataset of its own, so nothing is
+                    # built on it yet and there is nothing to follow it.
+                    progress.finish(
+                        db, "read", f"{sum(one.row_count or 0 for one in targets):,} records"
+                    )
+                    progress.skip_rest(db, "A new dataset: nothing is built on it yet")
+                dataset = targets[0]
+                summary = {
+                    "datasets": [
+                        {"id": one.id, "name": one.name, "rows": one.row_count}
+                        for one in targets
+                    ],
+                    "rows": sum(one.row_count or 0 for one in targets),
+                    "columns": dataset.column_count,
+                }
+            if review:
+                candidates, changes = prepare(
+                    db, outcome.datasets if archive else targets, before
+                )
+                # A single-file upload allocated a pending row before queuing;
+                # retain its identity and expected version on acceptance.
+                summary = {
+                    "review": True,
+                    "job_id": job_id,
+                    "changes": changes,
+                    "datasets": [],
+                    "warnings": summary.get("warnings", []),
+                }
+                db.rollback()
+        if review:
+            progress.finish(None, "read", "Read; waiting for the changes to be reviewed")
+            progress.skip_rest(None, "Runs once the reviewed changes are accepted")
+            progress.save_now()
+    except (IngestError, OSError, MemoryError) as exc:
+        logger.error("Upload import job %s failed: %s", job_id, exc)
+        progress.finish(None, "read", str(exc) or exc.__class__.__name__, status="failed")
+        progress.skip_rest(None, "The files could not be read")
+        progress.save_now()
+        with session_scope() as db:
+            job = db.get(Job, job_id)
+            if job:
+                job.status = JobStatus.failed
+                job.finished_at = utcnow()
+                job.progress = 100.0
+                job.error = str(exc) or exc.__class__.__name__
+        return {"error": str(exc)}
+    finally:
+        for path in upload_paths:
+            path.unlink(missing_ok=True)
+
+    with session_scope() as db:
+        job = db.get(Job, job_id)
+        if job:
+            if review:
+                job.params = {**job.params, "candidates": candidates}
+            job.status = JobStatus.success
+            job.finished_at = utcnow()
+            job.progress = 100.0
+            job.result = summary
+    return summary
+
+
+@celery_app.task(name="app.workers.tasks.ingest_dataset_file")
+def ingest_dataset_file(dataset_id: str, file_path: str) -> dict[str, Any]:
+    """Used for large uploads that are handed off to the worker."""
+    with session_scope() as db:
+        dataset = db.get(Dataset, dataset_id)
+        if dataset is None:
+            return {"error": "dataset not found"}
+        try:
+            load_file_into_dataset(db, dataset, Path(file_path))
+            return {"rows": dataset.row_count, "columns": dataset.column_count}
+        except IngestError as exc:
+            return {"error": str(exc)}
+        finally:
+            Path(file_path).unlink(missing_ok=True)
+
+
+@celery_app.task(name="app.workers.tasks.prune_history")
+def prune_history() -> dict[str, int]:
+    """Keep the operational tables, and the files they point at, bounded."""
+    now = utcnow()
+    removed = {
+        "snapshots": 0,
+        "alerts": 0,
+        "quality_results": 0,
+        "jobs": 0,
+        "report_bursts": 0,
+    }
+    with session_scope() as db:
+        snapshot_cutoff = now - dt.timedelta(days=SNAPSHOT_RETENTION_DAYS)
+        for snapshot in db.scalars(
+            select(IndicatorSnapshot).where(IndicatorSnapshot.computed_at < snapshot_cutoff)
+        ).all():
+            db.delete(snapshot)
+            removed["snapshots"] += 1
+
+        alert_cutoff = now - dt.timedelta(days=ALERT_RETENTION_DAYS)
+        for alert in db.scalars(
+            select(Alert).where(
+                Alert.created_at < alert_cutoff, Alert.status == AlertStatus.resolved
+            )
+        ).all():
+            db.delete(alert)
+            removed["alerts"] += 1
+
+        quality_cutoff = now - dt.timedelta(days=QUALITY_RESULT_RETENTION_DAYS)
+        for result in db.scalars(
+            select(QualityResult).where(QualityResult.run_at < quality_cutoff)
+        ).all():
+            db.delete(result)
+            removed["quality_results"] += 1
+
+        job_cutoff = now - dt.timedelta(days=JOB_RETENTION_DAYS)
+        for job in db.scalars(select(Job).where(Job.created_at < job_cutoff)).all():
+            db.delete(job)
+            removed["jobs"] += 1
+
+    # After the rows have gone, and in its own transaction so it reads them as
+    # gone: a report burst's zip is named for its job and reachable only
+    # through that row, so pruning the row is what leaves the file stranded.
+    from app.services import reports
+
+    with session_scope() as db:
+        removed["report_bursts"] = reports.sweep_bursts(db)
+
+    logger.info("Pruned old records: %s", removed)
+    # Large uploads sent in pieces and never finished or used.
+    removed["staged_uploads"] = staged_uploads.prune()
+    return removed
+
+
+
+
+@celery_app.task(name="app.workers.tasks.take_due_snapshots")
+def take_due_snapshots() -> dict[str, Any]:
+    """Capture the boards whose moment has come, and prune what they keep.
+
+    Each dashboard decides for itself whether it is owed one, the same way a
+    connection decides whether its import is due - a clock time on a chosen
+    weekday, read in the board's own zone, with nothing having run since it
+    passed.
+
+    One board failing does not stop the rest: a widget whose dataset was
+    archived raises while it renders, and the other boards scheduled for the
+    same minute should still be captured.
+    """
+    # Imported here rather than at module scope: the renderer lives with the
+    # API, and importing that at worker start-up pulls the whole app in before
+    # the worker has settled.
+    from app.api.v1.endpoints.dashboards import _render_widget
+
+    taken: list[str] = []
+    failed: list[dict[str, str]] = []
+    now = utcnow()
+    with session_scope() as db:
+        boards = db.scalars(
+            select(Dashboard).where(Dashboard.snapshot_enabled.is_(True))
+        ).all()
+        for dashboard in boards:
+            if not snapshots.due(dashboard, now):
+                continue
+            try:
+                snapshot = snapshots.take(
+                    db,
+                    dashboard,
+                    render=lambda widget, filters: _render_widget(db, widget, filters),
+                    automatic=True,
+                    now=now,
+                )
+                snapshots.prune(db, dashboard)
+                db.commit()
+                taken.append(snapshot.id)
+            except Exception as error:  # noqa: BLE001 - one board must not stop the rest
+                db.rollback()
+                logger.exception("Snapshot failed for dashboard %s", dashboard.id)
+                failed.append({"dashboard": dashboard.id, "error": str(error)})
+
+    return {"taken": len(taken), "failed": failed}
+
+
+# A task that raises marks its own job failed. A task whose *process* is killed
+# cannot: the kernel takes it mid-statement and nothing in it runs again. That
+# is not hypothetical - a census archive read entirely into memory was killed by
+# the OOM killer, and the job it had been running sat at "running" for hours
+# while the interface waited on it. Celery notices (WorkerLostError in the main
+# process) and these two make sure the job row hears about it.
+OUT_OF_MEMORY_HINT = (
+    "The worker ran out of memory reading this file and was stopped. Import it "
+    "from the server instead, which reads large files a piece at a time: see "
+    "'Importing from the server' in the deployment guide."
+)
+
+
+def _fail_job(db: Any, job: Job, reason: str) -> None:
+    job.status = JobStatus.failed
+    job.finished_at = utcnow()
+    job.progress = 100.0
+    job.error = reason
+
+
+@task_failure.connect
+def record_task_failure(
+    sender: Any = None, task_id: str = "", exception: Any = None, **_: Any
+) -> None:
+    """Mark the job behind a task that died without being able to say so.
+
+    Runs in the main process, which survives a child being killed, so this is
+    the last chance to turn a job nobody will ever finish into one that says
+    why. A task that handled its own failure has already set a status and is
+    left alone.
+    """
+    if not task_id:
+        return
+    # WorkerLostError means the process was taken away rather than the code
+    # failing, and on an import that is almost always memory. Naming the likely
+    # cause beats a traceback nobody outside this file can read.
+    lost = type(exception).__name__ == "WorkerLostError"
+    reason = OUT_OF_MEMORY_HINT if lost else (str(exception) or type(exception).__name__)
+    try:
+        with session_scope() as db:
+            job = db.scalar(select(Job).where(Job.celery_task_id == task_id))
+            if job is None or job.status in (JobStatus.success, JobStatus.failed):
+                return
+            _fail_job(db, job, reason)
+            logger.error("Job %s failed with the task that was running it: %s", job.id, reason)
+    except Exception:  # noqa: BLE001 - a failing handler must not mask the failure
+        logger.exception("Could not record the failure of task %s", task_id)
+
+
+@celery_app.task(name="app.workers.tasks.reap_stale_jobs")
+def reap_stale_jobs() -> dict[str, int]:
+    """Fail jobs that cannot still be running, whatever happened to the worker.
+
+    The signal above covers a child process being killed. It cannot cover the
+    whole container going away - a restart, a deploy, the host rebooting - since
+    nothing is left to fire it. Celery will not let a task run longer than its
+    hard time limit, so a job still claiming to be running well past that is
+    finished one way or another, and saying so beats a progress bar that never
+    moves.
+    """
+    # Ten minutes past the hard limit, so a task being killed at the limit has
+    # time to record its own failure before this decides for it.
+    cutoff = utcnow() - dt.timedelta(seconds=celery_app.conf.task_time_limit + 600)
+    failed = 0
+    with session_scope() as db:
+        stale = db.scalars(
+            select(Job).where(Job.status == JobStatus.running, Job.started_at < cutoff)
+        ).all()
+        for job in stale:
+            _fail_job(
+                db,
+                job,
+                "The worker running this stopped before it finished, and it has "
+                "been left behind. Start the import again.",
+            )
+            failed += 1
+    if failed:
+        logger.warning("Failed %s job(s) left running by a worker that went away", failed)
+    return {"failed": failed}

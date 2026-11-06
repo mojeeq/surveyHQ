@@ -1,0 +1,100 @@
+[
+  {
+    "family": "Inter Variable",
+    "weight": "100 900",
+    "file": "inter-latin-wght-normal.woff2",
+    "sha256": "3100e775e8616cd2611beecfa23a4263d7037586789b43f035236a2e6fbd4c62",
+    "bytes": 48256
+  },
+  {
+    "family": "Inter Variable",
+    "weight": "100 900",
+    "file": "inter-latin-ext-wght-normal.woff2",
+    "sha256": "34b9c504cab7a73e37b746343a449132e56cf7b5481af2cb81dc74dcff25c956",
+    "bytes": 85068
+  },
+  {
+    "family": "Source Sans 3 Variable",
+    "weight": "200 900",
+    "file": "source-sans-3-latin-wght-normal.woff2",
+    "sha256": "7a19a7027e125257d310c6dbd78ae3a30b5ea1e3794d60b12bb28227a003bfda",
+    "bytes": 28740
+  },
+  {
+    "family": "Source Sans 3 Variable",
+    "weight": "200 900",
+    "file": "source-sans-3-latin-ext-wght-normal.woff2",
+    "sha256": "a85a7459bdb3cdc1136751e151a506bae653fc29ada3ca86237477df6f1b59e6",
+    "bytes": 60088
+  },
+  {
+    "family": "IBM Plex Sans Variable",
+    "weight": "100 700",
+    "file": "ibm-plex-sans-latin-wght-normal.woff2",
+    "sha256": "e2291e842cf5af167122a22881a740c7f2dda7716f1e8cd76680264f4a859470",
+    "bytes": 45712
+  },
+  {
+    "family": "IBM Plex Sans Variable",
+    "weight": "100 700",
+    "file": "ibm-plex-sans-latin-ext-wght-normal.woff2",
+    "sha256": "d160e20920ae4d6556518d352d3af27a74e9b0de3d8fe17b1c1044fc75aa2f81",
+    "bytes": 30964
+  },
+  {
+    "family": "Space Grotesk Variable",
+    "weight": "300 700",
+    "file": "space-grotesk-latin-wght-normal.woff2",
+    "sha256": "0640890476fc1198ab4de571fb658de443c4d85b66466ec09534a8737ab1ce9d",
+    "bytes": 22288
+  },
+  {
+    "family": "Space Grotesk Variable",
+    "weight": "300 700",
+    "file": "space-grotesk-latin-ext-wght-normal.woff2",
+    "sha256": "952dddb45d2f96f71cbf3b7f510b24379afc3c89ea02fcf89d377b45d62c0166",
+    "bytes": 18940
+  },
+  {
+    "family": "Source Serif 4 Variable",
+    "weight": "200 900",
+    "file": "source-serif-4-latin-wght-normal.woff2",
+    "sha256": "c1df4596be5029233ed2afbb8b2f6ea20784b3fb1aa5d6b5c6519ccd85eb3dfb",
+    "bytes": 50824
+  },
+  {
+    "family": "Source Serif 4 Variable",
+    "weight": "200 900",
+    "file": "source-serif-4-latin-ext-wght-normal.woff2",
+    "sha256": "41529a5b38008d9ea01e28ec18693a714a3216669ee477d83a5b9db999369625",
+    "bytes": 42040
+  },
+  {
+    "family": "IBM Plex Serif",
+    "weight": "400",
+    "file": "ibm-plex-serif-latin-400-normal.woff2",
+    "sha256": "cb2c5eee2c0a43ff30d2365407c7bc8b20e3bd90720a4a64102ba0b328022a02",
+    "bytes": 19580
+  },
+  {
+    "family": "IBM Plex Serif",
+    "weight": "600",
+    "file": "ibm-plex-serif-latin-600-normal.woff2",
+    "sha256": "e279e4f8baa0d4634d98868092f2198ae0dcd9e142c935822c385b9843352a9b",
+    "bytes": 20516
+  },
+  {
+    "family": "JetBrains Mono Variable",
+    "weight": "100 800",
+    "file": "jetbrains-mono-latin-wght-normal.woff2",
+    "sha256": "18be452724bfdc236c074ca94a249a7f41a86752c7d04ab258ce9ed5651f6a7e",
+    "bytes": 40404
+  },
+  {
+    "family": "JetBrains Mono Variable",
+    "weight": "100 800",
+    "file": "jetbrains-mono-latin-ext-wght-normal.woff2",
+    "sha256": "79bfdab9ba467e26eea4122e6f2567e188dd8a09a8c730d501fc487c4ab99c6e",
+    "bytes": 15196
+  }
+]

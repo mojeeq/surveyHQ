@@ -1,0 +1,231 @@
+"""User administration, and finding the person to add to a project."""
+
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException
+from sqlalchemy import func, select
+
+from app.api.deps import CurrentUser, DbSession, RequireAdmin
+from app.core.security import hash_password
+from app.models import Role, User
+from app.schemas.auth import (
+    UserCreate,
+    UserDirectoryEntry,
+    UserLookup,
+    UserOut,
+    UserUpdate,
+)
+from app.schemas.common import Message, Page
+from app.services import preferences
+from app.services.accounts import (
+    next_available_username,
+    normalize_username,
+    username_taken,
+    validate_username,
+)
+from app.services.audit import record
+
+router = APIRouter()
+
+
+@router.get("", response_model=Page[UserOut])
+def list_users(
+    db: DbSession,
+    _: RequireAdmin,
+    limit: int = 50,
+    offset: int = 0,
+    search: str = "",
+) -> Page[UserOut]:
+    statement = select(User)
+    if search:
+        pattern = f"%{search.lower()}%"
+        statement = statement.where(
+            func.lower(User.email).like(pattern)
+            | func.lower(User.full_name).like(pattern)
+            | func.lower(User.username).like(pattern)
+        )
+    total = db.scalar(select(func.count()).select_from(statement.subquery())) or 0
+    users = db.scalars(
+        statement.order_by(User.created_at.desc()).limit(limit).offset(offset)
+    ).all()
+    return Page(
+        items=[UserOut.model_validate(u) for u in users],
+        total=total,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.get("/lookup/{username}", response_model=UserLookup)
+def lookup_user(username: str, db: DbSession, _: CurrentUser) -> UserLookup:
+    """Resolve one exact username without exposing the installation's user list."""
+    try:
+        normalized = validate_username(username)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="No active user has that username") from None
+    user = db.scalar(
+        select(User).where(User.username == normalized, User.is_active.is_(True))
+    )
+    if user is None or not user.username:
+        raise HTTPException(status_code=404, detail="No active user has that username")
+    return UserLookup(id=user.id, username=user.username, full_name=user.full_name)
+
+
+@router.get("/directory", response_model=list[UserDirectoryEntry])
+def directory(
+    db: DbSession, _: CurrentUser, search: str = "", limit: int = 200
+) -> list[UserDirectoryEntry]:
+    """Who there is to add to a project.
+
+    The exact-username lookup below exists so that adding a member does not
+    hand out the installation's user list. That was the right trade when
+    anybody could sign themselves up: the list would have held strangers.
+
+    With self-service sign-up off - the default - it is not. Every account was
+    created by an administrator of this installation, so the people here are
+    colleagues, and the list is the same one the administrator already has. A
+    username, meanwhile, is derived from an email address and shown nowhere, so
+    asking a project manager to type one exactly was asking for something they
+    could not find out.
+
+    So this answers only while sign-up is off. Turn sign-up on and it closes,
+    because then the accounts are no longer all somebody's colleagues.
+    """
+    if preferences.value("signup_enabled"):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                "This server lets people create their own accounts, so it does "
+                "not hand out a list of them. Add a member by their exact "
+                "username instead."
+            ),
+        )
+
+    statement = select(User).where(User.is_active.is_(True))
+    if search.strip():
+        pattern = f"%{search.strip().lower()}%"
+        statement = statement.where(
+            func.lower(User.email).like(pattern)
+            | func.lower(User.full_name).like(pattern)
+            | func.lower(User.username).like(pattern)
+        )
+    # By name, and by address for the accounts that have no name yet, so the
+    # list reads in the order somebody would look down it.
+    people = db.scalars(
+        statement.order_by(func.lower(func.coalesce(User.full_name, "")), User.email).limit(
+            max(1, min(limit, 500))
+        )
+    ).all()
+    return [UserDirectoryEntry.model_validate(person) for person in people]
+
+
+@router.post("", response_model=UserOut, status_code=201)
+def create_user(payload: UserCreate, db: DbSession, admin: RequireAdmin) -> User:
+    email = str(payload.email).lower()
+    if db.scalar(select(User).where(User.email == email)):
+        raise HTTPException(status_code=409, detail="A user with that email already exists")
+    if payload.username and username_taken(db, payload.username):
+        raise HTTPException(status_code=409, detail="That username is already taken")
+    username = payload.username or next_available_username(db, email)
+    user = User(
+        email=email,
+        username=username,
+        full_name=payload.full_name,
+        role=payload.role,
+        is_active=payload.is_active,
+        restricted_to_projects=payload.restricted_to_projects,
+        hashed_password=hash_password(payload.password),
+        # An administrator chose this password, so the holder has not yet.
+        must_change_password=True,
+    )
+    db.add(user)
+    record(
+        db,
+        user=admin,
+        action="create_user",
+        entity_type="user",
+        detail={"email": email, "username": username},
+    )
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@router.patch("/{user_id}", response_model=UserOut)
+def update_user(
+    user_id: str, payload: UserUpdate, db: DbSession, admin: RequireAdmin
+) -> User:
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+
+    if payload.role is not None and user.id == admin.id and payload.role != Role.admin:
+        raise HTTPException(
+            status_code=400, detail="You cannot remove your own administrator role"
+        )
+    if payload.is_active is False and user.id == admin.id:
+        raise HTTPException(status_code=400, detail="You cannot deactivate your own account")
+
+    if payload.username is not None:
+        username = normalize_username(payload.username)
+        if username_taken(db, username, exclude_user_id=user.id):
+            raise HTTPException(status_code=409, detail="That username is already taken")
+        user.username = username
+    if payload.full_name is not None:
+        user.full_name = payload.full_name
+    if payload.role is not None:
+        user.role = payload.role
+    if payload.is_active is not None:
+        user.is_active = payload.is_active
+    if payload.restricted_to_projects is not None:
+        user.restricted_to_projects = payload.restricted_to_projects
+    if payload.password:
+        user.hashed_password = hash_password(payload.password)
+        # A reset by an administrator is someone else's password again.
+        user.must_change_password = True
+
+    record(db, user=admin, action="update_user", entity_type="user", entity_id=user_id)
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+@router.delete("/{user_id}", response_model=Message)
+def delete_user(user_id: str, db: DbSession, admin: RequireAdmin) -> Message:
+    user = db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="User not found")
+    if user.id == admin.id:
+        raise HTTPException(status_code=400, detail="You cannot delete your own account")
+    remaining_admins = db.scalar(
+        select(func.count()).select_from(User).where(User.role == Role.admin)
+    )
+    if user.role == Role.admin and (remaining_admins or 0) <= 1:
+        raise HTTPException(status_code=400, detail="The last administrator cannot be deleted")
+
+    db.delete(user)
+    record(db, user=admin, action="delete_user", entity_type="user", entity_id=user_id)
+    db.commit()
+    return Message(detail="User deleted")
+
+
+@router.get("/roles", response_model=list[dict])
+def list_roles(_: CurrentUser) -> list[dict]:
+    return [
+        {"value": Role.viewer.value, "label": "Viewer", "description": "Read dashboards only"},
+        {
+            "value": Role.analyst.value,
+            "label": "Analyst",
+            "description": "Build charts, dashboards and run analyses",
+        },
+        {
+            "value": Role.manager.value,
+            "label": "Manager",
+            "description": "Manage datasets, connections and monitoring rules",
+        },
+        {
+            "value": Role.admin.value,
+            "label": "Administrator",
+            "description": "Full access including user management",
+        },
+    ]

@@ -1,0 +1,140 @@
+from __future__ import annotations
+
+import datetime as dt
+
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from app.models.project import ProjectStatus
+from app.models.user import Role
+
+
+class ProjectMemberOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    user_id: str
+    role: Role
+    username: str = ""
+    email: str = ""
+    full_name: str = ""
+
+
+class ProjectOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    name: str
+    slug: str
+    description: str = ""
+    status: ProjectStatus
+    # When the data was removed, for a page that wants to date the archive.
+    archived_at: dt.datetime | None = None
+    starts_on: dt.date | None = None
+    ends_on: dt.date | None = None
+    created_at: dt.datetime
+    updated_at: dt.datetime
+    # Filled in by the endpoint; the model does not carry counts
+    dataset_count: int = 0
+    dashboard_count: int = 0
+    member_count: int = 0
+    # This caller's role over the project, so the UI can hide what they cannot do
+    your_role: Role | None = None
+
+
+class ProjectDetail(ProjectOut):
+    members: list[ProjectMemberOut] = Field(default_factory=list)
+
+
+class ProjectIn(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str = ""
+    status: ProjectStatus = ProjectStatus.active
+    starts_on: dt.date | None = None
+    ends_on: dt.date | None = None
+
+
+class ProjectUpdate(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=200)
+    description: str | None = None
+    status: ProjectStatus | None = None
+    starts_on: dt.date | None = None
+    ends_on: dt.date | None = None
+
+
+class ProjectMemberIn(BaseModel):
+    user_id: str
+    role: Role = Role.viewer
+
+    @field_validator("role")
+    @classmethod
+    def _not_admin(cls, value: Role) -> Role:
+        # Administration is global, so there is no administrator of one project.
+        # Silently downgrading would be worse than saying so.
+        if value is Role.admin:
+            raise ValueError(
+                "'admin' is a global role, not a project role; use 'manager'"
+            )
+        return value
+
+
+class AssignProjectIn(BaseModel):
+    """Move a dataset or dashboard into a project, or out to the shared area."""
+
+    project_id: str | None = None
+
+
+class ScriptIn(BaseModel):
+    """The project's do-file, as the editor holds it."""
+
+    text: str = Field(default="", max_length=200_000)
+
+
+class ScriptRunIn(BaseModel):
+    """What to run. Omitted, the stored script runs."""
+
+    text: str | None = Field(default=None, max_length=200_000)
+
+
+class ScriptOut(BaseModel):
+    # Which script this is. Empty from the one-script endpoints for a project
+    # that has none yet, which answer with an empty script rather than a 404.
+    id: str = ""
+    name: str = ""
+    project_id: str = ""
+    project_name: str = ""
+    text: str = ""
+    # What the last run ran, when that is not what is saved above. Running and
+    # saving are separate on purpose, so a script can be tried without being
+    # kept - and a script tried and never kept used to leave the editor blank
+    # afterwards, with the commands that built the data gone. Empty when the
+    # saved text is what ran, so the page only mentions it when it differs.
+    unsaved_run: str = ""
+    # What the last run touched, by name rather than by id: whoever reads this
+    # is looking at a page, not a database.
+    reads: list[str] = Field(default_factory=list)
+    writes: list[str] = Field(default_factory=list)
+    last_run_at: dt.datetime | None = None
+    last_error: str = ""
+    # The saved script the last successful run replaced, so it can be put
+    # back. Empty when there was none, or when it is what is saved now.
+    previous_text: str = ""
+
+
+class ScriptVariable(BaseModel):
+    name: str
+    label: str = ""
+    type: str = ""
+
+
+class ScriptDataset(BaseModel):
+    """A dataset a script in this project can `use`, with what is in it."""
+
+    name: str
+    # The other name `use` answers to, for a name with spaces in it.
+    slug: str = ""
+    rows: int = 0
+    variables: list[ScriptVariable] = Field(default_factory=list)
+
+
+class ScriptNames(BaseModel):
+    datasets: list[ScriptDataset] = Field(default_factory=list)

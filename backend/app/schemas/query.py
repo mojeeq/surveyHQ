@@ -1,0 +1,449 @@
+"""The query specification shared by explore, charts, indicators and widgets.
+
+A spec is deliberately declarative JSON so it can be stored on a chart, replayed
+by a scheduled job, and rebuilt in the UI without server-side templating.
+"""
+
+from __future__ import annotations
+
+import enum
+from typing import Any, Literal
+
+from pydantic import BaseModel, Field, model_validator
+
+from app.services import formula as sums
+
+
+class Aggregation(str, enum.Enum):
+    count = "count"
+    count_distinct = "count_distinct"
+    sum = "sum"
+    mean = "mean"
+    median = "median"
+    min = "min"
+    max = "max"
+    stddev = "stddev"
+    p25 = "p25"
+    p75 = "p75"
+    p90 = "p90"
+    share = "share"  # count as a percentage of the grand total
+
+
+class DateGrain(str, enum.Enum):
+    day = "day"
+    week = "week"
+    month = "month"
+    quarter = "quarter"
+    year = "year"
+
+
+class FilterOperator(str, enum.Enum):
+    eq = "eq"
+    ne = "ne"
+    gt = "gt"
+    gte = "gte"
+    lt = "lt"
+    lte = "lte"
+    in_ = "in"
+    not_in = "not_in"
+    contains = "contains"
+    not_contains = "not_contains"
+    starts_with = "starts_with"
+    ends_with = "ends_with"
+    between = "between"
+    is_null = "is_null"
+    is_not_null = "is_not_null"
+    # A "tick all that apply" option: the column was ticked, or was not. These
+    # take no value - the column *is* the answer - and they match on the same
+    # test the multiple-select tabulation counts with, so a filter made by
+    # clicking a bar agrees with the bar it was clicked on.
+    selected = "selected"
+    not_selected = "not_selected"
+    # A date on or after a day, and before one: what a dashboard's date-range
+    # filter is made of. Separate from gte and lt because a date is often kept
+    # as text - an export's "2026-11-04T10:12:00" - and these read the column
+    # as a moment whatever it is stored as, where a plain comparison would
+    # compare the text.
+    on_or_after = "on_or_after"
+    before = "before"
+
+
+class Dimension(BaseModel):
+    """A grouping column."""
+
+    variable: str
+    alias: str | None = None
+    grain: DateGrain | None = None
+    # Numeric binning: bucket width, e.g. 10 turns age into 0-9, 10-19, ...
+    bin_width: float | None = None
+    # Keep only the N largest groups, the rest collapse into "Other"
+    limit: int | None = None
+    sort: Literal["asc", "desc", "value_asc", "value_desc"] | None = None
+
+    @property
+    def output_name(self) -> str:
+        return self.alias or self.variable
+
+
+class Measure(BaseModel):
+    agg: Aggregation = Aggregation.count
+    variable: str | None = None
+    alias: str | None = None
+    # Numeric variable holding the survey weight
+    weight: str | None = None
+
+    @model_validator(mode="after")
+    def _check_variable(self) -> Measure:
+        if self.weight and self.agg not in {
+            Aggregation.count,
+            Aggregation.share,
+            Aggregation.sum,
+            Aggregation.mean,
+        }:
+            raise ValueError(
+                f"Survey weights are not supported for {self.agg.value}. "
+                "Choose an unweighted calculation or use R for weighted distribution statistics."
+            )
+        needs_variable = {
+            Aggregation.sum,
+            Aggregation.mean,
+            Aggregation.median,
+            Aggregation.min,
+            Aggregation.max,
+            Aggregation.stddev,
+            Aggregation.p25,
+            Aggregation.p75,
+            Aggregation.p90,
+            Aggregation.count_distinct,
+        }
+        if self.agg in needs_variable and not self.variable:
+            raise ValueError(f"aggregation '{self.agg.value}' requires a variable")
+        return self
+
+    @property
+    def output_name(self) -> str:
+        if self.alias:
+            return self.alias
+        if self.variable:
+            return f"{self.agg.value}_{self.variable}"
+        return self.agg.value
+
+
+class Condition(BaseModel):
+    variable: str
+    operator: FilterOperator = FilterOperator.eq
+    value: Any = None
+    # Compare against the labelled value rather than the stored code
+    use_label: bool = False
+    # Compare against another column instead of `value`: end_date < start_date,
+    # total != parts. Set it and `value` and `use_label` are both ignored, and
+    # only the six scalar comparisons are allowed - "is one of" and "contains"
+    # have no meaning against a whole column.
+    #
+    # Added after the fact and optional, so every filter saved before it exists
+    # loads unchanged and keeps comparing against a literal.
+    other_variable: str | None = None
+    # Arithmetic over columns, on either side: `inc2020 - inc2019 > 100`,
+    # `total != boys + girls`. Set, `formula` is the left side in place of
+    # `variable` alone - which stays the first column it names, so everything
+    # that reads `variable` still finds one - and `other_formula` the right
+    # side in place of a value or `other_variable`. The text is the indicator
+    # formula language (numbers, names, + - * /, brackets), read into a tree
+    # by services.formula and compiled with every name quoted and every number
+    # bound: it never reaches SQL as text. Only the six comparisons apply.
+    formula: str | None = None
+    other_formula: str | None = None
+
+    @model_validator(mode="after")
+    def _check_sums(self) -> Condition:
+        if not (self.formula or self.other_formula):
+            return self
+        if self.operator not in ARITHMETIC_COMPARISONS:
+            raise ValueError(
+                f"'{self.operator.value}' cannot compare a sum. Use one of: "
+                + ", ".join(op.value for op in ARITHMETIC_COMPARISONS)
+            )
+        for text in (self.formula, self.other_formula):
+            if text:
+                try:
+                    sums.parse(text)
+                except sums.FormulaError as exc:
+                    raise ValueError(f"Cannot read {text!r}: {exc}") from None
+        return self
+
+    def variables(self) -> list[str]:
+        """Every column this condition reads, `variable` first.
+
+        What a check on the columns a filter may touch has to look at: a
+        condition names a column in `variable`, and may name more in
+        `other_variable` and in either sum.
+        """
+        names = [self.variable]
+        if self.other_variable:
+            names.append(self.other_variable)
+        for text in (self.formula, self.other_formula):
+            if text:
+                names.extend(sorted(sums.names_in(text)))
+        return list(dict.fromkeys(names))
+
+
+#: The comparisons a sum can take part in: the ones that mean something
+#: between two numbers. "Is one of" and "contains" do not.
+ARITHMETIC_COMPARISONS = (
+    FilterOperator.eq,
+    FilterOperator.ne,
+    FilterOperator.gt,
+    FilterOperator.gte,
+    FilterOperator.lt,
+    FilterOperator.lte,
+)
+
+
+class FilterGroup(BaseModel):
+    op: Literal["and", "or"] = "and"
+    conditions: list[Condition] = Field(default_factory=list)
+    groups: list[FilterGroup] = Field(default_factory=list)
+
+    def is_empty(self) -> bool:
+        return not self.conditions and all(g.is_empty() for g in self.groups)
+
+
+FilterGroup.model_rebuild()
+
+
+class SortSpec(BaseModel):
+    field: str
+    direction: Literal["asc", "desc"] = "desc"
+
+
+class QuerySpec(BaseModel):
+    """Full description of an aggregate query over one dataset."""
+
+    dimensions: list[Dimension] = Field(default_factory=list)
+    measures: list[Measure] = Field(default_factory=list)
+    filters: FilterGroup = Field(default_factory=FilterGroup)
+    sort: list[SortSpec] = Field(default_factory=list)
+    limit: int = Field(default=1000, ge=1, le=100_000)
+    offset: int = Field(default=0, ge=0)
+    # Replace stored codes with value labels in the response
+    use_labels: bool = True
+    # Drop rows where any dimension is null
+    drop_missing: bool = False
+
+    @model_validator(mode="after")
+    def _default_measure(self) -> QuerySpec:
+        if not self.measures:
+            self.measures = [Measure(agg=Aggregation.count, alias="count")]
+        return self
+
+
+class QueryColumn(BaseModel):
+    name: str
+    label: str = ""
+    type: Literal["dimension", "measure"] = "measure"
+    data_type: str = "number"
+
+
+class QueryResult(BaseModel):
+    columns: list[QueryColumn]
+    rows: list[list[Any]]
+    row_count: int
+    truncated: bool = False
+    sql: str = ""
+    duration_ms: int = 0
+    total_rows_scanned: int | None = None
+
+
+class MultiSelectRequest(BaseModel):
+    """A "tick all that apply" question, named by the columns it was exported as."""
+
+    columns: list[str] = Field(default_factory=list)
+    filters: FilterGroup = Field(default_factory=FilterGroup)
+    # Respondents by default: a multiple-select is read as "what share of the
+    # people asked chose this", and those shares add to more than 100 because
+    # more than one may be chosen. Of all rows is the other honest denominator,
+    # for a file where some rows were never asked the question.
+    percent_of: Literal["respondents", "rows"] = "respondents"
+    sort: Literal["value_desc", "value_asc", "label_asc", "none"] = "value_desc"
+    # Which of the two numbers to return. A bar chart wants one of them - a
+    # count and a percentage on one axis is two scales pretending to be one -
+    # while a table is usually asked for both.
+    show: Literal["count", "percent", "both"] = "both"
+    # How the question is read; see multiselect.VIEWS. One bar per option is
+    # the default and what every chart saved before the others existed is.
+    view: Literal["options", "by_group", "combinations", "how_many", "together"] = "options"
+    # The variable a by_group view splits the respondents by.
+    by: str = ""
+    # How many combinations a combinations view names before the rest are
+    # one bar.
+    top: int = Field(default=10, ge=1, le=50)
+
+
+class CrosstabRequest(BaseModel):
+    # One of the two may be left empty, which asks for a one-way table: the
+    # frequencies of a single variable, which is what "tabulate this" usually
+    # means before anyone wants it crossed with something. Requiring both
+    # forced people to pick a second variable they did not want and then read
+    # around it.
+    row_variable: str = ""
+    column_variable: str = ""
+    # A table can also have no cell values at all: the categories of one
+    # variable listed down the page and nothing beside them. `None` asks for
+    # that, and an absent measure still means counting, so every table saved
+    # before this reads back exactly as it did.
+    measure: Measure | None = Field(default_factory=Measure)
+    # Several cell values side by side, one column each: the sum of rejections
+    # by the supervisor and the sum by headquarters, per interviewer. Used in
+    # place of `measure` when it holds two or more, and only without a column
+    # variable - the variables are the columns.
+    measures: list[Measure] = Field(default_factory=list)
+    # What to call the columns, where the name the data gives is not the one a
+    # reader should see: "sum of rejections__sup" as "Rejected by supervisor".
+    # Keyed by the heading the table would otherwise show, so a heading whose
+    # column is no longer there is simply not used. Only the heading changes:
+    # a click on it still filters by the category it stands for.
+    column_headings: dict[str, str] = Field(default_factory=dict)
+    # The same for the heading of the row variable, in the corner.
+    row_heading: str = ""
+    filters: FilterGroup = Field(default_factory=FilterGroup)
+    percentages: Literal["none", "row", "column", "total"] = "none"
+    include_totals: bool = True
+    use_labels: bool = True
+    # Rows and columns are not the same question. A table is read down: 5,000
+    # rows scroll perfectly well and export whole, which is what tabulating by
+    # interview key or enumeration area needs. Columns are read across, and a
+    # thousand of them is a scroll bar rather than a table - but it still
+    # exports, so the ceiling is generous rather than tasteful.
+    max_rows: int = Field(default=5_000, ge=2, le=100_000)
+    max_columns: int = Field(default=1_000, ge=2, le=10_000)
+
+    @model_validator(mode="after")
+    def _needs_one_variable(self) -> CrosstabRequest:
+        if not self.row_variable and not self.column_variable:
+            raise ValueError("A tabulation needs a row variable, a column variable, or both")
+        if len(self.measures) == 1:
+            # One is the ordinary table, asked the ordinary way.
+            self.measure, self.measures = self.measures[0], []
+        if self.measures:
+            if self.column_variable:
+                raise ValueError(
+                    "With several variables in the cells, the variables are the "
+                    "columns - leave Columns empty"
+                )
+            if not self.row_variable:
+                raise ValueError("Choose the rows to show the variables against")
+            if self.percentages != "none" and not self.adds_across:
+                # A row total of a mean and a median is no number at all, and
+                # a mean as a share of the overall mean is not a share of
+                # anything, so percentages are for counts and sums. Corrected
+                # rather than refused, as below: it is reachable by changing
+                # the cell values.
+                self.percentages = "none"
+            return self
+        if self.measure is None:
+            if self.row_variable and self.column_variable:
+                # Two variables crossed with nothing in the cells is a grid of
+                # blanks: the reader cannot tell which combinations occurred,
+                # so it is not a smaller table but an unreadable one.
+                raise ValueError(
+                    "A table with no cell values can only list one variable, "
+                    "so leave the rows or the columns empty"
+                )
+            # A percentage of nothing. Corrected rather than refused, because
+            # this is reachable by changing the cell values on a table that
+            # already had percentages set, and a 422 there is just a dead end.
+            self.percentages = "none"
+        return self
+
+    @property
+    def adds_across(self) -> bool:
+        """Whether several cell values can be added along a row into a total.
+
+        Counts and sums can: rejections by the supervisor plus rejections by
+        headquarters are the rejections. Means, medians and the rest cannot.
+        """
+        return bool(self.measures) and all(
+            one.agg in (Aggregation.count, Aggregation.sum) for one in self.measures
+        )
+
+
+class CrosstabResult(BaseModel):
+    row_variable: str
+    column_variable: str
+    # What to call each variable in the corner of the table. The names are what
+    # the columns are called in the file; a reader wants the question.
+    row_variable_label: str = ""
+    column_variable_label: str = ""
+    row_labels: list[str]
+    column_labels: list[str]
+    # What each column is headed, where somebody renamed it; the labels above
+    # are still what a click filters by. Empty, or one per column.
+    column_headings: list[str] = Field(default_factory=list)
+    # The row variable's heading, where somebody renamed it.
+    row_heading: str = ""
+    values: list[list[float | None]]
+    # Nullable because a margin can be withheld too. A one-way table's row
+    # total is its single cell exactly, so publishing it would hand back
+    # whatever the cell refused to say.
+    row_totals: list[float | None]
+    column_totals: list[float | None]
+    grand_total: float | None
+    percentages: str = "none"
+    chi_square: dict[str, Any] | None = None
+    # How many categories the data actually had, when that is more than was
+    # returned. Silently cutting a table is worse than a small table: the
+    # totals still add up, so nothing on screen says the rest is missing.
+    rows_omitted: int = 0
+    columns_omitted: int = 0
+    # Statistical disclosure control, when the deployment has a floor set.
+    #
+    # A withheld cell and an empty cell are both blank in `values`, and a
+    # reader must be able to tell them apart - "we are not telling you" is a
+    # different statement from "nobody was here" - so the mask says which is
+    # which. It is the same shape as `values`.
+    suppressed: list[list[bool]] = Field(default_factory=list)
+    # The same for the margins, which are protected in the same pass because a
+    # line sum is recoverable arithmetic in both directions.
+    row_totals_suppressed: list[bool] = Field(default_factory=list)
+    column_totals_suppressed: list[bool] = Field(default_factory=list)
+    grand_total_suppressed: bool = False
+    # Categories dropped entirely, which happens on a table with no cell values:
+    # there is no cell to blank, so a category too small to publish cannot be
+    # listed at all.
+    rows_withheld: int = 0
+    # The floor that was applied, so the table can say what rule it followed.
+    # Zero means disclosure control is off and nothing here was touched.
+    disclosure_threshold: int = 0
+
+
+class FrequencyRow(BaseModel):
+    value: Any
+    label: str
+    count: int
+    percent: float
+    valid_percent: float
+    cumulative_percent: float
+
+
+class FrequencyResult(BaseModel):
+    variable: str
+    label: str
+    rows: list[FrequencyRow]
+    total: int
+    missing: int
+    distinct: int
+
+
+class SummaryStats(BaseModel):
+    variable: str
+    label: str = ""
+    count: int = 0
+    missing: int = 0
+    mean: float | None = None
+    std: float | None = None
+    min: float | None = None
+    p25: float | None = None
+    median: float | None = None
+    p75: float | None = None
+    max: float | None = None
+    sum: float | None = None

@@ -1,0 +1,532 @@
+// Thin fetch wrapper: attaches the token, unwraps JSON and normalises errors.
+
+import { getProjectScope } from '@/hooks/useProjectScope'
+import type { Page } from './types'
+
+const TOKEN_KEY = 'surveyhq.token'
+const GRANT_PREFIX = 'surveyhq.share.'
+
+/**
+ * The proof that a reader knew a shared link's password.
+ *
+ * Kept per link and only for this tab. A grant is not a login - everybody
+ * holding one is the same anonymous reader - so it has no business outliving
+ * the tab it was typed into, and a shared computer in a field office is
+ * exactly where that matters.
+ */
+export const shareGrants = {
+  get: (token: string) => {
+    try {
+      return sessionStorage.getItem(GRANT_PREFIX + token) ?? ''
+    } catch {
+      return ''
+    }
+  },
+  set: (token: string, grant: string) => {
+    try {
+      sessionStorage.setItem(GRANT_PREFIX + token, grant)
+    } catch {
+      /* a browser refusing storage still works, it just asks again */
+    }
+  },
+}
+
+/** The share token in the path of a public request, if this is one. */
+function shareTokenOf(path: string): string {
+  const match = /^\/public\/dashboards\/([^/?]+)/.exec(path)
+  return match ? decodeURIComponent(match[1]) : ''
+}
+
+export class ApiError extends Error {
+  status: number
+  fields: { field: string; message: string }[]
+
+  constructor(status: number, message: string, fields: { field: string; message: string }[] = []) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+    this.fields = fields
+  }
+}
+
+export const tokenStore = {
+  get: () => localStorage.getItem(TOKEN_KEY),
+  set: (token: string) => localStorage.setItem(TOKEN_KEY, token),
+  clear: () => localStorage.removeItem(TOKEN_KEY),
+}
+
+type Options = Omit<RequestInit, 'body'> & { body?: unknown; raw?: boolean }
+
+/**
+ * Lists that understand project_id themselves. Most dataset-owned resources use
+ * an empty value for the shared area; dataset/dashboard-style lists use `none`
+ * because an empty project_id means "no filter" on those endpoints.
+ */
+const NONE_FOR_SHARED = new Set([
+  '/datasets',
+  '/dashboards',
+  '/dashboards/charts',
+  '/dashboards/chart-library',
+  '/boundaries',
+  '/relationships',
+])
+const EMPTY_FOR_SHARED = new Set([
+  '/monitoring/summary',
+  '/monitoring/indicators',
+  '/monitoring/indicators/values',
+  '/monitoring/alerts',
+  '/monitoring/alert-rules',
+  '/monitoring/quality-rules',
+])
+
+function parsed(path: string) {
+  return new URL(path, 'https://surveyhq.local')
+}
+
+/** Fill project_id on project-aware list calls that did not specify one. */
+function scopedGetPath(path: string): string {
+  const project = getProjectScope()
+  if (project === null || path.startsWith('/public/')) return path
+
+  const url = parsed(path)
+  // An explicit project belongs to the screen making the request (for example a
+  // Project detail page). The workspace scope is a default for lists, not a way
+  // to rewrite a resource-specific request into a different project.
+  if (url.searchParams.has('project_id')) return path
+
+  if (NONE_FOR_SHARED.has(url.pathname)) {
+    url.searchParams.set('project_id', project || 'none')
+  } else if (EMPTY_FOR_SHARED.has(url.pathname)) {
+    url.searchParams.set('project_id', project)
+  } else {
+    return path
+  }
+  return `${url.pathname}${url.search}${url.hash}`
+}
+
+/**
+ * Two older collection endpoints do not expose a project_id query parameter.
+ * They already return only resources the caller may see, so filtering that
+ * authorised response in the browser is both safe and avoids a backend API
+ * change just for presentation scope.
+ *
+ * `/projects?scope=all` is the deliberate escape hatch used by the workspace
+ * switcher: it must always be able to list the projects the user can switch to.
+ */
+export function filterScopedCollection<T>(requestedPath: string, value: T): T {
+  const project = getProjectScope()
+  if (project === null || !Array.isArray(value)) return value
+
+  const url = parsed(requestedPath)
+  if (url.pathname === '/connections') {
+    return value.filter((item: any) => (item.project_id ?? '') === project) as T
+  }
+  if (url.pathname === '/projects' && url.searchParams.get('scope') !== 'all') {
+    if (project === '') return [] as T
+    return value.filter((item: any) => item.id === project) as T
+  }
+  return value
+}
+
+
+/**
+ * A validator's complaint, as a sentence rather than as a schema's notes.
+ *
+ * The server validates with pydantic, which prefixes a message written for a
+ * reader with the name of the thing that raised it: "Value error, the formula
+ * uses 'part_2', which is not one of its parts". The sentence after it was
+ * written to be read; the three words before it were not, and there is nothing
+ * the reader can do with them.
+ */
+export function plainly(message: string): string {
+  return String(message).replace(/^(Value|Type|Assertion) error,\s*/, '')
+}
+
+async function request<T>(path: string, options: Options = {}): Promise<T> {
+  const { body, raw, headers, ...rest } = options
+  const token = tokenStore.get()
+
+  // A password-protected shared link carries its grant on every request, since
+  // every route behind the password checks it. Attached here rather than at
+  // each call site so nothing can be forgotten and left readable.
+  const grant = shareGrants.get(shareTokenOf(path))
+
+  const init: RequestInit = {
+    ...rest,
+    headers: {
+      ...(body instanceof FormData ? {} : { 'Content-Type': 'application/json' }),
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      ...(grant ? { 'X-Share-Grant': grant } : {}),
+      ...(headers as Record<string, string>),
+    },
+  }
+  if (body !== undefined) {
+    init.body = body instanceof FormData ? body : JSON.stringify(body)
+  }
+
+  let response: Response
+  try {
+    response = await fetch(`/api/v1${path}`, init)
+  } catch {
+    throw new ApiError(0, 'Could not reach the server. Check that the platform is running.')
+  }
+
+  // A locked shared link answers 401 until its password is given. That is not
+  // an expired session and must not clear the signed-in user's token or bounce
+  // them to the sign-in page: the page above handles it by asking.
+  if (response.status === 401 && path.startsWith('/public/')) {
+    throw new ApiError(401, await detailOf(response))
+  }
+
+  if (response.status === 401 && !path.startsWith('/auth/login')) {
+    tokenStore.clear()
+    if (!location.pathname.startsWith('/login') && !location.pathname.startsWith('/shared')) {
+      location.href = '/login'
+    }
+    throw new ApiError(401, 'Your session has expired. Please sign in again.')
+  }
+
+  if (!response.ok) {
+    let message = withoutWords(response.status)
+    let fields: { field: string; message: string }[] = []
+    try {
+      const payload = await response.json()
+      if (typeof payload.detail === 'string') message = payload.detail
+      else if (Array.isArray(payload.detail)) message = plainly(payload.detail[0]?.msg ?? message)
+      if (Array.isArray(payload.errors)) fields = payload.errors
+    } catch {
+      /* keep the default message */
+    }
+    throw new ApiError(response.status, message, fields)
+  }
+
+  if (raw) return (await response.blob()) as T
+  if (response.status === 204) return undefined as T
+  return (await response.json()) as T
+}
+
+async function detailOf(response: Response): Promise<string> {
+  try {
+    const payload = await response.json()
+    if (typeof payload.detail === 'string') return payload.detail
+  } catch {
+    /* fall through to the generic message */
+  }
+  return withoutWords(response.status)
+}
+
+
+/** How far an upload has got, for a progress bar that means something. */
+export type UploadProgress = {
+  /** Bytes handed to the network so far. */
+  sent: number
+  /** Bytes in the whole request body, a little more than the files themselves. */
+  total: number
+  /** Bytes per second, averaged over the transfer so far. */
+  rate: number
+  /** Seconds left at that rate, or null before there is anything to go on. */
+  remaining: number | null
+}
+
+/**
+ * POST a form and report how far it has got.
+ *
+ * XMLHttpRequest rather than fetch, which the rest of this module uses, for one
+ * reason: fetch has no upload progress event and cannot be given one. On a four
+ * gigabyte census export that leaves a spinner which looks exactly the same
+ * whether the transfer is moving at full speed or died ten minutes ago.
+ *
+ * The contract is the one request() offers - the token and any share grant
+ * attached, an expired session cleared, the server's own message on an error -
+ * because a second way of talking to the API that answers differently is worse
+ * than no progress bar.
+ */
+function uploadWithProgress<T>(
+  path: string,
+  form: FormData | Blob,
+  onProgress?: (progress: UploadProgress) => void,
+  method: 'POST' | 'PUT' = 'POST',
+): Promise<T> {
+  const token = tokenStore.get()
+  const grant = shareGrants.get(shareTokenOf(path))
+
+  return new Promise<T>((resolve, reject) => {
+    const xhr = new XMLHttpRequest()
+    xhr.open(method, `/api/v1${path}`)
+    if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`)
+    if (grant) xhr.setRequestHeader('X-Share-Grant', grant)
+    // Content-Type is left alone: the browser sets it with the multipart
+    // boundary, and overriding it makes the body unparseable.
+
+    const started = Date.now()
+    xhr.upload.onprogress = (event) => {
+      if (!onProgress || !event.lengthComputable) return
+      // What the browser has handed to the socket, which runs slightly ahead of
+      // what the server has. On a gigabyte transfer the difference is a rounding
+      // error; on a small one the bar is gone before anybody reads it.
+      const seconds = (Date.now() - started) / 1000
+      const rate = seconds > 0 ? event.loaded / seconds : 0
+      onProgress({
+        sent: event.loaded,
+        total: event.total,
+        rate,
+        remaining: rate > 0 ? (event.total - event.loaded) / rate : null,
+      })
+    }
+
+    xhr.onerror = () =>
+      reject(new ApiError(0, 'Could not reach the server. Check that the platform is running.'))
+    xhr.onabort = () => reject(new ApiError(0, 'The upload was cancelled.'))
+
+    xhr.onload = () => {
+      const status = xhr.status
+      let payload: any = null
+      try {
+        payload = xhr.responseText ? JSON.parse(xhr.responseText) : null
+      } catch {
+        /* a body that is not JSON leaves the generic message below */
+      }
+
+      // A locked shared link answers 401 until its password is given. That is
+      // not an expired session and must not sign the user out.
+      if (status === 401 && path.startsWith('/public/')) {
+        reject(new ApiError(401, detailIn(payload, status)))
+        return
+      }
+      if (status === 401) {
+        tokenStore.clear()
+        if (!location.pathname.startsWith('/login') && !location.pathname.startsWith('/shared')) {
+          location.href = '/login'
+        }
+        reject(new ApiError(401, 'Your session has expired. Please sign in again.'))
+        return
+      }
+      if (status < 200 || status >= 300) {
+        reject(
+          new ApiError(
+            status,
+            detailIn(payload, status),
+            Array.isArray(payload?.errors) ? payload.errors : [],
+          ),
+        )
+        return
+      }
+      resolve((status === 204 ? undefined : payload) as T)
+    }
+
+    xhr.send(form)
+  })
+}
+
+/** The server's own words for a failure, or a generic line if it had none. */
+function detailIn(payload: any, status: number): string {
+  if (typeof payload?.detail === 'string') return payload.detail
+  if (Array.isArray(payload?.detail)) return payload.detail[0]?.msg ?? withoutWords(status)
+  return withoutWords(status)
+}
+
+/** What to say when the answer carried no words of its own.
+ *
+ *  A 413 is the one worth explaining. SurveyHQ's own size limit always says
+ *  the file's size and the limit, so a bare one came from something in front
+ *  of it - a reverse proxy on the host, whose default in nginx is 1 MB, or a
+ *  CDN - and "Request failed with status 413" sent people looking at the
+ *  platform for a limit it does not have.
+ */
+export function withoutWords(status: number): string {
+  if (status === 413)
+    return (
+      'The file was refused before it reached SurveyHQ: a proxy in front of the server ' +
+      '(nginx, Caddy or a CDN) has an upload limit of its own that is smaller than this file. ' +
+      'Ask your administrator to remove it - see "Request failed with status 413" under ' +
+      'Troubleshooting in the deployment guide.'
+    )
+  return `Request failed with status ${status}`
+}
+
+/** Above this much in one upload, the files are sent in pieces.
+ *
+ *  Cloudflare refuses any request over 100 MB on its free and Pro plans, and
+ *  no setting on the server reaches it; plenty of other proxies have a ceiling
+ *  of their own. So a large upload goes as pieces every one of them accepts,
+ *  and the server joins them before reading the file. */
+export const STAGE_ABOVE = 90 * 1024 * 1024
+
+/** Try again on what a retry can mend - no connection, an overloaded proxy,
+ *  a server error - and not on a refusal, which will only be refused again. */
+export async function withRetries<T>(
+  attempt: () => Promise<T>,
+  tries = 4,
+  wait: (ms: number) => Promise<void> = (ms) => new Promise((done) => setTimeout(done, ms)),
+): Promise<T> {
+  for (let made = 1; ; made += 1) {
+    try {
+      return await attempt()
+    } catch (error) {
+      const status = error instanceof ApiError ? error.status : 0
+      const mendable = status === 0 || status === 429 || status >= 500
+      if (!mendable || made >= tries) throw error
+      await wait(1000 * 2 ** (made - 1))
+    }
+  }
+}
+
+/** The four requests a staged upload is made of, so the walk can be tested. */
+export interface StagingTransport {
+  start: (file: File) => Promise<{ id: string; chunk_size: number; pieces: number }>
+  send: (id: string, index: number, piece: Blob, onSent: (bytes: number) => void) => Promise<unknown>
+  complete: (id: string) => Promise<unknown>
+  post: <T>(form: FormData) => Promise<T>
+}
+
+/**
+ * Send files in pieces, then the upload form naming them.
+ *
+ * Each piece is tried again if the connection drops or a proxy turns it away,
+ * so a gigabyte that loses its connection at 90% resends one piece rather than
+ * the whole file. The progress reported spans every piece of every file, so
+ * the bar moves once from empty to full.
+ */
+export async function stagedUpload<T>(
+  form: FormData,
+  files: File[],
+  transport: StagingTransport,
+  onProgress?: (progress: UploadProgress) => void,
+): Promise<T> {
+  const total = files.reduce((sum, one) => sum + one.size, 0)
+  const started = Date.now()
+  const report = (sent: number) => {
+    if (!onProgress) return
+    const seconds = (Date.now() - started) / 1000
+    const rate = seconds > 0 ? sent / seconds : 0
+    onProgress({ sent, total, rate, remaining: rate > 0 ? (total - sent) / rate : null })
+  }
+  let done = 0
+  const ids: string[] = []
+  for (const file of files) {
+    const begun = await transport.start(file)
+    for (let index = 0; index < begun.pieces; index += 1) {
+      const piece = file.slice(index * begun.chunk_size, (index + 1) * begun.chunk_size)
+      await withRetries(() =>
+        transport.send(begun.id, index, piece, (bytes) => report(done + bytes)),
+      )
+      done += piece.size
+      report(done)
+    }
+    await withRetries(() => transport.complete(begun.id))
+    ids.push(begun.id)
+  }
+  const rest = new FormData()
+  form.forEach((value, key) => {
+    if (key !== 'file') rest.append(key, value)
+  })
+  rest.append('staged', JSON.stringify(ids))
+  return transport.post<T>(rest)
+}
+
+/** The largest page the list endpoints hand out. */
+const PAGE_LIMIT = 200
+
+/**
+ * Every page of a paged list, as one page.
+ *
+ * The lists that feed a picker or a grouping were fetched as a single page of
+ * 200 and the total ignored, so the 201st dataset was simply not there - not in
+ * the Datasets listing, not in any dataset picker - with nothing to say so. An
+ * office running a few census rounds passes 200 datasets without trying.
+ *
+ * `next` is how one page is fetched; it is a parameter so the walk itself can
+ * be tested without a server.
+ */
+export async function allPages<T>(
+  path: string,
+  next: (path: string) => Promise<Page<T>>,
+): Promise<Page<T>> {
+  const items: T[] = []
+  let total = 0
+  for (let offset = 0; ; offset += PAGE_LIMIT) {
+    const url = new URL(path, 'http://x')
+    url.searchParams.set('limit', String(PAGE_LIMIT))
+    url.searchParams.set('offset', String(offset))
+    const page = await next(`${url.pathname}${url.search}`)
+    items.push(...page.items)
+    total = page.total
+    // A short page is the last one, whatever the total said: rows deleted
+    // while walking would otherwise leave this asking for pages forever.
+    if (page.items.length < PAGE_LIMIT || items.length >= total) break
+  }
+  return { items, total, limit: items.length, offset: 0 }
+}
+
+export const api = {
+  get: async <T>(path: string) => {
+    const value = await request<T>(scopedGetPath(path))
+    return filterScopedCollection(path, value)
+  },
+  /** Every item of a paged list. Use it wherever the whole list is wanted. */
+  getAll: <T>(path: string) => allPages<T>(path, (one) => api.get<Page<T>>(one)),
+  post: <T>(path: string, body?: unknown) => request<T>(path, { method: 'POST', body }),
+  patch: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PATCH', body }),
+  put: <T>(path: string, body?: unknown) => request<T>(path, { method: 'PUT', body }),
+  delete: <T>(path: string) => request<T>(path, { method: 'DELETE' }),
+  upload: <T>(
+    path: string,
+    form: FormData,
+    onProgress?: (progress: UploadProgress) => void,
+  ) => {
+    const files = form.getAll('file').filter((one): one is File => one instanceof File)
+    const total = files.reduce((sum, one) => sum + one.size, 0)
+    if (path !== '/datasets/upload' || total <= STAGE_ABOVE) {
+      return uploadWithProgress<T>(path, form, onProgress)
+    }
+    return stagedUpload<T>(
+      form,
+      files,
+      {
+        start: (file) =>
+          request('/datasets/uploads', {
+            method: 'POST',
+            body: { filename: file.name, size: file.size },
+          }),
+        send: (id, index, piece, onSent) =>
+          uploadWithProgress(
+            `/datasets/uploads/${id}/pieces/${index}`,
+            piece,
+            (progress) => onSent(progress.sent),
+            'PUT',
+          ),
+        complete: (id) => request(`/datasets/uploads/${id}/complete`, { method: 'POST' }),
+        post: <R>(rest: FormData) => uploadWithProgress<R>(path, rest),
+      },
+      onProgress,
+    )
+  },
+  blob: (path: string, body?: unknown) =>
+    request<Blob>(path, { method: 'POST', body, raw: true }),
+  // A GET that returns bytes rather than JSON. An <img src> cannot carry the
+  // Authorization header, so an authenticated image is fetched and shown from
+  // an object URL instead.
+  getBlob: (path: string) => request<Blob>(path, { raw: true }),
+}
+
+/** Trigger a browser download for an export endpoint.
+ *
+ * Most exports are a POST carrying the query being exported; a stored file -
+ * an import's own archive - is a plain GET, hence the method.
+ */
+export async function downloadFile(
+  path: string,
+  body: unknown,
+  filename: string,
+  method: 'POST' | 'GET' = 'POST',
+) {
+  const blob = method === 'GET' ? await api.getBlob(path) : await api.blob(path, body)
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  anchor.click()
+  anchor.remove()
+  URL.revokeObjectURL(url)
+}

@@ -1,0 +1,1000 @@
+"""Creating and refreshing datasets from files, and their metadata bookkeeping."""
+
+from __future__ import annotations
+
+import json
+import shutil
+import tempfile
+from collections.abc import Callable
+from dataclasses import dataclass
+from dataclasses import field as dc_field
+from pathlib import Path
+
+import pandas as pd
+from slugify import slugify
+from sqlalchemy import delete, func, or_, select
+from sqlalchemy.orm import Session
+
+from app.core.config import settings
+from app.core.logging import get_logger
+from app.db.base import utcnow
+from app.models import Dataset, DatasetSource, DatasetStatus, Variable, VariableType
+from app.services.archives import (
+    PARADATA_TAG,
+    SOURCE_COLUMN,
+    by_member_name,
+    combine,
+    extract_members,
+    group_by_schema,
+    is_archive,
+)
+from app.services.ingest import (
+    MISSING_TAG_SUFFIX,
+    IngestError,
+    IngestResult,
+    add_geopoint_columns,
+    clean_columns,
+    code_labels,
+    detect_monitoring_fields,
+    ingest_file,
+    ingest_frame,
+    merge_value_labels,
+    read_source,
+    retyped_warnings,
+    stored_geopoint_columns,
+    unlabelled_code_warnings,
+)
+
+logger = get_logger(__name__)
+
+
+def unique_slug(db: Session, name: str, exclude_id: str | None = None) -> str:
+    """A filename-safe stem for this name that no other dataset is using.
+
+    `exclude_id` leaves one dataset out of the check, which is what a rename
+    needs: without it, changing "Water survey" to "Water Survey" would find the
+    dataset's own slug already taken and hand back "water-survey-2".
+    """
+    base = slugify(name)[:180] or "dataset"
+    candidate = base
+    suffix = 2
+    while True:
+        taken = select(Dataset).where(Dataset.slug == candidate)
+        if exclude_id:
+            taken = taken.where(Dataset.id != exclude_id)
+        if not db.scalar(taken):
+            return candidate
+        candidate = f"{base}-{suffix}"
+        suffix += 1
+
+
+def dataset_directory(dataset_id: str) -> Path:
+    return settings.datasets_path / dataset_id
+
+
+def create_dataset_record(
+    db: Session,
+    *,
+    name: str,
+    description: str = "",
+    source: DatasetSource = DatasetSource.upload,
+    source_ref: str = "",
+    connection_id: str | None = None,
+    tags: list[str] | None = None,
+    created_by: str | None = None,
+    project_id: str | None = None,
+    dataset_id: str | None = None,
+) -> Dataset:
+    dataset = Dataset(
+        name=name,
+        slug=unique_slug(db, name),
+        description=description,
+        source=source,
+        source_ref=source_ref,
+        connection_id=connection_id,
+        tags=tags or [],
+        created_by=created_by,
+        project_id=project_id,
+        status=DatasetStatus.pending,
+    )
+    if dataset_id is not None:
+        dataset.id = dataset_id
+    db.add(dataset)
+    db.flush()
+    return dataset
+
+
+def load_file_into_dataset(db: Session, dataset: Dataset, file_path: Path) -> Dataset:
+    """Ingest a file and attach the resulting Parquet + variables to the dataset.
+
+    Safe to call repeatedly: a refresh replaces the data in place and bumps the
+    version, so saved charts keep working as long as variable names are stable.
+    """
+    previous_status = dataset.status
+    had_data = dataset_is_queryable(dataset)
+    dataset.status = DatasetStatus.processing
+    dataset.error = ""
+    db.flush()
+
+    directory = dataset_directory(dataset.id)
+    try:
+        result = ingest_file(file_path, directory)
+    except IngestError as exc:
+        dataset.status = previous_status if had_data else DatasetStatus.failed
+        dataset.error = str(exc)
+        db.flush()
+        raise
+    except Exception as exc:  # noqa: BLE001 - surface unexpected reader failures
+        dataset.status = previous_status if had_data else DatasetStatus.failed
+        dataset.error = f"Unexpected error while reading the file: {exc}"
+        db.flush()
+        raise IngestError(dataset.error) from exc
+
+    return _apply_ingest(db, dataset, result)
+
+
+def _apply_ingest(db: Session, dataset: Dataset, result: IngestResult) -> Dataset:
+    """Attach a finished ingest to the dataset row.
+
+    Shared by every route data arrives on so that variables, counts, detected
+    monitoring fields and status are recorded identically each time.
+    """
+    from app.services.dataset_versions import remember_version
+
+    remember_version(dataset)
+
+    # Replace variable metadata wholesale; the parquet file is the source of
+    # truth. Deleted by statement rather than through dataset.variables: when
+    # two archives are appended in one transaction, the collection still holds
+    # the first pass's objects from before they were flushed, so deleting
+    # through it left them behind and the dataset ended up with two rows per
+    # variable - a Variables tab listing everything twice, and a lookup by name
+    # landing on whichever row came first.
+    db.execute(delete(Variable).where(Variable.dataset_id == dataset.id))
+    db.expire(dataset, ["variables"])
+    db.flush()
+
+    # Labels somebody wrote by hand are not in the file and would be lost every
+    # time a newer export replaced it - so they are kept on the dataset and put
+    # back here, which is what makes them survive a replacement.
+    overrides = (dataset.meta or {}).get("variable_labels") or {}
+
+    for meta in result.variables:
+        override = overrides.get(meta.name) or {}
+        db.add(
+            Variable(
+                dataset_id=dataset.id,
+                name=meta.name,
+                label=override.get("label", meta.label),
+                var_type=VariableType(meta.var_type),
+                storage_type=meta.storage_type,
+                position=meta.position,
+                n_missing=meta.n_missing,
+                n_unique=meta.n_unique,
+                min_value=meta.min_value,
+                max_value=meta.max_value,
+                mean_value=meta.mean_value,
+                # Through code_labels, because a dataset carried from before
+                # these were normalised can hold "1.0" where the lookup asks
+                # for "1" - a labelled question whose labels never matched.
+                value_labels=code_labels(
+                    {**meta.value_labels, **(override.get("value_labels") or {})}
+                ),
+                missing_tags=meta.missing_tags,
+                is_hidden=meta.is_hidden,
+            )
+        )
+
+    detected = detect_monitoring_fields(result.variables)
+    meta_payload = dict(dataset.meta or {})
+    meta_payload["monitoring_fields"] = detected
+    meta_payload["warnings"] = result.warnings
+    dataset.meta = meta_payload
+
+    dataset.storage_path = str(result.parquet_path)
+    dataset.row_count = result.row_count
+    dataset.column_count = result.column_count
+    dataset.file_size = result.file_size
+    dataset.status = DatasetStatus.ready
+    dataset.refreshed_at = utcnow()
+    dataset.version = (dataset.version or 0) + 1
+    db.flush()
+
+    # Every figure read off this dataset rather than queried from it is now
+    # describing data that is no longer there, and the indicators are the ones
+    # a dashboard reads: a tile shows the value the last scheduled run
+    # computed. Recomputed here, where the data changed, rather than left to
+    # the quarter-hour tick - a morning's import should move the numbers it
+    # was imported to move. Imported here because monitoring reads this
+    # module, and at module scope the two would not import at all.
+    from app.services.monitoring import refresh_for_dataset
+
+    refresh_for_dataset(db, dataset.id)
+
+    logger.info(
+        "Dataset %s ready: %s rows x %s columns",
+        dataset.name,
+        result.row_count,
+        result.column_count,
+    )
+    return dataset
+
+
+def delete_dataset_files(dataset: Dataset) -> None:
+    directory = dataset_directory(dataset.id)
+    if directory.exists():
+        shutil.rmtree(directory, ignore_errors=True)
+
+
+#: What a dataset can have built on it. Each is a model and the column that
+#: points at the dataset, which is all that is needed to count them - and
+#: counting them is what decides whether deleting the dataset would destroy
+#: somebody's work or merely free some disk.
+DEPENDENTS: tuple[tuple[str, str, str], ...] = (
+    ("charts", "Chart", "dataset_id"),
+    ("indicators", "Indicator", "dataset_id"),
+    ("quality rules", "QualityRule", "dataset_id"),
+    ("target sets", "TargetSet", "dataset_id"),
+    ("alert rules", "AlertRule", "dataset_id"),
+    ("saved questions", "SavedQuery", "dataset_id"),
+    ("dashboard widgets", "Widget", "dataset_id"),
+)
+
+
+def dependents_of(db: Session, dataset: Dataset) -> dict[str, int]:
+    """What is built on this dataset, counted by kind, skipping the empties.
+
+    A relationship names two datasets, so it is counted against either side
+    rather than by one column like the rest.
+    """
+    from app import models
+
+    found: dict[str, int] = {}
+    for label, model_name, column in DEPENDENTS:
+        model = getattr(models, model_name, None)
+        if model is None:  # pragma: no cover - a model renamed away
+            continue
+        count = db.scalar(
+            select(func.count())
+            .select_from(model)
+            .where(getattr(model, column) == dataset.id)
+        )
+        if count:
+            found[label] = int(count)
+
+    joins = db.scalar(
+        select(func.count())
+        .select_from(models.DatasetRelationship)
+        .where(
+            or_(
+                models.DatasetRelationship.left_dataset_id == dataset.id,
+                models.DatasetRelationship.right_dataset_id == dataset.id,
+            )
+        )
+    )
+    if joins:
+        found["relationships"] = int(joins)
+
+    # A freshness widget watches several datasets and keeps their ids in its
+    # config rather than in the column above, so counting the column alone said
+    # a dataset nobody else used was free to delete, and the widget it was the
+    # whole subject of lost its line without a word. Read in Python because the
+    # column is JSON and the two databases disagree about how to search one;
+    # a board holds tens of widgets, not millions.
+    inside = 0
+    for widget in db.scalars(select(models.Widget)):
+        if widget.dataset_id == dataset.id:
+            continue  # already counted by the column
+        held = (widget.config or {}).get("dataset_ids") or []
+        if isinstance(held, list) and dataset.id in held:
+            inside += 1
+    if inside:
+        found["dashboard widgets"] = found.get("dashboard widgets", 0) + inside
+
+    # Datasets bringing variables in from this one keep the recipe on their
+    # own metadata, so no column points here either. Deleted, this one leaves
+    # them holding the values they last had, and saying they cannot be
+    # brought up to date - worth knowing before the delete, not after.
+    from app.services.linked_variables import source_ids
+
+    bringing = sum(
+        1
+        for other in db.scalars(select(models.Dataset).where(models.Dataset.id != dataset.id))
+        if dataset.id in source_ids(other)
+    )
+    if bringing:
+        found["datasets bringing variables in from it"] = bringing
+    return found
+
+
+def describe_dependents(found: dict[str, int]) -> str:
+    """"3 charts, 1 indicator and 2 dashboard widgets", for saying out loud."""
+    parts = [
+        f"{count} {label[:-1] if count == 1 and label.endswith('s') else label}"
+        for label, count in found.items()
+    ]
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    return ", ".join(parts[:-1]) + " and " + parts[-1]
+
+
+def empty_dataset(db: Session, dataset: Dataset) -> int:
+    """Take the data away and leave the dataset itself standing.
+
+    Everything built on a dataset points at its id, so the id is the one thing
+    that must not move: keep the row and a chart, an indicator, a quality rule
+    and a dashboard widget all stay attached, waiting. Drop the row and the
+    database cascades them out of existence, and no amount of re-uploading
+    brings them back, because the next upload is a new id.
+
+    The variables and counts stay too. They are the description of what was
+    here, which is what lets a later import recognise the file as this
+    dataset's rather than some other survey's, and what lets the page say what
+    the charts are waiting for.
+
+    Returns the bytes freed, because that is the part somebody deleting data
+    actually wanted.
+    """
+    directory = dataset_directory(dataset.id)
+    freed = (
+        sum(f.stat().st_size for f in directory.rglob("*") if f.is_file())
+        if directory.exists()
+        else 0
+    )
+    delete_dataset_files(dataset)
+
+    dataset.status = DatasetStatus.archived
+    # Cleared because it names a file that is gone.
+    dataset.storage_path = ""
+    dataset.file_size = 0
+    # The retained versions were files in the same directory, so the list of
+    # them is now a list of nothing. Left in place it would offer a rollback
+    # that cannot happen.
+    meta = dict(dataset.meta or {})
+    meta.pop("retained_versions", None)
+    dataset.meta = meta
+    return freed
+
+
+def find_emptied_slot(
+    db: Session, *, name: str, filename: str, project_id: str | None
+) -> Dataset | None:
+    """The emptied dataset this upload should fill, if there is one.
+
+    Deleting a dataset that has charts on it leaves the dataset standing and
+    empty, so that uploading the export again fills it and the charts keep
+    working. An archive finds its way back by the member name it was imported
+    under. A plain file - one `.dta`, `.sav`, `.csv` or `.xlsx` - has no member
+    name, so without this it created a new dataset with a new id, the charts
+    stayed attached to the empty one, and the promise made when it was deleted
+    was not kept.
+
+    Matched narrowly, because filling the wrong slot would put one survey's
+    rows under another's charts: the slot has to be empty, in the same project,
+    and either carry the name this upload would use or name this very file as
+    where it came from. A dataset that still holds data is never matched -
+    replacing live data is what the replace endpoint is for, and doing it from
+    an upload nobody marked as a replacement would be a destruction nobody
+    asked for.
+    """
+    candidates = db.scalars(
+        select(Dataset).where(
+            Dataset.project_id.is_(None)
+            if project_id is None
+            else Dataset.project_id == project_id
+        )
+    ).all()
+    matched = [
+        one
+        for one in candidates
+        if dataset_is_empty(one) and (one.name == name or one.source_ref == filename)
+    ]
+    # The most recently touched, for the unlikely case of two empty slots that
+    # both answer to this file.
+    matched.sort(key=lambda one: one.updated_at or one.created_at, reverse=True)
+    return matched[0] if matched else None
+
+
+def dataset_is_empty(dataset: Dataset) -> bool:
+    """Whether this is a slot waiting for data rather than a dataset."""
+    return dataset.status == DatasetStatus.archived or not dataset.storage_path
+
+
+def dataset_is_queryable(dataset: Dataset) -> bool:
+    return (
+        dataset.status == DatasetStatus.ready
+        and bool(dataset.storage_path)
+        and Path(dataset.storage_path).exists()
+    )
+
+
+def append_file_into_dataset(
+    db: Session,
+    dataset: Dataset,
+    file_path: Path,
+    source_name: str | None = None,
+    password: str | None = None,
+) -> Dataset:
+    """Append another file's rows onto a dataset that already holds data.
+
+    Used for the case the archive route does not cover: a later round arriving
+    on its own, to be added to what is already there rather than replacing it.
+
+    source_name is the name the file was uploaded under. It has to be passed in:
+    file_path points at a temporary copy named after the dataset id, so using it
+    would stamp every appended row with a meaningless generated filename and lose
+    the provenance the column exists to record.
+    """
+    label = source_name or file_path.name
+    if not dataset_is_queryable(dataset):
+        raise IngestError(
+            f"'{dataset.name}' has no data to append to yet. Upload into it first."
+        )
+
+    if is_archive(file_path):
+        workdir = Path(tempfile.mkdtemp(prefix="surveyhq-append-"))
+        try:
+            members = extract_members(file_path, workdir, password)
+            incoming = combine(group_by_schema(members)[0])
+            frame, variable_labels, value_labels = (
+                incoming.frame,
+                incoming.variable_labels,
+                incoming.value_labels,
+            )
+        finally:
+            shutil.rmtree(workdir, ignore_errors=True)
+    else:
+        frame, variable_labels, value_labels = read_source(file_path)
+        frame = frame.copy()
+        frame[SOURCE_COLUMN] = label
+
+    return append_frame_into_dataset(db, dataset, frame, variable_labels, value_labels)
+
+
+def _recoded_warnings(
+    kept: dict[str, dict[str, str]], incoming: dict[str, dict[str, str]]
+) -> list[str]:
+    """Variables whose codes mean something different in the appended file."""
+    conflicts: list[str] = []
+    for name, codes in incoming.items():
+        established = kept.get(name)
+        if not established or not codes:
+            continue
+        changed = [
+            code
+            for code, label in codes.items()
+            if code in established and str(established[code]) != str(label)
+        ]
+        if changed:
+            conflicts.append(f"{name} ({len(changed)} code(s))")
+    if not conflicts:
+        return []
+    return [
+        "The appended file labels the same codes differently for "
+        + ", ".join(sorted(conflicts)[:5])
+        + ". The rows were appended, but they are shown under this dataset's "
+        "existing labels - check that the answer options did not change."
+    ]
+
+
+def append_frame_into_dataset(
+    db: Session,
+    dataset: Dataset,
+    frame: pd.DataFrame,
+    variable_labels: dict[str, str],
+    value_labels: dict[str, dict[str, str]],
+) -> Dataset:
+    """Append rows onto a dataset that already holds data.
+
+    The frame is expected to carry its own SOURCE_COLUMN already, since only the
+    caller knows what the rows should be attributed to.
+    """
+    if not dataset_is_queryable(dataset):
+        raise IngestError(
+            f"'{dataset.name}' has no data to append to yet. Upload into it first."
+        )
+    existing = pd.read_parquet(dataset.storage_path)
+    # The stored frame's columns were cleaned on the way in and the incoming
+    # one's have not been, so they are put in the same namespace before they
+    # are lined up. Without this, any name that cleaning changes concatenates
+    # as two separate columns: the old rows under one, the new rows under the
+    # other, and both half empty.
+    frame = clean_columns(frame)
+    # A dataset that already holds coordinates has to go on holding them for the
+    # rows arriving now. The incoming batch is small enough to fail the evidence
+    # test the first import passed, so what it produces is decided by what is
+    # stored rather than by this batch. Anything not yet split is left to
+    # ingest_frame below, which sees the whole dataset and can fill every row.
+    add_geopoint_columns(
+        frame,
+        stored_geopoint_columns(existing.columns, frame.columns),
+        variable_labels,
+    )
+
+    if SOURCE_COLUMN not in existing.columns:
+        # The dataset predates this column; label what is already there rather
+        # than leaving half the rows with no provenance.
+        existing[SOURCE_COLUMN] = dataset.source_ref or "original upload"
+
+    before = len(existing)
+    combined = pd.concat([existing, frame], ignore_index=True, sort=False)
+
+    warnings: list[str] = []
+    warnings.extend(_duplicate_key_warnings(existing, frame))
+    # The "__mv" companions are this platform's own bookkeeping for Stata tagged
+    # missings, created only for columns that actually carry a tag. A round with
+    # no ".a" in a column simply has no companion for it, which is not a
+    # difference in the data and not something to report as one.
+    added = _reportable(set(frame.columns) - set(existing.columns))
+    dropped = _reportable(set(existing.columns) - set(frame.columns))
+    if added:
+        warnings.append(
+            f"The appended file adds {len(added)} new variable(s), blank for "
+            f"earlier rows: " + ", ".join(sorted(added)[:5])
+        )
+    if dropped:
+        warnings.append(
+            f"The appended file does not contain {len(dropped)} existing "
+            f"variable(s), blank for the new rows: " + ", ".join(sorted(dropped)[:5])
+        )
+
+    # Existing labels win: they describe the dataset as it has been analysed.
+    # Value labels merge code by code, so an answer option the appended round
+    # added arrives labelled instead of as a bare number.
+    kept_labels = {v.name: v.label for v in dataset.variables if v.label}
+    for key, value in variable_labels.items():
+        kept_labels.setdefault(key, value)
+    kept_value_labels = merge_value_labels(
+        {v.name: v.value_labels for v in dataset.variables if v.value_labels},
+        value_labels,
+    )
+    # A questionnaire revised between rounds can reuse a code for a different
+    # answer. The appended rows are then shown under the labels the dataset
+    # already had, which reads as one variable's values appearing under
+    # another's meaning - so it is reported rather than left to be noticed.
+    warnings.extend(_recoded_warnings(kept_value_labels, value_labels))
+    warnings.extend(unlabelled_code_warnings(frame, kept_value_labels))
+    warnings.extend(
+        retyped_warnings(
+            {
+                str(name)
+                for name in existing.columns
+                if pd.api.types.is_numeric_dtype(existing[name])
+            },
+            frame,
+        )
+    )
+
+    _apply_ingest(
+        db,
+        dataset,
+        ingest_frame(
+            combined, kept_labels, kept_value_labels, dataset_directory(dataset.id), warnings
+        ),
+    )
+    logger.info(
+        "Appended %s rows to %s (%s -> %s)",
+        len(combined) - before,
+        dataset.name,
+        before,
+        len(combined),
+    )
+    return dataset
+
+
+# Records which file inside an archive a dataset holds, so a later archive knows
+# which dataset each of its members belongs to. Without it the match would have
+# to be made on the dataset's display name, which users rename.
+ARCHIVE_MEMBER_KEY = "archive_member"
+
+
+def merge_imports(into: ArchiveImport, step: ArchiveImport) -> ArchiveImport:
+    """Fold one archive's report into the running one for a whole upload.
+
+    Several archives uploaded together are one import as far as the person who
+    started it is concerned, so they get one report rather than three.
+    """
+    seen = {dataset.id for dataset in into.datasets}
+    into.datasets.extend(d for d in step.datasets if d.id not in seen)
+    into.created.extend(step.created)
+    into.appended.extend(step.appended)
+    into.replaced.extend(step.replaced)
+    into.skipped.extend(step.skipped)
+    into.warnings.extend(step.warnings)
+    into.replaced_ids.extend(i for i in step.replaced_ids if i not in into.replaced_ids)
+    into.rows += step.rows
+    return into
+
+
+@dataclass
+class ArchiveImport:
+    """What one archive upload did, per member file."""
+
+    datasets: list[Dataset] = dc_field(default_factory=list)
+    created: list[str] = dc_field(default_factory=list)
+    appended: list[str] = dc_field(default_factory=list)
+    replaced: list[str] = dc_field(default_factory=list)
+    # The ids behind `replaced`, for whatever was built on top of them.
+    replaced_ids: list[str] = dc_field(default_factory=list)
+    skipped: list[str] = dc_field(default_factory=list)
+    warnings: list[str] = dc_field(default_factory=list)
+    rows: int = 0
+
+
+# A member file only appends onto a dataset whose columns it largely shares.
+# The name alone is not enough: two unrelated surveys can both export a
+# "members.dta", and in the shared area they would otherwise silently merge into
+# one dataset whose row count means nothing.
+MIN_COLUMN_OVERLAP = 0.5
+
+
+def find_archive_sibling(
+    db: Session,
+    key: str,
+    project_id: str | None,
+    columns: set[str] | None = None,
+) -> Dataset | None:
+    """The dataset already holding this member file, if there is one.
+
+    Scoped to the project, so two projects can each hold their own
+    "members.dta". Within that scope the candidate must also share most of its
+    columns with the incoming file, which is what stops a same-named file from a
+    different survey being appended onto it.
+    """
+    statement = select(Dataset).where(
+        Dataset.project_id.is_(None) if project_id is None else Dataset.project_id == project_id
+    )
+    for candidate in db.scalars(statement):
+        if (candidate.meta or {}).get(ARCHIVE_MEMBER_KEY) != key:
+            continue
+        if columns is None:
+            return candidate
+        known = {v.name for v in candidate.variables}
+        if not known:
+            return candidate
+        shared = len(known & columns) / len(known)
+        if shared >= MIN_COLUMN_OVERLAP:
+            return candidate
+        logger.info(
+            "Not appending %s onto '%s': only %.0f%% of its columns match",
+            key,
+            candidate.name,
+            shared * 100,
+        )
+    return None
+
+
+def _ingest_warnings(dataset: Dataset, archive: str, member: str) -> list[str]:
+    """What the ingest said about one file, named by the file it was said about.
+
+    Ingest writes its warnings onto the dataset, where the next round
+    overwrites them - so uploading five questionnaire versions at once left
+    only what was said about the fifth, and nothing about the four before it
+    reached the person who pressed import. The import report is where somebody
+    is actually looking, and which round a warning belongs to is most of its
+    meaning when five are going in at once.
+    """
+    said = (dataset.meta or {}).get("warnings") or []
+    return [f"{archive} ({member}): {text}" for text in said]
+
+
+def load_archive_as_datasets(
+    db: Session,
+    *,
+    archive_path: Path,
+    archive_name: str,
+    project_id: str | None = None,
+    created_by: str | None = None,
+    combine_all: bool = False,
+    name_prefix: str = "",
+    mode: str = "replace",
+    after_replace: Callable[[Session, Dataset], list[str]] | None = None,
+    stamp: tuple[str, str] | None = None,
+    password: str | None = None,
+) -> ArchiveImport:
+    """Import an archive as one dataset per member file.
+
+    An export holds one file per roster level - interview, household member,
+    person abroad - so each becomes its own dataset. A later archive carries the
+    same member names, and each of its files goes to the dataset already holding
+    that name rather than creating a duplicate.
+
+    mode decides what "goes to" means:
+
+      replace  the dataset's data is swapped for the new file's. The dataset row
+               keeps its id, so every relationship, chart, indicator and quality
+               rule built on it goes on working. This is what a live monitoring
+               tool needs: a fresh export every morning should update the
+               numbers, not accumulate yesterday's rows underneath today's.
+      append   the new rows are added to what is there, for genuinely
+               incremental exports where each file holds only what is new.
+
+    combine_all is a separate escape hatch for an archive that really does hold
+    several rounds of one table: every member goes into a single dataset.
+
+    stamp is (column, value) written onto every row this archive brings in -
+    the questionnaire version, usually. Three exports of versions 9, 10 and 11
+    append into one dataset per member file, and without a stamp there is
+    nothing in the rows to say which questionnaire each was answered on.
+    """
+    workdir = Path(tempfile.mkdtemp(prefix="surveyhq-archive-"))
+    outcome = ArchiveImport()
+    try:
+        members = extract_members(archive_path, workdir, password)
+
+        if combine_all:
+            result = combine(members)
+            dataset = create_dataset_record(
+                db,
+                name=archive_name,
+                source=DatasetSource.upload,
+                source_ref=archive_name,
+                created_by=created_by,
+                project_id=project_id,
+            )
+            _apply_ingest(
+                db,
+                dataset,
+                ingest_frame(
+                    result.frame,
+                    result.variable_labels,
+                    result.value_labels,
+                    dataset_directory(dataset.id),
+                    list(result.warnings),
+                ),
+            )
+            outcome.datasets.append(dataset)
+            outcome.created.append(dataset.name)
+            outcome.warnings.extend(result.warnings)
+            outcome.rows = dataset.row_count
+            return outcome
+
+        for key, member in sorted(by_member_name(members).items()):
+            # One member in memory at a time. take() hands over the member's only
+            # reference, so the frame can be stamped in place rather than copied,
+            # and the finally below drops it before the next file is read. Held
+            # all at once and then copied, a census export needed more memory
+            # than the machine had and the worker was killed mid-import.
+            try:
+                frame, member_labels, member_values = member.take()
+            except IngestError as exc:
+                logger.warning("Skipping %s inside the archive: %s", member.name, exc)
+                outcome.skipped.append(f"{member.name}: {exc}")
+                continue
+            try:
+                # Every row records the archive it arrived in, not the member
+                # file: the member name is the same in every round, so it would
+                # say nothing about which round a row came from.
+                frame[SOURCE_COLUMN] = archive_name
+                if stamp:
+                    column, value = stamp
+                    if column in frame.columns:
+                        # Overwriting an answer with a version number would be a
+                        # silent loss of data, so the stamp gives way and says so.
+                        outcome.warnings.append(
+                            f"'{column}' is already a variable in {member.name}, so "
+                            "it was left alone rather than stamped"
+                        )
+                    else:
+                        # Text, and declared as text: a questionnaire version
+                        # is a name, not a quantity. Left as a plain object
+                        # column it is all digits, so the numeric coercion in
+                        # ingest_frame reads it as a number - and then one
+                        # import path stores "1" and the other 1, a filter
+                        # written against one of them matches nothing on the
+                        # other, and nobody can see why.
+                        frame[column] = pd.Series(
+                            [value] * len(frame), index=frame.index, dtype="string"
+                        )
+
+                existing = find_archive_sibling(
+                    db, key, project_id, {str(c) for c in frame.columns}
+                )
+                if existing is not None and dataset_is_queryable(existing):
+                    before = existing.row_count
+                    if mode == "append":
+                        append_frame_into_dataset(
+                            db, existing, frame, member_labels, member_values
+                        )
+                        outcome.appended.append(
+                            f"{member.name} -> {existing.name} "
+                            f"({before} + {len(frame)} = {existing.row_count} rows)"
+                        )
+                        outcome.rows += len(frame)
+                        outcome.warnings.extend(
+                            _ingest_warnings(existing, archive_name, member.name)
+                        )
+                    else:
+                        # Everything built on this dataset points at its id, so the
+                        # row is kept and only its data swapped. Losing a variable is
+                        # the one way that can still break something, so it is
+                        # checked for rather than hoped about.
+                        had = {v.name for v in existing.variables}
+                        labels = dict(member_labels)
+                        labels.setdefault(SOURCE_COLUMN, "Archive this row was imported from")
+                        if stamp:
+                            labels.setdefault(stamp[0], "Questionnaire version of this row")
+                        ingested = ingest_frame(
+                            frame,
+                            labels,
+                            member_values,
+                            dataset_directory(existing.id),
+                            [],
+                        )
+                        _apply_ingest(db, existing, ingested)
+                        # Anything recorded against this dataset - a generated
+                        # variable, a hand-written label - is put back before the
+                        # check below, or it would report as lost a variable that
+                        # is about to exist again.
+                        now = {v.name for v in ingested.variables}
+                        if after_replace is not None:
+                            outcome.warnings.extend(after_replace(db, existing))
+                            db.flush()
+                            db.refresh(existing)
+                            now = {v.name for v in existing.variables}
+                        outcome.replaced.append(
+                            f"{member.name} -> {existing.name} "
+                            f"({before} rows replaced by {existing.row_count})"
+                        )
+                        outcome.replaced_ids.append(existing.id)
+                        outcome.rows += existing.row_count
+                        outcome.warnings.extend(
+                            _lost_variable_warnings(db, existing, had, now)
+                        )
+                        outcome.warnings.extend(
+                            _ingest_warnings(existing, archive_name, member.name)
+                        )
+                    outcome.datasets.append(existing)
+                    continue
+
+                stem = Path(member.name).stem
+                dataset = existing or create_dataset_record(
+                    db,
+                    # The member stem is the useful name - VN_LF2024, R_demographics -
+                    # but two surveys in one project can share one, so a prefix is
+                    # offered for telling them apart.
+                    name=f"{name_prefix} {stem}".strip() if name_prefix else stem,
+                    description=f"From {archive_name}",
+                    source=DatasetSource.upload,
+                    source_ref=member.name,
+                    created_by=created_by,
+                    project_id=project_id,
+                    tags=[PARADATA_TAG] if member.is_paradata else [],
+                )
+                labels = dict(member_labels)
+                labels.setdefault(SOURCE_COLUMN, "Archive this row was imported from")
+                if stamp:
+                    labels.setdefault(stamp[0], "Questionnaire version of this row")
+                _apply_ingest(
+                    db,
+                    dataset,
+                    ingest_frame(
+                        frame,
+                        labels,
+                        member_values,
+                        dataset_directory(dataset.id),
+                        [],
+                    ),
+                )
+                meta = dict(dataset.meta or {})
+                meta[ARCHIVE_MEMBER_KEY] = key
+                dataset.meta = meta
+                db.flush()
+                outcome.datasets.append(dataset)
+                outcome.created.append(
+                    f"{member.name} -> {dataset.name} ({dataset.row_count} rows)"
+                )
+                outcome.rows += dataset.row_count
+                outcome.warnings.extend(
+                    _ingest_warnings(dataset, archive_name, member.name)
+                )
+            finally:
+                # Dropped before the next file is read, so the peak is one
+                # member rather than the whole archive. The member released its
+                # own reference in take(), so this is the last one.
+                frame = None
+
+        return outcome
+    finally:
+        shutil.rmtree(workdir, ignore_errors=True)
+
+
+# Survey Solutions can be set to export everything collected so far rather than
+# only what is new. Appending two such exports duplicates every interview they
+# have in common, and nothing about the row counts makes that obvious - the
+# dataset just quietly reports twice the fieldwork. So say it plainly.
+IDENTITY_COLUMNS = ("interview__key", "interview__id")
+
+
+def _reportable(columns: set[str]) -> set[str]:
+    """Drop internal companion columns from anything shown to a user."""
+    return {c for c in columns if not c.endswith(MISSING_TAG_SUFFIX)}
+
+
+def _duplicate_key_warnings(
+    existing: pd.DataFrame, incoming: pd.DataFrame
+) -> list[str]:
+    """Report interviews that appear in both the existing data and the new rows."""
+    warnings: list[str] = []
+    for column in IDENTITY_COLUMNS:
+        if column not in existing.columns or column not in incoming.columns:
+            continue
+        overlap = set(existing[column].dropna()) & set(incoming[column].dropna())
+        if not overlap:
+            continue
+        warnings.append(
+            f"{len(overlap)} value(s) of '{column}' appear in both the existing "
+            f"data and the appended rows, so those interviews are now counted "
+            f"twice. This usually means the export was cumulative rather than "
+            f"incremental. Examples: "
+            + ", ".join(str(v) for v in sorted(overlap)[:3])
+        )
+        break  # one identity column is enough; the second would say the same
+    return warnings
+
+
+def _lost_variable_warnings(
+    db: Session, dataset: Dataset, had: set[str], now: set[str]
+) -> list[str]:
+    """Name what a replacement broke, rather than leaving it to be discovered.
+
+    Replacing a dataset in place is what keeps a live monitoring setup working:
+    the row keeps its id, so relationships, charts, indicators and quality rules
+    all still point at it. The one thing that still breaks it is a variable
+    disappearing - a question dropped between rounds - and nothing about the
+    import would otherwise say so. The chart just fails the next time somebody
+    opens the dashboard.
+    """
+    from app.models import Chart, Indicator, QualityRule
+
+    # The new names come from the ingest result, not from dataset.variables:
+    # the relationship is still holding the rows that were just replaced, so
+    # reading it here would compare the old list against itself and find nothing.
+    from app.services.linked_variables import provided
+
+    # Brought in from another dataset, and brought in again as soon as this
+    # lands: never in the export, so never lost by it.
+    lost = {
+        name
+        for name in had - now - provided(dataset)
+        if not name.endswith(MISSING_TAG_SUFFIX)
+    }
+    if not lost:
+        return []
+
+    warnings = [
+        f"'{dataset.name}' no longer has {len(lost)} variable(s) it had before: "
+        + ", ".join(sorted(lost)[:6])
+        + ("..." if len(lost) > 6 else "")
+    ]
+
+    # Anything referring to a lost variable by name is now broken. The specs are
+    # free-form JSON, so this looks for the name in the serialised spec rather
+    # than trying to parse every shape a spec can take.
+    def mentions(blob: object) -> set[str]:
+        text = json.dumps(blob or {})
+        return {name for name in lost if f'"{name}"' in text}
+
+    broken: list[str] = []
+    for chart in db.scalars(select(Chart).where(Chart.dataset_id == dataset.id)):
+        if mentions(chart.spec):
+            broken.append(f"chart '{chart.name}'")
+    for indicator in db.scalars(
+        select(Indicator).where(Indicator.dataset_id == dataset.id)
+    ):
+        if mentions(indicator.spec) or indicator.breakdown_variable in lost:
+            broken.append(f"indicator '{indicator.name}'")
+    for rule in db.scalars(
+        select(QualityRule).where(QualityRule.dataset_id == dataset.id)
+    ):
+        if mentions(rule.config) or mentions(rule.filters):
+            broken.append(f"quality check '{rule.name}'")
+
+    if broken:
+        warnings.append(
+            f"{len(broken)} saved item(s) refer to those variables and will now "
+            "fail: " + ", ".join(broken[:6]) + ("..." if len(broken) > 6 else "")
+        )
+    return warnings

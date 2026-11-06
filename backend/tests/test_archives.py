@@ -1,0 +1,288 @@
+"""Uploading a zip of Stata files and appending them into one dataset.
+
+Several rounds of a survey arrive as several export archives. Analysing them one
+file at a time is not the point: the useful object is one dataset covering every
+round, with a column saying which file each row came from.
+"""
+
+from __future__ import annotations
+
+import zipfile
+from pathlib import Path
+
+import pandas as pd
+import pytest
+
+from app.services.archives import (
+    SOURCE_COLUMN,
+    _copy_member,
+    _too_big,
+    combine,
+    extract_members,
+    group_by_schema,
+    is_archive,
+    max_extracted_bytes,
+)
+from app.services.ingest import IngestError
+
+
+def _stata(path: Path, frame: pd.DataFrame) -> Path:
+    frame.to_stata(path, write_index=False, version=118)
+    return path
+
+
+def _zip(path: Path, files: list[Path]) -> Path:
+    with zipfile.ZipFile(path, "w") as archive:
+        for file in files:
+            archive.write(file, arcname=file.name)
+    return path
+
+
+@pytest.fixture
+def two_rounds(tmp_path) -> Path:
+    """Two files with identical columns, as consecutive rounds would be."""
+    a = _stata(tmp_path / "round1.dta", pd.DataFrame({"id": [1, 2], "age": [30.0, 40.0]}))
+    b = _stata(tmp_path / "round2.dta", pd.DataFrame({"id": [3, 4], "age": [50.0, 60.0]}))
+    return _zip(tmp_path / "rounds.zip", [a, b])
+
+
+def test_is_archive():
+    assert is_archive(Path("x.zip"))
+    assert not is_archive(Path("x.dta"))
+
+
+def test_members_are_appended_with_their_source_file(two_rounds, tmp_path):
+    members = extract_members(two_rounds, tmp_path / "work")
+    assert {m.name for m in members} == {"round1.dta", "round2.dta"}
+
+    result = combine(sorted(members, key=lambda m: m.name))
+    assert len(result.frame) == 4
+    # Every row can be traced back to the file it came from
+    assert set(result.frame[SOURCE_COLUMN]) == {"round1.dta", "round2.dta"}
+    assert sorted(result.frame["id"].tolist()) == [1, 2, 3, 4]
+
+
+def test_paradata_is_imported_and_marked_as_such(tmp_path):
+    """An export ships action and comment logs beside the responses.
+
+    They are not survey answers, they are the record of how the fieldwork
+    happened - who did what and when, how long an interview took, what a
+    supervisor rejected - which is the subject of a monitoring tool. They are
+    imported like any other level, and flagged so they can be told apart.
+    """
+    data = _stata(tmp_path / "household.dta", pd.DataFrame({"id": [1], "age": [30.0]}))
+    actions = _stata(
+        tmp_path / "interview__actions.dta", pd.DataFrame({"id": [1], "action": [2.0]})
+    )
+    archive = _zip(tmp_path / "export.zip", [data, actions])
+
+    members = {m.name: m for m in extract_members(archive, tmp_path / "work")}
+    assert set(members) == {"household.dta", "interview__actions.dta"}
+    assert members["interview__actions.dta"].is_paradata is True
+    assert members["household.dta"].is_paradata is False
+
+
+def test_files_with_different_schemas_are_grouped_apart(tmp_path):
+    """A zip is often roster levels, not rounds; appending them would be wrong."""
+    person_a = _stata(tmp_path / "person1.dta", pd.DataFrame({"pid": [1], "age": [9.0]}))
+    person_b = _stata(tmp_path / "person2.dta", pd.DataFrame({"pid": [2], "age": [8.0]}))
+    household = _stata(tmp_path / "hh.dta", pd.DataFrame({"hhid": [1], "size": [4.0]}))
+    archive = _zip(tmp_path / "mixed.zip", [person_a, person_b, household])
+
+    groups = group_by_schema(extract_members(archive, tmp_path / "work"))
+    assert len(groups) == 2
+    # The largest matching group comes first, and it is the two person files
+    assert sorted(m.name for m in groups[0]) == ["person1.dta", "person2.dta"]
+
+
+def test_a_later_round_may_add_a_variable(tmp_path):
+    """Appending on the union keeps every row; the unasked question stays blank."""
+    a = _stata(tmp_path / "r1.dta", pd.DataFrame({"id": [1], "age": [30.0]}))
+    b = _stata(
+        tmp_path / "r2.dta", pd.DataFrame({"id": [2], "age": [40.0], "income": [100.0]})
+    )
+    archive = _zip(tmp_path / "grew.zip", [a, b])
+
+    members = sorted(extract_members(archive, tmp_path / "work"), key=lambda m: m.name)
+    result = combine(members)
+
+    assert len(result.frame) == 2
+    assert result.frame["income"].isna().sum() == 1
+    assert any("income" in warning for warning in result.warnings)
+
+
+def test_strict_combine_refuses_a_mismatch(tmp_path):
+    a = _stata(tmp_path / "r1.dta", pd.DataFrame({"id": [1], "age": [30.0]}))
+    b = _stata(tmp_path / "r2.dta", pd.DataFrame({"id": [2], "other": [1.0]}))
+    archive = _zip(tmp_path / "bad.zip", [a, b])
+    members = sorted(extract_members(archive, tmp_path / "work"), key=lambda m: m.name)
+
+    with pytest.raises(IngestError, match="does not match"):
+        combine(members, strict=True)
+
+
+def test_an_archive_with_no_data_files_is_rejected(tmp_path):
+    notes = tmp_path / "notes.pdf"
+    notes.write_bytes(b"%PDF-1.4")
+    archive = _zip(tmp_path / "empty.zip", [notes])
+
+    with pytest.raises(IngestError, match="no data files"):
+        extract_members(archive, tmp_path / "work")
+
+
+def test_the_exports_own_readme_is_not_treated_as_a_round(tmp_path):
+    """.txt is a data format here, so export__readme.txt would otherwise append."""
+    data = _stata(tmp_path / "household.dta", pd.DataFrame({"id": [1], "age": [30.0]}))
+    readme = tmp_path / "export__readme.txt"
+    readme.write_text("This export was produced by Survey Solutions.")
+    archive = _zip(tmp_path / "export.zip", [data, readme])
+
+    members = extract_members(archive, tmp_path / "work")
+    assert [m.name for m in members] == ["household.dta"]
+
+
+def test_a_file_that_is_not_a_zip_is_rejected(tmp_path):
+    fake = tmp_path / "not.zip"
+    fake.write_bytes(b"definitely not a zip")
+    with pytest.raises(IngestError, match="not a readable zip"):
+        extract_members(fake, tmp_path / "work")
+
+
+def test_member_names_cannot_escape_the_extraction_directory(tmp_path):
+    """A crafted archive must not write outside where it is unpacked."""
+    inner = _stata(tmp_path / "ok.dta", pd.DataFrame({"id": [1], "age": [30.0]}))
+    archive = tmp_path / "evil.zip"
+    with zipfile.ZipFile(archive, "w") as zf:
+        zf.write(inner, arcname="../../escaped.dta")
+
+    work = tmp_path / "work"
+    members = extract_members(archive, work)
+    # Only the basename is used, so the file lands inside the work directory
+    assert [m.name for m in members] == ["escaped.dta"]
+    assert members[0].path.resolve().parent == work.resolve()
+    assert not (tmp_path.parent / "escaped.dta").exists()
+
+
+def test_a_member_that_expands_past_the_budget_is_refused(tmp_path, monkeypatch):
+    """A zip caps what was uploaded, never what comes out of it.
+
+    Survey data compresses so well that a small archive can hold an enormous
+    file, and a deliberately built one can hold an effectively unbounded one.
+    Reading a member with source.read() put all of it in memory before anything
+    had a chance to object.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "max_upload_mb", 1)  # budget: 20 MB
+
+    archive = tmp_path / "bomb.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as handle:
+        # Zeroes compress to almost nothing; on disk this archive is tiny.
+        handle.writestr("huge.csv", b"0" * (40 * 1024 * 1024))
+
+    with pytest.raises(IngestError, match="expand to more than"):
+        extract_members(archive, tmp_path / "out")
+
+
+def test_members_that_are_each_small_but_add_up_are_refused(tmp_path, monkeypatch):
+    """The budget is for the archive, not for one file inside it.
+
+    A per-member cap alone is no cap: two hundred members just under it expand
+    to two hundred times as much.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "max_upload_mb", 1)  # budget: 20 MB
+
+    archive = tmp_path / "many.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as handle:
+        for index in range(8):
+            handle.writestr(f"part{index}.csv", b"0" * (4 * 1024 * 1024))
+
+    with pytest.raises(IngestError, match="expand to more than"):
+        extract_members(archive, tmp_path / "out")
+
+
+def test_a_member_that_lies_about_its_size_is_a_readable_error(tmp_path):
+    """An archive cannot understate a member and have it unpacked anyway.
+
+    zipfile checks the length and CRC against the header as it reads, so a
+    forged size fails there rather than slipping past the budget. What that
+    used to give was a BadZipFile escaping as a 500; it should be the same 422
+    as any other unreadable archive, and it must not leave the part that was
+    written on disk.
+    """
+    archive = tmp_path / "forged.zip"
+    with zipfile.ZipFile(archive, "w", zipfile.ZIP_DEFLATED) as handle:
+        handle.writestr("round1.csv", b"id,region\n" + b"1,North\n" * 1000)
+
+    # Rewrite the central directory entry to claim the member is tiny.
+    with zipfile.ZipFile(archive) as source:
+        forged = source.infolist()[0]
+        forged.file_size = 4
+        destination = tmp_path / "out"
+        destination.mkdir()
+        with pytest.raises(IngestError, match="damaged"):
+            _copy_member(source, forged, destination / "round1.csv", 1024 * 1024)
+        assert list(destination.iterdir()) == []
+
+
+def test_a_normal_archive_is_unaffected(tmp_path):
+    """The cap is far above anything a real export reaches."""
+    frame = pd.DataFrame({"id": range(10), "region": ["North"] * 10})
+    archive = tmp_path / "round.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.write(_stata(tmp_path / "round1.dta", frame), "round1.dta")
+
+    members = extract_members(archive, tmp_path / "out")
+    assert [member.name for member in members] == ["round1.dta"]
+    assert len(members[0].frame) == 10
+
+
+def test_the_ceiling_caps_a_budget_the_upload_limit_would_let_run_away(monkeypatch):
+    """Twenty times the upload limit stops being a bound at a large limit.
+
+    The rule was written when an upload could be 512 MB, where twenty times it
+    is 10 GB and genuinely finite. At the 20 GB limit the same rule permits
+    400 GB - more than any disk an archive would be unpacked onto, so a zip
+    built to exhaust the machine would have filled it and failed on space
+    rather than been refused.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "max_upload_mb", 20480)
+    monkeypatch.setattr(settings, "max_extracted_gb", 64)
+
+    assert max_extracted_bytes() == 64 * 1024**3
+
+
+def test_the_proportional_rule_still_decides_where_it_was_already_working(monkeypatch):
+    """The cap is a backstop, not a replacement.
+
+    A modest upload limit gets the smaller, stricter budget it always had. A
+    ceiling that quietly raised it would be a loosening dressed up as a guard.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "max_upload_mb", 512)
+    monkeypatch.setattr(settings, "max_extracted_gb", 64)
+
+    assert max_extracted_bytes() == 10 * 1024**3
+
+
+def test_the_refusal_names_whichever_knob_is_actually_holding(monkeypatch):
+    """Advice that cannot work is worse than no advice.
+
+    Two bounds decide this budget, and whoever is refused will do what the
+    message says. Told to raise MAX_UPLOAD_MB while the ceiling is what binds,
+    they can raise it all day and watch the same refusal come back.
+    """
+    from app.core.config import settings
+
+    monkeypatch.setattr(settings, "max_extracted_gb", 64)
+
+    monkeypatch.setattr(settings, "max_upload_mb", 20480)
+    assert "MAX_EXTRACTED_GB" in str(_too_big(max_extracted_bytes()))
+
+    monkeypatch.setattr(settings, "max_upload_mb", 512)
+    assert "MAX_UPLOAD_MB" in str(_too_big(max_extracted_bytes()))

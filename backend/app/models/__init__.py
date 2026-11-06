@@ -1,0 +1,128 @@
+"""SQLAlchemy models. Importing this package registers every table."""
+
+from app.db.base import Base
+from app.models.analytics import (
+    Chart,
+    ChartType,
+    Dashboard,
+    DashboardSnapshot,
+    DashboardView,
+    HtmlSnippet,
+    SavedQuery,
+    ShareLink,
+    Widget,
+    WidgetComment,
+    WidgetType,
+)
+from app.models.connection import (
+    Connection,
+    ExportFormat,
+    FolderImport,
+    SourceKind,
+    SyncRun,
+    SyncStatus,
+)
+from app.models.dataset import (
+    Dataset,
+    DatasetSource,
+    DatasetStatus,
+    Variable,
+    VariableType,
+)
+from app.models.geography import (
+    BoundaryFormat,
+    BoundaryLayer,
+)
+from app.models.monitoring import (
+    Alert,
+    AlertRule,
+    AlertStatus,
+    CheckType,
+    Direction,
+    Indicator,
+    IndicatorSnapshot,
+    QualityResult,
+    QualityRule,
+    Severity,
+    TargetSet,
+)
+from app.models.project import (
+    Project,
+    ProjectMember,
+    ProjectScript,
+    ProjectStatus,
+)
+from app.models.publishing import Publication, PublishKind, PublishTarget
+from app.models.relationship import (
+    Cardinality,
+    DatasetRelationship,
+    KeyMatch,
+)
+from app.models.system import (
+    AuditLog,
+    Job,
+    JobStatus,
+    JobType,
+    Notification,
+    SystemSetting,
+)
+from app.models.user import ROLE_RANK, ApiKey, Role, User
+
+__all__ = [
+    "Base",
+    "User",
+    "Role",
+    "ROLE_RANK",
+    "ApiKey",
+    "Dataset",
+    "DatasetSource",
+    "DatasetStatus",
+    "Variable",
+    "VariableType",
+    "BoundaryFormat",
+    "BoundaryLayer",
+    "ShareLink",
+    "Connection",
+    "ExportFormat",
+    "FolderImport",
+    "SourceKind",
+    "SyncRun",
+    "SyncStatus",
+    "SavedQuery",
+    "Chart",
+    "ChartType",
+    "Dashboard",
+    "DashboardSnapshot",
+    "DashboardView",
+    "HtmlSnippet",
+    "Widget",
+    "WidgetComment",
+    "WidgetType",
+    "Indicator",
+    "IndicatorSnapshot",
+    "TargetSet",
+    "AlertRule",
+    "Alert",
+    "AlertStatus",
+    "Severity",
+    "Direction",
+    "QualityRule",
+    "QualityResult",
+    "CheckType",
+    "Job",
+    "JobStatus",
+    "JobType",
+    "Notification",
+    "AuditLog",
+    "SystemSetting",
+    "Project",
+    "ProjectScript",
+    "ProjectMember",
+    "ProjectStatus",
+    "DatasetRelationship",
+    "Cardinality",
+    "KeyMatch",
+    "Publication",
+    "PublishKind",
+    "PublishTarget",
+]

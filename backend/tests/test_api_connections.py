@@ -1,0 +1,276 @@
+"""The Survey Solutions connection: where its imports land, and what it keeps.
+
+A sync used to download an export, keep the first data file in it and throw the
+rest away, into the shared area whatever project the survey belonged to. These
+cover the two halves of the fix: a connection names a project, and the export
+zip is kept where it can be fetched back.
+"""
+
+from __future__ import annotations
+
+import zipfile
+from types import SimpleNamespace
+
+import pytest
+
+
+def _connection(client, auth_headers, **overrides) -> dict:
+    payload = {
+        "name": "Field server",
+        "base_url": "https://survey.example.org",
+        "workspace": "primary",
+        "username": "api_user",
+        "password": "secret",
+        **overrides,
+    }
+    response = client.post("/api/v1/connections", headers=auth_headers, json=payload)
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+def test_a_connection_remembers_which_project_its_imports_belong_to(client, auth_headers):
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Labour force 2026"}
+    ).json()
+
+    connection = _connection(client, auth_headers, project_id=project["id"])
+    assert connection["project_id"] == project["id"]
+
+    again = client.get(f"/api/v1/connections/{connection['id']}", headers=auth_headers).json()
+    assert again["project_id"] == project["id"]
+
+
+def test_a_connection_can_be_moved_to_another_project(client, auth_headers):
+    first = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Round one"}
+    ).json()
+    second = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Round two"}
+    ).json()
+
+    connection = _connection(client, auth_headers, project_id=first["id"])
+    moved = client.patch(
+        f"/api/v1/connections/{connection['id']}",
+        headers=auth_headers,
+        json={"project_id": second["id"]},
+    )
+    assert moved.status_code == 200
+    assert moved.json()["project_id"] == second["id"]
+
+    # And back to the shared area
+    released = client.patch(
+        f"/api/v1/connections/{connection['id']}", headers=auth_headers, json={"project_id": None}
+    )
+    assert released.json()["project_id"] is None
+
+
+def test_the_password_never_comes_back_out(client, auth_headers):
+    connection = _connection(client, auth_headers)
+    assert "password" not in connection
+    assert connection["has_password"] is True
+
+
+def test_an_exported_archive_can_be_downloaded_again(client, auth_headers, tmp_path, db_session):
+    """The zip is the only record of what the server actually sent."""
+    from app.db.base import utcnow
+    from app.models import SyncRun, SyncStatus
+
+    connection = _connection(client, auth_headers)
+
+    archive = tmp_path / "export.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("household.dta", b"data")
+
+    run = SyncRun(
+        connection_id=connection["id"],
+        questionnaire="Labour Force Survey",
+        status=SyncStatus.success,
+        started_at=utcnow(),
+        archive_path=str(archive),
+    )
+    db_session.add(run)
+    db_session.commit()
+
+    listed = client.get(
+        f"/api/v1/connections/{connection['id']}/runs", headers=auth_headers
+    ).json()
+    assert listed[0]["has_archive"] is True
+
+    downloaded = client.get(
+        f"/api/v1/connections/{connection['id']}/runs/{run.id}/archive", headers=auth_headers
+    )
+    assert downloaded.status_code == 200
+    assert downloaded.headers["content-type"] == "application/zip"
+    assert downloaded.content == archive.read_bytes()
+    assert "labour-force-survey" in downloaded.headers["content-disposition"]
+
+
+def test_a_run_whose_archive_was_pruned_does_not_offer_a_download(
+    client, auth_headers, tmp_path, db_session
+):
+    """Archives are pruned, and offering a download that 404s is worse."""
+    from app.db.base import utcnow
+    from app.models import SyncRun, SyncStatus
+
+    connection = _connection(client, auth_headers)
+    run = SyncRun(
+        connection_id=connection["id"],
+        questionnaire="Gone",
+        status=SyncStatus.success,
+        started_at=utcnow(),
+        archive_path=str(tmp_path / "never-written.zip"),
+    )
+    db_session.add(run)
+    db_session.commit()
+
+    listed = client.get(
+        f"/api/v1/connections/{connection['id']}/runs", headers=auth_headers
+    ).json()
+    assert listed[0]["has_archive"] is False
+
+    missing = client.get(
+        f"/api/v1/connections/{connection['id']}/runs/{run.id}/archive", headers=auth_headers
+    )
+    assert missing.status_code == 404
+    assert "no longer on the server" in missing.json()["detail"]
+
+
+def test_an_archive_cannot_be_fetched_through_another_connection(
+    client, auth_headers, tmp_path, db_session
+):
+    from app.db.base import utcnow
+    from app.models import SyncRun, SyncStatus
+
+    mine = _connection(client, auth_headers)
+    theirs = _connection(client, auth_headers, name="Another server")
+
+    archive = tmp_path / "theirs.zip"
+    with zipfile.ZipFile(archive, "w") as handle:
+        handle.writestr("household.dta", b"data")
+    run = SyncRun(
+        connection_id=theirs["id"],
+        questionnaire="Theirs",
+        status=SyncStatus.success,
+        started_at=utcnow(),
+        archive_path=str(archive),
+    )
+    db_session.add(run)
+    db_session.commit()
+
+    response = client.get(
+        f"/api/v1/connections/{mine['id']}/runs/{run.id}/archive", headers=auth_headers
+    )
+    assert response.status_code == 404
+
+
+def test_a_connection_can_be_told_what_time_to_import(client, auth_headers):
+    """A nightly refresh is a time of day, not an interval: the dashboard is
+    read at nine, so the import belongs at six."""
+    connection = _connection(
+        client,
+        auth_headers,
+        sync_enabled=True,
+        sync_mode="daily",
+        sync_times=["18:00", "06:00"],
+        sync_timezone="Etc/GMT-11",
+    )
+    assert connection["sync_mode"] == "daily"
+    # Sorted and de-duplicated on the way in
+    assert connection["sync_times"] == ["06:00", "18:00"]
+    assert connection["sync_timezone"] == "Etc/GMT-11"
+
+    changed = client.patch(
+        f"/api/v1/connections/{connection['id']}",
+        headers=auth_headers,
+        json={"sync_times": ["07:30", "07:30"]},
+    )
+    assert changed.status_code == 200
+    assert changed.json()["sync_times"] == ["07:30"]
+
+
+def test_a_time_that_is_not_a_time_is_refused(client, auth_headers):
+    connection = _connection(client, auth_headers, name="Bad times")
+    response = client.patch(
+        f"/api/v1/connections/{connection['id']}",
+        headers=auth_headers,
+        json={"sync_times": ["half past six"]},
+    )
+    assert response.status_code == 422
+    assert "not a time of day" in response.text
+
+
+def test_a_zone_that_does_not_exist_is_refused(client, auth_headers):
+    connection = _connection(client, auth_headers, name="Bad zone")
+    response = client.patch(
+        f"/api/v1/connections/{connection['id']}",
+        headers=auth_headers,
+        json={"sync_timezone": "Middle/Earth"},
+    )
+    assert response.status_code == 422
+    assert "not a known time zone" in response.text
+
+
+def test_a_connection_remembers_the_questionnaires_it_imports(client, auth_headers):
+    """The list a scheduled import runs on, which had nowhere to be set.
+
+    The scheduler skips a connection with nothing chosen, so automatic imports
+    could be switched on, given a schedule, and still never import anything.
+    """
+    questionnaire = "11111111-1111-1111-1111-111111111111"
+    connection = _connection(client, auth_headers, questionnaires=[f"{questionnaire}$2"])
+    assert connection["questionnaires"] == [f"{questionnaire}$2"]
+
+    updated = client.patch(
+        f"/api/v1/connections/{connection['id']}",
+        headers=auth_headers,
+        # A bare id, with no version on it: every version of this
+        # questionnaire, including the ones published after today. A pinned
+        # list goes stale the moment the questionnaire is revised again.
+        json={"questionnaires": [questionnaire]},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["questionnaires"] == [questionnaire]
+
+    again = client.get(f"/api/v1/connections/{connection['id']}", headers=auth_headers)
+    assert again.json()["questionnaires"] == [questionnaire]
+
+
+@pytest.fixture
+def no_broker(monkeypatch):
+    """Queue nothing.
+
+    Redis is not running in the test environment, and Celery spends twenty
+    seconds finding that out one retry at a time - which was an eighth of the
+    whole suite in this one test. The endpoint catches the failure and records
+    it on the job; what is under test here is what the job was given.
+    """
+    monkeypatch.setattr(
+        "app.workers.tasks.run_connection_sync.delay",
+        lambda job_id: SimpleNamespace(id=f"task-{job_id}"),
+    )
+
+
+def test_an_import_with_nothing_chosen_falls_back_to_the_connections_list(
+    client, auth_headers, db_session, no_broker
+):
+    """What the "Import data" button sends when the reader changes nothing."""
+    from app.models import Job
+
+    questionnaire = "22222222-2222-2222-2222-222222222222"
+    connection = _connection(client, auth_headers, questionnaires=[questionnaire])
+    response = client.post(
+        f"/api/v1/connections/{connection['id']}/sync", headers=auth_headers, json={}
+    )
+    assert response.status_code == 202, response.text
+    job = db_session.get(Job, response.json()["id"])
+    assert job.params["questionnaires"] == [questionnaire]
+
+
+def test_an_import_with_no_questionnaires_anywhere_is_refused(client, auth_headers):
+    """Rather than queueing a job that downloads nothing and reports success."""
+    connection = _connection(client, auth_headers)
+    response = client.post(
+        f"/api/v1/connections/{connection['id']}/sync", headers=auth_headers, json={}
+    )
+    assert response.status_code == 400
+    assert "questionnaire" in response.json()["detail"]

@@ -1,0 +1,1020 @@
+// Mirrors the backend's pydantic schemas.
+
+export type Role = 'admin' | 'manager' | 'analyst' | 'viewer'
+
+export interface User {
+  id: string
+  email: string
+  full_name: string
+  role: Role
+  is_active: boolean
+  // Confines this user to the projects they belong to, shutting off the
+  // shared area every other user can see.
+  restricted_to_projects: boolean
+  /** Someone else chose this password, so the holder has to set their own. */
+  must_change_password: boolean
+  created_at: string
+  last_login_at: string | null
+  preferences: UserPreferences
+}
+
+/**
+ * The interface settings kept against the account rather than the browser.
+ *
+ * Null means never chosen, which is not the same as chosen-and-false: the
+ * shell applies its own default to the first and the stored answer to the
+ * second.
+ */
+export interface UserPreferences {
+  sidebar_pinned: boolean | null
+  /** Put away the getting-started list on the Overview. */
+  getting_started_hidden?: boolean | null
+}
+
+export type Cardinality =
+  | 'one_to_one'
+  | 'one_to_many'
+  | 'many_to_one'
+  | 'many_to_many'
+
+/**
+ * How a relationship's two keys are lined up before they are compared.
+ *
+ * `exact` compares the columns as stored and is the only one that cannot
+ * quietly match the wrong rows, so it is the default. The other two are a
+ * statement about the data that only a person can make: the same household is
+ * written "0041" in one export and 41 in the next, and nothing in the files
+ * says so.
+ */
+export type KeyMatch = 'exact' | 'text' | 'number'
+
+/** What archiving a project would take, asked before it is done. */
+export interface ArchiveCost {
+  bytes: number
+  /** The same number as a person would say it, formatted by the server. */
+  human: string
+  datasets: number
+  share_links: number
+  archived: boolean
+}
+
+export interface Relationship {
+  id: string
+  project_id: string | null
+  left_dataset_id: string
+  right_dataset_id: string
+  left_variable: string
+  right_variable: string
+  cardinality: Cardinality
+  is_active: boolean
+  key_match: KeyMatch
+  /** Still as detected, i.e. nobody has corrected it. */
+  detected: boolean
+  created_at: string
+  left_name: string
+  right_name: string
+}
+
+export interface DetectedRelationship {
+  left_dataset_id: string
+  right_dataset_id: string
+  left_name: string
+  right_name: string
+  left_variable: string
+  right_variable: string
+  cardinality: Cardinality
+  /** Share of the right side's keys present on the left. */
+  overlap: number
+}
+
+/**
+ * `archived` means the survey data has been removed to reclaim the disk and
+ * everything built on it kept: the datasets' names and variables, the
+ * dashboards, indicators, quality rules and the project's script. Widgets read
+ * empty until the export is imported again.
+ */
+export type ProjectStatus = 'active' | 'paused' | 'closed' | 'archived'
+
+export interface ProjectMember {
+  id: string
+  user_id: string
+  role: Role
+  email: string
+  full_name: string
+}
+
+export interface Project {
+  id: string
+  name: string
+  slug: string
+  description: string
+  status: ProjectStatus
+  /** When the data was removed, if it has been. */
+  archived_at: string | null
+  starts_on: string | null
+  ends_on: string | null
+  created_at: string
+  updated_at: string
+  dataset_count: number
+  dashboard_count: number
+  member_count: number
+  // This caller's role over the project, so the UI can hide what they cannot do
+  your_role: Role | null
+  members?: ProjectMember[]
+}
+
+export type VariableType = 'numeric' | 'categorical' | 'text' | 'datetime' | 'boolean'
+
+export interface Variable {
+  id: string
+  name: string
+  label: string
+  var_type: VariableType
+  storage_type: string
+  position: number
+  n_missing: number
+  n_unique: number
+  min_value: number | null
+  max_value: number | null
+  mean_value: number | null
+  value_labels: Record<string, string>
+  /** Stata tagged missings this variable carries, e.g. [".a", ".b"]. */
+  missing_tags: string[]
+  /** Internal bookkeeping columns, which should not be offered for analysis. */
+  is_hidden: boolean
+}
+
+/**
+ * `archived` means the project was archived and this dataset's file removed.
+ * Its name, variables and counts are all still here, which is what tells it
+ * apart from `failed`: nothing went wrong, and re-importing fills it back in.
+ */
+export type DatasetStatus = 'pending' | 'processing' | 'ready' | 'failed' | 'archived'
+
+/** A frame of areas - enumeration areas, districts, villages - a map draws. */
+export interface BoundaryLayer {
+  id: string
+  name: string
+  description: string
+  project_id: string | null
+  source_format: string
+  source_filename: string
+  feature_count: number
+  file_size: number
+  /** The attribute names its areas carry, for choosing a code and a label. */
+  properties: string[]
+  /** [min_x, min_y, max_x, max_y], for framing a map on it. */
+  bbox: number[]
+  created_at: string
+  updated_at: string
+}
+
+export interface Dataset {
+  id: string
+  name: string
+  slug: string
+  description: string
+  source: 'upload' | 'survey_solutions' | 'derived'
+  source_ref: string
+  connection_id: string | null
+  // Null means the shared area, visible to everyone
+  project_id: string | null
+  status: DatasetStatus
+  error: string
+  row_count: number
+  column_count: number
+  file_size: number
+  tags: string[]
+  /** Non-empty when built from other datasets; it can then be rebuilt. */
+  derivation: Record<string, unknown>
+  meta: {
+    monitoring_fields?: Record<string, string>
+    warnings?: string[]
+    /** Which file inside an export archive this dataset holds, and so which
+     *  file a later archive's rows get appended to. */
+    archive_member?: string
+    /** How the last rebuild of a merged dataset went. Anything but
+     *  `rebuilt` means it is holding older data than its sources. */
+    rebuild?: { status: 'rebuilt' | 'failed' | 'stuck'; message: string; at: string }
+  }
+  version: number
+  refreshed_at: string | null
+  created_at: string
+  updated_at: string
+  variables?: Variable[]
+}
+
+export type Aggregation =
+  | 'count' | 'count_distinct' | 'sum' | 'mean' | 'median'
+  | 'min' | 'max' | 'stddev' | 'p25' | 'p75' | 'p90' | 'share'
+
+export type DateGrain = 'day' | 'week' | 'month' | 'quarter' | 'year'
+
+export interface Dimension {
+  variable: string
+  alias?: string | null
+  grain?: DateGrain | null
+  bin_width?: number | null
+  limit?: number | null
+}
+
+export interface Measure {
+  agg: Aggregation
+  variable?: string | null
+  alias?: string | null
+  weight?: string | null
+}
+
+export type FilterOperator =
+  | 'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte' | 'in' | 'not_in'
+  | 'contains' | 'not_contains' | 'starts_with' | 'ends_with'
+  | 'between' | 'is_null' | 'is_not_null'
+  // A date on or after a day, and before one: a dashboard's date range.
+  | 'on_or_after' | 'before'
+  // A tick-all-that-apply option: the column was ticked, or was not. Neither
+  // takes a value - the column is the answer.
+  | 'selected' | 'not_selected'
+
+export interface Condition {
+  variable: string
+  operator: FilterOperator
+  value: unknown
+  use_label?: boolean
+  /**
+   * Compare against another column rather than `value`: end_date < start_date.
+   * Set, and `value` and `use_label` are both ignored, and only the six scalar
+   * comparisons are accepted. Absent on every filter saved before it existed.
+   */
+  other_variable?: string | null
+  /**
+   * Arithmetic over columns, on either side: `inc2020 - inc2019 > 100`.
+   * `formula` is the left side in place of `variable` alone (which stays the
+   * first column it names); `other_formula` the right side in place of a
+   * value or `other_variable`. Numbers, plain names, + - * / and brackets.
+   */
+  formula?: string | null
+  other_formula?: string | null
+}
+
+export interface FilterGroup {
+  op: 'and' | 'or'
+  conditions: Condition[]
+  groups: FilterGroup[]
+}
+
+export interface SortSpec {
+  field: string
+  direction: 'asc' | 'desc'
+}
+
+export interface QuerySpec {
+  dimensions: Dimension[]
+  measures: Measure[]
+  filters: FilterGroup
+  sort: SortSpec[]
+  limit: number
+  offset?: number
+  use_labels?: boolean
+  drop_missing?: boolean
+}
+
+export interface QueryColumn {
+  name: string
+  label: string
+  type: 'dimension' | 'measure'
+  data_type: string
+}
+
+export interface QueryResult {
+  columns: QueryColumn[]
+  rows: unknown[][]
+  row_count: number
+  truncated: boolean
+  sql: string
+  duration_ms: number
+  /** What the percentages in the result are a percentage of, where there are any. */
+  total_rows_scanned?: number | null
+}
+
+export interface FrequencyRow {
+  value: unknown
+  label: string
+  count: number
+  percent: number
+  valid_percent: number
+  cumulative_percent: number
+}
+
+export interface FrequencyResult {
+  variable: string
+  label: string
+  rows: FrequencyRow[]
+  total: number
+  missing: number
+  distinct: number
+}
+
+/** A "tick all that apply" question, named by the columns it was exported as. */
+export interface MultiSelectRequest {
+  columns: string[]
+  filters: FilterGroup
+  /** Respondents is the honest denominator: the shares add to over 100. */
+  percent_of: 'respondents' | 'rows'
+  sort: 'value_desc' | 'value_asc' | 'label_asc' | 'none'
+  /** A chart draws one number; a table is the case that wants both. */
+  show: 'count' | 'percent' | 'both'
+  /** How the question is read. Absent on a chart saved before there was a
+   *  choice, which is one bar per option. */
+  view?: MultiSelectView
+  /** The variable a by_group view splits the respondents by. */
+  by?: string
+  /** How many combinations are named before the rest are one bar. */
+  top?: number
+}
+
+export type MultiSelectView = 'options' | 'by_group' | 'combinations' | 'how_many' | 'together'
+
+/** A set of columns in a dataset that together look like one question. */
+export interface MultiSelectGroup {
+  /** The shared part of the names, e.g. "toilet" from toilet__1, toilet__2. */
+  stem: string
+  columns: string[]
+  /** What the options agree on in their labels, which is the question. */
+  label: string
+  /** Each option's column and the name its bar will carry. */
+  options: { column: string; label: string }[]
+  /** The file named none of them, so every bar would read "Option 8". */
+  unnamed: boolean
+}
+
+export interface CrosstabRequest {
+  row_variable: string
+  column_variable: string
+  /** null asks for a table with no cell values: the categories and nothing else. */
+  measure: Measure | null
+  /** Several cell values side by side, one column each, with no column variable. */
+  measures?: Measure[]
+  /** Renamed column headings, keyed by the heading the table would otherwise show. */
+  column_headings?: Record<string, string>
+  /** A renamed heading for the row variable, in the corner. */
+  row_heading?: string
+  filters: FilterGroup
+  percentages: 'none' | 'row' | 'column' | 'total'
+  include_totals: boolean
+  use_labels: boolean
+}
+
+export interface CrosstabResult {
+  row_variable: string
+  column_variable: string
+  /** What to call each variable in the corner: the question, not the column. */
+  row_variable_label?: string
+  column_variable_label?: string
+  row_labels: string[]
+  column_labels: string[]
+  /** What each column is headed where somebody renamed it; a click still uses the label. */
+  column_headings?: string[]
+  /** The row variable's heading, where somebody renamed it. */
+  row_heading?: string
+  values: (number | null)[][]
+  /** Null where a margin was withheld: a one-way table's row total is its
+   *  single cell, so a margin is as disclosive as a cell is. */
+  row_totals: (number | null)[]
+  column_totals: (number | null)[]
+  grand_total: number | null
+  percentages: string
+  chi_square: { statistic: number; dof: number; cramers_v: number } | null
+  /** Categories the data had beyond what was returned, so a cut table says so. */
+  rows_omitted?: number
+  columns_omitted?: number
+  /**
+   * Which cells were withheld under disclosure control, same shape as `values`.
+   *
+   * A withheld cell and an empty one are both null in `values`, and they say
+   * different things: one is "we are not telling you", the other is "nobody
+   * was here".
+   */
+  suppressed?: boolean[][]
+  /** The same for the margins, protected in the same pass as the cells. */
+  row_totals_suppressed?: boolean[]
+  column_totals_suppressed?: boolean[]
+  grand_total_suppressed?: boolean
+  /** Categories too small to name at all, on a table with no cell values. */
+  rows_withheld?: number
+  /** The floor that was applied. Zero means disclosure control is off. */
+  disclosure_threshold?: number
+}
+
+export interface SummaryStats {
+  variable: string
+  label: string
+  count: number
+  missing: number
+  mean: number | null
+  std: number | null
+  min: number | null
+  p25: number | null
+  median: number | null
+  p75: number | null
+  max: number | null
+  sum: number | null
+}
+
+export interface Connection {
+  id: string
+  name: string
+  /**
+   * A survey server, or a folder on this host that exports are put in.
+   *
+   * The second exists because creating an API user is an administrator's
+   * privilege on the survey server, and the answer is sometimes no.
+   */
+  source_kind: 'survey_solutions' | 'folder'
+  /** For a folder connection: the directory read, inside an allowed root. */
+  folder_path: string
+  base_url: string
+  workspace: string
+  username: string
+  verify_ssl: boolean
+  is_active: boolean
+  sync_enabled: boolean
+  sync_interval_minutes: number
+  export_format: 'STATA' | 'Tabular' | 'SPSS'
+  questionnaires: string[]
+  interview_status: string
+  last_sync_at: string | null
+  last_sync_status: 'never' | 'running' | 'success' | 'failed'
+  last_sync_error: string
+  server_info: Record<string, unknown>
+  created_at: string
+  has_password: boolean
+  /** Where this connection's imports land. Null is the shared area. */
+  project_id: string | null
+  /** 'interval' counts from the last run; 'daily' uses sync_times. */
+  sync_mode: 'interval' | 'daily'
+  /** Times of day to import at, as "HH:MM", read in sync_timezone. */
+  sync_times: string[]
+  sync_timezone: string
+}
+
+export interface Questionnaire {
+  id: string
+  version: number
+  title: string
+  variable: string
+  identity: string
+  last_entry_date: string | null
+}
+
+export interface SyncRun {
+  id: string
+  connection_id: string
+  questionnaire: string
+  status: 'never' | 'running' | 'success' | 'failed'
+  started_at: string
+  finished_at: string | null
+  rows_imported: number
+  datasets_created: number
+  message: string
+  log: string[]
+  /** Whether the export zip is still on disk to be downloaded. */
+  has_archive: boolean
+  /** The format asked of the server. Empty for runs from before it was recorded. */
+  export_format: string
+}
+
+export type ChartType =
+  | 'bar' | 'horizontal_bar' | 'stacked_bar' | 'horizontal_stacked_bar'
+  | 'population_pyramid' | 'line' | 'area' | 'pie'
+  | 'donut' | 'scatter' | 'table' | 'kpi' | 'heatmap' | 'crosstab' | 'map'
+  | 'gauge' | 'funnel' | 'boxplot'
+
+export interface Chart {
+  id: string
+  name: string
+  description: string
+  dataset_id: string
+  chart_type: ChartType
+  // A cross-tab is saved with a crosstab request in place of a query; the
+  // server branches on which one is present when rendering it.
+  spec: {
+    query?: QuerySpec
+    crosstab?: CrosstabRequest
+    // As is a multiple-select, which holds the columns the question was
+    // spread across instead of a variable to group by.
+    multiselect?: MultiSelectRequest
+    encoding?: Record<string, string>
+    options?: Record<string, unknown>
+  }
+  created_at: string
+  updated_at: string
+}
+
+export interface ArchiveImport {
+  datasets: Dataset[]
+  /** "R_demographics.dta -> R_demographics (401 rows)" */
+  created: string[]
+  /** "R_demographics.dta -> R_demographics (401 + 381 = 782 rows)" */
+  appended: string[]
+  /** "R_demographics.dta -> R_demographics (401 rows replaced by 415)" */
+  replaced: string[]
+  skipped: string[]
+  warnings: string[]
+  rows: number
+}
+
+export type WidgetType =
+  | 'chart'
+  | 'table'
+  | 'kpi'
+  | 'indicator'
+  | 'text'
+  | 'crosstab'
+  | 'quality'
+  | 'countdown'
+  | 'map'
+  | 'html'
+  | 'freshness'
+
+export interface Widget {
+  id: string
+  dashboard_id: string
+  title: string
+  widget_type: WidgetType
+  chart_id: string | null
+  indicator_id: string | null
+  dataset_id: string | null
+  config: Record<string, unknown>
+  /** Index into Dashboard.pages; 0 is the first page. */
+  page: number
+  /** Id of the WidgetGroup this belongs to, or "" for none. */
+  group_id: string
+  layout: { x?: number; y?: number; w?: number; h?: number }
+  position: number
+}
+
+/**
+ * A named box drawn behind the widgets that belong to it.
+ *
+ * The title bar is a grid item like any other, so dragging, resizing and
+ * collision are react-grid-layout's rather than a second implementation of
+ * them. The frame is then drawn from the bar and its members together, which
+ * is why the group stores no width or height of its own for the box: there is
+ * no second copy of the geometry to fall out of step with the widgets.
+ *
+ * Moving the group is moving the bar and applying the same shift to every
+ * member. Collapsing it is leaving the members out of the layout, so the
+ * board closes up around a bar that is still there to open again.
+ */
+export interface WidgetGroup {
+  id: string
+  name: string
+  /** Index into Dashboard.pages, the same way a widget names its page. */
+  page: number
+  /** Folded down to its title bar. Saved, so a board opens as it was left. */
+  collapsed?: boolean
+  /** Frame and title colour. Empty means the dashboard's own ink. */
+  color?: string
+  /** The group's own ground, behind its widgets. Empty is the faint grey wash. */
+  background?: string
+  /** The heading's size in pixels. Absent is 12. */
+  title_size?: number
+  /**
+   * Where the title bar sits, in grid units. It is a grid item like any
+   * other, which is what lets react-grid-layout drag and resize it; the frame
+   * around the group is then drawn from the bar and its members together.
+   */
+  x: number
+  y: number
+  w: number
+}
+
+export interface Appearance {
+  background_color?: string
+  /** File name of an uploaded image, served from the dashboard's own endpoint. */
+  background_image?: string
+  /** Changes whenever the image does, so a cached one is not shown instead. */
+  background_version?: string
+  background_fit?: 'cover' | 'contain' | 'tile'
+  /**
+   * A ready-made ground from lib/backgrounds, drawn in CSS rather than
+   * uploaded. An uploaded image wins over it: both at once is a pattern
+   * nobody can see under a photograph.
+   */
+  background_pattern?: string
+  /** 0-1: how much white is laid over the image to keep widgets readable. */
+  fade?: number
+  /** Grid columns: more is finer placement, not more room. Defaults to 12. */
+  columns?: number
+  /** Pixel height of one grid row. Defaults to 74. */
+  row_height?: number
+  /** A canvas wider than the window, which then scrolls sideways. 0 = fit. */
+  canvas_width?: number
+  /** 0-1: how opaque the widget cards are, so the background shows through. */
+  widget_opacity?: number
+  /** A band behind the page tabs, for when the background swallows them. */
+  tab_background?: string
+  /** The page tab text, when the automatic light-or-dark choice is wrong. */
+  tab_color?: string
+  /** The filter bar's own colour, for when white floats oddly on a background. */
+  filter_background?: string
+  /** The filter labels, for a bar whose colour the default grey disappears into. */
+  filter_color?: string
+
+  // --- the dashboard's own header -----------------------------------------
+  /** An uploaded logo, served from the dashboard's own endpoint. */
+  logo_image?: string
+  logo_version?: string
+  /** A second mark, at the other end of the masthead from the first. */
+  logo_right_image?: string
+  logo_right_version?: string
+  /** Logo height in pixels. Width follows the image. */
+  logo_height?: number
+  /** Title size in pixels. 0 or absent uses the default. */
+  title_size?: number
+  title_color?: string
+  /** A font id from lib/fonts, not arbitrary CSS. */
+  title_font?: string
+  title_align?: 'left' | 'center'
+  /** A line under the header, which most branded dashboards want. */
+  header_rule?: boolean
+  /** Show the description under the title. */
+  hide_subtitle?: boolean
+
+  // --- the masthead, and the ground the whole page sits on ------------------
+  /**
+   * A band behind the title. One colour paints it flat; a second turns it into
+   * a gradient. Set, it also moves the toolbar out of the title row and onto
+   * its own line, because a row of buttons across a masthead is a masthead
+   * with a row of buttons across it.
+   */
+  header_background?: string
+  header_background_2?: string
+  /** Gradient angle in degrees, clockwise from up. 135 lights it from top left. */
+  header_angle?: number
+  /**
+   * The ground behind the whole page, outside the board itself - the margin
+   * the board is mounted on. Same two-colour arrangement as the band.
+   */
+  page_background?: string
+  page_background_2?: string
+  page_angle?: number
+}
+
+export interface Dashboard {
+  id: string
+  name: string
+  slug: string
+  description: string
+  filters: Record<string, unknown>[]
+  project_id: string | null
+  /** Named pages; empty means the dashboard is a single unnamed page. */
+  pages: { name: string }[]
+  /** Named boxes behind the widgets that belong to them. */
+  groups: WidgetGroup[]
+  /** Which categorical ordering its charts use; see CHART_THEMES. */
+  theme: string
+  /** How the board is dressed: background colour, image, fit and fade. */
+  appearance: Appearance
+  /** The hierarchy the whole board drills through, outermost first. */
+  drilldown: DrillLevel[]
+  is_public: boolean
+  public_token: string | null
+  /** A hostname this dashboard also answers on, e.g. "labour-force.dash.gov.vu". */
+  public_hostname?: string | null
+  refresh_interval_seconds: number
+  created_at: string
+  updated_at: string
+  widgets?: Widget[]
+  /**
+   * The first page's widgets, as little as it takes to draw the board small.
+   * Sent by the list endpoint only: a card draws a thumbnail from it, and the
+   * board itself has the real widgets.
+   */
+  sketch?: { kind: WidgetType; layout: Record<string, unknown>; chart_type?: string }[]
+  /** Every widget on the board, not just the first page's. */
+  widget_count?: number
+  page_count?: number
+}
+
+/** One step of a board's drill-down hierarchy, e.g. province then district. */
+export interface DrillLevel {
+  variable: string
+  label?: string
+  /** Which dataset the level was chosen from, so its values can be listed. */
+  dataset_id?: string
+}
+
+/** Where the reader has drilled to: the value chosen at each level so far. */
+export interface DrillStep {
+  variable: string
+  value: string
+  label: string
+}
+
+/** A named filter selection saved against a dashboard. */
+export interface DashboardSavedView {
+  id: string
+  dashboard_id: string
+  name: string
+  description: string
+  state: {
+    page?: number
+    filters?: Record<string, string>
+    drill?: DrillStep[]
+  }
+  is_default: boolean
+  is_shared: boolean
+  created_by: string | null
+  created_at: string
+  updated_at: string
+}
+
+/** A note somebody left on one widget, under one reading of the board. */
+export interface WidgetComment {
+  id: string
+  dashboard_id: string
+  widget_id: string
+  /** The saved view it was said under. Null means it is about the board and
+   *  is shown under every view. */
+  view_id: string | null
+  /** The comment it answers, for a reply. One level only. */
+  parent_id: string | null
+  body: string
+  is_resolved: boolean
+  created_by: string | null
+  author_name: string
+  created_at: string
+  updated_at: string
+}
+
+export type Direction = 'higher_is_better' | 'lower_is_better' | 'neutral'
+export type Severity = 'info' | 'warning' | 'critical'
+export type IndicatorState = 'ok' | 'warning' | 'critical' | 'unknown'
+
+/**
+ * One counted thing inside a formula, under a name the formula can use.
+ *
+ * Each part carries its own filters, which is the whole reason parts exist:
+ * "done" counts the rows whose status says so and "issued" counts all of
+ * them, and no single filter can be both halves of that fraction.
+ */
+export interface FormulaPart {
+  name: string
+  measure: Measure
+  filters: FilterGroup
+}
+
+/** Named parts and the sum over them, where an indicator is written that way. */
+export interface Formula {
+  expression: string
+  parts: FormulaPart[]
+}
+
+export interface Indicator {
+  id: string
+  name: string
+  description: string
+  dataset_id: string
+  spec: QuerySpec
+  unit: string
+  value_format: string
+  target_value: number | null
+  /** The day the target is meant to be met by, if any. */
+  target_date?: string | null
+  warning_threshold: number | null
+  critical_threshold: number | null
+  direction: Direction
+  breakdown_variable: string
+  /** A quota per category of the breakdown; a category with none is not judged. */
+  breakdown_targets?: Record<string, number>
+  /** A shared target set, which wins over the quotas above. */
+  target_set_id?: string | null
+  /** '' for a plain number, or what the value is a percentage of. */
+  percent_of?: '' | 'all_rows' | 'answered'
+  /** Arithmetic over named parts instead of the single measure in `spec`. */
+  formula?: Formula | Record<string, never>
+  is_active: boolean
+  display_order: number
+  last_value: number | null
+  last_computed_at: string | null
+  created_at: string
+}
+
+export interface IndicatorValue {
+  indicator_id: string
+  name: string
+  value: number | null
+  unit: string
+  value_format: string
+  target_value: number | null
+  progress_percent: number | null
+  status: IndicatorState
+  /** False where no threshold decides the status, so "ok" means nothing. */
+  judged?: boolean
+  direction: Direction
+  breakdown: Record<string, number>
+  /**
+   * Each group against its own quota: the value, that group's target where it
+   * has one, how far through it is and what that makes it. A group with no
+   * quota of its own has a null target and is reported rather than judged -
+   * the overall target belongs to all the groups together.
+   */
+  breakdown_progress: Record<
+    string,
+    { value: number; target: number | null; percent: number | null; status: IndicatorState }
+  >
+  /** True where the breakdown has more groups than one answer reports. */
+  breakdown_truncated?: boolean
+  breakdown_variable: string
+  computed_at: string | null
+  error: string | null
+  trend: { t: string; v: number | null }[]
+  target_date?: string | null
+  /** Since yesterday, since last week, the pace and where it leads; read off
+   *  the stored history and empty until there is some. See lib/movement. */
+  movement?: import('@/lib/movement').Movement
+}
+
+export interface AlertRule {
+  id: string
+  name: string
+  description: string
+  indicator_id: string | null
+  dataset_id: string | null
+  condition: { operator: string; value: number }
+  severity: Severity
+  channels: string[]
+  recipients: string[]
+  cooldown_minutes: number
+  is_active: boolean
+  last_triggered_at: string | null
+  created_at: string
+}
+
+export interface Alert {
+  id: string
+  rule_id: string | null
+  title: string
+  message: string
+  severity: Severity
+  status: 'open' | 'acknowledged' | 'resolved'
+  payload: Record<string, unknown>
+  created_at: string
+  acknowledged_at: string | null
+  resolved_at: string | null
+}
+
+export type CheckType =
+  | 'missing_rate' | 'value_range' | 'duplicates' | 'outliers'
+  | 'consistency' | 'interview_duration' | 'gps_missing' | 'constant_value'
+  | 'logic' | 'likely_duplicates'
+
+export interface QualityResult {
+  id: string
+  rule_id: string
+  run_at: string
+  passed: boolean
+  failed_rows: number
+  total_rows: number
+  failure_rate: number
+  details: Record<string, unknown>
+  message: string
+}
+
+export interface QualityRule {
+  id: string
+  name: string
+  dataset_id: string
+  check_type: CheckType
+  config: Record<string, unknown>
+  severity: Severity
+  threshold: number
+  is_active: boolean
+  /** Restricts the check to part of the dataset; empty means all of it. */
+  filters: FilterGroup
+  created_at: string
+  latest_result: QualityResult | null
+}
+
+export interface Job {
+  id: string
+  job_type: string
+  status: 'queued' | 'running' | 'success' | 'failed' | 'cancelled'
+  title: string
+  progress: number
+  params: Record<string, unknown>
+  result: Record<string, unknown>
+  error: string
+  started_at: string | null
+  finished_at: string | null
+  created_at: string
+}
+
+/** One step of a background job, as the server writes it while it runs. */
+export interface JobStage {
+  key: string
+  label: string
+  status: 'pending' | 'running' | 'done' | 'warning' | 'failed' | 'skipped'
+  detail: string
+  items: { name: string; status: string; detail?: string }[]
+  started_at?: string
+  finished_at?: string
+}
+
+/** A job as the activity panel sees it: its steps, never its parameters. */
+export interface ActivityJob {
+  id: string
+  job_type: string
+  status: Job['status']
+  title: string
+  progress: number
+  stages: JobStage[]
+  error: string
+  warnings: string[]
+  project_name: string
+  started_at: string | null
+  finished_at: string | null
+  created_at: string
+}
+
+export interface Activity {
+  jobs: ActivityJob[]
+  /** When each scheduled connection imports next. */
+  upcoming: { connection_id: string; name: string; project_name: string; due_at: string }[]
+}
+
+export interface Notification {
+  id: string
+  title: string
+  body: string
+  level: string
+  link: string
+  created_at: string
+  read_at: string | null
+}
+
+export interface FieldProgress {
+  dataset_id: string
+  dataset_name: string
+  total_records: number
+  detected_fields: Record<string, string>
+  available_views: string[]
+  status_breakdown: { status: string; count: number }[]
+  submissions_over_time: { period: string; count: number; cumulative: number }[]
+  by_interviewer: Record<string, unknown>[]
+  by_supervisor: Record<string, unknown>[]
+  coverage_by_area: { area: string; interviews: number }[]
+  geo_points: Record<string, unknown>[]
+  completed_records: number
+  completion_rate: number | null
+}
+
+export interface MonitoringSummary {
+  datasets: number
+  total_records: number
+  indicators: number
+  indicators_ok: number
+  indicators_warning: number
+  indicators_critical: number
+  open_alerts: number
+  critical_alerts: number
+  failing_quality_checks: number
+  recently_refreshed: number
+}
+
+export interface Page<T> {
+  items: T[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface ApiKeyOut {
+  id: string
+  name: string
+  prefix: string
+  created_at: string
+  last_used_at: string | null
+  revoked: boolean
+}
+
+export interface SnapshotSchedule {
+  enabled: boolean
+  /** "HH:MM", read in `timezone`. */
+  times: string[]
+  /** Monday 0 through Sunday 6. Empty means every day. */
+  days: number[]
+  timezone: string
+  keep: number
+}
+
+export interface DashboardSnapshot {
+  id: string
+  dashboard_id: string
+  label: string
+  taken_at: string
+  size_bytes: number
+  is_automatic: boolean
+  created_by: string | null
+}

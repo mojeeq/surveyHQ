@@ -1,0 +1,1485 @@
+"""Dataset upload, browsing and lifecycle."""
+
+from __future__ import annotations
+
+import json
+import shutil
+from pathlib import Path
+from typing import Annotated, Any
+from uuid import uuid4
+
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    File,
+    Form,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+)
+from fastapi.responses import FileResponse
+from pydantic import BaseModel, Field
+from sqlalchemy import func, or_, select
+
+from app.api.deps import (
+    CurrentUser,
+    DbSession,
+    RequireManager,
+    get_dataset,
+    get_ready_dataset,
+)
+from app.core.config import settings
+from app.core.logging import get_logger
+from app.models import (
+    Dataset,
+    DatasetSource,
+    DatasetStatus,
+    Job,
+    JobStatus,
+    JobType,
+    KeyMatch,
+    Project,
+    Role,
+    Variable,
+)
+from app.schemas.common import Message, Page
+from app.schemas.dataset import (
+    ArchiveImportOut,
+    BulkDeleteRequest,
+    CommandRequest,
+    DatasetDetail,
+    DatasetOut,
+    DatasetPreview,
+    DatasetUpdate,
+    VariableOut,
+    VariableUpdate,
+)
+from app.schemas.monitoring import JobOut
+from app.schemas.query import FilterGroup
+from app.services import archive as archiving
+from app.services import linked_variables, preferences, staged_uploads, stata
+from app.services.audit import record
+from app.services.columnar import holds_numbers
+from app.services.datasets import (
+    ArchiveImport,
+    append_file_into_dataset,
+    create_dataset_record,
+    dataset_is_empty,
+    delete_dataset_files,
+    dependents_of,
+    describe_dependents,
+    empty_dataset,
+    find_emptied_slot,
+    load_archive_as_datasets,
+    load_file_into_dataset,
+    merge_imports,
+    unique_slug,
+)
+from app.services.derived import propagate_labels, rebuild_dependents
+from app.services.download import FORMATS as DOWNLOAD_FORMATS
+from app.services.download import download_file, temp_directory
+from app.services.ingest import SUPPORTED_EXTENSIONS, IngestError, numeric_code_text
+from app.services.pipeline import AFTER_IMPORT, Progress, after_import
+from app.services.projects import can_edit, can_view, restrict, scope_for
+from app.services.query_engine import (
+    DatasetContext,
+    QueryError,
+    SQLBuilder,
+    distinct_values,
+    run_sql,
+)
+from app.services.stata import CommandError
+from app.services.stata_expr import ExpressionError
+
+logger = get_logger(__name__)
+router = APIRouter()
+
+
+@router.get("", response_model=Page[DatasetOut])
+def list_datasets(
+    db: DbSession,
+    user: CurrentUser,
+    limit: int = Query(default=50, le=200),
+    offset: int = 0,
+    search: str = "",
+    status: DatasetStatus | None = None,
+    tag: str = "",
+    project_id: str = "",
+) -> Page[DatasetOut]:
+    statement = restrict(select(Dataset), scope_for(db, user).filter(Dataset.project_id))
+    if project_id:
+        statement = statement.where(
+            Dataset.project_id.is_(None)
+            if project_id == "none"
+            else Dataset.project_id == project_id
+        )
+    if search:
+        pattern = f"%{search.lower()}%"
+        statement = statement.where(
+            or_(
+                func.lower(Dataset.name).like(pattern),
+                func.lower(Dataset.description).like(pattern),
+            )
+        )
+    if status:
+        statement = statement.where(Dataset.status == status)
+    total = db.scalar(select(func.count()).select_from(statement.subquery())) or 0
+    rows = db.scalars(
+        statement.order_by(Dataset.created_at.desc()).limit(limit).offset(offset)
+    ).all()
+    items = [DatasetOut.model_validate(d) for d in rows]
+    if tag:
+        items = [d for d in items if tag in (d.tags or [])]
+    return Page(items=items, total=total, limit=limit, offset=offset)
+
+
+def _queue_import(
+    db: DbSession,
+    *,
+    user: Any,
+    datasets: list[Dataset],
+    upload_paths: list[Path],
+    filenames: list[str],
+    written: int,
+    project_id: str | None,
+    combine_all: bool,
+    name_prefix: str,
+    mode: str,
+    labels: list[str],
+    version_column: str,
+    review: bool = False,
+    password: str | None = None,
+) -> Job:
+    """Hand a large upload to the worker and answer with the job watching it."""
+    dataset = datasets[0] if datasets else None
+    title = f"Import {filenames[0]}" if len(filenames) == 1 else f"Import {len(filenames)} files"
+    job = Job(
+        job_type=JobType.ingest,
+        status=JobStatus.queued,
+        title=title,
+        params={
+            "upload_paths": [str(path) for path in upload_paths],
+            "filenames": filenames,
+            # dataset_id is kept beside the list so a job queued by the
+            # previous release, still waiting when this one starts, is not
+            # orphaned by the rename.
+            "dataset_id": dataset.id if dataset else "",
+            "dataset_ids": [one.id for one in datasets],
+            "project_id": project_id or "",
+            "combine_all": combine_all,
+            "name_prefix": name_prefix,
+            "mode": mode,
+            "labels": labels,
+            "version_column": version_column,
+            "bytes": written,
+            "review": review,
+            # Carried for this job only; the row is pruned with the rest.
+            "password": password,
+        },
+        created_by=user.id,
+    )
+    db.add(job)
+    record(
+        db,
+        user=user,
+        action="upload_dataset",
+        entity_type="dataset",
+        entity_id=dataset.id if dataset else None,
+        detail={"files": filenames, "queued": True, "bytes": written},
+    )
+    db.commit()
+    db.refresh(job)
+
+    from app.workers.tasks import run_upload_import
+
+    try:
+        async_result = run_upload_import.delay(job.id)
+        job.celery_task_id = async_result.id
+        db.commit()
+        db.refresh(job)
+    except Exception as exc:  # noqa: BLE001 - broker unreachable
+        logger.error("Could not queue import job %s: %s", job.id, exc)
+        job.status = JobStatus.failed
+        job.error = (
+            "The background worker could not be reached. Check that the worker "
+            "and Redis containers are running."
+        )
+        db.commit()
+        db.refresh(job)
+    return job
+
+
+# Above this, an upload is imported by the worker rather than in the request.
+# A census roster export is hundreds of megabytes and takes minutes to read,
+# which is longer than any proxy in front of this will hold a request open -
+# and reading it in the API process starves everyone else's requests of memory
+# while it happens. The worker has neither problem, and the browser watches the
+# job instead of watching a socket.
+INLINE_IMPORT_LIMIT = 48 * 1024 * 1024
+
+
+# --- a large upload, in pieces -----------------------------------------------
+#
+# The browser sends a file larger than a proxy will carry in one request as
+# pieces, then posts the ordinary upload naming what it sent instead of
+# attaching it. See services/staged_uploads.py.
+
+
+class StageIn(BaseModel):
+    filename: str = Field(min_length=1, max_length=300)
+    size: int = Field(ge=0)
+
+
+@router.post("/uploads", status_code=201)
+def start_staged_upload(payload: StageIn, user: RequireManager) -> dict[str, Any]:
+    """Make room for a file that will arrive in pieces."""
+    suffix = Path(payload.filename).suffix.lower()
+    if suffix not in SUPPORTED_EXTENSIONS and suffix != ".zip":
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"'{suffix or payload.filename}' is not a supported format. Upload a "
+                ".zip archive, or one of: " + ", ".join(sorted(SUPPORTED_EXTENSIONS))
+            ),
+        )
+    limit = preferences.value("max_upload_mb") * 1024 * 1024
+    if payload.size > limit:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"{payload.filename} is {payload.size / (1024 * 1024):,.0f} MB and the "
+                f"limit is {preferences.upload_label()}. An administrator can raise it "
+                "under Administration -> Settings."
+            ),
+        )
+    settings.ensure_directories()
+    upload_id = staged_uploads.start(user.id, payload.filename, payload.size)
+    return {
+        "id": upload_id,
+        "chunk_size": staged_uploads.CHUNK_BYTES,
+        "pieces": staged_uploads.pieces(payload.size),
+    }
+
+
+@router.put("/uploads/{upload_id}/pieces/{index}")
+async def send_staged_piece(
+    upload_id: str, index: int, request: Request, user: RequireManager
+) -> dict[str, int]:
+    """One piece of a file, as the raw body. Sending a piece again replaces it."""
+    try:
+        received = await staged_uploads.write_piece(upload_id, user.id, index, request.stream())
+    except staged_uploads.StagingError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"index": index, "received": received}
+
+
+@router.post("/uploads/{upload_id}/complete")
+def complete_staged_upload(upload_id: str, user: RequireManager) -> dict[str, Any]:
+    """Put the pieces back together. The upload can then be named in /upload."""
+    try:
+        staged = staged_uploads.complete(upload_id, user.id)
+    except staged_uploads.StagingError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"id": staged.id, "filename": staged.filename, "size": staged.size}
+
+
+@router.delete("/uploads/{upload_id}", response_model=Message)
+def cancel_staged_upload(upload_id: str, user: RequireManager) -> Message:
+    """Throw away an upload that will not be finished."""
+    try:
+        staged_uploads.check(upload_id, user.id)
+    except staged_uploads.StagingError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    staged_uploads.discard(upload_id)
+    return Message(detail="Upload cancelled")
+
+
+@router.post(
+    "/upload",
+    response_model=DatasetDetail | ArchiveImportOut | JobOut,
+    status_code=201,
+)
+async def upload_dataset(
+    request: Request,
+    db: DbSession,
+    user: RequireManager,
+    file: Annotated[
+        list[UploadFile] | None,
+        File(description="Stata, SPSS, CSV, tab, Excel or zip files"),
+    ] = None,
+    name: Annotated[str, Form()] = "",
+    description: Annotated[str, Form()] = "",
+    tags: Annotated[str, Form()] = "",
+    combine_all: Annotated[bool, Form()] = False,
+    project_id: Annotated[str, Form()] = "",
+    mode: Annotated[str, Form()] = "replace",
+    labels: Annotated[str, Form()] = "",
+    version_column: Annotated[str, Form()] = "",
+    review: Annotated[bool, Form()] = False,
+    # A locked export is opened with this and it is never stored: it belongs to
+    # the file, not to the dataset, and the next export may have another.
+    password: Annotated[str, Form()] = "",
+    # Files sent beforehand in pieces, by the ids /uploads gave them, in place
+    # of attaching them here. A JSON list, in the order they are to be read.
+    staged: Annotated[str, Form()] = "",
+) -> DatasetDetail | ArchiveImportOut | JobOut:
+    """Upload a data file, or an export archive, and ingest it immediately.
+
+    A single file becomes one dataset. An archive becomes one dataset per file
+    inside it, because a Survey Solutions export holds one file per roster level
+    - the interview, the household members, the people abroad - and those are
+    different tables, not different rounds.
+
+    Uploading a later archive sends each of its files to the dataset already
+    holding that file name. mode="replace" (the default) swaps that dataset's
+    data while keeping its id, so relationships, charts, indicators and quality
+    rules built on it go on working - which is what a live monitoring tool
+    needs. mode="append" adds the rows instead, for genuinely incremental
+    exports.
+
+    Pass combine_all for the other case: an archive that really does hold
+    several rounds of one table, which goes into a single dataset instead.
+
+    Several archives can be uploaded at once, which is the case a questionnaire
+    revised mid-fieldwork produces: three exports, one per version, holding the
+    same member file names. They are imported in the order given - the first
+    under `mode`, the rest appended onto what it produced - so the interview
+    level of all three ends up in one dataset, as do the rosters and the
+    paradata. `labels` is a JSON list parallel to the files, and
+    `version_column` names a variable each file's label is written into, which
+    is what keeps the versions tellable apart afterwards.
+    """
+    uploads = list(file or [])
+    try:
+        chosen = staged_uploads.take(
+            [str(one) for one in json.loads(staged)] if staged.strip() else [], user.id
+        )
+    except (ValueError, TypeError) as exc:
+        detail = str(exc) if isinstance(exc, staged_uploads.StagingError) else (
+            "staged must be a JSON list of upload ids"
+        )
+        raise HTTPException(status_code=422, detail=detail) from exc
+    if not uploads and not chosen:
+        raise HTTPException(status_code=422, detail="Choose a file to upload")
+    if uploads and chosen:
+        raise HTTPException(
+            status_code=422, detail="Attach the files or name staged ones, not both"
+        )
+
+    # An archived project has had its data removed on purpose, and importing
+    # into one would quietly un-archive half of it: some datasets holding rows
+    # again and the project still saying it holds none.
+    if project_id:
+        try:
+            archiving.refuse_if_archived(db.get(Project, project_id), "importing data")
+        except ValueError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    names = (
+        [Path(item.filename or "upload.dat").name for item in uploads]
+        if uploads
+        else [one.filename for one in chosen]
+    )
+    suffixes = [Path(item).suffix.lower() for item in names]
+    for one, suffix in zip(names, suffixes, strict=True):
+        if suffix not in SUPPORTED_EXTENSIONS and suffix != ".zip":
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"'{suffix or one}' is not a supported format. Upload a .zip "
+                    "archive, or one of: " + ", ".join(sorted(SUPPORTED_EXTENSIONS))
+                ),
+            )
+    # Several archives append together; several data files each become their
+    # own dataset. Both are useful and they are different operations, so a
+    # mixture of the two has no single meaning and is refused rather than
+    # guessed at.
+    if len(names) > 1 and len({suffix == ".zip" for suffix in suffixes}) > 1:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "Upload either several .zip archives, which are appended "
+                "together, or several data files, which each become their own "
+                "dataset. Not a mixture of the two."
+            ),
+        )
+
+    try:
+        stamps = [str(one) for one in json.loads(labels)] if labels.strip() else []
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=422, detail="labels must be a JSON list") from exc
+    if stamps and len(stamps) != len(names):
+        raise HTTPException(status_code=422, detail="Give a label for every file, or none at all")
+    stamp_column = version_column.strip()
+    if stamp_column and not stamps:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Nothing to write into '{stamp_column}': the files have no labels",
+        )
+
+    filename = names[0]
+    suffix = suffixes[0]
+
+    if project_id and not can_edit(db, user, project_id, Role.manager):
+        raise HTTPException(status_code=404, detail="Project not found")
+
+    if mode not in ("replace", "append"):
+        raise HTTPException(status_code=422, detail="mode must be 'replace' or 'append'")
+
+    max_bytes = preferences.value("max_upload_mb") * 1024 * 1024
+    # Refused from the declared length, before a byte of it is stored. The old
+    # order - store, count, refuse - meant the whole file was uploaded and
+    # written to disk first, and a proxy that had already forwarded a body no
+    # longer being read reported it as a bad gateway rather than as the size
+    # limit it was.
+    declared = request.headers.get("content-length")
+    if chosen:
+        # The body is a few form fields; the files were sent beforehand.
+        declared = str(sum(one.size for one in chosen))
+    if declared and declared.isdigit() and int(declared) > max_bytes + 1024 * 1024:
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"This upload is {int(declared) / (1024 * 1024):,.0f} MB and the "
+                f"limit is {preferences.upload_label()}. An administrator can "
+                "raise it under Administration -> Settings, or upload the "
+                "archive's files separately."
+            ),
+        )
+
+    settings.ensure_directories()
+    archive = suffix == ".zip"
+    # A version column writes each file's label into the rows it brought, which
+    # is what tells apart the rounds an append has merged. Nothing is merged
+    # when each file becomes its own dataset, so there is nothing to tell apart
+    # and the column would be a constant. Saying so beats writing it anyway.
+    # A name names one dataset. Several data files each become their own, named
+    # after the file they came from, so a name given here could apply to at most
+    # one of them - and quietly applying it to all would make several datasets
+    # with the same name, or to the first only would be a coin toss.
+    if name.strip() and not archive and len(names) > 1:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "These files each become their own dataset, named after the "
+                "file. Upload them without a name, or one at a time to name "
+                "them yourself."
+            ),
+        )
+    if stamp_column and not archive:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "A version column belongs to an append. These files each become "
+                "their own dataset, so the name of the file is already the answer."
+            ),
+        )
+    # An archive creates its own datasets, one per member file, so there is no
+    # record to make up front - and making one would leave an empty dataset
+    # behind whenever the archive turned out to hold several tables.
+    #
+    # Data files get one record each. A census round arrives as one file per
+    # roster level - the interview, the person roster, the paradata - and those
+    # are different tables, so appending them would be nonsense and a single
+    # record would describe only the first.
+    chosen_tags = [t.strip() for t in tags.split(",") if t.strip()]
+    datasets: list[Dataset] = [] if archive else [
+        _record_for(
+            db,
+            # Several files are refused a name above, so this is either the
+            # one file's chosen name or the file's own stem.
+            name=name.strip() or Path(one).stem,
+            filename=one,
+            description=description,
+            tags=chosen_tags,
+            user_id=user.id,
+            project_id=project_id or None,
+        )
+        for one in names
+    ]
+    dataset = datasets[0] if datasets else None
+
+    saved: list[Path] = []
+    written = 0
+    # A file sent in pieces is already on this disk, whole: it is moved into
+    # place rather than copied, and from here on it is an upload like any other.
+    for index, (one, item_suffix) in enumerate(
+        zip(chosen, suffixes if chosen else [], strict=True)
+    ):
+        target = settings.uploads_path / (
+            f"{datasets[index].id}{item_suffix}"
+            if index < len(datasets)
+            else f"{uuid4().hex}{item_suffix}"
+        )
+        shutil.move(str(one.path), target)
+        staged_uploads.discard(one.id)
+        saved.append(target)
+        written += one.size
+    try:
+        # Attached files only; staged ones were moved into place above, and
+        # only one of the two is ever given.
+        for index, (item, item_suffix) in enumerate(
+            zip(uploads, suffixes if uploads else [], strict=True)
+        ):
+            target = settings.uploads_path / (
+                f"{datasets[index].id}{item_suffix}"
+                if index < len(datasets)
+                else f"{uuid4().hex}{item_suffix}"
+            )
+            saved.append(target)
+            with open(target, "wb") as handle:
+                while chunk := await item.read(1024 * 1024):
+                    written += len(chunk)
+                    if written > max_bytes:
+                        raise HTTPException(
+                            status_code=413,
+                            detail=(
+                                f"This upload exceeds the "
+                                f"{preferences.upload_label()} limit"
+                            ),
+                        )
+                    handle.write(chunk)
+    except HTTPException:
+        for path in saved:
+            path.unlink(missing_ok=True)
+        db.rollback()
+        raise
+    finally:
+        for item in uploads:
+            await item.close()
+
+    if review or written > INLINE_IMPORT_LIMIT:
+        return _queue_import(
+            db,
+            user=user,
+            datasets=datasets,
+            upload_paths=saved,
+            filenames=names,
+            written=written,
+            project_id=project_id or None,
+            combine_all=combine_all,
+            name_prefix=name.strip(),
+            mode=mode,
+            labels=stamps,
+            version_column=stamp_column,
+            review=review,
+            password=password or None,
+        )
+
+    try:
+        if archive:
+            outcome = ArchiveImport()
+            for index, (path, one) in enumerate(zip(saved, names, strict=True)):
+                # The first archive lands under the mode that was asked for; the
+                # rest are appended onto what it produced, which is what makes
+                # three questionnaire versions one dataset per member file
+                # rather than three.
+                step = load_archive_as_datasets(
+                    db,
+                    archive_path=path,
+                    archive_name=one,
+                    project_id=project_id or None,
+                    created_by=user.id,
+                    combine_all=combine_all,
+                    name_prefix=name.strip(),
+                    mode=mode if index == 0 else "append",
+                    stamp=(stamp_column, stamps[index]) if stamp_column else None,
+                    # Variables somebody generated are not in the export, so a
+                    # replacement drops them and everything built on them. The
+                    # recorded commands are run again on the new data.
+                    after_replace=stata.replay,
+                    password=password or None,
+                )
+                outcome = merge_imports(outcome, step)
+        else:
+            # No replay here: a data file always creates a dataset of its own
+            # rather than replacing one, so there is no recorded history to put
+            # back. Only an archive matches its member files onto datasets that
+            # already exist.
+            for one, path in zip(datasets, saved, strict=True):
+                load_file_into_dataset(db, one, path)
+    except IngestError as exc:
+        db.commit()  # keep the failed record so the user can see why
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        for path in saved:
+            path.unlink(missing_ok=True)
+
+    # Everything built on what just landed follows it: the merges, then the
+    # scripts reading them, then the indicators a dashboard shows - and every
+    # dataset the archive wrote counts, appended to as much as replaced. The
+    # recorded commands were already put back as each dataset was replaced.
+    # See pipeline.after_import.
+    #
+    # Only for an archive. A single file always creates a dataset of its own,
+    # so nothing is built on it yet.
+    stages: list[dict] = []
+    if archive:
+        progress = Progress(None, AFTER_IMPORT)
+        aftermath = after_import(
+            db,
+            changed=[d.id for d in outcome.datasets],
+            replaced=outcome.replaced_ids,
+            progress=progress,
+        )
+        outcome.warnings.extend(aftermath.notes())
+        stages = progress.stages
+    if archive:
+        record(
+            db,
+            user=user,
+            action="upload_archive",
+            entity_type="dataset",
+            detail={"filename": filename, "datasets": len(outcome.datasets)},
+        )
+        db.commit()
+        for item in outcome.datasets:
+            db.refresh(item)
+        return ArchiveImportOut(
+            datasets=[DatasetOut.model_validate(d) for d in outcome.datasets],
+            created=outcome.created,
+            appended=outcome.appended,
+            replaced=outcome.replaced,
+            skipped=outcome.skipped,
+            stages=stages,
+            warnings=sorted(
+                set(outcome.warnings)
+                | {w for d in outcome.datasets for w in (d.meta or {}).get("warnings", [])}
+            ),
+            rows=outcome.rows,
+        )
+
+    record(
+        db,
+        user=user,
+        action="upload_dataset",
+        entity_type="dataset",
+        entity_id=dataset.id,
+        detail=(
+            {"filename": filename, "rows": dataset.row_count}
+            if len(datasets) == 1
+            else {"files": names, "datasets": len(datasets), "rows": sum(
+                one.row_count or 0 for one in datasets
+            )}
+        ),
+    )
+    db.commit()
+    for one in datasets:
+        db.refresh(one)
+    # Several files made several datasets, which is the shape an archive import
+    # already answers in and the interface already knows how to show. One file
+    # keeps answering with the dataset itself, so nothing that reads this route
+    # for a single upload has to change.
+    if len(datasets) > 1:
+        return ArchiveImportOut(
+            datasets=[DatasetOut.model_validate(one) for one in datasets],
+            # Every one is new: a data file never matches onto a dataset that
+            # already exists, which is what separates this from an archive.
+            created=[one.name for one in datasets],
+            warnings=sorted(
+                {w for one in datasets for w in (one.meta or {}).get("warnings", [])}
+            ),
+            rows=sum(one.row_count or 0 for one in datasets),
+        )
+    return DatasetDetail.model_validate(dataset)
+
+
+@router.get("/{dataset_id}", response_model=DatasetDetail)
+def read_dataset(dataset_id: str, db: DbSession, user: CurrentUser) -> DatasetDetail:
+    return DatasetDetail.model_validate(get_dataset(dataset_id, db, user))
+
+
+@router.patch("/{dataset_id}", response_model=DatasetOut)
+def update_dataset(
+    dataset_id: str, payload: DatasetUpdate, db: DbSession, user: RequireManager
+) -> Dataset:
+    dataset = get_dataset(dataset_id, db, user)
+    if payload.name is not None and payload.name != dataset.name:
+        dataset.name = payload.name
+        # The slug follows the name. It is the stem every download is named
+        # after and nothing else - no route resolves a dataset by it - so
+        # leaving it at whatever the dataset was first called meant a renamed
+        # dataset kept arriving in Excel under the old name, however many times
+        # it had been renamed since.
+        dataset.slug = unique_slug(db, payload.name, exclude_id=dataset.id)
+    if payload.description is not None:
+        dataset.description = payload.description
+    if payload.tags is not None:
+        dataset.tags = payload.tags
+    record(db, user=user, action="update_dataset", entity_type="dataset", entity_id=dataset_id)
+    db.commit()
+    db.refresh(dataset)
+    return dataset
+
+
+@router.post("/delete", response_model=Message)
+def delete_datasets(payload: BulkDeleteRequest, db: DbSession, user: RequireManager) -> Message:
+    """Delete several datasets at once, or a whole project's worth.
+
+    A survey export produces eight datasets in one upload, most of them roster
+    levels and paradata, so clearing a project one confirmation at a time is
+    eight confirmations for one decision.
+
+    Datasets the caller cannot reach are skipped rather than refused: the
+    listing they were chosen from is already scoped to what they can see, so a
+    stray id is a stale page rather than an attempt at something.
+    """
+    if payload.project_id is not None:
+        # Every dataset in one project, without the caller having to list them.
+        statement = restrict(
+            select(Dataset).where(Dataset.project_id == (payload.project_id or None)),
+            scope_for(db, user).filter(Dataset.project_id),
+        )
+        targets = list(db.scalars(statement).all())
+    else:
+        targets = []
+        for dataset_id in payload.ids:
+            dataset = db.get(Dataset, dataset_id)
+            if dataset is not None and can_view(db, user, dataset.project_id):
+                targets.append(dataset)
+
+    targets = [
+        dataset
+        for dataset in targets
+        if not dataset.project_id or can_edit(db, user, dataset.project_id, Role.manager)
+    ]
+    if not targets:
+        raise HTTPException(status_code=404, detail="Nothing to delete")
+
+    names = [dataset.name for dataset in targets]
+    emptied: list[str] = []
+    removed: list[str] = []
+    for dataset in targets:
+        what, _ = _remove_or_empty(db, dataset)
+        (removed if what == "deleted" else emptied).append(dataset.name)
+    record(
+        db,
+        user=user,
+        action="delete_datasets",
+        entity_type="dataset",
+        detail={"count": len(names), "names": names[:20]},
+    )
+    db.commit()
+    said = []
+    if removed:
+        said.append(f"Deleted {len(removed)} dataset(s)")
+    if emptied:
+        # Named rather than counted, because these are the ones still on the
+        # page afterwards and it would otherwise read as a delete that failed.
+        said.append(
+            f"emptied {len(emptied)} that other work is built on "
+            f"({', '.join(emptied[:5])}{'…' if len(emptied) > 5 else ''}), "
+            "which keep their charts and fill back in when the export is "
+            "uploaded again"
+        )
+    return Message(detail=". ".join(said) + "." if said else "Nothing to delete")
+
+
+def _record_for(
+    db: DbSession,
+    *,
+    name: str,
+    filename: str,
+    description: str,
+    tags: list[str],
+    user_id: str,
+    project_id: str | None,
+) -> Dataset:
+    """The dataset this uploaded file belongs in: an empty one, or a new one.
+
+    A dataset deleted while charts stood on it is left empty rather than
+    removed, so that uploading the export again fills it and the charts go on
+    working. An archive member finds its way back by the name it was imported
+    under; a plain file has no such name, so it is matched here or it would
+    create a second dataset and leave the charts attached to the first.
+    """
+    waiting = find_emptied_slot(db, name=name, filename=filename, project_id=project_id)
+    if waiting is not None:
+        # Whatever the upload says about itself is worth keeping - a file
+        # renamed between rounds, a description written on the way back in -
+        # but the id, and so everything built on it, does not move.
+        waiting.source_ref = filename
+        if description:
+            waiting.description = description
+        if tags:
+            waiting.tags = tags
+        return waiting
+    return create_dataset_record(
+        db,
+        name=name,
+        description=description,
+        source=DatasetSource.upload,
+        source_ref=filename,
+        tags=tags,
+        created_by=user_id,
+        project_id=project_id,
+    )
+
+
+def _remove_or_empty(db: DbSession, dataset: Dataset) -> tuple[str, dict[str, int]]:
+    """Delete the dataset, or empty it if anything is built on it.
+
+    Deleting the row cascades: the charts, indicators, quality rules, target
+    sets, alert rules and relationships built on it are deleted by the
+    database, and the dashboard widgets pointing at them are blanked. None of
+    that comes back when the same file is uploaded again, because the upload is
+    a new dataset with a new id.
+
+    So when somebody has built on it, the data goes and the dataset stays, in
+    the state archiving a project already leaves it in: no file, same id,
+    variables intact. Re-upload the export and the import recognises it, fills
+    the slot, and every one of those charts is working again without anybody
+    relinking anything.
+
+    An empty slot deletes for real on the second go, so there is always a way
+    to finish the job.
+    """
+    found = {} if dataset_is_empty(dataset) else dependents_of(db, dataset)
+    if not found:
+        delete_dataset_files(dataset)
+        db.delete(dataset)
+        return "deleted", {}
+    empty_dataset(db, dataset)
+    return "emptied", found
+
+
+@router.delete("/{dataset_id}", response_model=Message)
+def delete_dataset(dataset_id: str, db: DbSession, user: RequireManager) -> Message:
+    dataset = get_dataset(dataset_id, db, user)
+    name = dataset.name
+    what, found = _remove_or_empty(db, dataset)
+    record(
+        db,
+        user=user,
+        action="delete_dataset" if what == "deleted" else "empty_dataset",
+        entity_type="dataset",
+        entity_id=dataset_id,
+        detail={"name": name, "kept_for": found} if found else {"name": name},
+    )
+    db.commit()
+    if what == "deleted":
+        return Message(detail=f"Dataset '{name}' deleted")
+    return Message(
+        detail=(
+            f"'{name}' emptied. {describe_dependents(found)} stay attached and are "
+            "waiting for data: upload this export again and they will work."
+        )
+    )
+
+
+@router.post("/{dataset_id}/replace", response_model=DatasetDetail)
+async def replace_dataset_data(
+    dataset_id: str,
+    db: DbSession,
+    user: RequireManager,
+    file: Annotated[UploadFile, File()],
+) -> DatasetDetail:
+    """Refresh a dataset in place from a new file, keeping charts pointed at it."""
+    dataset = get_dataset(dataset_id, db, user)
+    filename = Path(file.filename or "upload.dat").name
+    suffix = Path(filename).suffix.lower()
+    if suffix not in SUPPORTED_EXTENSIONS:
+        raise HTTPException(status_code=400, detail=f"Unsupported format '{suffix}'")
+
+    settings.ensure_directories()
+    upload_path = settings.uploads_path / f"{dataset.id}-{uuid4().hex}-replace{suffix}"
+    with open(upload_path, "wb") as handle:
+        shutil.copyfileobj(file.file, handle)
+    await file.close()
+
+    try:
+        load_file_into_dataset(db, dataset, upload_path)
+    except IngestError as exc:
+        db.commit()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        upload_path.unlink(missing_ok=True)
+
+    record(db, user=user, action="replace_dataset", entity_type="dataset", entity_id=dataset.id)
+    db.commit()
+    db.refresh(dataset)
+    return DatasetDetail.model_validate(dataset)
+
+
+@router.post("/{dataset_id}/append", response_model=DatasetDetail)
+async def append_to_dataset(
+    dataset_id: str,
+    db: DbSession,
+    user: RequireManager,
+    file: Annotated[UploadFile, File()],
+) -> DatasetDetail:
+    """Add another round's rows to a dataset rather than replacing them."""
+    dataset = get_dataset(dataset_id, db, user)
+    filename = Path(file.filename or "upload.dat").name
+    suffix = Path(filename).suffix.lower()
+    if suffix not in SUPPORTED_EXTENSIONS and suffix != ".zip":
+        raise HTTPException(status_code=400, detail=f"Unsupported format '{suffix}'")
+
+    settings.ensure_directories()
+    upload_path = settings.uploads_path / f"{dataset.id}-{uuid4().hex}-append{suffix}"
+    with open(upload_path, "wb") as handle:
+        shutil.copyfileobj(file.file, handle)
+    await file.close()
+
+    try:
+        append_file_into_dataset(db, dataset, upload_path, source_name=filename)
+    except IngestError as exc:
+        db.commit()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    finally:
+        upload_path.unlink(missing_ok=True)
+
+    record(
+        db,
+        user=user,
+        action="append_dataset",
+        entity_type="dataset",
+        entity_id=dataset.id,
+        detail={"filename": filename, "rows": dataset.row_count},
+    )
+    db.commit()
+    db.refresh(dataset)
+    return DatasetDetail.model_validate(dataset)
+
+
+@router.get("/{dataset_id}/download")
+def download_dataset(
+    dataset_id: str,
+    background: BackgroundTasks,
+    db: DbSession,
+    user: RequireManager,
+    format: str = Query(default="csv", pattern="^(csv|xlsx|dta)$"),
+) -> Response:
+    """The whole dataset as a file: CSV, Excel or Stata.
+
+    Written from the Parquet the platform queries, not from whatever was
+    uploaded, so a merged dataset - which never had a file of its own - comes
+    back like any other, and what you get is what the charts are reading.
+
+    Stata carries the labels: the variable labels and, where the codes are
+    whole numbers, the value labels. That is the reason to prefer it to CSV.
+    """
+    dataset = get_ready_dataset(dataset_id, db, user)
+    directory = temp_directory()
+    try:
+        path = download_file(dataset, format, directory)
+    except QueryError as exc:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except Exception:
+        shutil.rmtree(directory, ignore_errors=True)
+        raise
+    # Deleted once the response has been sent, not before: the file is the
+    # response body.
+    background.add_task(shutil.rmtree, directory, ignore_errors=True)
+    record(
+        db,
+        user=user,
+        action="download_dataset",
+        entity_type="dataset",
+        entity_id=dataset.id,
+        detail={"format": format, "rows": dataset.row_count},
+    )
+    db.commit()
+    return FileResponse(
+        path,
+        media_type=DOWNLOAD_FORMATS[format][1],
+        filename=path.name,
+        background=background,
+    )
+
+
+@router.get("/{dataset_id}/variables", response_model=list[VariableOut])
+def list_variables(
+    dataset_id: str,
+    db: DbSession,
+    user: CurrentUser,
+    search: str = "",
+    var_type: str = "",
+) -> list[Variable]:
+    dataset = get_dataset(dataset_id, db, user)
+    variables = dataset.variables
+    if search:
+        needle = search.lower()
+        variables = [
+            v for v in variables if needle in v.name.lower() or needle in (v.label or "").lower()
+        ]
+    if var_type:
+        variables = [v for v in variables if v.var_type.value == var_type]
+    return variables
+
+
+@router.get("/{dataset_id}/preview", response_model=DatasetPreview)
+def preview_dataset(
+    dataset_id: str,
+    db: DbSession,
+    user: CurrentUser,
+    limit: int = Query(default=50, le=1000),
+    offset: int = 0,
+    columns: str = "",
+    sort_by: str = "",
+    sort_dir: str = "asc",
+) -> DatasetPreview:
+    """Raw row browser for the data tab."""
+    dataset = get_ready_dataset(dataset_id, db, user)
+    ctx = DatasetContext.from_model(dataset)
+    selected = [c.strip() for c in columns.split(",") if c.strip()] or None
+    sort = [(sort_by, sort_dir)] if sort_by else None
+    builder = SQLBuilder(ctx)
+    try:
+        sql, params = builder.build_rows(selected, FilterGroup(), limit, offset, sort)
+        column_names, rows = run_sql(sql, params)
+    except QueryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return DatasetPreview(
+        columns=column_names,
+        rows=rows,
+        total_rows=dataset.row_count,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@router.patch("/{dataset_id}/variables/{variable}", response_model=VariableOut)
+def update_variable(
+    dataset_id: str,
+    variable: str,
+    payload: VariableUpdate,
+    db: DbSession,
+    user: RequireManager,
+) -> Variable:
+    """Name a variable, and name its codes.
+
+    An export often arrives with neither: a column called DEM_SEX holding 1 and
+    2, which a table then prints as "1.0" and "2.0". Nothing about the data is
+    changed here - only what the platform calls it, everywhere it is shown.
+
+    Kept on the dataset as well as on the variable row, because the variable
+    rows are rebuilt from the file every time a newer export replaces it, and
+    labels written by hand are not in the file.
+    """
+    dataset = get_dataset(dataset_id, db, user)
+    if dataset.project_id and not can_edit(db, user, dataset.project_id, Role.manager):
+        # Same as everywhere else: a dataset the caller cannot edit is reported
+        # as missing rather than forbidden.
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    row = next((v for v in dataset.variables if v.name == variable), None)
+    if row is None:
+        raise HTTPException(
+            status_code=404, detail=f"'{dataset.name}' has no variable called '{variable}'"
+        )
+
+    data = payload.model_dump(exclude_unset=True)
+    meta = dict(dataset.meta or {})
+    overrides = dict(meta.get("variable_labels") or {})
+    stored = dict(overrides.get(variable) or {})
+
+    if "label" in data:
+        row.label = data["label"] or ""
+        stored["label"] = row.label
+    if "value_labels" in data:
+        # Replaces rather than merges: removing a label has to be possible, and
+        # the editor sends the whole set it is showing.
+        # Keyed the way the column is read, so "1.0" typed against a numeric
+        # column the editor was printing as 1.0 still reaches the value 1. A
+        # text column is left alone: there "1.0" is the value.
+        as_key = (
+            numeric_code_text
+            if holds_numbers(row.storage_type)
+            else (lambda code: str(code))
+        )
+        cleaned = {
+            as_key(code): str(text)
+            for code, text in (data["value_labels"] or {}).items()
+            if str(text).strip()
+        }
+        row.value_labels = cleaned
+        stored["value_labels"] = cleaned
+    if "is_hidden" in data:
+        row.is_hidden = bool(data["is_hidden"])
+        stored["is_hidden"] = row.is_hidden
+
+    overrides[variable] = stored
+    meta["variable_labels"] = overrides
+    dataset.meta = meta
+
+    # A merge holds its own copy of the labels as they were when it was built,
+    # and a merged dataset is usually the one a dashboard points at.
+    propagate_labels(db, dataset.id, variable, stored)
+
+    record(
+        db,
+        user=user,
+        action="update_variable",
+        entity_type="dataset",
+        entity_id=dataset.id,
+        detail={"variable": variable},
+    )
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.get("/{dataset_id}/variables/{variable}/values", response_model=list[dict])
+def variable_values(
+    dataset_id: str,
+    variable: str,
+    db: DbSession,
+    user: CurrentUser,
+    limit: int = Query(default=200, le=20_000),
+) -> list[dict[str, Any]]:
+    """Distinct values for building filters in the UI.
+
+    The ceiling is generous because a filter dropdown is not the only caller:
+    a target list is one quota per enumeration area, and a census has
+    thousands of them. Checking a pasted list against the values the data
+    actually holds means being able to ask for all of them.
+    """
+    dataset = get_ready_dataset(dataset_id, db, user)
+    ctx = DatasetContext.from_model(dataset)
+    try:
+        return distinct_values(ctx, variable, limit)
+    except QueryError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{dataset_id}/tags", response_model=list[str])
+def all_tags(dataset_id: str, db: DbSession, user: CurrentUser) -> list[str]:
+    dataset = get_dataset(dataset_id, db, user)
+    return list(dataset.tags or [])
+
+
+@router.post("/reviews/{job_id}/accept")
+def accept_import_review(job_id: str, db: DbSession, user: RequireManager):
+    from app.services.import_review import accept
+
+    job = db.scalar(select(Job).where(Job.id == job_id).with_for_update())
+    if job is None or (job.created_by != user.id and not user.has_role(Role.admin)):
+        raise HTTPException(status_code=404, detail="Import review not found")
+    try:
+        result = accept(db, job, user)
+        record(db, user=user, action="accept_import", entity_type="job", entity_id=job.id)
+        db.commit()
+        return result
+    except IngestError as exc:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+
+
+@router.get("/{dataset_id}/versions")
+def dataset_versions(dataset_id: str, db: DbSession, user: CurrentUser):
+    from app.services.dataset_versions import list_versions
+
+    dataset = get_dataset(dataset_id, db, user)
+    return [
+        {"version": s["version"], "rows": s["row_count"], "columns": s["column_count"]}
+        for s in list_versions(dataset)
+    ]
+
+
+@router.post("/{dataset_id}/versions/{version}/restore", response_model=DatasetDetail)
+def restore_dataset_version(dataset_id: str, version: int, db: DbSession, user: RequireManager):
+    from app.services.dataset_versions import as_ingest, list_versions
+    from app.services.datasets import _apply_ingest
+
+    dataset = get_dataset(dataset_id, db, user)
+    if not can_edit(db, user, dataset.project_id, Role.manager):
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    snapshot = next((s for s in list_versions(dataset) if s["version"] == version), None)
+    if snapshot is None:
+        raise HTTPException(status_code=404, detail="Version not found")
+    _apply_ingest(db, dataset, as_ingest(snapshot))
+    rebuild_dependents(db, [dataset.id])
+    record(
+        db,
+        user=user,
+        action="restore_dataset_version",
+        entity_type="dataset",
+        entity_id=dataset.id,
+        detail={"version": version},
+    )
+    db.commit()
+    return DatasetDetail.model_validate(dataset)
+
+
+@router.delete("/reviews/{job_id}", response_model=Message)
+def discard_import_review(job_id: str, db: DbSession, user: RequireManager):
+    job = db.scalar(select(Job).where(Job.id == job_id).with_for_update())
+    if job is None or (job.created_by != user.id and not user.has_role(Role.admin)):
+        raise HTTPException(status_code=404, detail="Import review not found")
+    if job.status != JobStatus.success or not job.result.get("review"):
+        raise HTTPException(status_code=409, detail="This import is not awaiting review")
+    for item in job.params.get("candidates", []):
+        path = Path(item["snapshot"]["parquet_path"])
+        if path.is_relative_to(settings.datasets_path):
+            path.unlink(missing_ok=True)
+    job.params = {k: v for k, v in job.params.items() if k != "candidates"}
+    job.status = JobStatus.cancelled
+    db.commit()
+    return Message(detail="Import discarded")
+
+
+@router.post("/{dataset_id}/command", response_model=dict)
+def run_command(
+    dataset_id: str, payload: CommandRequest, db: DbSession, user: RequireManager
+) -> dict[str, Any]:
+    """Run a Stata-style script against the dataset, a command per line.
+
+    Recorded on the dataset and replayed after a newer export replaces it: a
+    variable somebody generated is not in the export file, so otherwise it
+    would disappear on exactly the upload this platform is built around.
+
+    A line that fails stops the script, and the response says which line and
+    why. Everything above it has already run - as in a do-file - so it is
+    committed rather than rolled back, and the log says what got through.
+    """
+    dataset = get_ready_dataset(dataset_id, db, user)
+    if dataset.project_id and not can_edit(db, user, dataset.project_id, Role.manager):
+        raise HTTPException(status_code=404, detail="Dataset not found")
+
+    done: list[Any] = []
+    failure: str | None = None
+    try:
+        done = stata.run_script(db, dataset, payload.command)
+    except stata.ScriptError as exc:
+        done, failure = exc.done, str(exc)
+    except (CommandError, ExpressionError) as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if failure and not done:
+        # Nothing ran, so nothing to report but the reason.
+        db.rollback()
+        raise HTTPException(status_code=422, detail=failure)
+
+    result = done[-1]
+    rebuilt = (
+        rebuild_dependents(db, [dataset.id])
+        if any(step.data_changed for step in done)
+        else []
+    )
+    record(
+        db,
+        user=user,
+        action="run_command",
+        entity_type="dataset",
+        entity_id=dataset.id,
+        detail={"commands": [step.command for step in done]},
+    )
+    db.commit()
+    db.refresh(dataset)
+    return {
+        "results": [
+            {
+                "command": step.command,
+                "message": step.message,
+                "variables_added": step.variables_added,
+                "variables_removed": step.variables_removed,
+            }
+            for step in done
+        ],
+        # The last one, kept so a caller that ran a single command still reads
+        # the same fields it always did.
+        "command": result.command,
+        "message": result.message,
+        "error": failure,
+        "rows": dataset.row_count,
+        "columns": dataset.column_count,
+        "variables_added": result.variables_added,
+        "variables_removed": result.variables_removed,
+        "rebuilt": len(rebuilt),
+    }
+
+
+# --- variables brought in from another dataset ---------------------------------
+
+
+class LinkKey(BaseModel):
+    here: str
+    there: str
+
+
+class LinkRequest(BaseModel):
+    """Variables of another dataset to bring into this one, matched on keys."""
+
+    source_dataset_id: str
+    keys: list[LinkKey] = Field(default_factory=list)
+    key_match: KeyMatch = KeyMatch.exact
+    variables: list[str] = Field(default_factory=list)
+
+
+def _editable(dataset_id: str, db: DbSession, user: Any) -> Dataset:
+    dataset = get_ready_dataset(dataset_id, db, user)
+    if dataset.project_id and not can_edit(db, user, dataset.project_id, Role.manager):
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    return dataset
+
+
+def _link_out(db: DbSession, link: linked_variables.Link) -> dict[str, Any]:
+    source = db.get(Dataset, link.source_id)
+    return {
+        **link.stored(),
+        # The name it has now, which a rename since will have changed.
+        "source_name": source.name if source is not None else link.source_name,
+        "source_exists": source is not None,
+    }
+
+
+@router.get("/{dataset_id}/linked-variables", response_model=list[dict])
+def list_linked_variables(dataset_id: str, db: DbSession, user: CurrentUser) -> list[dict]:
+    """The variables this dataset brings in from others, and how each last went."""
+    dataset = get_dataset(dataset_id, db, user)
+    return [_link_out(db, link) for link in linked_variables.links(dataset)]
+
+
+@router.post("/{dataset_id}/linked-variables/check", response_model=dict)
+def check_linked_variables(
+    dataset_id: str, payload: LinkRequest, db: DbSession, user: RequireManager
+) -> dict[str, Any]:
+    """What bringing these variables in would do, before anything is written.
+
+    With no keys, the keys to use are suggested: a relationship between the
+    two where there is one, otherwise a variable both have that is unique in
+    the other. A problem is answered in the body rather than as an error, so a
+    form can show it beside the choice that caused it while it is being made.
+    """
+    dataset = _editable(dataset_id, db, user)
+    source = get_ready_dataset(payload.source_dataset_id, db, user)
+    keys = [(one.here, one.there) for one in payload.keys]
+    key_match = payload.key_match
+    if not keys:
+        keys, key_match = linked_variables.suggest_keys(db, dataset, source)
+    answer: dict[str, Any] = {
+        "keys": [{"here": here, "there": there} for here, there in keys],
+        "key_match": key_match.value,
+        "error": None,
+        "match": None,
+    }
+    try:
+        link = linked_variables.plan(
+            db, dataset, source, keys, key_match, payload.variables, require_variables=False
+        )
+        match = linked_variables.check(dataset, source, link)
+    except QueryError as exc:
+        answer["error"] = str(exc)
+        return answer
+    answer["match"] = {
+        "rows": match.rows,
+        "matched": match.matched,
+        "unmatched": match.unmatched,
+        "sentence": match.sentence(dataset.name, source.name),
+    }
+    return answer
+
+
+@router.post("/{dataset_id}/linked-variables", response_model=dict, status_code=201)
+def add_linked_variables(
+    dataset_id: str, payload: LinkRequest, db: DbSession, user: RequireManager
+) -> dict[str, Any]:
+    """Bring another dataset's variables into this one, and keep them up to date.
+
+    The dataset keeps its id, so every chart, indicator and quality check on
+    it goes on working. Asking again with the same dataset and keys adds the
+    new variables to the link already there.
+    """
+    dataset = _editable(dataset_id, db, user)
+    source = get_ready_dataset(payload.source_dataset_id, db, user)
+    keys = [(one.here, one.there) for one in payload.keys]
+    try:
+        link = linked_variables.plan(
+            db, dataset, source, keys, payload.key_match, payload.variables
+        )
+        match = linked_variables.add(db, dataset, link)
+    except QueryError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    rebuilt = rebuild_dependents(db, [dataset.id])
+    record(
+        db,
+        user=user,
+        action="link_variables",
+        entity_type="dataset",
+        entity_id=dataset.id,
+        detail={
+            "source_dataset_id": source.id,
+            "keys": [{"here": here, "there": there} for here, there in link.keys],
+            "variables": link.variables,
+        },
+    )
+    db.commit()
+    db.refresh(dataset)
+    return {
+        "link": _link_out(db, link),
+        "message": match.sentence(dataset.name, source.name),
+        "rows": dataset.row_count,
+        "columns": dataset.column_count,
+        "rebuilt": len(rebuilt),
+    }
+
+
+@router.post("/{dataset_id}/linked-variables/refresh", response_model=dict)
+def refresh_linked_variables(
+    dataset_id: str, db: DbSession, user: RequireManager
+) -> dict[str, Any]:
+    """Bring every linked variable in again now, from the data as it stands."""
+    dataset = _editable(dataset_id, db, user)
+    if not linked_variables.links(dataset):
+        raise HTTPException(status_code=422, detail="This dataset brings nothing in.")
+    try:
+        notes = linked_variables.bring_in(db, dataset)
+    except QueryError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    rebuilt = rebuild_dependents(db, [dataset.id])
+    db.commit()
+    return {
+        "links": [_link_out(db, link) for link in linked_variables.links(dataset)],
+        "notes": notes,
+        "rebuilt": len(rebuilt),
+    }
+
+
+@router.delete("/{dataset_id}/linked-variables/{link_id}", response_model=dict)
+def remove_linked_variables(
+    dataset_id: str,
+    link_id: str,
+    db: DbSession,
+    user: RequireManager,
+    keep_columns: bool = Query(False),
+) -> dict[str, Any]:
+    """Stop bringing one dataset's variables in - removing them, or keeping them as they are."""
+    dataset = _editable(dataset_id, db, user)
+    try:
+        gone = linked_variables.remove(db, dataset, link_id, keep_columns=keep_columns)
+    except QueryError as exc:
+        db.rollback()
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    rebuilt = rebuild_dependents(db, [dataset.id]) if not keep_columns else []
+    record(
+        db,
+        user=user,
+        action="unlink_variables",
+        entity_type="dataset",
+        entity_id=dataset.id,
+        detail={"variables": gone.variables, "kept": keep_columns},
+    )
+    db.commit()
+    return {"removed": gone.variables, "kept": keep_columns, "rebuilt": len(rebuilt)}
+
+
+@router.get("/{dataset_id}/commands", response_model=list[str])
+def list_commands(dataset_id: str, db: DbSession, user: CurrentUser) -> list[str]:
+    """What has been run against this dataset, in the order it will be replayed."""
+    return stata.entries(get_dataset(dataset_id, db, user))
+
+
+@router.delete("/{dataset_id}/commands", response_model=Message)
+def clear_commands(dataset_id: str, db: DbSession, user: RequireManager) -> Message:
+    """Stop replaying the recorded commands, without undoing what they did."""
+    dataset = get_dataset(dataset_id, db, user)
+    if dataset.project_id and not can_edit(db, user, dataset.project_id, Role.manager):
+        raise HTTPException(status_code=404, detail="Dataset not found")
+    stata.forget(dataset)
+    db.commit()
+    return Message(detail="The command history is cleared. Re-upload to rebuild from source.")

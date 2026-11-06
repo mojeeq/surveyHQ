@@ -1,0 +1,1151 @@
+"""A dashboard as one HTML file, with its filters still working.
+
+A monitoring board is often wanted somewhere this platform is not: on a
+ministry's own web host, attached to a report, on a laptop taken to a meeting
+where the survey server is not reachable. Sending a picture of it loses the one
+thing that makes a dashboard a dashboard, which is that the reader can narrow
+it and see the numbers move.
+
+So the export carries data rather than pictures. For each widget it takes the
+same query the widget is drawn from and runs it at a finer grain: grouped by
+what the widget groups on *and* by every variable the page's filter controls
+name. That table is the cube. Choosing "Northern" in the exported page keeps the
+rows where province is Northern and adds the measures back up, which gives exactly
+the number the platform would have returned for that filter - no approximation,
+because sums of counts are counts.
+
+What cannot be added back up is not pretended to be. A median of medians is not
+a median and a count of distinct interviewers cannot be recovered from group
+counts, so a widget resting on one of those is exported as it stands, with a
+line on it saying the filters do not reach it. The same goes for the data
+quality and freshness panels, which are not queries over the data at all.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+from pathlib import Path
+from typing import Any
+
+from sqlalchemy.orm import Session
+
+from app.db.base import utcnow
+from app.models import (
+    Chart,
+    Dashboard,
+    Dataset,
+    Indicator,
+    Widget,
+)
+from app.schemas.query import (
+    Aggregation,
+    Condition,
+    CrosstabRequest,
+    DateGrain,
+    Dimension,
+    FilterGroup,
+    Measure,
+    QuerySpec,
+)
+from app.services import (
+    date_ranges,
+    export_appearance,
+    export_fonts,
+    export_lib,
+    multiselect,
+    preferences,
+)
+from app.services.datasets import dataset_is_queryable
+from app.services.monitoring import COUNTED, formula_of, part_spec, weight_of
+from app.services.query_engine import (
+    DatasetContext,
+    QueryError,
+    SQLBuilder,
+    _label_value,
+    _measure_label,
+    _quote_path,
+    execute_crosstab,
+    execute_query,
+    run_sql,
+)
+
+TEMPLATE = Path(__file__).parent / "export_assets" / "dashboard.html"
+
+
+def as_text(value: Any) -> str:
+    """A value written the way the exported page's script writes it.
+
+    The page keeps a widget's rows where the value equals the one chosen in
+    the dropdown, comparing the two as text. The dropdown's values were
+    written here with `str` and the rows' by the page from the JSON, and the
+    two disagree about numbers and days: a team coded 1 was offered as "1.0"
+    and matched against "1", and a day as "2026-07-19 00:00:00" against
+    "2026-07-19". Choosing either kept nothing, and every chart on the page
+    went blank - which reads as a filter that does not work.
+
+    So the dropdown is written by this, which follows `text()` in the
+    template: a whole number without its ".0", a day at midnight as the day.
+    """
+    if value is None:
+        return ""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    if isinstance(value, dt.datetime) and value.time() == dt.time(0):
+        return value.date().isoformat()
+    return str(value)
+
+# How many rows of cube one widget may carry. A cube is the widget's own
+# grouping crossed with every filter variable, so a chart by day filtered by
+# province and interviewer is days x provinces x interviewers - which is fine
+# until one of those is an identifier. Past this the widget is exported as it
+# stands rather than quietly turning a 3 MB page into a 300 MB one.
+MAX_CUBE_ROWS = 20_000
+
+# Aggregations whose group results can be combined into the result for a union
+# of those groups. Everything else needs the rows themselves.
+COMBINABLE = {
+    Aggregation.count: "sum",
+    Aggregation.share: "sum",
+    Aggregation.sum: "sum",
+    Aggregation.min: "min",
+    Aggregation.max: "max",
+    Aggregation.mean: "mean",
+}
+
+
+def _label(measure: Measure) -> str:
+    """What to call this measure on the exported page."""
+    if measure.alias:
+        return measure.alias
+    if measure.agg == Aggregation.count and not measure.variable:
+        return "Count"
+    return f"{measure.agg.value} of {measure.variable}" if measure.variable else measure.agg.value
+
+
+class NotExportable(Exception):
+    """This widget cannot be recomputed offline, and why."""
+
+
+def _recipe(measures: list[Measure]) -> tuple[list[Measure], list[dict[str, Any]]]:
+    """The measures to ask the database for, and how to rebuild the real ones.
+
+    A mean is the one that needs taking apart: the average of a set of group
+    averages is not the average of the set, so the export asks for the total
+    and the number of values behind each group and divides them again in the
+    browser. Everything else combines as itself.
+    """
+    asked: list[Measure] = []
+    recipes: list[dict[str, Any]] = []
+    for index, measure in enumerate(measures):
+        if measure.agg not in COMBINABLE:
+            raise NotExportable(
+                f"a {measure.agg.value} cannot be worked out again from grouped totals"
+            )
+        name = measure.output_name
+        if measure.agg == Aggregation.mean:
+            # Weighted, the same two halves with the weight in both: the
+            # weighted total of the values, and the weight of the rows that
+            # have one. Their ratio is the weighted mean for any combination
+            # of groups, as the plain total and count are for the plain mean.
+            total = f"__x{index}_total"
+            count = f"__x{index}_count"
+            asked.append(
+                Measure(
+                    agg=Aggregation.sum, variable=measure.variable, alias=total,
+                    weight=measure.weight,
+                )
+            )
+            asked.append(
+                Measure(
+                    agg=Aggregation.count, variable=measure.variable, alias=count,
+                    weight=measure.weight,
+                )
+            )
+            recipes.append(
+                {"name": name, "label": _label(measure), "how": "mean", "parts": [total, count]}
+            )
+            continue
+        asked.append(measure.model_copy(update={"alias": name}))
+        recipes.append(
+            {
+                "name": name,
+                "label": _label(measure),
+                "how": COMBINABLE[measure.agg],
+                "parts": [name],
+            }
+        )
+    return asked, recipes
+
+
+def _narrowed(
+    ctx: DatasetContext, filters: FilterGroup, pinned: dict[str, str]
+) -> FilterGroup:
+    """`filters`, and every pinned choice this dataset can answer.
+
+    A pinned export is one province's file, so the narrowing happens here
+    rather than being left to the reader: the rows of the other provinces are
+    never computed and never travel. That is the difference between a file
+    that opens on Northern and a file that is Northern, and it is the whole reason
+    not to simply preselect the dropdown - a standalone file is the copy
+    nobody can withdraw, and one quietly carrying every other province's
+    numbers is the wrong thing to email to a provincial office.
+
+    A pinned variable the dataset does not carry is skipped, the same way an
+    ordinary control leaves such a widget alone instead of emptying it.
+    """
+    extra = [
+        condition
+        for name, value in pinned.items()
+        if name in ctx.variables
+        for condition in _pin(name, value)
+    ]
+    if not extra:
+        return filters
+    # Nested rather than appended: the saved filter may be an "any of these",
+    # and adding a condition beside those would widen it instead of narrowing.
+    return FilterGroup(op="and", conditions=extra, groups=[filters])
+
+
+def _cube(
+    ctx: DatasetContext,
+    spec: QuerySpec,
+    filters: list[dict[str, str]],
+    pinned: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """One widget's numbers, at the grain its filters need.
+
+    The widget's own top-N is deliberately not applied here. "The ten busiest
+    interviewers" is a different ten once the page is narrowed to one province,
+    and a cube holding only the national ten could not produce the provincial
+    ones. The whole grouping is exported and the top-N is taken in the browser,
+    after the filter.
+    """
+    own = [dimension.output_name for dimension in spec.dimensions]
+    # A filter variable the widget already groups on needs no column of its
+    # own: the grouping is the grain. Matched on the variable rather than the
+    # output name, because a cross-tab groups by its row and column variables
+    # under aliases of its own and would otherwise carry each of them twice.
+    grouped = {
+        dimension.variable: dimension.output_name
+        for dimension in spec.dimensions
+        if not dimension.grain and not dimension.bin_width
+    }
+    extra: list[Dimension] = []
+    # Which column answers for which control: a selection is made against a
+    # variable, and the column holding it may be one of the widget's own
+    # groupings under an alias of its own.
+    against: list[dict[str, str]] = []
+    for control in filters:
+        name = control["variable"]
+        if control["kind"] == "dates":
+            # Always a column of its own, by day: a chart by week of the same
+            # date cannot say which days of the week a range keeps.
+            column = f"__day__{name}"
+            extra.append(Dimension(variable=name, grain=DateGrain.day, alias=column))
+            against.append({"variable": name, "column": column, "kind": "dates"})
+        elif name in grouped:
+            against.append({"variable": name, "column": grouped[name], "kind": "values"})
+        else:
+            extra.append(Dimension(variable=name))
+            against.append({"variable": name, "column": name, "kind": "values"})
+    asked, recipes = _recipe(list(spec.measures))
+    if pinned:
+        spec = spec.model_copy(update={"filters": _narrowed(ctx, spec.filters, pinned)})
+    grained = spec.model_copy(
+        update={
+            "dimensions": [
+                *[d.model_copy(update={"limit": None}) for d in spec.dimensions],
+                *extra,
+            ],
+            "measures": asked,
+            "limit": MAX_CUBE_ROWS + 1,
+            "offset": 0,
+        }
+    )
+    result = execute_query(ctx, grained)
+    if len(result.rows) > MAX_CUBE_ROWS:
+        raise NotExportable(
+            "there are too many combinations of its groups and this page's filters"
+        )
+    return {
+        "dimensions": own,
+        # The columns a selection is tested against: the extra ones just added,
+        # plus the widget's own grouping where it already covers a filter.
+        "filters": against,
+        "measures": recipes,
+        "columns": [
+            {
+                "name": column.name,
+                "label": column.label,
+                "type": column.type,
+                # A date or a number is read along its own order rather
+                # than biggest first, and the browser has no other way to
+                # tell either from a category.
+                "data_type": column.data_type,
+            }
+            for column in result.columns
+        ],
+        "rows": result.rows,
+        # The sort and the top-N the chart was saved with, applied again in the
+        # browser once the rows have been added back up.
+        "top": spec.dimensions[0].limit if spec.dimensions else None,
+        "sort": [{"field": s.field, "direction": s.direction} for s in spec.sort],
+    }
+
+
+def _filters_for(dashboard: Dashboard) -> list[dict[str, Any]]:
+    controls: list[dict[str, Any]] = []
+    for raw in dashboard.filters or []:
+        if not isinstance(raw, dict):
+            continue
+        variable = str(raw.get("variable") or "")
+        if not variable:
+            continue
+        controls.append(
+            {
+                "variable": variable,
+                "label": str(raw.get("label") or variable),
+                "dataset_id": str(raw.get("dataset_id") or ""),
+                "page": int(raw.get("page") or 0),
+                # A date range is not a dropdown - two hundred days make a list
+                # nobody can use - so it travels as a range: the file carries
+                # each widget's numbers by day, and the page offers the same
+                # choices the board does. It used to be left out altogether,
+                # so a board filtered by date arrived with no filter at all.
+                "kind": "dates" if raw.get("kind") == "dates" else "values",
+                "values": [],
+            }
+        )
+    return controls
+
+
+def _values_for(ctx: DatasetContext, variable: str, limit: int = 200) -> list[str]:
+    """The choices a dropdown offers, in the order the live page offers them."""
+    spec = QuerySpec(
+        dimensions=[Dimension(variable=variable)],
+        measures=[Measure(agg=Aggregation.count, alias="n")],
+        sort=[],
+        limit=limit,
+        use_labels=True,
+        drop_missing=True,
+    )
+    try:
+        result = execute_query(ctx, spec)
+    except QueryError:
+        return []
+    seen: list[str] = []
+    for row in result.rows:
+        value = row[0]
+        if value is None:
+            continue
+        text = as_text(value)
+        if text and text not in seen:
+            seen.append(text)
+    return sorted(seen)
+
+
+def _date_span(ctx: DatasetContext, variable: str) -> dict[str, str] | None:
+    """The first and last day a date variable holds, for the range control.
+
+    None where it holds no dates - a control that can only ever empty the
+    page is worse than none.
+    """
+    try:
+        day = SQLBuilder(ctx).dimension_expr(Dimension(variable=variable, grain=DateGrain.day))
+        _, rows = run_sql(
+            f"SELECT CAST(min({day}) AS DATE), CAST(max({day}) AS DATE) "
+            f"FROM read_parquet({_quote_path(ctx.parquet_path)})"
+        )
+    except QueryError:
+        return None
+    if not rows or rows[0][0] is None:
+        return None
+    first, last = rows[0]
+    return {"min": as_text(first), "max": as_text(last)}
+
+
+def _ctx_for(db: Session, dataset_id: str | None) -> DatasetContext | None:
+    if not dataset_id:
+        return None
+    dataset = db.get(Dataset, dataset_id)
+    if dataset is None or not dataset_is_queryable(dataset):
+        return None
+    try:
+        return DatasetContext.from_model(dataset)
+    except QueryError:
+        return None
+
+
+def _applicable(ctx: DatasetContext, controls: list[dict[str, Any]]) -> list[dict[str, str]]:
+    """The filters this widget's dataset can answer, and what kind each is.
+
+    The same rule the live page follows: a control naming a variable the
+    widget's dataset does not carry leaves that widget alone rather than
+    emptying it.
+    """
+    known = set(ctx.variables)
+    found: list[dict[str, str]] = []
+    for control in controls:
+        variable = control["variable"]
+        if variable in known and all(one["variable"] != variable for one in found):
+            found.append({"variable": variable, "kind": control.get("kind") or "values"})
+    return found
+
+
+def _crosstab_spec(request: CrosstabRequest) -> QuerySpec:
+    """The cross-tab as an ordinary grouped query, which is what it is.
+
+    Rebuilt in the browser from the same counts: the totals and percentages a
+    cross-tab shows are arithmetic on the cells, so they follow the filter
+    without anything else having to be exported.
+    """
+    dimensions = []
+    if request.row_variable:
+        dimensions.append(Dimension(variable=request.row_variable, alias="__row"))
+    if request.column_variable:
+        dimensions.append(Dimension(variable=request.column_variable, alias="__column"))
+    # Several cell values travel as several measures, one column of the
+    # table each, re-added in the page like any other.
+    if len(request.measures) > 1:
+        return QuerySpec(
+            dimensions=dimensions,
+            measures=[
+                one.model_copy(update={"alias": f"__m{index}"})
+                for index, one in enumerate(request.measures)
+            ],
+            filters=request.filters,
+            use_labels=request.use_labels,
+            limit=MAX_CUBE_ROWS + 1,
+        )
+    # A table with no cell values still counts, because counting is how it
+    # learns which categories are there. The file is told not to draw them.
+    measure = request.measure or Measure()
+    return QuerySpec(
+        dimensions=dimensions,
+        measures=[measure.model_copy(update={"alias": "__value"})],
+        filters=request.filters,
+        use_labels=request.use_labels,
+        limit=MAX_CUBE_ROWS + 1,
+    )
+
+
+def _chart_widget(
+    db: Session, widget: Widget, controls: list[dict[str, Any]], pinned: dict[str, str]
+) -> dict[str, Any]:
+    chart = db.get(Chart, widget.chart_id or "")
+    if chart is None:
+        raise NotExportable("the chart it draws is no longer here")
+    spec_raw = chart.spec or {}
+    ctx = _ctx_for(db, chart.dataset_id)
+    if ctx is None:
+        raise NotExportable("its dataset is not available")
+    names = _applicable(ctx, controls)
+
+    if spec_raw.get("multiselect", {}).get("columns"):
+        return _multiselect_widget(ctx, chart, names, pinned)
+
+    if spec_raw.get("crosstab"):
+        request = CrosstabRequest.model_validate(spec_raw["crosstab"])
+        if preferences.value("disclosure_threshold") > 0:
+            # The cube is the cell values at their finest grain, which is the
+            # whole point of it - the browser re-adds them as the reader
+            # filters. Under disclosure control that is a file carrying the
+            # exact numbers the platform refuses to show on screen, and a
+            # standalone file is the copy nobody can withdraw.
+            #
+            # So the table is computed here, withheld here, and travels
+            # finished. The reader loses the ability to narrow this one widget
+            # inside the file; the alternative is publishing what the rule
+            # exists to protect.
+            # The only query that does not go through _cube, so the pinned
+            # narrowing has to be applied by hand here or this one widget
+            # would report the whole country inside a provincial file.
+            table = execute_crosstab(
+                ctx, request.model_copy(update={"filters": _narrowed(ctx, request.filters, pinned)})
+            )
+            return {
+                "kind": "crosstab",
+                "chart_type": "crosstab",
+                "crosstab": {
+                    "row_variable": request.row_variable,
+                    "column_variable": request.column_variable,
+                    "column_headings": dict(request.column_headings),
+                    "row_heading": request.row_heading,
+                    "percentages": table.percentages,
+                    "include_totals": request.include_totals,
+                    "show_values": request.measure is not None,
+                    "measure_label": "",
+                    "fixed": {
+                        "row_labels": table.row_labels,
+                        "column_labels": table.column_labels,
+                        "values": table.values,
+                        "suppressed": table.suppressed,
+                        "row_totals": table.row_totals,
+                        "column_totals": table.column_totals,
+                        "grand_total": table.grand_total,
+                        "row_totals_suppressed": table.row_totals_suppressed,
+                        "column_totals_suppressed": table.column_totals_suppressed,
+                        "grand_total_suppressed": table.grand_total_suppressed,
+                        "threshold": table.disclosure_threshold,
+                        "rows_withheld": table.rows_withheld,
+                    },
+                },
+                "cube": {"dimensions": [], "measures": [], "filters": [], "rows": []},
+            }
+        cube = _cube(ctx, _crosstab_spec(request), names, pinned)
+        return {
+            "kind": "crosstab",
+            "chart_type": "crosstab",
+            "crosstab": {
+                "row_variable": request.row_variable,
+                "column_variable": request.column_variable,
+                # Renamed headings, by the label they replace; the cells are
+                # still keyed by the label.
+                "column_headings": dict(request.column_headings),
+                "row_heading": request.row_heading,
+                "percentages": request.percentages,
+                "include_totals": request.include_totals,
+                "show_values": request.measure is not None,
+                "measure_label": (
+                    ""
+                    if request.measure is None
+                    else "Count"
+                    if request.measure.agg == Aggregation.count
+                    else f"{request.measure.agg.value} of {request.measure.variable}"
+                ),
+                # One column per value, in the order they were chosen; and
+                # whether they add along a row, which is what a total needs.
+                "measure_labels": (
+                    [_measure_label(one) for one in request.measures]
+                    if len(request.measures) > 1
+                    else []
+                ),
+                "adds_across": request.adds_across,
+            },
+            "cube": cube,
+        }
+
+    spec = QuerySpec.model_validate(spec_raw.get("query", spec_raw))
+    return {
+        "kind": "chart",
+        "chart_type": chart.chart_type.value,
+        "display": spec_raw.get("options") or {},
+        "cube": _cube(ctx, spec, names, pinned),
+    }
+
+
+def _multiselect_widget(
+    ctx: DatasetContext, chart: Chart, filters: list[dict[str, str]], pinned: dict[str, str]
+) -> dict[str, Any]:
+    """A tick-all-that-apply chart, carried so that it follows the filters.
+
+    It used to travel frozen - "built from columns rather than groups" - so on
+    a board made of them, choosing a province in the file left almost every
+    chart where it was. Its counts are taken per filter value instead (see
+    `multiselect.cube`) and added back up in the page, with the chart's own
+    saved settings, exactly as the board runs them.
+    """
+    saved = (chart.spec or {}).get("multiselect") or {}
+    own = FilterGroup.model_validate(saved.get("filters") or {})
+    try:
+        found = multiselect.cube(
+            ctx,
+            list(saved.get("columns") or []),
+            _narrowed(ctx, own, pinned) if pinned else own,
+            filters,
+            percent_of=str(saved.get("percent_of") or "respondents"),
+            sort=str(saved.get("sort") or "value_desc"),
+            show=str(saved.get("show") or "both"),
+            view=str(saved.get("view") or "options"),
+            by=str(saved.get("by") or ""),
+            top=max(1, min(50, int(saved.get("top") or 10))),
+            limit=MAX_CUBE_ROWS,
+        )
+    except QueryError as exc:
+        raise NotExportable(str(exc)) from None
+    # The filter values as the page compares them, written once here rather
+    # than by the page: a coded province is matched by its label, the one the
+    # dropdown offers, and a day by its date.
+    width = len(filters)
+    for rows in (found["rows"], found["bases"]):
+        for row in rows:
+            for index, control in enumerate(filters):
+                value = row[index]
+                info = ctx.variables.get(control["variable"])
+                if control["kind"] != "dates" and info is not None and info.value_labels:
+                    value = _label_value(info, value)
+                row[index] = as_text(value)
+    found["filters"] = [
+        {"variable": control["variable"], "kind": control["kind"], "index": index}
+        for index, control in enumerate(filters)
+    ]
+    found["keys"] = width
+    return {
+        "kind": "multiselect",
+        "chart_type": chart.chart_type.value,
+        "display": (chart.spec or {}).get("options") or {},
+        "multiselect": found,
+    }
+
+
+def _inline_widget(
+    db: Session, widget: Widget, controls: list[dict[str, Any]], pinned: dict[str, str]
+) -> dict[str, Any]:
+    config = widget.config or {}
+    ctx = _ctx_for(db, widget.dataset_id or config.get("dataset_id"))
+    if ctx is None:
+        raise NotExportable("its dataset is not available")
+    spec = QuerySpec.model_validate(config.get("query", {}))
+    return {
+        "kind": "chart",
+        "chart_type": config.get("chart_type", "bar")
+        if widget.widget_type.value == "chart"
+        else widget.widget_type.value,
+        "display": config.get("options") or {},
+        "cube": _cube(ctx, spec, _applicable(ctx, controls), pinned),
+    }
+
+
+def _indicator_widget(
+    db: Session, widget: Widget, controls: list[dict[str, Any]], pinned: dict[str, str]
+) -> dict[str, Any]:
+    indicator = db.get(Indicator, widget.indicator_id or "")
+    if indicator is None:
+        raise NotExportable("the indicator behind it is no longer here")
+    ctx = _ctx_for(db, indicator.dataset_id)
+    if ctx is None:
+        raise NotExportable("its dataset is not available")
+    spec = QuerySpec.model_validate(indicator.spec or {})
+    names = _applicable(ctx, controls)
+    shows_breakdown = bool((widget.config or {}).get("show_breakdown"))
+    breakdown = indicator.breakdown_variable if shows_breakdown else ""
+    headline = spec.model_copy(
+        update={
+            "dimensions": [Dimension(variable=breakdown)] if breakdown else [],
+            "limit": MAX_CUBE_ROWS + 1,
+        }
+    )
+    written = formula_of(indicator)
+    payload: dict[str, Any] = {
+        "kind": "indicator",
+        "indicator": {
+            "name": indicator.name,
+            "unit": indicator.unit,
+            "value_format": indicator.value_format,
+            "target_value": indicator.target_value,
+            "warning_threshold": indicator.warning_threshold,
+            "critical_threshold": indicator.critical_threshold,
+            "direction": indicator.direction.value,
+            "breakdown_variable": breakdown,
+            "breakdown_targets": indicator.breakdown_targets or {},
+            "percent_of": indicator.percent_of or "",
+        },
+        "cube": _cube(ctx, headline, names, pinned),
+    }
+    if written is not None:
+        # One cube per part, each with that part's own filters: the file has to
+        # be able to work the sum out again for any filter the reader picks,
+        # and no single grouping holds "how many were done" and "how many were
+        # issued" at once. The single measure's cube above is left in place and
+        # unused, so a file made before the formula was written still opens.
+        payload["formula"] = {
+            "expression": written.expression,
+            # "counted" is what a group the part matched none of is worth: no
+            # refusals is nought refusals, where the mean of no rows is not
+            # nought but nothing. The file has to make the same distinction
+            # the server does, so it is told rather than left to guess.
+            "parts": [
+                {"name": part.name, "counted": part.measure.agg in COUNTED}
+                for part in written.parts
+            ],
+        }
+        payload["parts"] = {
+            part.name: _cube(
+                ctx, part_spec(part, indicator, None, bool(breakdown)), names, pinned
+            )
+            for part in written.parts
+        }
+        return payload
+    if indicator.percent_of:
+        # The rows the indicator's own count is a share of. Its filters are
+        # dropped and the page's are not, exactly as the live tile does it, so
+        # a filtered percentage stays a rate rather than becoming a share of
+        # the national total.
+        keep = QuerySpec(
+            dimensions=[Dimension(variable=breakdown)] if breakdown else [],
+            measures=[Measure(agg=Aggregation.count, alias="value", weight=weight_of(spec))],
+            filters=_denominator_filters(indicator, spec),
+            limit=MAX_CUBE_ROWS + 1,
+        )
+        payload["denominator"] = _cube(ctx, keep, names, pinned)
+    return payload
+
+
+def _denominator_filters(indicator: Indicator, spec: QuerySpec):
+    from app.schemas.query import Condition, FilterGroup
+
+    if indicator.percent_of == "answered":
+        measured = next((m.variable for m in spec.measures if m.variable), None)
+        if measured:
+            return FilterGroup(
+                conditions=[Condition(variable=measured, operator="is_not_null")]
+            )
+    return FilterGroup()
+
+
+def _map_widget(
+    db: Session, widget: Widget, controls: list[dict[str, Any]], pinned: dict[str, str]
+) -> dict[str, Any]:
+    config = widget.config or {}
+    ctx = _ctx_for(db, widget.dataset_id or config.get("dataset_id"))
+    if ctx is None:
+        raise NotExportable("its dataset is not available")
+    latitude = str(config.get("latitude") or "")
+    longitude = str(config.get("longitude") or "")
+    if latitude not in ctx.variables or longitude not in ctx.variables:
+        raise NotExportable("its coordinate variables are not in the dataset")
+    detail = [name for name in (config.get("detail") or []) if name in ctx.variables]
+    agg = str(config.get("measure_agg") or "count")
+    variable = str(config.get("measure_variable") or "")
+    measure = (
+        Measure(agg=Aggregation(agg), variable=variable, alias="value")
+        if variable and agg != "count"
+        else Measure(agg=Aggregation.count, alias="value")
+    )
+    spec = QuerySpec(
+        dimensions=[
+            Dimension(variable=latitude, alias="__lat"),
+            Dimension(variable=longitude, alias="__lon"),
+            *[Dimension(variable=name) for name in detail],
+        ],
+        measures=[measure],
+        limit=MAX_CUBE_ROWS + 1,
+    )
+    return {
+        "kind": "map",
+        "map": {
+            "detail": detail,
+            "measure_label": "Interviews here" if agg == "count" else f"{agg} of {variable}",
+            "point_color": config.get("point_color") or "",
+            "point_size": config.get("point_size") or 0,
+            "point_opacity": config.get("point_opacity"),
+            "size_by_value": config.get("size_by_value", True),
+        },
+        "cube": _cube(ctx, spec, _applicable(ctx, controls), pinned),
+    }
+
+
+BUILDERS = {
+    "chart": _chart_widget,
+    "crosstab": _chart_widget,
+    "table": _inline_widget,
+    "kpi": _inline_widget,
+    "indicator": _indicator_widget,
+    "map": _map_widget,
+}
+
+# Panels that are not a query over the survey data at all, and so have nothing
+# a filter could narrow offline. They are exported as they stand.
+AS_THEY_STAND = {
+    "quality": "a data quality panel reports what the last run of its checks found",
+    "freshness": "a freshness panel reports when data last arrived",
+}
+
+
+def pinned_filters(pinned: dict[str, str] | None) -> FilterGroup | None:
+    """A pinned selection as a filter the live renderer understands.
+
+    Used for the widgets that cannot be recomputed offline and so are drawn
+    as they stand. Drawn with no filter, those showed the whole country inside
+    a province's report: labelled honestly, but the wrong numbers under the
+    wrong title, which is worse than leaving them out.
+    """
+    if not pinned:
+        return None
+    return FilterGroup(
+        op="and",
+        conditions=[
+            condition for name, value in pinned.items() for condition in _pin(name, value)
+        ],
+    )
+
+
+def _pin(name: str, value: str) -> list[Condition]:
+    """One pinned choice as conditions.
+
+    A dropdown's choice is one value, matched by its label: the values come
+    from _values_for, which asks for them labelled - the dropdown offers
+    "Lowland", not the code stored under it - and compared without the label
+    the value reaches DuckDB as CAST('Lowland' AS DOUBLE) against a coded
+    column. A plain text column has no labels, so the flag changes nothing.
+
+    A date range's choice is a span of days, fixed on the day the file is
+    made: a view saved as "Last 7 days" makes a file of the seven days before
+    it was exported.
+    """
+    if date_ranges.is_selection(value):
+        return date_ranges.conditions(name, value, utcnow().date())
+    return [Condition(variable=name, operator="eq", value=value, use_label=True)]
+
+
+#: What a widget is, where it says nothing. The same defaults the board uses.
+DEFAULT_WIDE = 4
+DEFAULT_HIGH = 6
+MIN_HIGH = 2
+
+
+def _box(layout: dict[str, Any], columns: int) -> dict[str, int]:
+    """One widget's rectangle, trimmed to a board of this many columns.
+
+    A board narrowed after its widgets were placed still holds some at the old
+    width. Left alone, a widget running off the end adds an implicit column,
+    which narrows every other widget on the page to make room for one that is
+    half off the paper.
+    """
+    wide = min(columns, max(1, int(layout.get("w") or DEFAULT_WIDE)))
+    return {
+        "w": wide,
+        "h": max(MIN_HIGH, int(layout.get("h") or DEFAULT_HIGH)),
+        "x": min(columns - wide, max(0, int(layout.get("x") or 0))),
+        "y": max(0, int(layout.get("y") or 0)),
+    }
+
+
+def _clear(box: dict[str, int], row: int, placed: list[dict[str, int]]) -> bool:
+    """Whether this widget would sit at that row without landing on another."""
+    return not any(
+        box["x"] < other["x"] + other["w"]
+        and other["x"] < box["x"] + box["w"]
+        and row < other["row"] + other["h"]
+        and other["row"] < row + box["h"]
+        for other in placed
+    )
+
+
+def pack(boxes: list[dict[str, int]]) -> list[int]:
+    """The row each widget comes to rest on, in the order they were given.
+
+    The board packs upwards: a widget dragged halfway down the page settles
+    against whatever is above it, and what gets stored is where it was
+    dropped rather than where it landed. Exported at the stored y, a board
+    grows bands of empty paper. Exported with no y at all - which is what
+    this page used to do, flowing the widgets in the order they were made -
+    a widget can only ever follow the one before it, so a chart beside the
+    first tile comes out beside the second, and the first tile sits alone
+    with a hole to its right. That was the fault; this is the fix.
+
+    So the page does what the board does: taken row by row and then column by
+    column, each widget rises until it meets one already placed.
+    """
+    rows = [0] * len(boxes)
+    placed: list[dict[str, int]] = []
+    order = sorted(range(len(boxes)), key=lambda index: (boxes[index]["y"], boxes[index]["x"]))
+    for index in order:
+        box = boxes[index]
+        row = box["y"]
+        while row > 0 and _clear(box, row - 1, placed):
+            row -= 1
+        rows[index] = row
+        placed.append({**box, "row": row})
+    return rows
+
+
+def place_widgets(widgets: list[dict[str, Any]], columns: int) -> list[dict[str, Any]]:
+    """Give every widget the rectangle it will be drawn in, and sort them.
+
+    Packed one container at a time, because that is how the page draws them:
+    a page's loose widgets share a grid, and each group is a band with a grid
+    of its own.
+
+    Sorted into reading order afterwards - down the page, then across - so
+    that the file prints, and is read aloud, in the order it looks like.
+    """
+    containers: dict[tuple[int, str], list[dict[str, Any]]] = {}
+    for widget in widgets:
+        key = (int(widget.get("page") or 0), str(widget.get("group_id") or ""))
+        containers.setdefault(key, []).append(widget)
+
+    for members in containers.values():
+        boxes = [_box(member.get("layout") or {}, columns) for member in members]
+        for member, box, row in zip(members, boxes, pack(boxes), strict=True):
+            member["place"] = {**box, "row": row}
+
+    return sorted(
+        widgets,
+        key=lambda widget: (
+            int(widget.get("page") or 0),
+            widget["place"]["row"],
+            widget["place"]["x"],
+        ),
+    )
+
+
+def build_payload(
+    db: Session,
+    dashboard: Dashboard,
+    render: Any,
+    pinned: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Everything the exported page needs, as plain JSON.
+
+    `render` is the dashboard renderer, handed in rather than imported: it
+    lives with the API and importing it here would tie a service to an
+    endpoint. It draws the widgets that cannot be recomputed offline, exactly
+    as they stand right now.
+
+    `pinned` fixes some of the filters, which makes this one province's file
+    rather than the whole country's with a dropdown. Those variables lose
+    their control, lose their cube column, and never have their other values
+    computed. Left empty, nothing changes and the export is what it was.
+    """
+    pinned = {str(k): str(v) for k, v in (pinned or {}).items() if v not in (None, "")}
+    controls = _filters_for(dashboard)
+    for control in controls:
+        ctx = _ctx_for(db, control["dataset_id"])
+        if control["kind"] == "dates":
+            span = _date_span(ctx, control["variable"]) if ctx else None
+            if span:
+                control.update(span)
+        else:
+            control["values"] = _values_for(ctx, control["variable"]) if ctx else []
+    # A control nothing can answer is worse than no control: it would sit on
+    # the page offering choices that move nothing.
+    controls = [control for control in controls if control["values"] or control.get("min")]
+    # A pinned variable is answered, so it is not a question any more. Dropped
+    # before the widgets are built, which is what keeps it out of every cube.
+    # One entry per variable, not per control. The same filter is usually
+    # declared on every page that uses it, so a board with five pages read
+    # "State: Lowland" five times under its title.
+    chosen: list[dict[str, str]] = []
+    for control in controls:
+        name = control["variable"]
+        if name in pinned and not any(one["variable"] == name for one in chosen):
+            chosen.append(
+                {
+                    "variable": name,
+                    "label": control.get("label") or name,
+                    # A range in words, with the days it stood for on the day
+                    # the file was made, rather than its stored form.
+                    "value": date_ranges.describe(pinned[name], utcnow().date())
+                    if control["kind"] == "dates"
+                    else pinned[name],
+                }
+            )
+    controls = [control for control in controls if control["variable"] not in pinned]
+    # A date range whose dataset gave no days has no control in the file, so
+    # its pinned choice is said
+    # here or nowhere: the days the file covers, under its title.
+    for raw in dashboard.filters or []:
+        if not isinstance(raw, dict) or raw.get("kind") != "dates":
+            continue
+        name = str(raw.get("variable") or "")
+        if name in pinned and not any(one["variable"] == name for one in chosen):
+            chosen.append(
+                {
+                    "variable": name,
+                    "label": str(raw.get("label") or name),
+                    "value": date_ranges.describe(pinned[name], utcnow().date()),
+                }
+            )
+
+    widgets: list[dict[str, Any]] = []
+    for widget in sorted(dashboard.widgets, key=lambda w: (w.page or 0, w.position or 0)):
+        page = widget.page or 0
+        mine = [control for control in controls if control["page"] == page]
+        entry: dict[str, Any] = {
+            "id": widget.id,
+            "title": widget.title or "",
+            "type": widget.widget_type.value,
+            "page": page,
+            "group_id": widget.group_id or "",
+            "layout": widget.layout or {},
+            # A widget's styling lives among its config, which also holds its
+            # query: only the part that says how it looks is carried over.
+            "style": _carried_style(widget.config or {}),
+            "config": {
+                key: value
+                for key, value in (widget.config or {}).items()
+                # The whole query and its options are already in the cube; what
+                # is kept here is what the page draws with.
+                if key in ("content", "html", "target", "label", "expired_text",
+                           "show_breakdown", "breakdown_order", "breakdown_view",
+                           "columns")
+            },
+        }
+        builder = BUILDERS.get(widget.widget_type.value)
+        reason = AS_THEY_STAND.get(widget.widget_type.value)
+        if builder is not None and reason is None:
+            try:
+                entry.update(builder(db, widget, mine, pinned))
+            except NotExportable as exc:
+                reason = str(exc)
+            except QueryError as exc:
+                reason = str(exc)
+        if reason is not None or builder is None:
+            entry["kind"] = "snapshot"
+            entry["snapshot"] = render(widget, pinned_filters(pinned))
+            # Only worth saying where a filter exists that the reader will
+            # expect to move it. A text box is not "not filtered"; it simply
+            # has nothing to filter.
+            entry["frozen_because"] = reason if (reason and mine) else ""
+        widgets.append(entry)
+
+    appearance = dashboard.appearance or {}
+    widgets = place_widgets(widgets, max(1, int(appearance.get("columns") or 12)))
+
+    pages = [
+        {"name": str((page or {}).get("name") or f"Page {index + 1}")}
+        for index, page in enumerate(dashboard.pages or [{"name": "Page 1"}])
+    ]
+    return {
+        "name": dashboard.name,
+        "description": dashboard.description or "",
+        "generated_at": utcnow().isoformat(),
+        "theme": dashboard.theme or "default",
+        # The colours that theme stands for, resolved here rather than looked
+        # up in the page. The exported file drew from a private list of its own
+        # that matched no theme the platform has, so a board came back in hues
+        # it had never been shown in.
+        "colors": export_lib.colors_for(dashboard.theme),
+        "appearance": appearance,
+        "pages": pages,
+        # The frames and their names. A group says what a handful of widgets
+        # are for, so a file that dropped them would read as a looser board
+        # than the one it was exported from.
+        "groups": [
+            {
+                "id": str(group.get("id") or ""),
+                "name": str(group.get("name") or ""),
+                "page": int(group.get("page") or 0),
+                "collapsed": bool(group.get("collapsed")),
+                "color": str(group.get("color") or ""),
+                # Its own ground and heading size, cleaned on the way: both are
+                # written into the page's styles.
+                "background": export_appearance.colour(group.get("background")),
+                "title_size": _group_title_size(group.get("title_size")),
+                "x": int(group.get("x") or 0),
+                "y": int(group.get("y") or 0),
+                "w": int(group.get("w") or 6),
+            }
+            for group in (dashboard.groups or [])
+            if isinstance(group, dict) and group.get("id")
+        ],
+        "filters": controls,
+        # What this file is of, for the page to say so under the title. Empty
+        # on an ordinary export, which then reads exactly as it always has.
+        "pinned": chosen,
+        "widgets": widgets,
+        # The logo and the one structural choice the page's own script acts on.
+        # Everything else about how this board is dressed is in the stylesheet.
+        "look": export_appearance.look(
+            dashboard,
+            export_appearance.image_data_url(dashboard, "logo"),
+            export_appearance.image_data_url(dashboard, "logo_right"),
+        ),
+    }
+
+
+def render_html(payload: dict[str, Any], stylesheet: str = "") -> str:
+    """The payload wrapped in the page that draws it.
+
+    The data goes in as JSON inside a script tag of a type the browser does not
+    execute, so nothing in a survey answer can become code on the page. The
+    only sequence that could end that tag early is escaped.
+
+    Three things travel outside the JSON. The drawing libraries, because a file
+    that fetched them from a CDN was a file whose charts turned into tables of
+    numbers the moment it was opened without the internet. Any bundled font a
+    widget is set in, because a font the file only names is a font it will not
+    have. And `stylesheet`, which is how the board is dressed: CSS rather than
+    data, and put through the JSON its background image would be encoded twice.
+    """
+    data = json.dumps(payload, default=str, separators=(",", ":"))
+    data = data.replace("<", "\\u003c").replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
+    template = TEMPLATE.read_text(encoding="utf-8")
+    needs_map = any(
+        (widget or {}).get("kind") == "map"
+        for widget in payload.get("widgets") or []
+        if isinstance(widget, dict)
+    )
+    return (
+        template.replace("__TITLE__", _escape(payload["name"]))
+        .replace("<!--__HEAD__-->", export_lib.head_for(needs_map))
+        .replace("/*__FONTS__*/", export_fonts.css_for(_fonts_used(payload)))
+        .replace("/*__LOOK__*/", stylesheet)
+        .replace('"__PAYLOAD__"', data)
+        # Last, so that neither the board's data nor the marks the other
+        # substitutions look for are ever searched for inside a megabyte of
+        # somebody else's minified JavaScript.
+        .replace("<!--__SCRIPTS__-->", export_lib.scripts_for(needs_map))
+    )
+
+
+def _group_title_size(value: Any) -> int:
+    """A group heading's size in a range a page can be drawn at, or 0 for none."""
+    try:
+        size = float(value or 0)
+    except (TypeError, ValueError):
+        return 0
+    return max(8, min(48, round(size))) if size == size and size > 0 else 0
+
+
+def _carried_style(config: dict[str, Any]) -> dict[str, Any]:
+    """The part of a widget's config that says how it looks.
+
+    Its text size among it, as a number in a range a page can be drawn at: the
+    value comes from a JSON column an editor can PATCH, and it is written into
+    the page's styles.
+    """
+    style = {
+        key: value
+        for key, value in config.items()
+        if key in ("background", "font_family", "font_color", "caption")
+    }
+    try:
+        size = float(config.get("chart_font_size") or 0)
+    except (TypeError, ValueError):
+        size = 0
+    if size == size and size > 0:
+        style["chart_font_size"] = max(8, min(48, round(size)))
+    return style
+
+
+def appearance_css(dashboard: Any) -> str:
+    """How this board is dressed, as CSS for the exported file.
+
+    Separate from the payload because it is paint, not data, and because the
+    background image inside it is already base64 - carrying it through the JSON
+    as well would put the same megabyte in the file twice.
+    """
+    return export_appearance.stylesheet(
+        dashboard, export_appearance.image_data_url(dashboard, "background")
+    )
+
+
+def _fonts_used(payload: dict[str, Any]) -> list[str]:
+    """The bundled families this board is set in.
+
+    Each widget's own font, and the board title's. The title is stored as an
+    id rather than a stack, so it is looked up by the stack the catalogue gives
+    it - which is the same lookup the interface does.
+    """
+    stacks: list[str | None] = [
+        (widget.get("style") or {}).get("font_family")
+        for widget in payload.get("widgets") or []
+        if isinstance(widget, dict)
+    ]
+    stacks.append((payload.get("look") or {}).get("title_stack"))
+    return export_fonts.collect(stacks)
+
+
+def _escape(text: str) -> str:
+    return (
+        str(text)
+        .replace("&", "&amp;")
+        .replace("<", "&lt;")
+        .replace(">", "&gt;")
+        .replace('"', "&quot;")
+    )

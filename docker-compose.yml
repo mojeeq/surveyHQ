@@ -1,0 +1,236 @@
+# SurveyHQ - survey monitoring platform
+#
+#   cp .env.example .env   # then edit every CHANGE-ME value
+#   docker compose up -d --build
+#
+# The stack is: nginx (web) -> FastAPI (api) -> Postgres, with Celery workers
+# and beat scheduler sharing the api image for background imports and monitoring.
+
+# The compose project name, the volume names, the database and the container
+# user stay "surveyhq" deliberately. They are stable installation identifiers.
+#
+# A second stack on the same machine - production beside development - sets
+# COMPOSE_PROJECT_NAME in its own env file, which compose prefers to the name
+# below, and so gets containers, a database and data volumes of its own:
+#   docker compose --env-file .env.prod up -d --build     (or: make up STACK=prod)
+# See "Development and production on one server" in docs/deployment.md.
+name: surveyhq
+
+x-backend-env: &backend-env
+  ENVIRONMENT: ${ENVIRONMENT:-production}
+  PROJECT_NAME: ${PROJECT_NAME:-SurveyHQ}
+  PUBLIC_URL: ${PUBLIC_URL:-http://localhost:8080}
+  DASHBOARD_DOMAIN: ${DASHBOARD_DOMAIN:-}
+  LOG_LEVEL: ${LOG_LEVEL:-INFO}
+  SECRET_KEY: ${SECRET_KEY:?SECRET_KEY must be set in .env}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY:-}
+  ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-1440}
+  CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:8080}
+  RATE_LIMIT_ENABLED: ${RATE_LIMIT_ENABLED:-true}
+  # Whether anyone reaching the sign-in page may create an account. Off
+  # unless a deployment says otherwise: a self-service account is a manager,
+  # and a project's manager may change its data. Named here rather than left
+  # to .env alone - compose uses .env only to substitute ${...} into this
+  # file, so a variable this file does not name never reaches the container.
+  SIGNUP_ENABLED: ${SIGNUP_ENABLED:-false}
+  FIRST_ADMIN_EMAIL: ${FIRST_ADMIN_EMAIL:-admin@example.com}
+  FIRST_ADMIN_PASSWORD: ${FIRST_ADMIN_PASSWORD:?FIRST_ADMIN_PASSWORD must be set in .env}
+  FIRST_ADMIN_NAME: ${FIRST_ADMIN_NAME:-Administrator}
+  POSTGRES_USER: ${POSTGRES_USER:-surveyhq}
+  POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+  POSTGRES_DB: ${POSTGRES_DB:-surveyhq}
+  POSTGRES_HOST: postgres
+  POSTGRES_PORT: 5432
+  REDIS_URL: redis://redis:6379/0
+  STORAGE_DIR: /data
+  MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-20480}
+  MAX_EXTRACTED_GB: ${MAX_EXTRACTED_GB:-64}
+  # Where a folder connection may read from, and how settled a file must be
+  # before it is read. Named here because compose uses .env only to substitute
+  # ${...} into this file: a variable this file does not name never reaches
+  # the container, so uncommenting it in .env would have changed nothing.
+  # Any root added here needs mounting into the api and worker containers too.
+  IMPORT_ROOTS: ${IMPORT_ROOTS:-/incoming}
+  IMPORT_SETTLE_SECONDS: ${IMPORT_SETTLE_SECONDS:-60}
+  SMTP_HOST: ${SMTP_HOST:-}
+  SMTP_PORT: ${SMTP_PORT:-587}
+  SMTP_USER: ${SMTP_USER:-}
+  SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+  SMTP_TLS: ${SMTP_TLS:-true}
+  SMTP_FROM: ${SMTP_FROM:-SurveyHQ <no-reply@example.org>}
+  SYNC_TICK_MINUTES: ${SYNC_TICK_MINUTES:-5}
+  MONITOR_TICK_MINUTES: ${MONITOR_TICK_MINUTES:-15}
+  # Columnar analytics tuning. DUCKDB_THREADS=0 chooses a conservative value
+  # from the host's CPUs and leaves headroom for API/Postgres/Celery.
+  DUCKDB_THREADS: ${DUCKDB_THREADS:-0}
+  DUCKDB_MEMORY_LIMIT: ${DUCKDB_MEMORY_LIMIT:-2GB}
+  DUCKDB_TEMP_DIR: ${DUCKDB_TEMP_DIR:-/data/duckdb_tmp}
+  DUCKDB_CSV_ABOVE_MB: ${DUCKDB_CSV_ABOVE_MB:-32}
+  ANALYTICS_CACHE_ENABLED: ${ANALYTICS_CACHE_ENABLED:-true}
+  ANALYTICS_CACHE_TTL_SECONDS: ${ANALYTICS_CACHE_TTL_SECONDS:-300}
+  MONITORING_PRECOMPUTE_ENABLED: ${MONITORING_PRECOMPUTE_ENABLED:-true}
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-surveyhq}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-surveyhq}
+      PGDATA: /var/lib/postgresql/data/pgdata
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-surveyhq} -d ${POSTGRES_DB:-surveyhq}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    networks: [surveyhq]
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes", "--save", "60", "1"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks: [surveyhq]
+
+  migrate:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    command: ["python", "-m", "app.cli", "init-db"]
+    environment: *backend-env
+    volumes:
+      - survey-data:/data
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [surveyhq]
+
+  api:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment: *backend-env
+    volumes:
+      - survey-data:/data
+      # Where a file copied to the server is imported from. Read-only, and a
+      # bind rather than a copy into the volume: a census roster is gigabytes,
+      # and `docker compose cp` of one would write it to disk a second time
+      # for no reason. See "Importing from the server" in docs/deployment.md.
+      # A second stack names a folder of its own with INCOMING_DIR.
+      - ${INCOMING_DIR:-./incoming}:/incoming:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    # Bound to localhost so the API is reached through nginx, not directly.
+    ports:
+      - "127.0.0.1:${API_PORT:-8000}:8000"
+    networks: [surveyhq]
+
+  # Heavy file parsing, connection downloads and default ad-hoc background work.
+  # Keeping this queue separate means a census import cannot occupy the worker
+  # slots responsible for alerts and field monitoring.
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command:
+      ["celery", "-A", "app.workers.celery_app.celery_app", "worker",
+       "--loglevel=info", "--queues=imports,default",
+       "--concurrency=${IMPORT_WORKER_CONCURRENCY:-2}", "--max-tasks-per-child=50"]
+    environment: *backend-env
+    volumes:
+      - survey-data:/data
+      # The same staging folder the API mounts, because a folder connection is
+      # listed by the API and read here. Mounted on one of them only, the
+      # connection tests green and every import after it fails.
+      - ${INCOMING_DIR:-./incoming}:/incoming:ro
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app.celery_app inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 40s
+    networks: [surveyhq]
+
+  # Latency-sensitive scheduled work has its own worker pool.
+  worker-monitoring:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    command:
+      ["celery", "-A", "app.workers.celery_app.celery_app", "worker",
+       "--loglevel=info", "--queues=monitoring,quality,maintenance",
+       "--concurrency=${MONITOR_WORKER_CONCURRENCY:-2}", "--max-tasks-per-child=100"]
+    environment: *backend-env
+    volumes:
+      - survey-data:/data
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A app.workers.celery_app.celery_app inspect ping -d celery@$$HOSTNAME || exit 1"]
+      interval: 60s
+      timeout: 15s
+      retries: 3
+      start_period: 40s
+    networks: [surveyhq]
+
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    # The schedule file lives in /tmp because the container runs as non-root.
+    command:
+      ["celery", "-A", "app.workers.celery_app.celery_app", "beat",
+       "--loglevel=info", "--schedule=/tmp/celerybeat-schedule"]
+    environment: *backend-env
+    volumes:
+      - survey-data:/data
+    depends_on:
+      redis: { condition: service_healthy }
+      migrate: { condition: service_completed_successfully }
+      postgres: { condition: service_healthy }
+    networks: [surveyhq]
+
+  web:
+    build:
+      # The repository root rather than ./frontend. The bundle now carries the
+      # in-app help, which scripts/build-help.mjs renders from docs/, and both
+      # of those sit above the frontend directory - so a context of ./frontend
+      # cannot see them and the image build fails on the missing script.
+      context: .
+      dockerfile: frontend/Dockerfile
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-8080}:80"
+    depends_on:
+      - api
+    networks: [surveyhq]
+
+volumes:
+  postgres-data:
+  redis-data:
+  survey-data:
+
+networks:
+  surveyhq:
+    driver: bridge

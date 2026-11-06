@@ -1,0 +1,970 @@
+# REST API
+
+Interactive documentation is served by the running instance at `/api/docs`, with
+the OpenAPI specification at `/api/openapi.json`.
+
+Base path: `/api/v1`
+
+## Authenticating
+
+Two ways.
+
+**A session token**, for browser-style use:
+
+```bash
+curl -X POST https://surveyhq.example.org/api/v1/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{"email": "you@example.org", "password": "your-password"}'
+# {"access_token": "eyJ...", "token_type": "bearer", "expires_in": 86400}
+```
+
+```bash
+curl https://surveyhq.example.org/api/v1/datasets \
+  -H "Authorization: Bearer eyJ..."
+```
+
+**An API key**, for scripts. Create one in **Administration → API keys**; it is
+shown once. Keys do not expire and can be revoked at any time.
+
+```bash
+curl https://surveyhq.example.org/api/v1/datasets \
+  -H "X-API-Key: shq_abc12345_..."
+```
+
+An API key carries the role of the user who created it.
+
+Sign-in is rate limited: ten attempts a minute from one address, five a minute
+against one account, counted whether or not the password was right. Over either,
+the endpoint answers `429` with a `Retry-After` header. A script that signs in
+once and reuses its token never meets this; one that signs in per request will.
+Prefer an API key for scripts - it is not rate limited, and it does not expire.
+
+## Endpoints
+
+Every listing returns only what the caller may reach. A dataset, dashboard or
+chart outside their projects answers `404`, not `403`, so responses cannot be
+used to enumerate other people's projects.
+
+### Accounts and keys
+
+```
+POST   /auth/login                        {"email": …, "password": …}
+POST   /auth/signup                       a personal account, signed in at once.
+                                          404 unless the deployment turned
+                                          self-service sign-up on; the account is
+                                          a manager limited to its own projects
+GET    /auth/me                           the signed-in user
+PATCH  /auth/me/preferences               change some of your preferences, leaving
+                                          the rest as they are: sidebar_pinned,
+                                          getting_started_hidden
+POST   /auth/change-password              {"current_password": …, "new_password": …}
+GET    /auth/api-keys                     your keys, without their secrets
+POST   /auth/api-keys                     create one; the secret is shown once
+DELETE /auth/api-keys/{id}                revoke one
+GET    /users                             every account                  [admin]
+GET    /users/directory                   who there is to add to a project, for
+                                          the member picker. 403 where
+                                          self-service sign-up is on
+GET    /users/roles                       the roles, for a picker
+GET    /users/lookup/{username}           one exact, active username: its id, name
+                                          and username, and nothing else
+POST   /users                             create an account              [admin]
+PATCH  /users/{id}                        role, name, password, whether they
+                                          are limited to assigned projects
+                                                                         [admin]
+DELETE /users/{id}                                                       [admin]
+```
+
+### Projects
+
+```
+GET    /projects                          projects you can reach
+POST   /projects                          create; you become its manager [manager]
+GET    /projects/{id}                     detail, with members
+PATCH  /projects/{id}                     rename, describe, set dates  [project manager]
+DELETE /projects/{id}?contents=release    delete; its datasets and dashboards
+                                          return to the shared area   [project manager]
+DELETE /projects/{id}?contents=delete     delete it and everything in it: datasets
+                                          and their files, charts, indicators and
+                                          snapshots, quality and alert rules and
+                                          their results, relationships, merged
+                                          datasets, dashboards. Connections are
+                                          released, not deleted       [project manager]
+GET    /projects/{id}/members             members and their roles
+PUT    /projects/{id}/members             add a member, or change a role
+                                          {"user_id": "...", "role": "analyst"}
+                                          "admin" is rejected: administration is
+                                          global, not per project     [project manager]
+DELETE /projects/{id}/members/{user_id}   remove a member             [project manager]
+PUT    /projects/assign/dataset/{id}      {"project_id": "..."} or null for the
+                                          shared area; needs manager rights on
+                                          both the source and the target
+PUT    /projects/assign/dashboard/{id}    the same, for a dashboard
+GET    /projects/{id}/overview            the project in the order its data
+                                          travels - connections and uploads, merges,
+                                          scripts, dashboards, monitoring - with
+                                          what needs a person gathered at the top
+GET    /projects/{id}/archive             what archiving it would remove, asked
+                                          before it is done
+POST   /projects/{id}/archive             remove its survey data, keeping
+                                          everything built on it  [project manager]
+POST   /projects/{id}/unarchive           open it for work again; the data comes
+                                          back with the next import
+                                                                [project manager]
+GET    /projects/{id}/script/names        the datasets a script here can `use`, and
+                                          the variables in each
+```
+
+#### Scripts
+
+A project can have several scripts, each with a name unique in the project
+(without regard to case). A script is addressed by its own id.
+
+```
+GET    /scripts                           every script you can see, in the
+                                          order they have to run, with the
+                                          step each is in and what it waits for
+POST   /scripts                           {"project_id": "...", "name": "...",
+                                          "text": "..."}; a blank name is the
+                                          next free "Main script" [project manager]
+GET    /scripts/{id}                      one script, and how its last run went
+PATCH  /scripts/{id}                      {"name": "..."} and/or {"text": "..."};
+                                          keeps text without running it
+                                                                      [project manager]
+POST   /scripts/{id}/run                  {"text": null} runs what is saved, or
+                                          the text given - kept if it runs
+                                          cleanly; the log and what it saved
+                                                                      [project manager]
+DELETE /scripts/{id}                      the script; the datasets it wrote stay
+                                                                      [project manager]
+PUT    /scripts/order                     {"script_ids": [...]} - the whole of one
+                                          step, in the order wanted
+GET    /scripts/language                  what the script language understands -
+                                          its commands, options and functions - for
+                                          an editor to colour and offer
+```
+
+`GET`, `PUT`, `DELETE /projects/{id}/script` and `POST /projects/{id}/script/run`
+are from when a project had one script, and act on the project's oldest.
+
+#### The Stata command box
+
+A subset of Stata's data-preparation commands, run against one dataset. Manager
+rights on the dataset's project are needed for anything that changes it.
+
+Nothing typed is passed to the database as written: the command is tokenised,
+every name in it has to be a variable of that dataset, only a listed few
+functions are understood, and the query is built from the tokens. A command
+that cannot be parsed answers **422** naming the piece that was not understood.
+
+```
+POST   /datasets/{id}/command             {"command": "..."} - a script, one
+                                          command per line            [manager]
+GET    /datasets/{id}/commands            what will be replayed, in order
+DELETE /datasets/{id}/commands            stop replaying them; what they did
+                                          stays done                  [manager]
+```
+
+A script runs top to bottom and stops at the first error. What ran before it is
+committed rather than rolled back, as a do-file behaves, so the response says
+both what got through and why it stopped:
+
+```json
+{
+  "results": [
+    {"command": "gen adult = age >= 18",
+     "message": "Created adult",
+     "variables_added": ["adult"], "variables_removed": []}
+  ],
+  "error": "line 2: 'agee' is not a variable of this dataset",
+  "rows": 438,
+  "columns": 13,
+  "rebuilt": 1
+}
+```
+
+`error` is null when everything ran. `rebuilt` counts the merged datasets
+rebuilt because this one changed underneath them.
+
+The commands are recorded on the dataset and replayed, in order, after a newer
+export replaces it, which is what stops a generated variable disappearing on
+exactly the upload the platform exists to make routine.
+
+
+### Relationships and merges
+
+```
+GET    /relationships                     links whose datasets you can see
+                                          (project_id filters; "none" = shared)
+POST   /relationships/detect              propose links by reading the data;
+                                          stores the new ones      [manager]
+POST   /relationships                     declare one by hand      [manager]
+PATCH  /relationships/{id}                correct keys, cardinality, or turn it
+                                          off; marks it no longer detected
+                                                                   [manager]
+DELETE /relationships/{id}                                         [manager]
+POST   /relationships/clear               remove a project's links
+                                          (?project_id=&detected_only=true keeps
+                                          the ones declared or corrected by hand)
+                                                                   [manager]
+POST   /relationships/merge               join two related datasets into a new
+                                          one; the recipe is stored on it
+                                                                   [manager]
+POST   /relationships/rebuild/{id}        re-run that merge against the current
+                                          sources                  [manager]
+```
+
+A merged dataset also rebuilds itself whenever a source is replaced by a newer
+import or changed by a command, so `/rebuild` is for forcing the issue
+rather than for keeping up.
+
+A many-to-many link is refused by `/merge`: joining two rosters on the interview
+multiplies rows rather than adding columns.
+
+### Datasets
+
+```
+GET    /datasets                          list (search, status, project_id, limit,
+                                          offset). project_id=none returns only
+                                          what is in the shared area.
+POST   /datasets/upload                   multipart upload; project_id puts it
+                                          straight into a project. A .zip answers
+                                          with a per-file report rather than one
+                                          dataset - see below      [manager]
+GET    /datasets/{id}                     detail with variables
+PATCH  /datasets/{id}                     rename, describe, tag [manager]
+DELETE /datasets/{id}                                            [manager]
+POST   /datasets/delete                   delete several at once, or a whole
+                                          project's worth          [manager]
+POST   /datasets/{id}/replace             refresh in place      [manager]
+POST   /datasets/{id}/append              add rows to it        [manager]
+GET    /datasets/{id}/variables           variable list
+PATCH  /datasets/{id}/variables/{v}       set the variable's label and the labels
+                                          of its codes             [manager]
+GET    /datasets/{id}/preview             raw rows
+GET    /datasets/{id}/download?format=      the whole dataset as a file: dta
+                                          (with labels), csv or xlsx [manager]
+GET    /datasets/{id}/variables/{v}/values  distinct values
+GET    /datasets/{id}/tags                tags in use
+GET    /datasets/{id}/versions            the earlier copies kept of it
+POST   /datasets/{id}/versions/{n}/restore  put one of them back      [manager]
+GET    /datasets/{id}/linked-variables    variables it brings in from other
+                                          datasets, and how each last went
+POST   /datasets/{id}/linked-variables/check  how the keys would line up,
+                                          before anything is written; with no
+                                          keys, suggests them       [manager]
+POST   /datasets/{id}/linked-variables    bring another dataset's variables in,
+                                          in place, and keep them up to date
+                                                                   [manager]
+POST   /datasets/{id}/linked-variables/refresh  bring them in again now
+                                                                   [manager]
+DELETE /datasets/{id}/linked-variables/{link}  stop; ?keep_columns=true keeps
+                                          the values as they are   [manager]
+POST   /datasets/reviews/{job}/accept     let an import held for review replace
+                                          the data                  [manager]
+DELETE /datasets/reviews/{job}            throw it away instead    [manager]
+POST   /datasets/uploads                  make room for a file sent in pieces
+                                                                   [manager]
+PUT    /datasets/uploads/{id}/pieces/{n}  one piece of it           [manager]
+POST   /datasets/uploads/{id}/complete    put the pieces together; the upload is
+                                          then named in /datasets/upload
+                                                                   [manager]
+DELETE /datasets/uploads/{id}             give up on one            [manager]
+```
+
+`POST /datasets/{id}/linked-variables` takes
+`{"source_dataset_id": …, "keys": [{"here": "hhid", "there": "hhid"}],
+"key_match": "exact", "variables": ["province", "hh_size"]}`. The dataset keeps
+its id and its rows, in their order, with the other dataset's values beside
+them where the keys match. It is refused (422) where the other dataset repeats
+a key, where a variable is one this dataset already has, and where the other
+dataset is itself built from this one. The variables are brought in again
+whenever either dataset changes, as merges are rebuilt. `/check` answers a
+problem in its body (`error`) rather than as a 422, for a form to show while it
+is being filled in.
+
+A file larger than a proxy will carry in one request - Cloudflare stops at
+100 MB - goes up in pieces. `POST /datasets/uploads` with
+`{"filename": …, "size": …}` answers with the upload's `id`, its `chunk_size`
+and how many `pieces` to send; each piece is `PUT` as the raw body (sending one
+again replaces it); `complete` checks they are all there; and the usual
+`POST /datasets/upload` then takes `staged=["<id>"]` in place of a file. The
+browser does this by itself for a large file.
+
+An upload larger than 48 MB is imported by the worker rather than in the
+request, and answers with a **job** instead of a dataset - poll
+`GET /system/jobs/{id}` and read its `result` when it succeeds, which carries
+the same report the inline path returns. Reading a census roster export takes
+longer than any proxy holds a request open, and doing it in the API process
+takes memory from every other request.
+
+An upload larger than `MAX_UPLOAD_MB` answers **413** from the declared length,
+before the body is read, and the message names both the size and the limit.
+
+Several archives can be sent in one request by repeating the `file` field. They
+are imported in order - the first under `mode`, the rest appended - which is
+how a questionnaire revised mid-fieldwork becomes one dataset per member file.
+`labels` is a JSON list parallel to the files and `version_column` names a
+variable each label is written into; a variable of that name already in the data
+is left alone and reported in `warnings`.
+
+```
+-F "file=@VANLFS_v11.zip" -F "file=@VANLFS_v10.zip" -F "file=@VANLFS_v9.zip" \
+-F 'labels=["11","10","9"]' -F "version_column=version"
+```
+
+Imports from a connection stamp `questionnaire_version` by themselves, from the
+version the export was taken at.
+
+`POST /datasets/upload` takes `mode` alongside the file: `replace` (the default)
+swaps the data of each dataset an archive's files match, keeping their ids so
+everything built on them survives; `append` adds the rows instead. `combine_all`
+is for the other case again - an archive that really does hold several rounds of
+one table, which goes into a single dataset.
+
+Uploading an archive returns:
+
+```json
+{
+  "datasets": [ ... ],
+  "created":  ["R_demographics.dta -> R_demographics (401 rows)"],
+  "replaced": ["VN_LF2024.dta -> VN_LF2024 (99 -> 190 rows)"],
+  "appended": [],
+  "skipped":  [],
+  "warnings": ["... appear in both ... so those interviews are now counted twice"],
+  "rows": 519
+}
+```
+
+`POST /datasets/delete` takes either a list of ids or a project:
+
+```json
+{"ids": ["0f3c…", "7ab1…"]}
+{"project_id": "2d19…"}    // "" is the shared area
+```
+
+Ids the caller cannot reach are skipped rather than refused - the listing they
+were chosen from is already scoped, so a stray id is a stale page.
+
+### Analysis
+
+```
+POST /analytics/query                              run a query specification
+POST /analytics/query/export?format=csv|xlsx       download the result
+GET  /analytics/datasets/{id}/frequency/{variable} one-way frequencies
+POST /analytics/datasets/{id}/frequency/{variable} the same, with a filter
+                                                  group in the body
+POST /analytics/datasets/{id}/crosstab             two-way table; max_rows
+                                                  (default 5,000) and max_columns
+                                                  (default 1,000) bound it, and the
+                                                  result reports rows_omitted and
+                                                  columns_omitted. `measures` (two
+                                                  or more, no column_variable) puts
+                                                  several values side by side, one
+                                                  column each. `column_headings`
+                                                  ({label: heading}) and
+                                                  `row_heading` rename the headings;
+                                                  the result carries them beside
+                                                  the unchanged labels
+POST /analytics/datasets/{id}/crosstab/export      download it
+POST /analytics/datasets/{id}/summary              descriptive statistics
+POST /analytics/datasets/{id}/suggest              suggested analyses
+GET  /analytics/datasets/{id}/multiselect-groups    sets of 0/1 columns that
+                                                   look like one question
+POST /analytics/datasets/{id}/multiselect          tabulate a "tick all that
+                                                   apply" question from them
+GET  /analytics/saved-queries
+POST /analytics/saved-queries                                    [analyst]
+DELETE /analytics/saved-queries/{id}                             [analyst]
+```
+
+### Connections
+
+```
+GET    /connections                       list (?project_id= narrows it)
+GET    /connections/{id}                  one, without its password
+POST   /connections                       create               [manager]
+PATCH  /connections/{id}                  change any of it, password included
+                                                               [manager]
+DELETE /connections/{id}                  its imported datasets stay [manager]
+POST   /connections/test                  test before saving   [manager]
+POST   /connections/{id}/test             test a saved one     [manager]
+GET    /connections/{id}/questionnaires   list from the server
+GET    /connections/{id}/interviews       live interview summaries
+POST   /connections/{id}/sync             start an import      [manager]
+GET    /connections/{id}/runs             import history; has_archive says whether
+                                          the export zip is still on disk
+GET    /connections/{id}/runs/{run}/archive  download that export zip exactly as
+                                          the server sent it
+```
+
+Connections are scoped by their project, like everything else that has one:
+listings are filtered, and every route above answers 404 for a connection
+outside the caller's reach - including `/questionnaires`, `/interviews`,
+`/sync` and the archive download, each of which reaches the server or its data.
+Aiming an import at a project the caller does not manage is refused the same
+way.
+
+A connection carries where its imports land and when they happen:
+
+| Field | Meaning |
+|---|---|
+| `project_id` | The project imported datasets go into |
+| `sync_enabled` | Whether the scheduler imports without being asked |
+| `sync_mode` | `interval` or `times` |
+| `sync_interval_minutes` | For `interval`: how long since the last import |
+| `sync_times` | For `times`: `["06:00", "18:00"]`, in `sync_timezone` |
+| `sync_timezone` | An IANA zone, e.g. `Etc/GMT-11`. Times mean that clock |
+| `export_format` | `STATA` recommended - it carries labels |
+| `interview_status` | `All`, or e.g. `ApprovedBySupervisor` |
+
+`POST /{id}/sync` accepts `questionnaires`, `interview_status`, `project_id` and
+`mode` (`replace` or `append`), each falling back to the connection's own
+setting. The last five export archives per connection are kept on disk; older
+ones are pruned as new runs land.
+
+### Charts and dashboards
+
+```
+GET/POST/PATCH/DELETE /dashboards/charts[/{id}]
+                                          ?project_id= narrows the listing to one
+                                          project's charts (none = shared area)
+POST   /dashboards/charts/{id}/data       run a saved chart
+GET/POST/PATCH/DELETE /dashboards[/{id}]
+POST   /dashboards/{id}/widgets                                 [analyst]
+PATCH  /dashboards/{id}/widgets/{wid}     change anything about a widget: what it
+                                          shows, its title, size, page, or its
+                                          own background colour (config.background)
+                                                                [analyst]
+POST   /dashboards/{id}/pages/move        {"from": i, "to": j} - moves a page and
+                                          renumbers the widgets with it [analyst]
+DELETE /dashboards/{id}/pages/{index}     remove an empty page, renumbering the
+                                          ones after it            [analyst]
+DELETE /dashboards/{id}/widgets/{wid}                           [analyst]
+PUT    /dashboards/{id}/background        upload a background image (PNG, JPEG,
+                                          GIF or WebP, 8 MB)    [analyst]
+GET    /dashboards/{id}/background        the image itself
+DELETE /dashboards/{id}/background                              [analyst]
+PUT    /dashboards/{id}/logo              upload a header logo  [analyst]
+GET    /dashboards/{id}/logo              the logo itself
+DELETE /dashboards/{id}/logo                                    [analyst]
+PUT    /dashboards/{id}/logo-right        a second logo, at the other end of the
+                                          masthead                [analyst]
+GET    /dashboards/{id}/logo-right        that logo itself
+DELETE /dashboards/{id}/logo-right                              [analyst]
+POST   /dashboards/{id}/duplicate         a copy of the board to change without
+                                          touching the original   [analyst]
+POST   /dashboards/{id}/data              render every widget; the body may carry
+                                          filter conditions to narrow them.
+                                          ?every_widget_but=<widget id> renders
+                                          that one unfiltered, which is what
+                                          click-to-filter needs
+GET    /dashboards/{id}/export.html       the whole dashboard as one HTML file,
+                                          with the data behind each widget so
+                                          its filter dropdowns still work away
+                                          from this server
+GET    /dashboards/{id}/export.docx       the board as a Word report
+GET    /dashboards/{id}/report-values     what a burst over a filter would make,
+                                          one report per value, before anybody
+                                          waits for it
+POST   /dashboards/{id}/reports           one report per value of a filter, as a
+                                          job                     [analyst]
+GET    /dashboards/{id}/reports/{job}.zip the reports a finished burst wrote
+GET/PUT /dashboards/{id}/snapshot-schedule  when to keep a copy of the board
+                                          (PUT [analyst])
+GET    /dashboards/{id}/snapshots         the copies kept
+POST   /dashboards/{id}/snapshots         keep one now            [analyst]
+GET    /dashboards/{id}/snapshots/{s}.html  the board as it stood
+DELETE /dashboards/{id}/snapshots/{s}                            [analyst]
+GET    /dashboards/chart-library          saved charts with their dataset and
+                                          project names, for adding to a board
+POST   /dashboards/{id}/share?enable=true public link           [analyst]
+GET/POST/PATCH/DELETE /dashboards/{id}/share-links[/{link}]
+                                          the addresses a dashboard is published
+                                          at. A link takes a name, an optional
+                                          password and an optional expires_at;
+                                          PATCH tells "leave it alone" from
+                                          "take it off" by whether the field is
+                                          sent, so an explicit null clears one
+                                                                [analyst]
+GET/POST/PATCH/DELETE /dashboards/html-snippets[/{id}]
+                                          the reusable library behind the
+                                          embedded-HTML widget, so a footer or
+                                          a logo is written once  [analyst]
+PUT    /dashboards/{id}/hostname          give a shared dashboard its own
+                                          address, or "" to remove it
+                                                                [analyst]
+GET    /dashboards/{id}/filter-values/{v}  the values a filter control offers,
+                                          read from the datasets the board uses
+GET    /dashboards/{id}/boundaries/{lid}  a boundary layer's geometry, reachable
+                                          because the board draws it
+GET/POST/PATCH/DELETE /dashboards/{id}/views[/{vid}]
+                                          named filter selections. A view stores
+                                          {page, filters, drill} in `state`;
+                                          is_default marks the one the board
+                                          opens in, is_shared whether others see
+                                          it. Saved on the dashboard, so a shared
+                                          link carries them
+GET/POST/PATCH/DELETE /dashboards/{id}/comments[/{cid}]
+                                          the comment threads on its widgets.
+                                          A comment carries widget_id, body, an
+                                          optional parent_id for a reply (one
+                                          level), and an optional view_id - the
+                                          reading it was made under. On the
+                                          listing, ?view_id= returns that view's
+                                          comments plus the board's own, and
+                                          ?widget_id= narrows it to one widget.
+                                          PATCH sets the body or is_resolved
+GET    /public/dashboards/{token}         no authentication
+POST   /public/dashboards/{token}/data    no authentication
+GET    /public/dashboards/{token}/background  no authentication
+GET    /public/dashboards/{token}/logo        no authentication
+GET    /public/dashboards/{token}/logo-right  no authentication
+GET    /public/dashboards/{token}/views       no authentication
+GET    /public/dashboards/{token}/filter-values/{v}   no authentication
+GET    /public/dashboards/{token}/boundaries/{lid}    no authentication
+POST   /public/dashboards/{token}/unlock      a password-protected link
+GET    /public/site                           no authentication; says whether the
+                                              host this was asked on is a named
+                                              dashboard
+```
+
+`PUT /{id}/hostname` takes `{"hostname": "labour-force"}` - a bare label or the
+whole name, both meaning the same thing. It answers 422 for a name outside the
+configured `DASHBOARD_DOMAIN`, a reserved label or the platform's own address,
+409 if another dashboard holds it or the dashboard is not shared. Turning
+sharing off clears it.
+
+`GET /public/site` reads the request's `Host` header and returns
+`{"dashboard": {"token": …, "name": …}}` when that host is assigned to a shared
+dashboard, and `{"dashboard": null}` otherwise. The bundle is served for every
+hostname, so this is how it knows which of the two it is.
+
+A dashboard carries `pages` (named, each widget holding the index of the one it
+sits on), `filters` (the controls offered to viewers, each belonging to a page),
+`theme` (which categorical ordering its charts use) and `appearance`:
+
+```json
+{
+  "background_color": "#0f172a",
+  "background_image": "…",
+  "background_fit": "cover",
+  "fade": 0.3,
+  "canvas_width": 2000,
+  "columns": 12,
+  "row_height": 74,
+  "widget_opacity": 0.6,
+  "tab_background": "#ffffff",
+
+  "logo_image": "…", "logo_version": "…", "logo_height": 44,
+  "logo_right_image": "…", "logo_right_version": "…",
+  "title_size": 38, "title_font": "serif", "title_color": "#0b5e3c",
+  "title_align": "left", "header_rule": true, "hide_subtitle": false,
+
+  "header_background": "#0d4b74", "header_background_2": "#1c84bd",
+  "header_angle": 120,
+  "page_background": "#0a2135", "page_background_2": "#0f3a5c",
+  "page_angle": 160
+}
+```
+
+`logo_height` is up to 200 pixels and applies to both logos. With two, the
+title sits between them.
+
+A dashboard also carries `groups`: named boxes drawn round some of its widgets.
+
+```json
+{"id": "g1", "name": "Population counts", "page": 0, "x": 0, "y": 0, "w": 6,
+ "collapsed": false, "color": "#7a4b00", "background": "#fdf3e7", "title_size": 18}
+```
+
+`x`, `y` and `w` place the group's heading bar on the grid; a widget belongs to a
+group through its own `group_id`. `color` is the heading and frame, `background`
+the group's ground, and `title_size` the heading in pixels (10 to 32). A folded
+group takes its widgets off the board.
+
+`title_font` names a stack the frontend knows (`grotesque`, `serif`, `slab`,
+`mono`, or empty for the interface face) rather than carrying CSS.
+
+`header_background` puts a band behind the dashboard's name, which turns the
+header into a masthead; a second colour makes it a gradient at `header_angle`
+degrees. `page_background` is the ground behind the whole page, around the
+board, and works the same way. Both are drawn by the frontend, on the editing
+view and on a shared link alike; the text on the band is chosen light or dark
+from the first colour's luminance unless `title_color` says otherwise. Setting
+a band also moves the dashboard's own toolbar to a row below it.
+
+A rendered chart widget carries `grouped_on`, the variables its query groups
+on. That is what lets a click on a mark say which variable the category it
+stands for belongs to, and filter the page by it.
+
+A widget is one of `chart`, `crosstab`, `indicator`, `quality`, `text`,
+`countdown`, `map`, `html` or `freshness`, and the rest of what it needs lives in
+its `config` - the countdown's target, the map's latitude, longitude, detail
+columns and aggregate, the HTML to embed, or the freshness widget's datasets,
+thresholds and any date variable chosen by hand. (`table` and `kpi` are still in
+the stored enum from an earlier shape of this and nothing renders them; a table
+is a saved chart with `chart_type: "table"`, and the KPI reading is what an
+indicator tile draws.)
+
+`config.chart_font_size` is the widget's text size in pixels, for whatever it
+draws: an indicator's figure scales from it, a chart's labels and a table's cells
+take it. Absent is the widget's default.
+
+#### A map widget
+
+```json
+{
+  "latitude": "gps_lat", "longitude": "gps_lon",
+  "detail": ["hhid", "ea"], "measure_agg": "count", "measure_variable": "",
+  "basemap": "satellite", "tiles": "",
+
+  "boundary_id": "…", "boundary_label": "code", "boundary_labels": "always",
+  "boundary_key": "code", "area_variable": "ea",
+
+  "duplicate_metres": 100,
+  "manual_latitude": "man_lat", "manual_longitude": "man_lon",
+  "manual_name": "Manual", "line_metres": 100,
+  "coverage": true
+}
+```
+
+- `boundary_label` writes an attribute of each area on it, on hover or - with
+  `boundary_labels: "always"` - for good.
+- `area_variable` and `boundary_key` check the area each record says it was in
+  against the area its coordinates fall in.
+- `duplicate_metres` flags every location with another record within that many
+  metres; absent or 0 is off.
+- `manual_latitude` and `manual_longitude` are a second location for each
+  record, entered by hand. It is checked against the areas on its own, and a
+  line is drawn to the record's GPS reading wherever the two are more than
+  `line_metres` apart (100 when absent).
+- `coverage` counts the records in each area of the layer.
+
+Rendered, a map widget answers with its pins and, for each layer asked for:
+
+```json
+{
+  "type": "map",
+  "points": [{"lat": -0.545, "lon": 166.905, "value": 1, "rows": 1,
+              "area_status": "match", "area_expected": "0101",
+              "recorded_area_label": "0101", "duplicates": 1}],
+  "area_check": {"variable": "ea", "counts": {"match": 45, "mismatch": 4,
+                 "outside": 1, "unrecorded": 2}},
+  "duplicates": {"metres": 100, "places": 38},
+  "manual": {"points": […], "counts": {"match": 44, "mismatch": 8,
+             "outside": 0, "unrecorded": 1}, "records": 53, "truncated": false},
+  "lines": {"metres": 100, "total": 5, "truncated": false,
+            "lines": [{"gps": [-0.545, 166.9053], "manual": [-0.545, 166.915],
+                       "metres": 1083.4, "rows": 1, "recorded_area_label": "0102"}]},
+  "coverage": {"0": 14, "1": 13, "3": 12, "4": 12},
+  "grouped": null
+}
+```
+
+`duplicates` on a pin is how many other records lie within the distance, up to
+99; on a pin standing for a cell of several places (`grouped` set), the cell
+carries `duplicate_places` instead. A manual pin carries `gps`, the distances to
+the GPS readings beside it. `coverage` is keyed by each area's position in the
+boundary layer, which is the order `/boundaries/{lid}` serves it in. Lines come
+longest first, at most 5,000.
+
+Filter conditions sent to `/data` are applied per widget: each one receives only
+the conditions its own dataset has variables for, and reports the rest in
+`filters_ignored`.
+
+### Publishing
+
+A dashboard published to GitHub Pages or a web server is the HTML export, pushed
+there and kept up to date. Destinations hold credentials for somebody else's
+server, so only an administrator sets them up; anybody who may share a
+dashboard may publish it.
+
+```
+GET    /publishing/targets                every destination, without secrets   [analyst]
+POST   /publishing/targets                {"name", "kind": "github"|"sftp"|"ftp",
+                                          "settings": {...}, "token" | "password" |
+                                          "private_key" + "passphrase"}          [admin]
+PATCH  /publishing/targets/{id}           a secret left empty is kept;
+                                          "forget_host_key": true for a rebuilt
+                                          SSH server                              [admin]
+DELETE /publishing/targets/{id}           refused (409) while anything is
+                                          published there                        [admin]
+POST   /publishing/targets/{id}/test      connect, write and remove a file; the
+                                          first test of an SFTP server trusts
+                                          its key                                [admin]
+
+GET    /dashboards/{id}/publications       where this board is published
+POST   /dashboards/{id}/publications       {"target_id", "path"?, "view_id"?,
+                                          "auto_republish"?, "replace_existing"?}
+                                          publishes it; 409 when another page is
+                                          at that address                       [analyst]
+PATCH  /dashboards/{id}/publications/{p}   {"auto_republish": true|false}        [analyst]
+POST   /dashboards/{id}/publications/{p}/publish
+                                          publish again, as the board is now     [analyst]
+DELETE /dashboards/{id}/publications/{p}?keep_files=false
+                                          take the page down; keep_files=true
+                                          forgets it without touching the server [analyst]
+```
+
+Settings by kind:
+
+- `github`: `owner`, `repo`, `branch` (default `gh-pages`), `folder`,
+  `site_url` (a custom domain), `api_url` (GitHub Enterprise),
+  `contents_page`.
+- `sftp`: `host`, `port` (22), `username`, `auth` (`password` or `key`),
+  `folder`, `site_url` (the address `folder` is served at), `contents_page`.
+- `ftp`: `host`, `port` (21), `username`, `folder`, `site_url`, `tls`
+  (default true), `verify_tls` (default true), `contents_page`.
+
+A failed publish answers 502 when the server refused or could not be reached,
+422 when the destination needs something done first, and 409 when the address
+holds a page this platform did not write. The page that was online before stays
+online.
+
+### Boundaries
+
+Areas a map draws under its points: provinces, districts, enumeration areas.
+
+```
+GET    /boundaries                        this project's layers plus every
+                                          shared one (?project_id= narrows it)
+POST   /boundaries                        multipart upload of GeoJSON, a
+                                          GeoPackage, or a zipped shapefile.
+                                          Form fields: name, description,
+                                          project_id, and layer for a
+                                          GeoPackage holding several  [manager]
+GET    /boundaries/{id}                   the layer's detail: its properties,
+                                          feature count and bounding box,
+                                          without the geometry
+GET    /boundaries/{id}/geojson           the areas themselves, served whole -
+                                          a map needs all of them
+PATCH  /boundaries/{id}                   name, description, project_id
+                                                                       [manager]
+DELETE /boundaries/{id}                                                [manager]
+```
+
+A dashboard reaches a layer it draws through
+`GET /dashboards/{id}/boundaries/{layer}`, and a shared link through the public
+route of the same name, so a viewer with no account still gets the outlines.
+
+### Monitoring
+
+Indicators, alerts, alert rules, quality rules and quality results all accept
+`project_id` to narrow a listing to one project (`none` for the shared area);
+a resource takes its project from its dataset.
+
+Scope is enforced on the id, not only on the listing. An alert rule is reached
+through its indicator's dataset, or its own, or - tied to neither - through the
+shared area; an alert through the rule that raised it. Editing, deleting,
+testing, acknowledging and resolving all answer 404 outside that reach, and a
+rule cannot be moved onto an indicator or dataset the caller cannot reach.
+An indicator can be moved between datasets with `dataset_id`, which is checked
+at both ends.
+
+```
+GET/POST/PATCH/DELETE /monitoring/indicators[/{id}]
+POST /monitoring/formula-preview                 what an indicator's formula would
+                                                 say, for the form writing it
+                                                                       [manager]
+GET  /monitoring/indicators/values?refresh=true   current values with trends
+GET/POST/PATCH/DELETE /monitoring/target-sets[/{id}]
+                                                 targets per group - one quota
+                                                 per area, say. Writes [manager]
+POST /monitoring/indicators/{id}/refresh
+GET/POST/PATCH/DELETE /monitoring/alert-rules[/{id}]
+POST /monitoring/alert-rules/{id}/test
+GET  /monitoring/alerts?status=open
+POST /monitoring/alerts/{id}/acknowledge | /resolve
+GET/POST/PATCH/DELETE /monitoring/quality-rules[/{id}]
+POST /monitoring/quality-rules/{id}/run
+GET  /monitoring/quality-results                 the last result of each check
+POST /monitoring/datasets/{id}/quality/run-all
+GET  /monitoring/datasets/{id}/quality/suggestions
+GET  /monitoring/quality-rules/{id}/failures      the rows behind a finding
+                                                                       [analyst]
+GET  /monitoring/quality-rules/{id}/failures/export  the same, as a file
+                                                                       [analyst]
+GET  /monitoring/datasets/{id}/quality/export    one workbook: the summary and a
+                                                 sheet per check       [analyst]
+POST /monitoring/datasets/{id}/field-progress
+GET  /monitoring/summary              headline counts; failing checks are the
+                                     checks whose latest run failed
+GET  /monitoring/attention           what has gone wrong and is still wrong:
+                                     failing checks, failed imports, stopped
+                                     scripts, merges not rebuilt (project_id=,
+                                     limit=). Open alerts are listed by
+                                     /monitoring/alerts
+GET  /monitoring/getting-started     the Overview's first steps, each
+                                     {"key", "done"}: project, data, quality,
+                                     indicator, dashboard, and team for an
+                                     administrator. Done when the thing exists,
+                                     counted within what you can see. Empty
+                                     below manager
+```
+
+An indicator value carries `judged`: false where it has no warning or critical
+threshold, so its `status` of "ok" is only the default rather than a judgement.
+
+### System
+
+```
+GET  /system/jobs            background jobs
+GET  /system/jobs/{id}       one job, with its result once it succeeds
+GET  /system/notifications
+POST /system/notifications/{id}/read
+POST /system/notifications/read-all
+GET  /system/audit                                              [admin]
+GET  /system/activity        what is running in the background that you can see,
+                             and what is next
+GET  /system/settings        every setting an administrator may change here
+                                                                [admin]
+PUT  /system/settings        change some of them, as one transaction    [admin]
+DELETE /system/settings/{name}  put one back to what `.env` says        [admin]
+GET  /system/info            the platform's name and dashboard domain
+GET  /health                 no authentication, and outside /api/v1
+```
+
+`/system/jobs` returns all jobs to administrators, and only the caller's own
+jobs to non-admin users.
+
+## The query specification
+
+The same object drives ad-hoc queries, saved charts and indicators.
+
+```json
+{
+  "dataset_id": "0f3c…",
+  "spec": {
+    "dimensions": [
+      {"variable": "region"},
+      {"variable": "interview__date", "grain": "week"}
+    ],
+    "measures": [
+      {"agg": "count", "alias": "interviews"},
+      {"agg": "mean", "variable": "hh_size", "alias": "avg_size", "weight": "hhweight"}
+    ],
+    "filters": {
+      "op": "and",
+      "conditions": [
+        {"variable": "interview__status", "operator": "eq", "value": 100},
+        {"variable": "age", "operator": "between", "value": [18, 65]}
+      ],
+      "groups": []
+    },
+    "sort": [{"field": "interviews", "direction": "desc"}],
+    "limit": 500,
+    "use_labels": true
+  }
+}
+```
+
+**Aggregations**: `count`, `count_distinct`, `sum`, `mean`, `median`, `min`,
+`max`, `stddev`, `p25`, `p75`, `p90`, `share`.
+
+**Filter operators**: `eq`, `ne`, `gt`, `gte`, `lt`, `lte`, `in`, `not_in`,
+`contains`, `not_contains`, `starts_with`, `ends_with`, `between`, `is_null`,
+`is_not_null`; `selected` and `not_selected` for a tick-all-that-apply option,
+which take no value; `on_or_after` and `before` for a date, which read the
+column as a moment however it is stored.
+
+**Date grains**: `day`, `week`, `month`, `quarter`, `year`.
+
+Filter groups nest, so `A AND (B OR C)` is expressible.
+
+A condition carries more than a variable, an operator and a value:
+
+```json
+{"variable": "district", "operator": "eq", "value": "North", "use_label": true}
+{"variable": "end_date", "operator": "lt", "other_variable": "start_date"}
+{"variable": "inc2020", "operator": "gt", "value": 100,
+ "formula": "inc2020 - inc2019"}
+{"variable": "total", "operator": "ne", "other_formula": "boys + girls"}
+```
+
+- `use_label` compares against a coded variable's label rather than its code.
+- `other_variable` compares against another column instead of a value.
+- `formula` puts arithmetic on the left in place of the variable alone, and
+  `other_formula` on the right in place of a value or `other_variable`. Both
+  are numbers, plain variable names, `+ - * /` and brackets - the language of an
+  indicator's formula - read into a tree and compiled with every name quoted and
+  every number bound, never handed to the database as text. `variable` stays
+  the first column the formula names.
+- A comparison with another column or a sum takes only `eq`, `ne`, `gt`, `gte`,
+  `lt` and `lte`, and leaves out a row missing any value it needs rather than
+  counting it either way. Dividing by zero gives no value.
+
+The expression box in the platform (`age.InRange(15, 49) && sex == "Female"`) is
+read in the browser into exactly this structure; the API takes the structure.
+
+A response:
+
+```json
+{
+  "columns": [
+    {"name": "region", "label": "Region", "type": "dimension", "data_type": "categorical"},
+    {"name": "interviews", "label": "Count", "type": "measure", "data_type": "number"}
+  ],
+  "rows": [["Nairobi", 1240], ["Kisumu", 980]],
+  "row_count": 2,
+  "truncated": false,
+  "sql": "SELECT …",
+  "duration_ms": 12
+}
+```
+
+## Errors
+
+| Status | Meaning |
+|---|---|
+| 400 | Invalid query - an unknown variable, or an impossible aggregation |
+| 401 | Missing or expired credentials |
+| 403 | Your role does not permit this |
+| 404 | Not found |
+| 409 | The dataset is not ready to query |
+| 413 | Upload exceeds `MAX_UPLOAD_MB` |
+| 422 | The file could not be parsed, or the request body is invalid |
+| 429 | Too many sign-in attempts, or too many requests to a shared dashboard. `Retry-After` says how long to wait |
+| 502 | The Survey Solutions server could not be reached or refused the request |
+
+Errors carry a readable `detail`:
+
+```json
+{"detail": "Unknown variable 'regionn' in this dataset"}
+```
+
+## Example: a daily extract
+
+```python
+import requests
+
+BASE = "https://surveyhq.example.org/api/v1"
+HEAD = {"X-API-Key": "shq_..."}
+
+datasets = requests.get(f"{BASE}/datasets", headers=HEAD).json()
+dataset = next(d for d in datasets["items"] if d["name"].startswith("Household"))
+
+response = requests.post(
+    f"{BASE}/analytics/query",
+    headers=HEAD,
+    json={
+        "dataset_id": dataset["id"],
+        "spec": {
+            "dimensions": [{"variable": "region"}],
+            "measures": [{"agg": "count", "alias": "interviews"}],
+            "filters": {
+                "op": "and",
+                "conditions": [
+                    {"variable": "interview__status", "operator": "eq", "value": 100}
+                ],
+                "groups": [],
+            },
+            "sort": [{"field": "interviews", "direction": "desc"}],
+            "limit": 100,
+        },
+    },
+)
+result = response.json()
+for region, count in result["rows"]:
+    print(f"{region:20s} {count:>6,}")
+```

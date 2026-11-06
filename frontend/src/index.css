@@ -1,0 +1,951 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    /* The height of anything you can click or type into. Thirty-two is what
+       most of the platform already was, and it is what the fields compute to,
+       so this is less a new decision than the one already implied. */
+    --control-height: 32px;
+    /* The compact step, for a filter bar or a toolbar inside a widget. Also
+       declared, because the reason there was a compact step at all is that a
+       button and the field beside it had worked out to heights four pixels
+       apart, and the dashboard shifted down whenever a Clear button appeared. */
+    --control-height-sm: 28px;
+    /* And the inline step, for a field inside a table row. */
+    --control-height-xs: 24px;
+  }
+  html {
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    @apply bg-ink-100 text-ink-700 font-sans text-[13px] antialiased transition-colors duration-200
+           dark:bg-dark-100 dark:text-dark-600;
+  }
+  h1,
+  h2,
+  h3,
+  h4 {
+    @apply text-ink-900 dark:text-dark-900;
+  }
+  a {
+    @apply text-link;
+  }
+  * {
+    @apply border-ink-200;
+  }
+  .dark * {
+    @apply border-dark-200;
+  }
+}
+
+@layer components {
+  /* Dark mode's safety net for text.
+   *
+   * The ink palette is the light one, and an element that says `text-ink-900`
+   * and nothing else keeps #333 when the theme goes dark - which on the
+   * Overview meant the three headline numbers were near-black on near-black,
+   * and readable only by selecting them. There are 251 class attributes in
+   * this codebase naming an ink text colour without a dark twin, so the fix is
+   * one rule per shade rather than 251 edits: under `.dark`, an ink shade
+   * resolves to the same number in the dark palette, which is exactly the
+   * pairing the components that DO carry a dark variant already write by hand.
+   *
+   * These sit in the components layer, so an explicit `dark:text-...` on the
+   * element still wins - it is emitted later, in utilities. This is the
+   * default for whatever was not thought about, not an override of what was.
+   */
+  .dark .text-ink-400 {
+    @apply text-dark-400;
+  }
+  .dark .text-ink-500 {
+    @apply text-dark-500;
+  }
+  .dark .text-ink-600 {
+    @apply text-dark-600;
+  }
+  .dark .text-ink-700 {
+    @apply text-dark-700;
+  }
+  .dark .text-ink-800 {
+    @apply text-dark-800;
+  }
+  .dark .text-ink-900 {
+    @apply text-dark-900;
+  }
+
+  /* The same safety net for what is drawn rather than written.
+   *
+   * The text rules above were added for the headline numbers; the rules a
+   * card is ruled with were left behind, and they are the light palette too.
+   * Measured on a dark page: a hairline between two rows came out #edecec
+   * and the box around a grouping #e8e8e8, so every panel on Explore wore a
+   * near-white outline and the Overview's dataset list a bright rule under
+   * each row. A border exists to be barely visible, which is exactly what it
+   * stops being when the page goes dark around it.
+   *
+   * One rule per shade rather than a `dark:` twin on each of the forty class
+   * attributes that name one, for the reason given above, and in the same
+   * layer - so an explicit `dark:border-...` still wins, and the `.on-light`
+   * opt-out below still holds a white tile to the light palette.
+   */
+  .dark .border-ink-100,
+  .dark .border-ink-200 {
+    @apply border-dark-200;
+  }
+  .dark .border-ink-300 {
+    @apply border-dark-300;
+  }
+  /* Written out the way Tailwind emits a divide utility, because that is the
+   * selector being overridden. */
+  .dark .divide-ink-100 > :not([hidden]) ~ :not([hidden]),
+  .dark .divide-ink-200 > :not([hidden]) ~ :not([hidden]) {
+    border-color: theme('colors.dark.200');
+  }
+  /* And the surfaces: a stripe behind a table heading, a progress track, the
+   * panel a share link sits in. Paired as the components that did think of it
+   * pair them by hand - ink-50 to the page shade, ink-100 to the one above it.
+   */
+  .dark .bg-ink-50 {
+    @apply bg-dark-100;
+  }
+  .dark .bg-ink-100 {
+    @apply bg-dark-200;
+  }
+
+  /* A widget whose own background disagrees with the page it sits on.
+   *
+   * Choosing a dark colour for one tile should not oblige anybody to go and
+   * choose a text colour to go with it. The card already takes a light ink
+   * from widgetInk(), but the text inside carries its own `text-ink-500` and
+   * the like, and those win: a slate tile with near-black labels on it is a
+   * slate rectangle. So the same pairing the app's own dark mode does is
+   * applied to the tile, scoped to it.
+   *
+   * Both directions, because both happen: a white tile on a board in dark
+   * mode had light-grey text on white for exactly the mirrored reason.
+   *
+   * In the components layer, like the .dark block above, so an explicit
+   * colour written on the element still wins - this is the default for
+   * whatever was not thought about.
+   */
+  .on-dark {
+    color: theme('colors.dark.700');
+  }
+  /* Lighter than the app's own dark mode uses for the same tokens, and with
+   * fewer steps.
+   *
+   * Those values were chosen against the two surfaces the app actually has. A
+   * widget background is any colour somebody liked, and a fixed grey cannot
+   * clear the readability floor on a tile that is only just dark enough to
+   * count as dark: at #334155 the app's muted grey measures 2.8:1. So the
+   * four-step ramp collapses to three, each far enough up that the faintest
+   * line still reads at better than 5:1 on slate, mid-slate, dark red, dark
+   * green and near-black alike. A grey ramp the tile's own colour muddies is
+   * worth less than text you can read.
+   */
+  .on-dark .text-ink-400,
+  .on-dark .text-ink-500 {
+    @apply text-dark-700;
+  }
+  .on-dark .text-ink-600 {
+    @apply text-dark-800;
+  }
+  .on-dark .text-ink-700,
+  .on-dark .text-ink-800,
+  .on-dark .text-ink-900 {
+    @apply text-dark-900;
+  }
+  /* Surfaces and rules drawn for white paper: a near-white track or a hairline
+   * meant to be barely visible both shout on a dark tile. */
+  .on-dark .bg-ink-50,
+  .on-dark .bg-ink-100 {
+    background-color: rgb(255 255 255 / 0.14);
+  }
+  /* A frozen column has to be opaque, or the rows scrolling under it show
+   * through. Translucent white will not do that job, so on a dark tile it
+   * takes a dark neutral rather than a wash. */
+  .on-dark .bg-white {
+    background-color: theme('colors.dark.50');
+  }
+  .on-dark .border-ink-100,
+  .on-dark .border-ink-200,
+  .on-dark .border-ink-300 {
+    border-color: rgb(255 255 255 / 0.18);
+  }
+  /* A table drawn for white paper.
+   *
+   * Its header carries a gradient and its rows a near-white hairline, and
+   * neither is an ink class - so the remapping above never reached them. On a
+   * dark tile that left the column headings white on white: measured at
+   * 1.06:1, which is not dim, it is gone. The frozen first column was already
+   * handled by the bg-white rule below; this is the rest of the table.
+   */
+  .on-dark .table-base thead th {
+    background-image: linear-gradient(
+      to bottom,
+      rgb(255 255 255 / 0.09),
+      rgb(255 255 255 / 0.03)
+    );
+  }
+  .on-dark .table-base thead th,
+  .on-dark .table-base tbody td {
+    border-color: rgb(255 255 255 / 0.18);
+  }
+  .on-dark .table-base tbody tr:hover {
+    background-color: rgb(255 255 255 / 0.06);
+  }
+
+  /* The two that carry a verdict rather than a level. Kept as green and red -
+   * that is the message - but at the lightness a dark ground needs. */
+  .on-dark .text-emerald-600,
+  .on-dark .text-emerald-700,
+  .on-dark .text-emerald-800,
+  .on-dark .text-emerald-900 {
+    @apply text-emerald-300;
+  }
+  .on-dark .text-rose-600,
+  .on-dark .text-rose-700 {
+    @apply text-rose-300;
+  }
+  .on-dark .text-danger-600,
+  .on-dark .text-red-600 {
+    @apply text-rose-300;
+  }
+
+  /* Written with theme() rather than @apply: applying `text-ink-400` inside a
+   * rule that selects `.text-ink-400` is a circular dependency, and Tailwind
+   * says so. The values are the same ones the utilities emit. */
+  .on-light {
+    color: theme('colors.ink.700');
+  }
+  .on-light .text-ink-400 {
+    color: theme('colors.ink.400');
+  }
+  .on-light .text-ink-500 {
+    color: theme('colors.ink.500');
+  }
+  .on-light .text-ink-600 {
+    color: theme('colors.ink.600');
+  }
+  .on-light .text-ink-700 {
+    color: theme('colors.ink.700');
+  }
+  .on-light .text-ink-800 {
+    color: theme('colors.ink.800');
+  }
+  .on-light .text-ink-900 {
+    color: theme('colors.ink.900');
+  }
+  /* Components that carry their own dark-mode pairing rather than an ink
+   * class. A table drawn for white paper inside a white tile has to stay
+   * drawn for white paper, whatever mode the rest of the page is in - in dark
+   * mode its headings and row labels went white on white and the tile read as
+   * an empty box. */
+  .dark .on-light .table-base thead th {
+    color: theme('colors.ink.900');
+    border-color: theme('colors.ink.200');
+    background-image: linear-gradient(to bottom, #fbfcfd, #eef1f5);
+  }
+  .dark .on-light .table-base tbody td {
+    color: theme('colors.ink.700');
+    border-color: #f0f0f0;
+  }
+  .dark .on-light .table-base tbody tr:hover {
+    background-color: rgba(102, 136, 153, 0.05);
+  }
+  .dark .on-light .bg-white {
+    background-color: #ffffff;
+  }
+  .dark .on-light .bg-ink-50 {
+    background-color: theme('colors.ink.50');
+  }
+  .dark .on-light .bg-ink-100 {
+    background-color: theme('colors.ink.100');
+  }
+  .dark .on-light .border-ink-100,
+  .dark .on-light .border-ink-200 {
+    border-color: theme('colors.ink.200');
+  }
+  .dark .on-light .border-ink-300 {
+    border-color: theme('colors.ink.300');
+  }
+
+  /* The card gloss has to be a tint, not a coat of paint.
+   *
+   * A background-image is painted over background-color, so a gradient with
+   * any real opacity in it hides the colour underneath - which is what turned
+   * a widget somebody had set to black into pale grey. Every stop here is
+   * translucent, so the colour beneath is what you see, lit from above: white
+   * over the top half, shadow over the bottom, meeting on the same hard line
+   * as the buttons. It glosses white, black and anything between without
+   * knowing which it is over. */
+  /* The gloss on its own, so a surface that is not a `.card` - a widget filling
+     the window, say - can wear the same one rather than a copy of it. */
+  /* Lit from above, shaded below - but as a wash rather than a step.
+   *
+   * This used to change from a white highlight to a dark one across a tenth
+   * of a percent at the halfway mark. That is what Aero does on a control
+   * thirty pixels tall, where the two halves read as a curved glass face. On
+   * a panel it lands as a hard horizontal line across the middle: measured at
+   * exactly 49.9% to 50.0% of a dashboard widget, a full-width step from
+   * #ffffff to #fafafa. Under a table with a few rows in it, that seam is
+   * what made the empty half look like a broken box rather than spare room.
+   *
+   * The same journey, spread over a quarter of the height instead of a tenth
+   * of a percent. Every neighbouring pair is now within a level or two of
+   * each other, so there is no edge for the eye to find, and a surface reads
+   * the same whether it is a summary card or a widget eight rows tall.
+   *
+   * aero-gloss keeps the hard split, because the things wearing it - buttons,
+   * the sidebar tiles - are the size the split was designed for.
+   */
+  .aero-surface {
+    background-image: linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.22) 0%,
+      rgba(255, 255, 255, 0.06) 38%,
+      rgba(0, 0, 0, 0.012) 62%,
+      rgba(0, 0, 0, 0.05) 100%
+    );
+  }
+  .card {
+    @apply aero-surface bg-white rounded-card border border-ink-200
+           dark:bg-dark-50 dark:border-dark-200;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.5),
+      0 1px 3px rgba(15, 23, 42, 0.08),
+      0 6px 16px -10px rgba(15, 23, 42, 0.25);
+  }
+  .dark .card {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.12),
+      0 1px 3px rgba(0, 0, 0, 0.45),
+      0 8px 20px -12px rgba(0, 0, 0, 0.7);
+  }
+  .card-header {
+    @apply px-5 py-4 border-b border-ink-200 flex items-center justify-between gap-3 dark:border-dark-200;
+  }
+  .card-body {
+    @apply p-5;
+  }
+  .label {
+    @apply block text-xs font-medium text-ink-600 mb-1 dark:text-dark-600;
+  }
+  /* No vertical padding, deliberately: the height is the declared one above
+     and the browser centres a field's own text inside it. With py-1.5 here the
+     padding and the line box added up to 34 and the min-height never came into
+     it, so every search box stood two pixels taller than the button beside it
+     - which is the whole complaint, just small enough to be felt rather than
+     seen. A box that is typed into rather than picked from keeps its padding
+     below. */
+  .input {
+    min-height: var(--control-height);
+    @apply w-full rounded-control border border-ink-300 bg-white px-3 text-[13px] text-ink-700
+           placeholder:text-ink-400 focus:border-brand-500 focus:outline-none
+           focus:ring-2 focus:ring-brand-500/20 disabled:bg-ink-50 disabled:text-ink-500
+           dark:bg-dark-50 dark:border-dark-300 dark:text-dark-700 dark:placeholder:text-dark-400
+           dark:disabled:bg-dark-100 dark:disabled:text-dark-500;
+    /* Sunk, where a button is raised: a field you type into is a hole in the
+       surface, and the shadow across its top edge is what says so. */
+    box-shadow: inset 0 1px 2px rgba(15, 23, 42, 0.09);
+  }
+  .dark .input {
+    box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.35);
+  }
+  /* The one control that is meant to grow. It takes its padding back, since
+     text starting hard against the top edge of a multi-line box reads as a
+     rendering fault, and it is free to be taller than a row. */
+  textarea.input {
+    @apply py-1.5;
+    height: auto;
+  }
+  /* One control height, declared rather than computed.
+     
+     Buttons, icon buttons and the fields beside them sit in the same rows, and
+     their heights used to be whatever a line box happened to work out to: a
+     .btn came to 38px, an .icon-button to 36 because it was written in another
+     stylesheet as h-9, and a .btn-sm to 32. Three heights in one header, none
+     of them chosen, and no way to line a button up with the field next to it.
+     
+     So the height is set here, once, and the text inside a control no longer
+     decides how tall it is. A denser button is narrower and smaller in its
+     lettering; it is not shorter, because a row of controls that do not share
+     a baseline is the thing that reads as unfinished. */
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-control px-3.5 py-1.5 text-[13px]
+           font-normal leading-none transition-colors disabled:opacity-50 disabled:cursor-not-allowed
+           focus:outline-none focus:ring-2 focus:ring-offset-1;
+    min-height: var(--control-height);
+  }
+  /* Aero's gloss, in one place.
+     
+     Two stops meeting on a hard line halfway down, a hairline of light along
+     the inside of the top edge, a hairline of shadow along the bottom, and a
+     shadow under the whole thing. The hard line is the part that matters: a
+     smooth fade from light to dark reads as a blur, and it is the crease at
+     the midpoint that makes a surface look like glass over a curve. */
+  .aero-gloss {
+    background-image: linear-gradient(
+      to bottom,
+      rgba(255, 255, 255, 0.28) 0%,
+      rgba(255, 255, 255, 0.1) 49.9%,
+      rgba(0, 0, 0, 0.04) 50%,
+      rgba(0, 0, 0, 0.1) 100%
+    );
+  }
+  .btn-primary {
+    @apply btn aero-gloss bg-brand-500 text-white focus:ring-brand-500;
+    border: 1px solid theme('colors.brand.800');
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.45),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.15),
+      0 1px 2px rgba(15, 23, 42, 0.2);
+    text-shadow: 0 -1px 0 rgba(0, 0, 0, 0.22);
+  }
+  .btn-primary:hover:not(:disabled) {
+    @apply bg-brand-400;
+  }
+  /* Pressed: the light goes to the bottom, which is the same surface seen from
+     the other side. Nothing else says "held down" as plainly. */
+  .btn-primary:active:not(:disabled) {
+    @apply bg-brand-600;
+    background-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.12), rgba(255, 255, 255, 0.12));
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.25);
+  }
+  .btn-secondary {
+    @apply btn aero-gloss bg-white text-ink-700 border border-ink-300 hover:border-brand-400
+           hover:text-brand-600 focus:ring-ink-400
+           dark:bg-dark-50 dark:text-dark-700 dark:border-dark-300 dark:hover:border-brand-500
+           dark:hover:text-brand-400 dark:focus:ring-dark-400;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.9),
+      0 1px 2px rgba(15, 23, 42, 0.1);
+  }
+  .dark .btn-secondary {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.08),
+      0 1px 2px rgba(0, 0, 0, 0.4);
+  }
+  .btn-secondary:active:not(:disabled) {
+    box-shadow: inset 0 2px 4px rgba(15, 23, 42, 0.14);
+    background-image: none;
+  }
+  .btn-danger {
+    @apply btn aero-gloss bg-red-600 text-white hover:bg-red-500 focus:ring-red-500;
+    border: 1px solid theme('colors.red.800');
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.35),
+      inset 0 -1px 0 rgba(0, 0, 0, 0.15),
+      0 1px 2px rgba(15, 23, 42, 0.2);
+    text-shadow: 0 -1px 0 rgba(0, 0, 0, 0.22);
+  }
+  .btn-danger:active:not(:disabled) {
+    background-image: none;
+    box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.25);
+  }
+  .btn-ghost {
+    @apply btn text-ink-600 hover:bg-ink-50 hover:text-brand-600 focus:ring-ink-300
+           dark:text-dark-600 dark:hover:bg-dark-200 dark:hover:text-brand-400 dark:focus:ring-dark-400;
+  }
+  /* Denser, not shorter and not quieter: the same height and the same lettering
+     as any other button, with tighter sides, for a toolbar inside a card where
+     a row of full-width buttons would shout. A label a pixel smaller than the
+     one in the next card along is the sort of difference nobody can name and
+     everybody can see. */
+  .btn-sm {
+    @apply px-2.5 py-1 text-[13px];
+    min-height: var(--control-height);
+  }
+  .table-base {
+    @apply w-full text-sm border-collapse;
+  }
+  /* Redash's table: a barely-there header wash, tight rows, no shouting. */
+  .table-base thead th {
+    @apply text-left text-[13px] font-medium
+           text-ink-900 px-2.5 py-[7px] border-b border-ink-200 whitespace-nowrap
+           dark:text-dark-900 dark:border-dark-200;
+    background-image: linear-gradient(to bottom, #fbfcfd, #eef1f5);
+  }
+  .dark .table-base thead th {
+    background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.05), rgba(255, 255, 255, 0.01));
+  }
+  .table-base tbody td {
+    @apply px-2.5 py-[7px] border-b border-[#f0f0f0] align-top dark:border-dark-200;
+  }
+  .table-base tbody tr:hover {
+    @apply bg-[rgba(102,136,153,0.05)] dark:bg-dark-200/40;
+  }
+  /* The sidebar as dark glass rather than flat navy: a vertical gradient, a
+     lit right edge where it meets the working area, and a sheen down the top
+     third. It is the surface every one of the navigation tiles sits on, and a
+     flat one under glossy tiles reads as a mistake in one of the two. */
+  .aero-sidebar {
+    background-image:
+      linear-gradient(to bottom, #262c37 0%, #1b1f27 42%, #171a21 100%);
+    box-shadow:
+      inset -1px 0 0 rgba(255, 255, 255, 0.06),
+      2px 0 8px -2px rgba(0, 0, 0, 0.45);
+  }
+  /* The selected row: Aero's own selection, which is a glossy blue capsule with
+     a bright rule down its leading edge rather than simply a darker patch. */
+  .nav-selected {
+    background-image: linear-gradient(
+      to bottom,
+      rgba(90, 175, 255, 0.34) 0%,
+      rgba(46, 128, 214, 0.28) 49.9%,
+      rgba(24, 92, 168, 0.32) 50%,
+      rgba(38, 120, 200, 0.26) 100%
+    );
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.22),
+      inset 2px 0 0 rgba(120, 200, 255, 0.9),
+      0 1px 2px rgba(0, 0, 0, 0.35);
+  }
+  /* Frosted glass over whatever scrolls under it. The fallback matters: without
+     a solid-enough background a browser with no backdrop-filter renders the
+     header as a see-through strip with text from the page behind running
+     through it. */
+  /* The ground a dashboard is mounted on.
+   *
+   * Only the image is set here, never the colour: the shells that carry this
+   * class set their own background colour with a utility, and a utility beats
+   * a component rule, so a colour written here would be the one thing on the
+   * page that never appeared. A flat ground comes through as a gradient of one
+   * colour, which covers the utility underneath it just the same.
+   *
+   * Fixed, so the gradient is the size of the window rather than the size of a
+   * board that may be four screens tall - down which it would otherwise
+   * stretch until it read as a flat colour at the top and another at the end.
+   */
+  .app-ground {
+    background-image: var(--app-ground, none);
+    background-attachment: fixed;
+  }
+
+  .aero-glass {
+    background-color: rgba(255, 255, 255, 0.96);
+    background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.75), rgba(236, 241, 247, 0.6));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.85), 0 1px 2px rgba(15, 23, 42, 0.06);
+  }
+  .dark .aero-glass {
+    background-color: rgba(42, 46, 55, 0.96);
+    background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0.01));
+    box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07), 0 1px 2px rgba(0, 0, 0, 0.4);
+  }
+  @supports (backdrop-filter: blur(10px)) or (-webkit-backdrop-filter: blur(10px)) {
+    .aero-glass {
+      background-color: rgba(255, 255, 255, 0.72);
+      -webkit-backdrop-filter: saturate(180%) blur(12px);
+      backdrop-filter: saturate(180%) blur(12px);
+    }
+    .dark .aero-glass {
+      background-color: rgba(42, 46, 55, 0.72);
+    }
+  }
+
+  /* Square, like everything else here. A pill reads as decoration; a status
+     belongs in the same rectangular vocabulary as the tables and cards it sits
+     among.
+
+     Glossed like the buttons: a chip is a small raised thing on the same
+     surface, and left flat among glass buttons and glass cards it was the one
+     element that looked printed on rather than made of the same material. */
+  .chip {
+    @apply aero-gloss inline-flex items-center gap-1 rounded-control border px-2 py-0.5
+           text-xs font-medium;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.6),
+      0 1px 1px rgba(15, 23, 42, 0.06);
+  }
+  .dark .chip {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.14),
+      0 1px 1px rgba(0, 0, 0, 0.4);
+  }
+
+  /* A pane for a note that has a state: a warning, a rule that passed.
+
+     Flat on purpose. These used to be lit like objects - a gradient crease at
+     the midpoint, a specular sweep off the top left corner, a drop shadow -
+     which read as depth on one pane and as noise on a column of them. On a
+     board that is a wall of findings, the gloss was the loudest thing in the
+     room and none of it carried meaning. What is left is the tint, the border
+     and the rail. */
+  .aero-pane {
+    @apply relative rounded-card border;
+  }
+  /* Each state: a tint, a border, and a rail down the left edge, which is an
+     inset shadow so it needs no element of its own and cannot be knocked out
+     of place by the text beside it. A straight edge rather than a dot, because
+     a row of coloured circles is the other thing every generated interface
+     does. */
+  .aero-pane-warn {
+    @apply border-amber-300/70 bg-amber-50 dark:border-amber-500/40 dark:bg-amber-500/10;
+    box-shadow: inset 3px 0 0 theme('colors.amber.500');
+  }
+  .aero-pane-ok {
+    @apply border-emerald-300/70 bg-emerald-50 dark:border-emerald-500/40 dark:bg-emerald-500/10;
+    box-shadow: inset 3px 0 0 theme('colors.emerald.600');
+  }
+  .dark .aero-pane-warn,
+  .dark .aero-pane-ok {
+    box-shadow: inset 3px 0 0 currentColor;
+  }
+  /* A check that failed critically. Anything less is the amber pane above. */
+  .aero-pane-bad {
+    @apply border-red-300 bg-red-50 dark:border-red-500/50 dark:bg-red-500/10;
+    box-shadow: inset 3px 0 0 currentColor;
+  }
+  .aero-pane-warn { --pane-glow: 245 158 11; }
+  .aero-pane-ok { --pane-glow: 16 185 129; }
+  .aero-pane-bad { --pane-glow: 220 38 38; }
+  .dark .aero-pane-bad { --pane-glow: 248 113 113; }
+  /* A pane that is lit: a halo in its own colour round it as well as the
+     rail. For the findings of a data quality panel, which is on the wall to
+     show them - drawn in the same white as everything else on the board, a
+     failing check was the last thing anybody noticed. The warnings and notes
+     elsewhere in the application stay flat. The rail is the pane's text
+     colour, so the element sets that. */
+  .aero-pane-glow {
+    box-shadow:
+      inset 3px 0 0 currentColor,
+      0 0 0 1px rgb(var(--pane-glow) / 0.18),
+      0 0 12px 1px rgb(var(--pane-glow) / 0.35);
+  }
+  .dark .aero-pane-glow {
+    box-shadow:
+      inset 3px 0 0 currentColor,
+      0 0 0 1px rgb(var(--pane-glow) / 0.25),
+      0 0 14px 1px rgb(var(--pane-glow) / 0.4);
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* react-grid-layout visuals */
+.react-grid-item.react-grid-placeholder {
+  @apply bg-brand-400/30 rounded-card;
+}
+.react-grid-item > .react-resizable-handle {
+  @apply opacity-0 transition-opacity;
+}
+.react-grid-item:hover > .react-resizable-handle {
+  @apply opacity-60;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  @apply bg-ink-300 rounded-full border-2 border-solid border-transparent bg-clip-padding
+         dark:bg-dark-300;
+}
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-ink-400 dark:bg-dark-400;
+}
+
+/* Tab takes the suggestion an empty box is showing (lib/suggest.ts). Said in
+   the box, on the right, while it is empty and in use: a shortcut nobody can
+   see is one nobody uses. Longhands only, so the box keeps its own background
+   colour in either theme; the grey reads on both. */
+[data-suggest]:focus:placeholder-shown {
+  padding-right: 3rem;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='30' height='16' viewBox='0 0 30 16'%3E%3Crect x='0.5' y='0.5' width='29' height='15' rx='3.5' fill='none' stroke='%2394a3b8'/%3E%3Ctext x='15' y='11.5' font-family='system-ui,sans-serif' font-size='9' text-anchor='middle' fill='%2394a3b8'%3ETab%3C/text%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 0.6rem center;
+  background-size: 30px 16px;
+}
+
+/* The script editor (components/ScriptEditor.tsx), which is CodeMirror. Its
+   frame takes the platform's palette; the colours of the words are an
+   editor's, so a command, a dataset, a function and a comment are told apart
+   at a glance, and a word that is not a command is underlined as the mistake
+   it is. */
+.script-editor .cm-editor {
+  height: 100%;
+  font-size: 13px;
+  background: transparent;
+}
+.script-editor .cm-editor.cm-focused {
+  outline: none;
+}
+.script-editor .cm-scroller {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  line-height: 20px;
+}
+.script-editor .cm-content {
+  padding: 8px 0;
+  caret-color: theme('colors.ink.900');
+}
+.script-editor .cm-line {
+  padding: 0 12px;
+}
+.script-editor .cm-gutters {
+  background: theme('colors.ink.50');
+  border-right: 1px solid theme('colors.ink.100');
+  color: theme('colors.ink.400');
+}
+.script-editor .cm-lineNumbers .cm-gutterElement {
+  min-width: 2.25rem;
+  padding: 0 8px 0 6px;
+}
+.script-editor .cm-activeLine {
+  background: rgba(15, 23, 42, 0.035);
+}
+.script-editor .cm-activeLineGutter {
+  background: transparent;
+  color: theme('colors.ink.800');
+}
+.script-editor .cm-placeholder {
+  color: theme('colors.ink.400');
+}
+.script-editor .cm-selectionBackground,
+.script-editor .cm-focused .cm-selectionBackground {
+  background: rgba(59, 130, 246, 0.22) !important;
+}
+.script-editor .cm-matchingBracket {
+  background: rgba(59, 130, 246, 0.16);
+  outline: 1px solid rgba(59, 130, 246, 0.4);
+}
+.script-editor .cm-stopped-line {
+  background: rgba(239, 68, 68, 0.09);
+}
+.script-editor .cm-gutterElement.cm-stopped-gutter {
+  background: theme('colors.red.100');
+  color: theme('colors.red.700');
+  font-weight: 600;
+}
+.dark .script-editor .cm-content {
+  caret-color: theme('colors.dark.900');
+}
+.dark .script-editor .cm-gutters {
+  background: theme('colors.dark.100');
+  border-right-color: theme('colors.dark.200');
+  color: theme('colors.dark.500');
+}
+.dark .script-editor .cm-activeLine {
+  background: rgba(255, 255, 255, 0.04);
+}
+.dark .script-editor .cm-activeLineGutter {
+  color: theme('colors.dark.800');
+}
+.dark .script-editor .cm-placeholder {
+  color: theme('colors.dark.500');
+}
+.dark .script-editor .cm-stopped-line {
+  background: rgba(239, 68, 68, 0.14);
+}
+.dark .script-editor .cm-gutterElement.cm-stopped-gutter {
+  background: rgba(239, 68, 68, 0.22);
+  color: theme('colors.red.300');
+}
+
+/* A map's list of layers, which is also its key (components/MapWidget.tsx):
+   each line a swatch drawn the way the layer is drawn, its name, and how many.
+   Leaflet's own box around it stays white in both themes, as the map does. */
+.map-key {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  vertical-align: middle;
+}
+.map-key-dot,
+.map-key-ring,
+.map-key-area {
+  display: inline-block;
+  flex: none;
+  width: 10px;
+  height: 10px;
+}
+.map-key-dot {
+  border-radius: 9999px;
+  border: 1px solid rgba(15, 23, 42, 0.35);
+}
+.map-key-ring {
+  border-radius: 9999px;
+  border: 2px solid;
+}
+.map-key-area {
+  width: 12px;
+  border-radius: 2px;
+  opacity: 0.6;
+}
+.map-key-line {
+  display: inline-block;
+  flex: none;
+  width: 14px;
+  border-top: 2px dashed #475569;
+}
+.map-key-count {
+  color: #64748b;
+  font-variant-numeric: tabular-nums;
+}
+/* An area's name written on the map for good: white on a dark halo, which
+   reads on the satellite and the street map alike, with no box to hide the
+   households under it. */
+.leaflet-tooltip.boundary-label-written {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  color: #fff;
+  font-size: 12px;
+  font-weight: 700;
+  text-shadow: 0 0 3px rgba(0, 0, 0, 0.9), 0 0 1px #000;
+}
+.leaflet-tooltip.boundary-label-written::before {
+  display: none;
+}
+
+/* A filter written as an expression (components/FilterExpressionBox.tsx): the
+   script editor's colours in a field's frame. The frame is the .input around
+   it, which ringed itself on focus as a field does; a div is never :focus,
+   so it is told to by what is inside it. */
+.expression-shell {
+  height: auto;
+  cursor: text;
+}
+.expression-shell:focus-within {
+  border-color: theme('colors.brand.500');
+  box-shadow: 0 0 0 3px rgb(59 130 246 / 0.12) !important;
+}
+.expression-editor .cm-editor {
+  font-size: 13px;
+  background: transparent;
+}
+.expression-editor .cm-editor.cm-focused {
+  outline: none;
+}
+.expression-editor .cm-scroller {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, 'Liberation Mono', monospace;
+  line-height: 20px;
+}
+.expression-editor .cm-content {
+  padding: 6px 0;
+  min-height: 52px;
+  caret-color: theme('colors.ink.900');
+}
+.expression-editor .cm-line {
+  padding: 0;
+}
+.expression-editor .cm-placeholder {
+  color: theme('colors.ink.400');
+}
+.expression-editor .cm-selectionBackground,
+.expression-editor .cm-focused .cm-selectionBackground {
+  background: rgba(59, 130, 246, 0.22) !important;
+}
+.expression-editor .cm-expression-error {
+  text-decoration: underline wavy rgba(220, 38, 38, 0.85);
+  text-decoration-skip-ink: none;
+  text-underline-offset: 3px;
+}
+.dark .expression-editor .cm-content {
+  caret-color: theme('colors.dark.900');
+}
+.dark .expression-editor .cm-placeholder {
+  color: theme('colors.dark.500');
+}
+.dark .expression-editor .cm-expression-error {
+  text-decoration-color: rgba(248, 113, 113, 0.85);
+}
+
+.sx-command { color: #1d4ed8; font-weight: 600; }
+.sx-invalid {
+  color: #b91c1c;
+  text-decoration: underline wavy rgba(220, 38, 38, 0.7);
+  text-underline-offset: 3px;
+}
+.sx-comment { color: #15803d; font-style: italic; }
+.sx-string { color: #a31515; }
+.sx-macro { color: #be185d; }
+.sx-number { color: #b45309; }
+.sx-dataset { color: #0e7490; font-weight: 600; }
+.sx-option { color: #4338ca; }
+.sx-function { color: #7c3aed; }
+.sx-variable { color: #1e293b; }
+.sx-operator { color: #64748b; }
+.dark .sx-command { color: #60a5fa; }
+.dark .sx-invalid { color: #f87171; text-decoration-color: rgba(248, 113, 113, 0.7); }
+.dark .sx-comment { color: #7ca668; }
+.dark .sx-string { color: #ce9178; }
+.dark .sx-macro { color: #f472b6; }
+.dark .sx-number { color: #e5c07b; }
+.dark .sx-dataset { color: #4fd1e8; }
+.dark .sx-option { color: #a5b4fc; }
+.dark .sx-function { color: #c4b5fd; }
+.dark .sx-variable { color: #9cdcfe; }
+.dark .sx-operator { color: #94a3b8; }
+
+/* Its suggestions and its hover help, drawn on the page rather than in the
+   card so the card's edge does not cut them off. */
+.cm-tooltip {
+  border: 1px solid theme('colors.ink.200') !important;
+  border-radius: 6px;
+  background: #fff !important;
+  box-shadow: 0 8px 24px -8px rgba(15, 23, 42, 0.25);
+  font-size: 12px;
+  overflow: hidden;
+}
+.cm-tooltip-autocomplete > ul {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace !important;
+  max-height: 16rem !important;
+}
+.cm-tooltip-autocomplete > ul > li {
+  padding: 2px 8px !important;
+  line-height: 20px;
+}
+.cm-tooltip-autocomplete > ul > li[aria-selected] {
+  background: theme('colors.brand.500') !important;
+  color: #fff !important;
+}
+.cm-completionDetail {
+  margin-left: 0.75em;
+  font-style: normal !important;
+  opacity: 0.65;
+}
+.cm-completionMatchedText {
+  text-decoration: none !important;
+  font-weight: 700;
+}
+.cm-tooltip.cm-completionInfo,
+.sx-hover {
+  max-width: 22rem;
+  padding: 6px 9px !important;
+  font-family: system-ui, sans-serif;
+  line-height: 1.45;
+  color: theme('colors.ink.700');
+}
+.sx-hover code {
+  display: block;
+  font-size: 12px;
+  font-weight: 600;
+  color: theme('colors.ink.900');
+}
+.sx-hover p {
+  margin-top: 2px;
+}
+.dark .cm-tooltip {
+  border-color: theme('colors.dark.300') !important;
+  background: theme('colors.dark.50') !important;
+  color: theme('colors.dark.800');
+}
+.dark .cm-tooltip.cm-completionInfo,
+.dark .sx-hover {
+  color: theme('colors.dark.700');
+}
+.dark .sx-hover code {
+  color: theme('colors.dark.900');
+}

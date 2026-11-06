@@ -1,0 +1,1277 @@
+"""Reads survey data files into the platform's Parquet + metadata format.
+
+Supported inputs: Stata (.dta), SPSS (.sav), CSV, tab-delimited (Survey
+Solutions exports) and Excel. Variable labels and value labels are preserved
+wherever the source format carries them, because a monitoring dashboard is far
+more useful showing "Female" than "2".
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+import json
+import math
+import re
+from collections.abc import Iterable
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+import numpy as np
+import pandas as pd
+
+from app.core.logging import get_logger
+from app.services.columnar import holds_numbers, quote_ident
+
+logger = get_logger(__name__)
+
+# A variable with at most this many distinct values is treated as categorical
+CATEGORICAL_MAX_UNIQUE = 50
+CATEGORICAL_MAX_RATIO = 0.3
+
+SUPPORTED_EXTENSIONS = {".dta", ".sav", ".csv", ".tab", ".txt", ".tsv", ".xlsx", ".xls"}
+
+
+class IngestError(RuntimeError):
+    pass
+
+
+@dataclass
+class VariableMeta:
+    name: str
+    label: str = ""
+    var_type: str = "text"
+    storage_type: str = ""
+    position: int = 0
+    n_missing: int = 0
+    n_unique: int = 0
+    min_value: float | None = None
+    max_value: float | None = None
+    mean_value: float | None = None
+    value_labels: dict[str, str] = field(default_factory=dict)
+    missing_tags: list[str] = field(default_factory=list)
+    is_hidden: bool = False
+
+
+@dataclass
+class IngestResult:
+    parquet_path: Path
+    row_count: int
+    column_count: int
+    file_size: int
+    variables: list[VariableMeta]
+    warnings: list[str] = field(default_factory=list)
+
+
+# --- a GPS question that arrived as one column ------------------------------
+#
+# Survey Solutions exports a geopoint as four columns and the platform finds
+# them by name. Plenty of other exports do not: ODK writes "lat lon altitude
+# accuracy" into a single field, a CSV assembled by hand often holds "lat,lon",
+# and a database extract can hold WKT or GeoJSON. All of those arrive as text,
+# and a text column cannot be a map: the widget offers numeric variables only,
+# so the data was in the dataset and unreachable.
+#
+# Splitting happens here rather than in the map, so the map, the missing-GPS
+# quality check, field progress and R all see the same two numeric columns.
+
+GEOPOINT_LAT_SUFFIX = "__latitude"
+GEOPOINT_LON_SUFFIX = "__longitude"
+# Enough rows to be sure of a column's shape without reading a census twice.
+GEOPOINT_SAMPLE = 500
+# Nearly all of them have to parse. A column where a third of the values are
+# coordinates is a column of something else that sometimes looks like one.
+GEOPOINT_MIN_SHARE = 0.9
+# A device reading is precise to a few metres, so it carries decimals and plenty
+# of them: 4 places is about 11 metres, and every handheld gives more. Without
+# this a pair of ordinary measurements - a height and a weight, say - is a legal
+# coordinate on paper and nonsense on a map.
+GEOPOINT_MIN_DECIMALS = 4
+
+# The exponent is here because an exporter serialising a float in full writes
+# one: POINT(1.683273e2 -1.77333e1) is a location like any other.
+_NUM = r"[-+]?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?"
+# One separator between the numbers, not merely a gap somewhere: without that,
+# any text holding two numbers reads as a location. "10.0.0.1" is the one that
+# matters, because a column of addresses would otherwise take over the map.
+_SEP = r"(?:\s*[,;]\s*|\s+)"
+# Two numbers, then up to two more: ODK writes latitude, longitude, altitude
+# and accuracy into the field together.
+_BARE_PAIR = re.compile(rf"^({_NUM}){_SEP}({_NUM})(?:{_SEP}{_NUM}){{0,2}}$")
+_WKT_POINT = re.compile(r"^point\s*z?\s*m?\s*\(([^)]*)\)$", re.IGNORECASE)
+_DECIMALS = re.compile(r"\d+\.(\d+)")
+_EXPONENT = re.compile(r"\d[eE][-+]?\d")
+
+
+def _in_range(latitude: float, longitude: float) -> tuple[float, float] | None:
+    # A NaN fails every comparison rather than failing the range check, so it
+    # has to be ruled out on its own. JSON carries one in two ways - a bare NaN,
+    # which Python's decoder accepts, and the string "NaN" - and either would
+    # otherwise count as a reading that parsed, which is evidence for splitting
+    # a column that holds no coordinates at all.
+    if not math.isfinite(latitude) or not math.isfinite(longitude):
+        return None
+    if abs(latitude) > 90 or abs(longitude) > 180:
+        return None
+    return latitude, longitude
+
+
+def parse_geopoint(value: Any) -> tuple[float, float] | None:
+    """Latitude and longitude out of one field holding both, or None.
+
+    The orders differ and are not guessable from the numbers alone, so each
+    notation is recognised rather than assumed: WKT and GeoJSON put longitude
+    first by specification, while a bare pair is latitude first - which is what
+    ODK, Survey Solutions and every handheld write.
+    """
+    if value is None or (isinstance(value, float) and math.isnan(value)):
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+
+    if text.startswith("{"):
+        try:
+            payload = json.loads(text)
+        except ValueError:
+            return None
+        if not isinstance(payload, dict) or str(payload.get("type", "")).lower() != "point":
+            return None
+        coordinates = payload.get("coordinates")
+        if not isinstance(coordinates, list) or len(coordinates) < 2:
+            return None
+        try:
+            longitude, latitude = float(coordinates[0]), float(coordinates[1])
+        except (TypeError, ValueError):
+            return None
+        return _in_range(latitude, longitude)
+
+    wkt = _WKT_POINT.match(text)
+    if wkt:
+        inner = _BARE_PAIR.match(wkt.group(1).strip())
+        if not inner:
+            return None
+        return _in_range(float(inner.group(2)), float(inner.group(1)))
+
+    pair = _BARE_PAIR.match(text)
+    if not pair:
+        return None
+    latitude, longitude = float(pair.group(1)), float(pair.group(2))
+    # A first value past 90 cannot be a latitude, so a bare pair written the
+    # other way round is read the other way round rather than plotted in the
+    # wrong ocean.
+    if abs(latitude) > 90 and abs(longitude) <= 90:
+        latitude, longitude = longitude, latitude
+    return _in_range(latitude, longitude)
+
+
+def _reads_like_a_reading(text: str) -> bool:
+    """Whether one value is evidence of coordinates rather than two numbers.
+
+    WKT and GeoJSON are notations nothing else is written in, so they speak for
+    themselves. A bare pair is only ever two numbers with a separator, and what
+    separates a location from a pair of measurements is precision.
+    """
+    if text.startswith("{") or _WKT_POINT.match(text):
+        return True
+    # Scientific notation is a machine writing a float out in full, which is the
+    # same evidence the decimal places below are there to look for. Nobody
+    # writes a height down that way.
+    if _EXPONENT.search(text):
+        return True
+    return max((len(found) for found in _DECIMALS.findall(text)), default=0) >= (
+        GEOPOINT_MIN_DECIMALS
+    )
+
+
+def geopoint_columns(frame: pd.DataFrame) -> list[str]:
+    """Which of a frame's columns hold a latitude and a longitude together.
+
+    Separate from the splitting itself so a file read in chunks can decide once,
+    off the first chunk, and then treat every chunk the same way. A column that
+    is split in one chunk and not the next produces two Parquet schemas and an
+    unreadable file.
+    """
+    found: list[str] = []
+    for column in list(frame.columns):
+        series = frame[column]
+        if not pd.api.types.is_object_dtype(series):
+            continue
+        if _already_split(frame.columns, column):
+            continue
+
+        values = series.dropna()
+        if len(values) < 5:
+            continue
+        sample = values.head(GEOPOINT_SAMPLE)
+        needed = GEOPOINT_MIN_SHARE * len(sample)
+        may_fail = len(sample) - needed
+        failed = 0
+        readings = 0
+        for value in sample:
+            text = str(value).strip()
+            if parse_geopoint(text) is None:
+                failed += 1
+                # A wide survey is mostly text columns and not one of them is a
+                # location, so stop as soon as the threshold is out of reach: a
+                # column of "yes" and "no" costs a few dozen parses rather than
+                # the whole sample. Counting failures rather than looking only
+                # at the first few values keeps the order of the rows out of it,
+                # so a round that opens with a handful of unreadable readings is
+                # still recognised.
+                if failed > may_fail:
+                    break
+                continue
+            if _reads_like_a_reading(text):
+                readings += 1
+        if failed > may_fail or readings < needed:
+            continue
+        found.append(column)
+    return found
+
+
+def _already_split(columns: Iterable[str], column: str) -> bool:
+    names = set(columns)
+    return (
+        f"{column}{GEOPOINT_LAT_SUFFIX}" in names
+        or f"{column}{GEOPOINT_LON_SUFFIX}" in names
+    )
+
+
+def stored_geopoint_columns(stored: Iterable[str], incoming: Iterable[str]) -> list[str]:
+    """Which incoming columns the stored data already holds coordinates for.
+
+    An append has to produce exactly the columns the dataset already has. The
+    incoming batch is a few hundred rows and can fail the evidence test the
+    first import passed - a round in which most readings are missing, say - and
+    a batch that produces no coordinates leaves those interviews off the map
+    with nothing to say why.
+    """
+    incoming_names = set(incoming)
+    return [
+        source
+        for column in stored
+        if column.endswith(GEOPOINT_LAT_SUFFIX)
+        and (source := column[: -len(GEOPOINT_LAT_SUFFIX)]) in incoming_names
+        and not _already_split(incoming_names, source)
+    ]
+
+
+def add_geopoint_columns(
+    frame: pd.DataFrame, columns: list[str], variable_labels: dict[str, str]
+) -> None:
+    """Put a latitude and a longitude beside each of the named columns."""
+    for column in columns:
+        if column not in frame.columns:
+            continue
+        pairs = frame[column].map(parse_geopoint)
+        frame[f"{column}{GEOPOINT_LAT_SUFFIX}"] = pd.to_numeric(
+            pairs.map(lambda pair: pair[0] if pair else None), errors="coerce"
+        )
+        frame[f"{column}{GEOPOINT_LON_SUFFIX}"] = pd.to_numeric(
+            pairs.map(lambda pair: pair[1] if pair else None), errors="coerce"
+        )
+        label = variable_labels.get(column) or column
+        variable_labels.setdefault(f"{column}{GEOPOINT_LAT_SUFFIX}", f"{label} (latitude)")
+        variable_labels.setdefault(f"{column}{GEOPOINT_LON_SUFFIX}", f"{label} (longitude)")
+
+
+def split_geopoints(frame: pd.DataFrame, variable_labels: dict[str, str]) -> list[str]:
+    """Give every combined GPS column a latitude and a longitude beside it.
+
+    Named with the suffixes the platform already looks for, so a split column is
+    picked up as the dataset's location without anybody configuring it.
+    """
+    columns = geopoint_columns(frame)
+    add_geopoint_columns(frame, columns, variable_labels)
+    return columns
+
+
+def code_text(value: Any) -> str:
+    """A value as a value-label key is written.
+
+    Codes are stored as text because that is what both Stata readers hand back
+    and what the query engine looks a label up by, and a whole number has to
+    read "3" rather than "3.0" or every label it has is missed.
+    """
+    if isinstance(value, float) and value.is_integer():
+        return str(int(value))
+    return str(value)
+
+
+def numeric_code_text(value: Any) -> str:
+    """A code written by hand against a numeric column, as that column reads.
+
+    The editor prints an unlabelled numeric column as 1.0, so 1.0 is what
+    somebody types into the label box beside it. The data is read by "1", and
+    a label keyed "1.0" is never found - which looks exactly like the label
+    not having saved. Only for columns that hold numbers: a text column whose
+    values really are "1.0" is read by "1.0".
+    """
+    try:
+        return code_text(float(value))
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def code_labels(labels: dict[Any, Any]) -> dict[str, str]:
+    """One file's value labels, keyed the way a code is written.
+
+    Readers do not agree on the type of a code. Stata's labels come back with
+    integer keys and SPSS's with floats, because SPSS stores every number as a
+    double - so str() alone wrote "1" for one format and "1.0" for the other,
+    and a lookup for "1" missed every label an SPSS file had. The data showed
+    the codes, a crosstab of a labelled question printed 1.0 and 2.0, and
+    nothing said the labels were there and unreachable.
+    """
+    return {code_text(code): str(text) for code, text in labels.items()}
+
+
+def merge_value_labels(
+    kept: dict[str, dict[str, str]], incoming: dict[str, dict[str, str]]
+) -> dict[str, dict[str, str]]:
+    """Fold another file's value labels into the ones a dataset already has.
+
+    Code by code, not variable by variable. A questionnaire revised in the
+    middle of fieldwork adds answer options, and keeping the first round's
+    whole mapping meant every code introduced after it had no label at all:
+    the chart drew "Rented" and "Mortgage or loan" beside a bare 6, with
+    nothing on it saying that 6 was "Other tenure" in the rounds that asked it
+    that way.
+
+    A code the dataset already knows keeps its meaning. One that now means
+    something else is reported rather than rewritten, because the rows
+    collected under the old meaning are still in the data.
+    """
+    merged = {name: dict(codes) for name, codes in kept.items()}
+    for name, codes in incoming.items():
+        if name not in merged:
+            merged[name] = dict(codes)
+            continue
+        for code, label in codes.items():
+            merged[name].setdefault(code, label)
+    return merged
+
+
+def _reads_as_text(series: pd.Series) -> bool:
+    """Whether a column of values would be stored as text rather than numbers."""
+    return any(isinstance(value, str) for value in series.dropna().head(100))
+
+
+def counts_as_numbers(series: pd.Series) -> bool:
+    """Whether every value in a text column is a number written down.
+
+    A round that exported household size as "5" rather than 5 has not
+    stopped collecting a number, and the whole column should not stop being
+    one because of how one file spelled it. Checked over every value, not a
+    sample: one "about 6" in a million rows is the difference between a
+    column that still has a mean and a column that lies about having one.
+    """
+    answered = series.dropna()
+    if answered.empty:
+        return False
+    return int(pd.to_numeric(answered, errors="coerce").notna().sum()) == len(answered)
+
+
+def retyped_warnings(numeric_before: set[str], frame: pd.DataFrame) -> list[str]:
+    """Variables the dataset holds as numbers that arrive as something else.
+
+    Text that is numbers written down is read back as numbers and says
+    nothing: how one round spelled a household size is not news. Text with
+    real text in it cannot be, and the two are then stacked as text - which
+    loses no values and is the end of every mean, total and range the
+    variable had, on all of it rather than only the rows that arrived.
+    Nothing else in an import says so: the column still looks full, the
+    numbers are all still there, and the statistics have quietly gone.
+    """
+    messages: list[str] = []
+    for name in sorted(numeric_before):
+        if name not in frame.columns:
+            continue
+        series = frame[name]
+        if not series.notna().any() or not _reads_as_text(series):
+            continue
+        if counts_as_numbers(series):
+            continue
+        messages.append(
+            f"'{name}' is held as numbers and arrives as text in this file, "
+            "with values that are not numbers in it, so the whole variable "
+            "becomes text. Every value is kept; totals, averages and ranges "
+            "on it stop working."
+        )
+    return messages
+
+
+# Below this share of labelled rows a variable is read as a measurement that
+# happens to tag a few codes - age with 999 for "refused" - rather than a coded
+# question, and its unlabelled values are its data rather than a gap.
+LABELLED_SHARE = 0.5
+
+# Enough to recognise what is arriving without printing a column into a warning.
+UNLABELLED_EXAMPLES = 5
+
+
+def _code_order(code: str) -> tuple[int, float, str]:
+    """Numbers in numeric order, so a list of codes reads as one."""
+    try:
+        return (0, float(code), "")
+    except ValueError:
+        return (1, 0.0, code)
+
+
+def unlabelled_code_warnings(
+    frame: pd.DataFrame, value_labels: dict[str, dict[str, str]]
+) -> list[str]:
+    """Coded variables arriving with codes that nothing in the file explains.
+
+    This is what a chart of a revised question looks like from the outside:
+    labels for the codes the first round had, bare numbers for everything
+    added later, and no way to tell whether the numbers are a labelling gap or
+    the wrong variable's values. Said at import, it is one sentence naming the
+    variable and the codes; found afterwards, it is a day.
+    """
+    messages: list[str] = []
+    for name, labels in sorted(value_labels.items()):
+        if not labels or name not in frame.columns:
+            continue
+        # Counted first, so the code text is worked out once per distinct
+        # answer rather than once per interview. A coded question has a
+        # handful of answers and a survey has millions of rows.
+        counts = frame[name].value_counts(dropna=True)
+        if counts.empty:
+            continue
+        seen: dict[str, int] = {}
+        for value, count in counts.items():
+            seen[code_text(value)] = seen.get(code_text(value), 0) + int(count)
+        labelled = sum(count for code, count in seen.items() if code in labels)
+        if labelled / sum(seen.values()) < LABELLED_SHARE:
+            continue
+        unknown = sorted((code for code in seen if code not in labels), key=_code_order)
+        if not unknown:
+            continue
+        shown = ", ".join(unknown[:UNLABELLED_EXAMPLES])
+        more = f" and {len(unknown) - UNLABELLED_EXAMPLES} more" if (
+            len(unknown) > UNLABELLED_EXAMPLES
+        ) else ""
+        messages.append(
+            f"'{name}' holds {len(unknown)} value(s) no file labels: {shown}{more}. "
+            "They are kept as they are and will appear on a chart as numbers."
+        )
+    return messages
+
+
+def _clean_column_name(name: Any, index: int) -> str:
+    text = str(name).strip()
+    if not text or text.lower() == "nan":
+        text = f"column_{index + 1}"
+    # Parquet and DuckDB cope with most characters, but newlines break tooling
+    return re.sub(r"[\r\n\t]+", " ", text)[:300]
+
+
+def clean_columns(frame: pd.DataFrame) -> pd.DataFrame:
+    """Rename a frame's columns to the names storage would give them.
+
+    Ingest cleans names on the way in, so a stored dataset's columns are the
+    cleaned ones. Anything that lines a fresh frame up against stored data -
+    appending, most of all - has to put both in the same namespace first, or
+    pandas aligns "a\nb" against "a b" as two different columns and the rows
+    each end up under a name the other half of the data has never heard of.
+    """
+    original = list(frame.columns)
+    cleaned = _deduplicate(
+        [_clean_column_name(name, index) for index, name in enumerate(original)]
+    )
+    if cleaned == [str(name) for name in original]:
+        return frame
+    return frame.rename(columns=dict(zip(original, cleaned, strict=True)))
+
+
+def _deduplicate(names: list[str]) -> list[str]:
+    seen: dict[str, int] = {}
+    result: list[str] = []
+    for name in names:
+        if name in seen:
+            seen[name] += 1
+            result.append(f"{name}_{seen[name]}")
+        else:
+            seen[name] = 0
+            result.append(name)
+    return result
+
+
+def read_source(path: Path) -> tuple[pd.DataFrame, dict[str, str], dict[str, dict[str, str]]]:
+    """Return (dataframe, variable_labels, value_labels)."""
+    suffix = path.suffix.lower()
+    if suffix not in SUPPORTED_EXTENSIONS:
+        raise IngestError(
+            f"Unsupported file type '{suffix}'. Supported: "
+            + ", ".join(sorted(SUPPORTED_EXTENSIONS))
+        )
+
+    if suffix == ".dta":
+        return _read_stata(path)
+    if suffix == ".sav":
+        return _read_spss(path)
+    if suffix in (".xlsx", ".xls"):
+        frame = pd.read_excel(path)
+        return frame, {}, {}
+    return _read_delimited(path)
+
+
+# Columns holding Stata's tagged missing values get a companion column with this
+# suffix, so ".a" survives without turning a numeric column into text.
+MISSING_TAG_SUFFIX = "__mv"
+
+# The columns a "tick all that apply" question is exported as: the question's
+# name, two underscores, and the code of one option.
+OPTION_COLUMN = re.compile(r"^(?P<stem>.+?)__(?P<option>\d+)$")
+
+
+def name_multiselect_options(
+    columns: list[str],
+    variable_labels: dict[str, str],
+    label_sets: dict[str, dict[str, str]],
+) -> dict[str, str]:
+    """Give a multiple-select's option columns the names its codes already have.
+
+    A "tick all that apply" question exports as one 0/1 column per option -
+    hhld_goods__1, hhld_goods__2 - and in many exports those columns carry no
+    label of their own. The option text is still in the file: it is in the
+    question's own value-label set, where code 8 reads "Bicycle", and the 8 in
+    the column name IS that code. Nothing was reading it, so a chart of the
+    question came out as "Option 1" to "Option 19" and the reader had to go and
+    find the questionnaire.
+
+    Only where the column has no label already: a file that names its options
+    knows better than this does. The set has to actually hold the codes, which
+    is what keeps a set that merely shares a name from being read as one.
+    """
+    by_stem: dict[str, list[tuple[str, str]]] = {}
+    for name in columns:
+        match = OPTION_COLUMN.match(name)
+        if match:
+            by_stem.setdefault(match.group("stem"), []).append(
+                (name, match.group("option"))
+            )
+
+    # Set names are matched without case, and with any trailing digits taken
+    # off: a writer that already has a set called "sex" names the next one
+    # "sex0", and Survey Solutions numbers a repeated question the same way.
+    lookup: dict[str, dict[str, str]] = {}
+    for set_name, mapping in label_sets.items():
+        for key in {set_name.lower(), set_name.lower().rstrip("0123456789")}:
+            lookup.setdefault(key, mapping)
+
+    found: dict[str, str] = {}
+    for stem, options in by_stem.items():
+        if len(options) < 2:
+            continue
+        mapping = lookup.get(stem.lower())
+        if not mapping:
+            continue
+        named = [(name, mapping[code]) for name, code in options if code in mapping]
+        # Half of them, so a set that happens to hold 1 and 2 cannot name two
+        # options of nineteen and leave the rest numbered.
+        if len(named) * 2 < len(options):
+            continue
+        # A label every option column shares word for word is the question, not
+        # the answer: some exports write "What does the household cook with" on
+        # all of them. Left alone, the chart draws every bar under the same
+        # words, which is worse than numbering them.
+        existing = {str(variable_labels.get(name) or "").strip() for name, _ in options}
+        the_question = len(existing) == 1 and bool(existing.pop())
+        for name, text in named:
+            if not the_question and str(variable_labels.get(name) or "").strip():
+                continue
+            if str(text).strip():
+                found[name] = str(text).strip()
+    return found
+
+
+def _split_missing_tags(
+    frame: pd.DataFrame, missing_user_values: dict[str, list[str]] | None
+) -> pd.DataFrame:
+    """Separate Stata tagged missings from the values they are mixed in with.
+
+    Reading with user_missing=True returns a column like [25.0, nan, 'a', 33.0]:
+    the tag is preserved but the column is now object dtype, so means and sums
+    stop working. Split it into a clean numeric column plus a companion column
+    holding the tag, and both survive.
+    """
+    if not missing_user_values:
+        return frame
+
+    for column in list(missing_user_values):
+        if column not in frame.columns:
+            continue
+        series = frame[column]
+        if not pd.api.types.is_object_dtype(series):
+            continue
+        is_tag = series.map(lambda v: isinstance(v, str) and len(v) == 1 and v.isalpha())
+        if not is_tag.any():
+            continue
+        frame[f"{column}{MISSING_TAG_SUFFIX}"] = series.where(is_tag).map(
+            lambda v: f".{v}" if isinstance(v, str) else None
+        )
+        frame[column] = pd.to_numeric(series.where(~is_tag), errors="coerce")
+    return frame
+
+
+def _read_stata(path: Path) -> tuple[pd.DataFrame, dict[str, str], dict[str, dict[str, str]]]:
+    """pyreadstat keeps labels intact; pandas is the fallback for odd versions."""
+    try:
+        import pyreadstat
+
+        # user_missing=True keeps Stata's tagged missing values (.a to .z) instead
+        # of flattening every kind of missing into NaN. Survey Solutions uses them
+        # for answers like "don't know", so losing them loses real information.
+        frame, meta = pyreadstat.read_dta(
+            str(path), apply_value_formats=False, user_missing=True
+        )
+        frame = _split_missing_tags(frame, getattr(meta, "missing_user_values", None))
+        variable_labels = {
+            name: label for name, label in (meta.column_names_to_labels or {}).items() if label
+        }
+        value_labels = {
+            variable: code_labels(labels)
+            for variable, labels in (meta.variable_value_labels or {}).items()
+        }
+        # Every label set in the file, named as the file names them, including
+        # the ones no column uses - which is where a multiple-select question
+        # keeps the text of its options.
+        sets = {
+            name: code_labels(labels) for name, labels in (meta.value_labels or {}).items()
+        }
+        variable_labels.update(
+            name_multiselect_options(list(frame.columns), variable_labels, sets)
+        )
+        return frame, variable_labels, value_labels
+    except Exception as exc:  # noqa: BLE001 - fall back to pandas on any reader issue
+        logger.warning("pyreadstat could not read %s (%s); falling back to pandas", path.name, exc)
+
+    try:
+        with pd.io.stata.StataReader(str(path), convert_categoricals=False) as reader:
+            frame = reader.read()
+            variable_labels = {
+                name: label for name, label in (reader.variable_labels() or {}).items() if label
+            }
+            raw_value_labels = reader.value_labels() or {}
+        # pandas gives the label SETS, by set name, and not which variable uses
+        # which. A set is very often named after the one variable that uses it,
+        # so that is the alignment made here - and where it is wrong, it is
+        # wrong about a variable no set was named after, which is to say it
+        # names nothing.
+        sets = {name: code_labels(labels) for name, labels in raw_value_labels.items()}
+        value_labels = {
+            name: labels for name, labels in sets.items() if name in frame.columns
+        }
+        variable_labels.update(
+            name_multiselect_options(list(frame.columns), variable_labels, sets)
+        )
+        return frame, variable_labels, value_labels
+    except Exception as exc:  # noqa: BLE001
+        raise IngestError(f"Could not read Stata file: {exc}") from exc
+
+
+def _read_spss(path: Path) -> tuple[pd.DataFrame, dict[str, str], dict[str, dict[str, str]]]:
+    try:
+        import pyreadstat
+
+        frame, meta = pyreadstat.read_sav(str(path), apply_value_formats=False)
+        variable_labels = {
+            name: label for name, label in (meta.column_names_to_labels or {}).items() if label
+        }
+        sets = {
+            name: code_labels(labels) for name, labels in (meta.value_labels or {}).items()
+        }
+        variable_labels.update(
+            name_multiselect_options(list(frame.columns), variable_labels, sets)
+        )
+        return (
+            frame,
+            variable_labels,
+            {
+                variable: code_labels(labels)
+                for variable, labels in (meta.variable_value_labels or {}).items()
+            },
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise IngestError(f"Could not read SPSS file: {exc}") from exc
+
+
+def _read_delimited(path: Path) -> tuple[pd.DataFrame, dict[str, str], dict[str, dict[str, str]]]:
+    separators = {".tab": "\t", ".tsv": "\t", ".txt": "\t", ".csv": ","}
+    separator = separators.get(path.suffix.lower(), ",")
+    last_error: Exception | None = None
+    for encoding in ("utf-8-sig", "latin-1"):
+        try:
+            frame = pd.read_csv(
+                path,
+                sep=separator,
+                encoding=encoding,
+                low_memory=False,
+                on_bad_lines="warn",
+                na_values=["", "NA", "N/A", "##N/A##", "null", "NULL"],
+                keep_default_na=True,
+            )
+            return frame, {}, {}
+        except (UnicodeDecodeError, pd.errors.ParserError) as exc:
+            last_error = exc
+    raise IngestError(f"Could not parse delimited file: {last_error}")
+
+
+def _safe_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        result = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(result) or math.isinf(result):
+        return None
+    return round(result, 6)
+
+
+def classify(
+    *,
+    is_boolean: bool,
+    is_datetime: bool,
+    is_numeric: bool,
+    is_integral: bool,
+    has_value_labels: bool,
+    non_null: int,
+    distinct: int,
+) -> str:
+    """The rules deciding what kind of variable something is.
+
+    Stated once over plain numbers because there are two ways into it: a pandas
+    frame for a file read whole, and DuckDB aggregates for one read in chunks.
+    Two implementations of these rules would mean the same file classified
+    differently depending on its size.
+    """
+    if is_boolean:
+        return "boolean"
+    if is_datetime:
+        return "datetime"
+    if non_null == 0:
+        # A column with no values in it is not evidence of anything. Survey
+        # exports are full of them - questions nobody reached - and calling one
+        # "numeric" because its storage happens to be a float would put it in
+        # the measure picker with nothing to measure.
+        return "text"
+    if is_numeric:
+        if has_value_labels:
+            # Names for the codes is the one piece of real evidence that this
+            # is a code set rather than a quantity, and it comes from whoever
+            # designed the questionnaire rather than from a guess about shape.
+            return "categorical"
+        # Without labels, only a two-value column is confidently a code: a tick
+        # or a yes-or-no, where the column's own name is the whole meaning.
+        #
+        # This used to catch anything with twenty or fewer whole numbers in it,
+        # which is household size, rooms, children, years of schooling, and age
+        # in a small sample. All of them came out as code sets, with no names
+        # for their codes, and the measure picker offered none of them: "No
+        # variable matches" on a dataset made of numbers.
+        if distinct <= 2 and non_null > 0 and is_integral:
+            return "categorical"
+        return "numeric"
+    if distinct <= CATEGORICAL_MAX_UNIQUE and distinct / max(non_null, 1) < (
+        CATEGORICAL_MAX_RATIO
+    ):
+        return "categorical"
+    return "text"
+
+
+def _classify(series: pd.Series, has_value_labels: bool) -> str:
+    non_null = series.dropna()
+    is_numeric = pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(
+        series
+    )
+    integral = False
+    if is_numeric and len(non_null):
+        try:
+            integral = bool((non_null % 1 == 0).all())
+        except TypeError:
+            integral = False
+    return classify(
+        is_boolean=bool(pd.api.types.is_bool_dtype(series)),
+        is_datetime=bool(pd.api.types.is_datetime64_any_dtype(series)),
+        is_numeric=is_numeric,
+        is_integral=integral,
+        has_value_labels=has_value_labels,
+        non_null=len(non_null),
+        distinct=int(non_null.nunique()) if len(non_null) else 0,
+    )
+
+
+def _coerce_datetime_columns(
+    frame: pd.DataFrame, only: set[str] | None = None
+) -> list[str]:
+    """Detect ISO-like date strings so they can be used on time axes.
+
+    Detection samples the first rows it sees, so a file read in chunks must
+    settle the set of date columns once and pass it back in for every later
+    chunk. Left to re-decide per chunk, one chunk converts a column and the next
+    does not, and the stored column ends up holding both timestamps and text.
+    """
+    converted: list[str] = []
+    pattern = re.compile(r"^\d{4}-\d{2}-\d{2}([ T]\d{2}:\d{2}(:\d{2})?)?")
+    for column in frame.columns:
+        series = frame[column]
+        if not pd.api.types.is_object_dtype(series):
+            continue
+        if only is not None:
+            if str(column) in only:
+                frame[column] = pd.to_datetime(series, errors="coerce", format="mixed")
+                converted.append(str(column))
+            continue
+        sample = series.dropna().astype(str).head(50)
+        if len(sample) < 3:
+            continue
+        if all(pattern.match(value) for value in sample):
+            try:
+                frame[column] = pd.to_datetime(series, errors="coerce", format="mixed")
+                converted.append(str(column))
+            except (ValueError, TypeError):
+                continue
+    return converted
+
+
+def build_metadata(
+    frame: pd.DataFrame,
+    variable_labels: dict[str, str],
+    value_labels: dict[str, dict[str, str]],
+) -> list[VariableMeta]:
+    metas: list[VariableMeta] = []
+    total = len(frame)
+    for position, column in enumerate(frame.columns):
+        series = frame[column]
+        name = str(column)
+        labels = value_labels.get(name, {})
+        var_type = _classify(series, bool(labels))
+        non_null = series.dropna()
+
+        companion = f"{name}{MISSING_TAG_SUFFIX}"
+        tags: list[str] = []
+        if companion in frame.columns:
+            tags = sorted({str(v) for v in frame[companion].dropna().unique()})
+
+        meta = VariableMeta(
+            name=name,
+            label=str(variable_labels.get(name, "") or "")[:1000],
+            var_type=var_type,
+            storage_type=str(series.dtype),
+            position=position,
+            n_missing=int(total - len(non_null)),
+            n_unique=int(non_null.nunique()) if total else 0,
+            value_labels=labels,
+            missing_tags=tags,
+            # The companion column is an implementation detail; it should not
+            # appear in variable pickers alongside the variable it belongs to.
+            is_hidden=name.endswith(MISSING_TAG_SUFFIX),
+        )
+        if var_type in ("numeric", "categorical") and pd.api.types.is_numeric_dtype(series):
+            meta.min_value = _safe_float(non_null.min()) if len(non_null) else None
+            meta.max_value = _safe_float(non_null.max()) if len(non_null) else None
+            meta.mean_value = _safe_float(non_null.mean()) if len(non_null) else None
+        metas.append(meta)
+    return metas
+
+
+def ingest_frame(
+    frame: pd.DataFrame,
+    variable_labels: dict[str, str],
+    value_labels: dict[str, dict[str, str]],
+    destination_dir: Path,
+    warnings: list[str] | None = None,
+) -> IngestResult:
+    """Normalise an already-read frame and persist it as Parquet.
+
+    Shared by every route data can arrive on - a single file, a zip of several
+    files appended together, or an append onto an existing dataset - so all of
+    them clean names, detect types and write storage the same way.
+    """
+    warnings = list(warnings or [])
+
+    if frame.empty:
+        warnings.append("The file contains no data rows.")
+
+    original_columns = list(frame.columns)
+    cleaned = _deduplicate(
+        [_clean_column_name(name, index) for index, name in enumerate(original_columns)]
+    )
+    rename_map = dict(zip(original_columns, cleaned, strict=False))
+    frame = frame.rename(columns=rename_map)
+    variable_labels = {rename_map.get(k, k): v for k, v in variable_labels.items()}
+    value_labels = {rename_map.get(k, k): v for k, v in value_labels.items()}
+
+    converted = _coerce_datetime_columns(frame)
+    if converted:
+        warnings.append(f"Detected {len(converted)} date column(s): {', '.join(converted[:5])}")
+
+    for column in frame.columns:
+        series = frame[column]
+        if not pd.api.types.is_object_dtype(series):
+            continue
+        # Reading a .dta with user_missing=True hands back object dtype for
+        # columns it had to inspect, even when every value in them is a number.
+        # Left alone, such a column is never recognised as numeric, so it gets
+        # no range and no mean - which is most of a Survey Solutions export.
+        numeric = pd.to_numeric(series, errors="coerce")
+        if numeric.notna().sum() == series.notna().sum() and series.notna().any():
+            frame[column] = numeric
+            continue
+        # Object columns holding genuinely mixed types break Parquet. Written
+        # out the way a code is written, not with str(): a round that exported
+        # a coded question as text, stacked on rounds that exported it as a
+        # number, would otherwise give one answer two spellings - "4" and
+        # "4.0" - which draws as two bars, one of them with no value label.
+        types = {type(v) for v in series.dropna().head(1000)}
+        if len(types) > 1:
+            frame[column] = series.map(
+                lambda value: None if pd.isna(value) else code_text(value)
+            )
+
+    # After the loop above, because a combined GPS column is exactly the kind
+    # of text column it leaves alone.
+    for column in split_geopoints(frame, variable_labels):
+        warnings.append(
+            f'Split the location in "{column}" into '
+            f'"{column}{GEOPOINT_LAT_SUFFIX}" and "{column}{GEOPOINT_LON_SUFFIX}".'
+        )
+
+    metas = build_metadata(frame, variable_labels, value_labels)
+
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    parquet_path = destination_dir / f"data-{uuid4().hex}.parquet"
+    try:
+        frame.to_parquet(parquet_path, index=False, engine="pyarrow", compression="zstd")
+    except Exception as exc:  # noqa: BLE001 - retry with everything stringified
+        logger.warning("Parquet write failed (%s); retrying with text coercion", exc)
+        fallback = frame.copy()
+        for column in fallback.columns:
+            if pd.api.types.is_object_dtype(fallback[column]):
+                fallback[column] = fallback[column].astype(str)
+        fallback.to_parquet(parquet_path, index=False, engine="pyarrow")
+        warnings.append("Some columns were stored as text because of mixed value types.")
+
+    return IngestResult(
+        parquet_path=parquet_path,
+        row_count=int(len(frame)),
+        column_count=int(len(frame.columns)),
+        file_size=parquet_path.stat().st_size,
+        variables=metas,
+        warnings=warnings,
+    )
+
+
+def ingest_file(source: Path, destination_dir: Path) -> IngestResult:
+    """Read one data file and persist it.
+
+    A file too big to hold in memory is streamed instead. The streaming path is
+    narrower - it reads Stata only, and computes statistics from the stored
+    Parquet rather than from a frame - so anything it cannot manage falls back
+    to reading the whole file, which is no worse than not having tried.
+    """
+    if not source.exists():
+        raise IngestError(f"File not found: {source}")
+
+    if _should_stream(source):
+        try:
+            return _stream_stata(source, destination_dir, [])
+        except IngestError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - fall back to the ordinary reader
+            logger.warning(
+                "Streaming %s failed (%s); reading it whole instead", source.name, exc
+            )
+
+    frame, variable_labels, value_labels = read_source(source)
+    return ingest_frame(frame, variable_labels, value_labels, destination_dir)
+
+
+def detect_monitoring_fields(variables: list[VariableMeta]) -> dict[str, str]:
+    """Guess which variables carry the standard Survey Solutions monitoring fields.
+
+    Recognising these lets the platform pre-build field-progress views without the
+    user configuring anything.
+    """
+    lookup = {v.name.lower(): v.name for v in variables}
+    patterns = {
+        "interview_key": ["interview__key", "interviewkey", "interview_key"],
+        "interview_id": ["interview__id", "interviewid"],
+        "status": ["interview__status", "assignment__status", "status"],
+        "interviewer": ["interviewer", "responsible", "interviewername"],
+        "supervisor": ["supervisor", "team", "teamlead"],
+        "assignment": ["assignment__id", "assignmentid", "assignment"],
+        "date": ["interview__date", "submitteddate", "date", "interviewdate", "starttime"],
+        "duration": ["duration", "interview__duration", "interviewduration"],
+        "latitude": ["latitude", "gpslatitude", "gps__latitude", "lat"],
+        "longitude": ["longitude", "gpslongitude", "gps__longitude", "lon", "lng"],
+        "region": ["region", "province", "state", "district", "admin1"],
+    }
+    detected: dict[str, str] = {}
+    for key, candidates in patterns.items():
+        for candidate in candidates:
+            if candidate in lookup:
+                detected[key] = lookup[candidate]
+                break
+        else:
+            # Fall back to prefixed export columns, e.g. GPS_4__Latitude. The
+            # candidates are tried in order so the specific one wins over the
+            # short one, and each has to be a whole word in the name: a bare
+            # substring match reads "lat" out of ACTIVATE_DATE_SIMULATION and
+            # points the map at a date.
+            for candidate in candidates:
+                match = next(
+                    (
+                        actual
+                        for lower_name, actual in lookup.items()
+                        if _names_a(lower_name, candidate)
+                    ),
+                    None,
+                )
+                if match:
+                    detected[key] = match
+                    break
+    return detected
+
+
+def _names_a(column: str, candidate: str) -> bool:
+    """Whether a column name mentions the candidate as a word of its own."""
+    if column == candidate:
+        return True
+    # Survey Solutions separates parts with underscores; digits are part of a
+    # name rather than a separator, so GPS_4__Latitude is gps / 4 / latitude.
+    return candidate in re.split(r"[^a-z0-9]+", column)
+
+
+def dataframe_preview(path: Path, limit: int = 20) -> dict[str, Any]:
+    """Small helper used by the upload preview endpoint."""
+    frame = pd.read_parquet(path).head(limit)
+    return {
+        "columns": [str(c) for c in frame.columns],
+        "rows": frame.replace({np.nan: None}).values.tolist(),
+    }
+
+
+def utcnow() -> dt.datetime:
+    return dt.datetime.now(dt.UTC)
+
+# --- streaming ingest -------------------------------------------------------
+
+# Reading a whole survey into pandas costs roughly (rows x columns x 20) bytes
+# once string columns are counted, so a million-person roster at 600 columns
+# needs tens of gigabytes and simply will not load. Past this many cells the
+# file is streamed instead: chunks are appended to the Parquet file one at a
+# time and the column statistics are computed afterwards from the finished file
+# by DuckDB, which reads one column at a time rather than all of them.
+STREAM_ABOVE_CELLS = 5_000_000
+
+# A chunk is sized in cells, not rows: 50,000 rows is nothing at ten columns and
+# about a gigabyte at six hundred, which is the width a person-level survey
+# roster actually has. Holding the cell count steady keeps the memory cost of a
+# chunk roughly constant however wide the file is.
+STREAM_CHUNK_CELLS = 2_000_000
+MIN_CHUNK_ROWS = 1_000
+MAX_CHUNK_ROWS = 100_000
+
+
+def _chunk_rows(columns: int) -> int:
+    if columns <= 0:
+        return MAX_CHUNK_ROWS
+    return max(MIN_CHUNK_ROWS, min(MAX_CHUNK_ROWS, STREAM_CHUNK_CELLS // columns))
+
+
+def _should_stream(path: Path) -> bool:
+    if path.suffix.lower() != ".dta":
+        return False
+    try:
+        import pyreadstat
+
+        _, meta = pyreadstat.read_dta(str(path), metadataonly=True)
+    except Exception:  # noqa: BLE001 - fall back to the ordinary reader
+        return False
+    return (meta.number_rows or 0) * (meta.number_columns or 0) > STREAM_ABOVE_CELLS
+
+
+def _stream_stata(path: Path, destination_dir: Path, warnings: list[str]) -> IngestResult:
+    """Ingest a large .dta without ever holding all of it in memory."""
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    import pyreadstat
+
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    parquet_path = destination_dir / f"data-{uuid4().hex}.parquet"
+
+    _, meta = pyreadstat.read_dta(str(path), metadataonly=True)
+    variable_labels = dict(meta.column_names_to_labels or {})
+    raw_value_labels = meta.variable_value_labels or {}
+    value_labels = {
+        column: code_labels(raw_value_labels[column])
+        for column in meta.column_names
+        if column in raw_value_labels
+    }
+
+    chunk_rows = _chunk_rows(meta.number_columns or 0)
+    date_columns: set[str] | None = None
+    geopoints: list[str] | None = None
+    writer: pq.ParquetWriter | None = None
+    rename_map: dict[str, str] = {}
+    schema: pa.Schema | None = None
+    rows = 0
+    try:
+        reader = pyreadstat.read_file_in_chunks(
+            pyreadstat.read_dta,
+            str(path),
+            chunksize=chunk_rows,
+            user_missing=True,
+        )
+        for chunk, chunk_meta in reader:
+            chunk = _split_missing_tags(chunk, chunk_meta.missing_user_values)
+            if not rename_map:
+                original = list(chunk.columns)
+                cleaned = _deduplicate(
+                    [_clean_column_name(n, i) for i, n in enumerate(original)]
+                )
+                rename_map = dict(zip(original, cleaned, strict=False))
+            chunk = chunk.rename(columns=rename_map)
+            if date_columns is None:
+                date_columns = set(_coerce_datetime_columns(chunk))
+            else:
+                _coerce_datetime_columns(chunk, only=date_columns)
+
+            # Decided off the first chunk and then applied to all of them: a
+            # column split in one chunk and not the next gives the file two
+            # schemas, and the second write fails against the first.
+            if geopoints is None:
+                geopoints = geopoint_columns(chunk)
+            add_geopoint_columns(chunk, geopoints, variable_labels)
+
+            table = pa.Table.from_pandas(chunk, preserve_index=False)
+            if writer is None:
+                schema = table.schema
+                writer = pq.ParquetWriter(parquet_path, schema, compression="zstd")
+            elif table.schema != schema:
+                # A later chunk inferred a different type for some column -
+                # all-null in one chunk and text in the next, typically. Cast to
+                # the first chunk's schema so the file stays readable; a cast
+                # that cannot work raises and the caller falls back.
+                table = table.cast(schema)
+            writer.write_table(table)
+            rows += len(chunk)
+    finally:
+        if writer is not None:
+            writer.close()
+
+    if writer is None:
+        raise IngestError("The file produced no rows to read.")
+
+    variable_labels = {rename_map.get(k, k): v for k, v in variable_labels.items()}
+    value_labels = {rename_map.get(k, k): v for k, v in value_labels.items()}
+    metas = build_metadata_from_parquet(parquet_path, variable_labels, value_labels)
+    warnings.append(
+        f"Read in chunks of {chunk_rows:,} rows because the file is large; "
+        f"statistics were computed from the stored data."
+    )
+    for column in geopoints or []:
+        warnings.append(
+            f'Split the location in "{column}" into '
+            f'"{column}{GEOPOINT_LAT_SUFFIX}" and "{column}{GEOPOINT_LON_SUFFIX}".'
+        )
+    return IngestResult(
+        parquet_path=parquet_path,
+        row_count=rows,
+        column_count=len(metas),
+        file_size=parquet_path.stat().st_size,
+        variables=metas,
+        warnings=warnings,
+    )
+
+
+def build_metadata_from_parquet(
+    parquet_path: Path,
+    variable_labels: dict[str, str],
+    value_labels: dict[str, dict[str, str]],
+) -> list[VariableMeta]:
+    """Column statistics computed by DuckDB over the stored Parquet.
+
+    The equivalent of build_metadata for data too large to hold in pandas. Each
+    aggregate reads one column, so the cost is in the number of columns rather
+    than the size of the table.
+    """
+    import duckdb
+
+    path = str(parquet_path).replace("'", "''")
+    con = duckdb.connect()
+    described = con.execute(f"DESCRIBE SELECT * FROM read_parquet('{path}')").fetchall()
+    total = con.execute(f"SELECT COUNT(*) FROM read_parquet('{path}')").fetchone()[0]
+    names = [row[0] for row in described]
+
+    metas: list[VariableMeta] = []
+    for position, (name, storage, *_rest) in enumerate(described):
+        if name.endswith(MISSING_TAG_SUFFIX):
+            continue
+        quoted = quote_ident(name)
+        numeric = holds_numbers(storage)
+        is_datetime = "TIMESTAMP" in storage.upper() or storage.upper() == "DATE"
+
+        aggregates = [f"COUNT({quoted})", f"COUNT(DISTINCT {quoted})"]
+        if numeric:
+            aggregates += [f"MIN({quoted})", f"MAX({quoted})", f"AVG({quoted})"]
+        row = con.execute(
+            f"SELECT {', '.join(aggregates)} FROM read_parquet('{path}')"
+        ).fetchone()
+        non_null, distinct = int(row[0]), int(row[1])
+        minimum, maximum, mean = (row[2], row[3], row[4]) if numeric else (None, None, None)
+
+        labels = value_labels.get(name, {})
+        integral = False
+        if numeric and non_null:
+            whole = con.execute(
+                f"SELECT COUNT(*) FROM read_parquet('{path}') "
+                f"WHERE {quoted} IS NOT NULL AND {quoted} != floor({quoted})"
+            ).fetchone()[0]
+            integral = int(whole) == 0
+        var_type = classify(
+            is_boolean=storage.upper() == "BOOLEAN",
+            is_datetime=is_datetime,
+            is_numeric=numeric,
+            is_integral=integral,
+            has_value_labels=bool(labels),
+            non_null=non_null,
+            distinct=distinct,
+        )
+
+        companion = f"{name}{MISSING_TAG_SUFFIX}"
+        tags: list[str] = []
+        if companion in names:
+            quoted_companion = '"' + companion.replace('"', '""') + '"'
+            tags = sorted(
+                str(value[0])
+                for value in con.execute(
+                    f"SELECT DISTINCT {quoted_companion} FROM read_parquet('{path}') "
+                    f"WHERE {quoted_companion} IS NOT NULL"
+                ).fetchall()
+            )
+
+        metas.append(
+            VariableMeta(
+                name=name,
+                label=str(variable_labels.get(name, "") or ""),
+                var_type=var_type,
+                storage_type=storage,
+                position=position,
+                n_missing=int(total) - non_null,
+                n_unique=distinct,
+                min_value=float(minimum) if isinstance(minimum, (int, float)) else None,
+                max_value=float(maximum) if isinstance(maximum, (int, float)) else None,
+                mean_value=float(mean) if isinstance(mean, (int, float)) else None,
+                value_labels=labels,
+                missing_tags=tags,
+            )
+        )
+    con.close()
+    return metas

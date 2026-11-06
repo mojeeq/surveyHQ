@@ -1,0 +1,1408 @@
+"""Projects, and the access rules that hang off them.
+
+The point of a project is not the grouping - it is that a user can be given
+one project and nothing else. So most of what is worth testing here is what a
+user *cannot* see, which no amount of exercising the happy path would catch.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from tests.conftest import ADMIN_EMAIL, ADMIN_PASSWORD, sign_in  # noqa: F401
+
+
+def _headers(client, email: str, password: str) -> dict[str, str]:
+    return sign_in(client, email, password)
+
+
+@pytest.fixture
+def project(client, auth_headers) -> dict:
+    response = client.post(
+        "/api/v1/projects",
+        headers=auth_headers,
+        json={"name": "Round 1 fieldwork", "description": "Feb 2026"},
+    )
+    assert response.status_code == 201, response.text
+    return response.json()
+
+
+@pytest.fixture
+def restricted_user(client, auth_headers) -> tuple[dict, dict[str, str]]:
+    """An analyst confined to whatever projects they are given.
+
+    The database outlives a single test, so this resets an existing user to a
+    known state rather than assuming it is the first to create one. Otherwise
+    each test would inherit whatever the previous one left behind.
+    """
+    email = "restricted@example.com"
+    password = "restricted-password-123"
+    created = client.post(
+        "/api/v1/users",
+        headers=auth_headers,
+        json={
+            "email": email,
+            "full_name": "Restricted Analyst",
+            "role": "analyst",
+            "password": password,
+            "restricted_to_projects": True,
+        },
+    )
+    if created.status_code == 201:
+        user = created.json()
+    else:
+        assert created.status_code == 409, created.text
+        page = client.get("/api/v1/users", headers=auth_headers, params={"search": email})
+        user = next(u for u in page.json()["items"] if u["email"] == email)
+        client.patch(
+            f"/api/v1/users/{user['id']}",
+            headers=auth_headers,
+            json={"role": "analyst", "restricted_to_projects": True, "password": password},
+        )
+        # Memberships from an earlier test would otherwise grant access here
+        for project in client.get("/api/v1/projects", headers=auth_headers).json():
+            client.delete(
+                f"/api/v1/projects/{project['id']}/members/{user['id']}", headers=auth_headers
+            )
+    return user, _headers(client, email, password)
+
+
+def test_creating_a_project_makes_the_creator_a_member(client, auth_headers, project):
+    """Otherwise a manager would lose sight of the project the moment they made it."""
+    detail = client.get(f"/api/v1/projects/{project['id']}", headers=auth_headers).json()
+    assert [m["email"] for m in detail["members"]] == [ADMIN_EMAIL]
+    assert detail["members"][0]["role"] == "manager"
+
+
+def test_a_restricted_user_sees_no_projects_until_added(
+    client, auth_headers, project, restricted_user
+):
+    _, headers = restricted_user
+    assert client.get("/api/v1/projects", headers=headers).json() == []
+
+    client.put(
+        f"/api/v1/projects/{project['id']}/members",
+        headers=auth_headers,
+        json={"user_id": restricted_user[0]["id"], "role": "analyst"},
+    )
+    visible = client.get("/api/v1/projects", headers=headers).json()
+    assert [p["id"] for p in visible] == [project["id"]]
+
+
+def test_a_restricted_user_cannot_see_the_shared_area(
+    client, auth_headers, dataset_id, restricted_user
+):
+    """The dataset is unassigned, so every ordinary user sees it - but not this one."""
+    _, headers = restricted_user
+    assert dataset_id in [
+        d["id"] for d in client.get("/api/v1/datasets", headers=auth_headers).json()["items"]
+    ]
+    assert client.get("/api/v1/datasets", headers=headers).json()["items"] == []
+
+
+def test_a_dataset_in_a_project_is_invisible_to_non_members(
+    client, auth_headers, dataset_id, project, restricted_user
+):
+    member, headers = restricted_user
+    client.put(
+        f"/api/v1/projects/{project['id']}/members",
+        headers=auth_headers,
+        json={"user_id": member["id"], "role": "analyst"},
+    )
+    # A second project the user is not a member of
+    other = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Someone else's work"}
+    ).json()
+    assert (
+        client.put(
+            f"/api/v1/projects/assign/dataset/{dataset_id}",
+            headers=auth_headers,
+            json={"project_id": other["id"]},
+        ).status_code
+        == 200
+    )
+
+    assert client.get("/api/v1/datasets", headers=headers).json()["items"] == []
+    # Reported as missing rather than forbidden, so the response cannot be used
+    # to discover that another project holds it.
+    assert client.get(f"/api/v1/datasets/{dataset_id}", headers=headers).status_code == 404
+
+
+def test_a_hidden_dataset_cannot_be_queried_either(
+    client, auth_headers, dataset_id, project, restricted_user
+):
+    """Listing is not the only way in; the query endpoints take an id directly."""
+    member, headers = restricted_user
+    client.put(
+        f"/api/v1/projects/{project['id']}/members",
+        headers=auth_headers,
+        json={"user_id": member["id"], "role": "analyst"},
+    )
+    other = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Off limits"}
+    ).json()
+    client.put(
+        f"/api/v1/projects/assign/dataset/{dataset_id}",
+        headers=auth_headers,
+        json={"project_id": other["id"]},
+    )
+
+    for path, body in (
+        ("/api/v1/analytics/query", {"dataset_id": dataset_id, "spec": {}}),
+        (f"/api/v1/analytics/datasets/{dataset_id}/crosstab",
+         {"row_variable": "region", "column_variable": "sex"}),
+    ):
+        assert client.post(path, headers=headers, json=body).status_code == 404, path
+    assert (
+        client.get(f"/api/v1/datasets/{dataset_id}/preview", headers=headers).status_code == 404
+    )
+
+
+def test_membership_cannot_exceed_the_users_own_role(
+    client, auth_headers, project, restricted_user
+):
+    """Making a viewer a project manager must not turn them into an editor."""
+    member, _ = restricted_user
+    client.patch(f"/api/v1/users/{member['id']}", headers=auth_headers, json={"role": "viewer"})
+    headers = _headers(client, "restricted@example.com", "restricted-password-123")
+    client.put(
+        f"/api/v1/projects/{project['id']}/members",
+        headers=auth_headers,
+        json={"user_id": member["id"], "role": "manager"},
+    )
+
+    response = client.patch(
+        f"/api/v1/projects/{project['id']}",
+        headers=headers,
+        json={"description": "changed"},
+    )
+    assert response.status_code == 403, response.text
+
+    # Restore, so the shared session fixtures are unaffected
+    client.patch(f"/api/v1/users/{member['id']}", headers=auth_headers, json={"role": "analyst"})
+
+
+def test_admin_is_never_confined_to_projects(client, auth_headers, dataset_id, project):
+    client.put(
+        f"/api/v1/projects/assign/dataset/{dataset_id}",
+        headers=auth_headers,
+        json={"project_id": project["id"]},
+    )
+    items = client.get("/api/v1/datasets", headers=auth_headers).json()["items"]
+    assert dataset_id in [d["id"] for d in items]
+    # Put it back in the shared area for the tests that follow
+    client.put(
+        f"/api/v1/projects/assign/dataset/{dataset_id}",
+        headers=auth_headers,
+        json={"project_id": None},
+    )
+
+
+def test_project_is_not_an_admin_role(client, auth_headers, project, restricted_user):
+    member, _ = restricted_user
+    response = client.put(
+        f"/api/v1/projects/{project['id']}/members",
+        headers=auth_headers,
+        json={"user_id": member["id"], "role": "admin"},
+    )
+    assert response.status_code == 422
+    assert "global role" in response.text
+
+
+def test_deleting_a_project_releases_its_data_rather_than_destroying_it(
+    client, auth_headers, dataset_id, project
+):
+    """ON DELETE SET NULL does not exist on an upgraded database, so this is explicit."""
+    client.put(
+        f"/api/v1/projects/assign/dataset/{dataset_id}",
+        headers=auth_headers,
+        json={"project_id": project["id"]},
+    )
+    assert client.delete(f"/api/v1/projects/{project['id']}", headers=auth_headers).status_code == 200
+
+    dataset = client.get(f"/api/v1/datasets/{dataset_id}", headers=auth_headers)
+    assert dataset.status_code == 200
+    assert dataset.json()["project_id"] is None
+
+
+def test_dashboards_are_scoped_the_same_way(client, auth_headers, project, restricted_user):
+    member, headers = restricted_user
+    dashboard = client.post(
+        "/api/v1/dashboards",
+        headers=auth_headers,
+        json={"name": "Project dashboard", "project_id": project["id"]},
+    )
+    assert dashboard.status_code == 201, dashboard.text
+    dashboard_id = dashboard.json()["id"]
+
+    assert client.get(f"/api/v1/dashboards/{dashboard_id}", headers=headers).status_code == 404
+
+    client.put(
+        f"/api/v1/projects/{project['id']}/members",
+        headers=auth_headers,
+        json={"user_id": member["id"], "role": "viewer"},
+    )
+    assert client.get(f"/api/v1/dashboards/{dashboard_id}", headers=headers).status_code == 200
+
+
+def test_an_unrestricted_user_still_sees_everything_unassigned(client, auth_headers, dataset_id):
+    """The upgrade path: before projects existed, every user saw every dataset."""
+    email = "ordinary@example.com"
+    password = "ordinary-password-123"
+    client.post(
+        "/api/v1/users",
+        headers=auth_headers,
+        json={"email": email, "role": "analyst", "password": password},
+    )
+    headers = _headers(client, email, password)
+    items = client.get("/api/v1/datasets", headers=headers).json()["items"]
+    assert dataset_id in [d["id"] for d in items]
+
+
+def test_every_listing_endpoint_is_scoped(client, auth_headers, dataset_id, restricted_user):
+    """A sweep, because the leaks that matter are the endpoints nobody thought of.
+
+    Two were found this way: saved queries and quality results, both of which
+    hang off a dataset and neither of which the first pass had covered.
+    """
+    member, headers = restricted_user
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Scoping sweep"}
+    ).json()
+    client.put(
+        f"/api/v1/projects/{project['id']}/members",
+        headers=auth_headers,
+        json={"user_id": member["id"], "role": "analyst"},
+    )
+
+    # Everything below hangs off this dataset, which stays in the shared area -
+    # so a user cut off from the shared area must see none of it.
+    admin_owned = {
+        "/api/v1/analytics/saved-queries": client.post(
+            "/api/v1/analytics/saved-queries",
+            headers=auth_headers,
+            json={
+                "name": "Region counts",
+                "dataset_id": dataset_id,
+                "spec": {
+                    "dataset_id": dataset_id,
+                    "dimensions": [{"variable": "region"}],
+                    "measures": [{"agg": "count"}],
+                },
+            },
+        ),
+        "/api/v1/dashboards/charts": client.post(
+            "/api/v1/dashboards/charts",
+            headers=auth_headers,
+            json={
+                "name": "Region chart",
+                "dataset_id": dataset_id,
+                "chart_type": "bar",
+                "spec": {
+                    "query": {
+                        "dimensions": [{"variable": "region"}],
+                        "measures": [{"agg": "count"}],
+                    }
+                },
+            },
+        ),
+        "/api/v1/monitoring/indicators": client.post(
+            "/api/v1/monitoring/indicators",
+            headers=auth_headers,
+            json={
+                "name": "Interviews",
+                "dataset_id": dataset_id,
+                "spec": {"measures": [{"agg": "count"}]},
+            },
+        ),
+        "/api/v1/monitoring/quality-rules": client.post(
+            "/api/v1/monitoring/quality-rules",
+            headers=auth_headers,
+            json={
+                "name": "Age in range",
+                "dataset_id": dataset_id,
+                "check_type": "value_range",
+                "config": {"variable": "age", "min": 0, "max": 120},
+            },
+        ),
+    }
+    for path, response in admin_owned.items():
+        assert response.status_code == 201, f"{path}: {response.text}"
+
+    # Run the rule so there is a quality result to leak
+    client.post(
+        f"/api/v1/monitoring/quality-rules/{admin_owned['/api/v1/monitoring/quality-rules'].json()['id']}/run",
+        headers=auth_headers,
+    )
+
+    for path in [
+        *admin_owned,
+        "/api/v1/monitoring/quality-results",
+        "/api/v1/monitoring/alert-rules",
+        "/api/v1/dashboards",
+    ]:
+        mine = client.get(path, headers=auth_headers)
+        theirs = client.get(path, headers=headers)
+        assert mine.status_code == 200 and theirs.status_code == 200, path
+        assert theirs.json() == [], f"{path} leaked {theirs.json()}"
+
+    # And the headline counts must not give away what the listings hide
+    summary = client.get("/api/v1/monitoring/summary", headers=headers).json()
+    assert summary["total_records"] == 0, summary
+
+
+def test_by_id_access_is_scoped_too_not_only_listings(client, auth_headers, dataset_id, restricted_user):
+    """Filtering the listings is not enough on its own.
+
+    The first sweep here only checked that listings come back empty, which a
+    resource reachable by a known id passes while still being readable. Every
+    one of these routes takes an id directly.
+    """
+    member, _ = restricted_user
+    # A manager, so the role check cannot answer first: these routes require one,
+    # and a 403 for insufficient role would pass this test without proving that
+    # project scope is enforced. (That 403 leaks nothing - it is returned for any
+    # id, real or not, because the role check precedes the lookup.)
+    client.patch(
+        f"/api/v1/users/{member['id']}", headers=auth_headers, json={"role": "manager"}
+    )
+    headers = _headers(client, "restricted@example.com", "restricted-password-123")
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Id access sweep"}
+    ).json()
+    client.put(
+        f"/api/v1/projects/{project['id']}/members",
+        headers=auth_headers,
+        json={"user_id": member["id"], "role": "manager"},
+    )
+
+    indicator = client.post(
+        "/api/v1/monitoring/indicators",
+        headers=auth_headers,
+        json={
+            "name": "Hidden indicator",
+            "dataset_id": dataset_id,
+            "spec": {"measures": [{"agg": "count"}]},
+        },
+    )
+    assert indicator.status_code == 201, indicator.text
+    indicator_id = indicator.json()["id"]
+
+    rule = client.post(
+        "/api/v1/monitoring/quality-rules",
+        headers=auth_headers,
+        json={
+            "name": "Hidden rule",
+            "dataset_id": dataset_id,
+            "check_type": "missing_rate",
+            "config": {"variable": "age"},
+        },
+    )
+    assert rule.status_code == 201, rule.text
+    rule_id = rule.json()["id"]
+
+    # Every one of these names a resource on a dataset in the shared area, which
+    # this user is cut off from.
+    forbidden = [
+        ("post", f"/api/v1/monitoring/indicators/{indicator_id}/refresh", None),
+        ("patch", f"/api/v1/monitoring/indicators/{indicator_id}", {"name": "renamed"}),
+        ("delete", f"/api/v1/monitoring/indicators/{indicator_id}", None),
+        ("patch", f"/api/v1/monitoring/quality-rules/{rule_id}", {"name": "renamed"}),
+        ("delete", f"/api/v1/monitoring/quality-rules/{rule_id}", None),
+        ("post", f"/api/v1/monitoring/quality-rules/{rule_id}/run", None),
+    ]
+    for method, path, body in forbidden:
+        response = getattr(client, method)(
+            path, headers=headers, **({"json": body} if body else {})
+        )
+        assert response.status_code == 404, f"{method.upper()} {path} -> {response.status_code}"
+
+    # ...and the owner can still use every one of them
+    assert (
+        client.patch(
+            f"/api/v1/monitoring/quality-rules/{rule_id}",
+            headers=auth_headers,
+            json={"name": "still mine"},
+        ).status_code
+        == 200
+    )
+
+    # Restore, since the account is shared with the other tests here
+    client.patch(
+        f"/api/v1/users/{member['id']}", headers=auth_headers, json={"role": "analyst"}
+    )
+
+
+def test_relationships_are_detected_from_the_data_and_can_be_merged(
+    client, auth_headers
+):
+    """A survey export is several tables that only mean something joined.
+
+    Detection reads the data rather than the column names: whether a key is
+    unique on each side is what tells one-to-many from many-to-many, and that is
+    a fact about values.
+    """
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Relationship test"}
+    ).json()
+
+    # One interview-level table and one roster, shaped like a real export
+    archive = _zip_bytes(
+        {
+            "rel_main.dta": _stata_bytes(
+                pd.DataFrame(
+                    {
+                        "interview__id": ["i1", "i2", "i3"],
+                        "province": [1.0, 2.0, 1.0],
+                    }
+                )
+            ),
+            "rel_people.dta": _stata_bytes(
+                pd.DataFrame(
+                    {
+                        "interview__id": ["i1", "i1", "i2"],
+                        "age": [40.0, 9.0, 33.0],
+                    }
+                )
+            ),
+        }
+    )
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("export.zip", archive, "application/zip")},
+        data={"project_id": project["id"]},
+    )
+    assert uploaded.status_code == 201, uploaded.text
+
+    detected = client.post(
+        f"/api/v1/relationships/detect?project_id={project['id']}", headers=auth_headers
+    )
+    assert detected.status_code == 200, detected.text
+    proposals = detected.json()["proposed"]
+    assert len(proposals) == 1, proposals
+    link = proposals[0]
+    # rel_main is unique on the key and rel_people is not, so main is the "one"
+    assert {link["left_name"], link["right_name"]} == {"rel_main", "rel_people"}
+    assert link["cardinality"] in ("one_to_many", "many_to_one")
+    assert link["left_variable"] == "interview__id"
+
+    stored = client.get(
+        f"/api/v1/relationships?project_id={project['id']}", headers=auth_headers
+    ).json()
+    assert len(stored) == 1
+    relationship = stored[0]
+
+    merged = client.post(
+        "/api/v1/relationships/merge",
+        headers=auth_headers,
+        json={
+            "name": "People with their interview",
+            "relationship_id": relationship["id"],
+            "how": "inner",
+        },
+    )
+    assert merged.status_code == 201, merged.text
+    body = merged.json()
+    # Three people rows match an interview... except i3 has nobody, and one
+    # person belongs to i2. Whichever way round, an inner join keeps 3 rows.
+    assert body["row_count"] == 3
+    assert body["derivation"]["type"] == "merge"
+    names = {v["name"] for v in body["variables"]}
+    assert {"province", "age"} <= names, names
+
+    # Rebuilding re-runs the recipe rather than needing it redone by hand
+    rebuilt = client.post(
+        f"/api/v1/relationships/rebuild/{body['id']}", headers=auth_headers
+    )
+    assert rebuilt.status_code == 200, rebuilt.text
+    assert rebuilt.json()["row_count"] == 3
+    assert rebuilt.json()["version"] > body["version"]
+
+
+def test_a_many_to_many_link_refuses_to_merge(client, auth_headers):
+    """Joining two rosters on the interview multiplies rows rather than adding
+    columns, and the row count afterwards would look like real fieldwork."""
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Two rosters"}
+    ).json()
+    archive = _zip_bytes(
+        {
+            "roster_a.dta": _stata_bytes(
+                pd.DataFrame({"interview__id": ["i1", "i1", "i2"], "crop": [1.0, 2.0, 3.0]})
+            ),
+            "roster_b.dta": _stata_bytes(
+                pd.DataFrame({"interview__id": ["i1", "i1", "i2"], "animal": [1.0, 2.0, 3.0]})
+            ),
+        }
+    )
+    client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("rosters.zip", archive, "application/zip")},
+        data={"project_id": project["id"]},
+    )
+    client.post(
+        f"/api/v1/relationships/detect?project_id={project['id']}", headers=auth_headers
+    )
+    stored = client.get(
+        f"/api/v1/relationships?project_id={project['id']}", headers=auth_headers
+    ).json()
+    assert len(stored) == 1
+    assert stored[0]["cardinality"] == "many_to_many"
+    # Recorded, but not switched on for anyone to merge by accident
+    assert stored[0]["is_active"] is False
+
+    refused = client.post(
+        "/api/v1/relationships/merge",
+        headers=auth_headers,
+        json={"name": "Nonsense", "relationship_id": stored[0]["id"]},
+    )
+    assert refused.status_code == 422
+    assert "multiply rows" in refused.json()["detail"]
+
+
+def test_replacing_a_project_s_data_keeps_what_was_built_on_it(client, auth_headers):
+    """The live-monitoring case: a fresh export updates the numbers, and the
+    relationships, charts, indicators and quality rules go on working.
+
+    That holds because the dataset row keeps its id and only its data is
+    swapped. Nothing here would notice if a replace created new datasets
+    instead - so each saved object is used again afterwards, not merely counted.
+    """
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Live monitoring"}
+    ).json()
+
+    def archive(keys, provinces, person_keys, ages):
+        return _zip_bytes(
+            {
+                "live_main.dta": _stata_bytes(
+                    pd.DataFrame({"interview__id": keys, "province": provinces})
+                ),
+                "live_people.dta": _stata_bytes(
+                    pd.DataFrame({"interview__id": person_keys, "age": ages})
+                ),
+            }
+        )
+
+    monday = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("monday.zip", archive(["i1", "i2"], [1.0, 2.0], ["i1", "i2"], [30.0, 40.0]), "application/zip")},
+        data={"project_id": project["id"]},
+    )
+    assert monday.status_code == 201, monday.text
+    before = {d["name"]: d for d in monday.json()["datasets"]}
+    main_id = before["live_main"]["id"]
+
+    # Build the things a user would build on it
+    client.post(f"/api/v1/relationships/detect?project_id={project['id']}", headers=auth_headers)
+    relationship = client.get(
+        f"/api/v1/relationships?project_id={project['id']}", headers=auth_headers
+    ).json()[0]
+
+    chart = client.post(
+        "/api/v1/dashboards/charts",
+        headers=auth_headers,
+        json={
+            "name": "By province",
+            "dataset_id": main_id,
+            "chart_type": "bar",
+            "spec": {"query": {"dimensions": [{"variable": "province"}], "measures": [{"agg": "count"}]}},
+        },
+    ).json()
+    indicator = client.post(
+        "/api/v1/monitoring/indicators",
+        headers=auth_headers,
+        json={"name": "Interviews", "dataset_id": main_id, "spec": {"measures": [{"agg": "count"}]}},
+    ).json()
+    assert indicator["last_value"] == 2
+
+    # Wednesday's export: the same questions, more interviews
+    wednesday = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "wednesday.zip",
+                archive(["i1", "i2", "i3", "i4"], [1.0, 2.0, 1.0, 3.0],
+                        ["i1", "i2", "i3"], [30.0, 40.0, 22.0]),
+                "application/zip",
+            )
+        },
+        data={"project_id": project["id"]},
+    )
+    assert wednesday.status_code == 201, wednesday.text
+    body = wednesday.json()
+    assert body["created"] == [], body["created"]
+    assert len(body["replaced"]) == 2, body
+
+    # Replaced, not accumulated: 4 interviews, not 2 + 4
+    after = {d["name"]: d for d in body["datasets"]}
+    assert after["live_main"]["row_count"] == 4
+    assert after["live_main"]["id"] == main_id
+
+    # The relationship still points at the same datasets and still merges
+    still_there = client.get(
+        f"/api/v1/relationships?project_id={project['id']}", headers=auth_headers
+    ).json()
+    assert [r["id"] for r in still_there] == [relationship["id"]]
+    merged = client.post(
+        "/api/v1/relationships/merge",
+        headers=auth_headers,
+        json={"name": "After replace", "relationship_id": relationship["id"], "how": "inner"},
+    )
+    assert merged.status_code == 201, merged.text
+
+    # The chart runs against the new data
+    rendered = client.post(
+        f"/api/v1/dashboards/charts/{chart['id']}/data", headers=auth_headers
+    )
+    assert rendered.status_code == 200, rendered.text
+    assert sum(row[1] for row in rendered.json()["rows"]) == 4
+
+    # And the indicator reports the new number
+    refreshed = client.post(
+        f"/api/v1/monitoring/indicators/{indicator['id']}/refresh", headers=auth_headers
+    )
+    assert refreshed.status_code == 200, refreshed.text
+    assert refreshed.json()["value"] == 4
+
+
+def test_a_replacement_that_drops_a_variable_says_what_it_broke(client, auth_headers):
+    """The one way a replace still breaks things, so it is not left to be found
+    when somebody opens the dashboard."""
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Dropped question"}
+    ).json()
+
+    full = _zip_bytes(
+        {
+            "drop_test.dta": _stata_bytes(
+                pd.DataFrame({"interview__id": ["a", "b"], "region": [1.0, 2.0], "income": [10.0, 20.0]})
+            )
+        }
+    )
+    first = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("with-income.zip", full, "application/zip")},
+        data={"project_id": project["id"]},
+    )
+    dataset_id = first.json()["datasets"][0]["id"]
+    client.post(
+        "/api/v1/dashboards/charts",
+        headers=auth_headers,
+        json={
+            "name": "Mean income",
+            "dataset_id": dataset_id,
+            "chart_type": "bar",
+            "spec": {"query": {"dimensions": [{"variable": "region"}],
+                               "measures": [{"agg": "mean", "variable": "income"}]}},
+        },
+    )
+
+    # The next export no longer carries income
+    without = _zip_bytes(
+        {
+            "drop_test.dta": _stata_bytes(
+                pd.DataFrame({"interview__id": ["a", "b", "c"], "region": [1.0, 2.0, 1.0]})
+            )
+        }
+    )
+    second = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("without-income.zip", without, "application/zip")},
+        data={"project_id": project["id"]},
+    )
+    assert second.status_code == 201, second.text
+    warnings = " ".join(second.json()["warnings"])
+    assert "no longer has" in warnings and "income" in warnings, warnings
+    assert "Mean income" in warnings, warnings
+
+
+def test_a_merged_dataset_is_rebuilt_when_its_sources_are_replaced(client, auth_headers):
+    """The bug this fixes: a merge holds last month's join and says nothing.
+
+    A merged dataset keeps its id, its name and its row count, so a dashboard
+    built on it goes on showing the previous export's figures after a
+    replacement - and looks live while doing it.
+    """
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Merged and replaced"}
+    ).json()
+
+    def archive(keys, provinces, person_keys, ages):
+        return _zip_bytes(
+            {
+                "merge_main.dta": _stata_bytes(
+                    pd.DataFrame({"interview__id": keys, "province": provinces})
+                ),
+                "merge_people.dta": _stata_bytes(
+                    pd.DataFrame({"interview__id": person_keys, "age": ages})
+                ),
+            }
+        )
+
+    first = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("first.zip", archive(["i1", "i2"], [1.0, 2.0], ["i1", "i2"], [30.0, 40.0]), "application/zip")},
+        data={"project_id": project["id"]},
+    )
+    assert first.status_code == 201, first.text
+
+    client.post(f"/api/v1/relationships/detect?project_id={project['id']}", headers=auth_headers)
+    relationship = client.get(
+        f"/api/v1/relationships?project_id={project['id']}", headers=auth_headers
+    ).json()[0]
+    merged = client.post(
+        "/api/v1/relationships/merge",
+        headers=auth_headers,
+        json={"name": "People with interviews", "relationship_id": relationship["id"], "how": "inner"},
+    ).json()
+    assert merged["row_count"] == 2
+    version = merged["version"]
+
+    # A later export with a third interview and a third person
+    second = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "second.zip",
+                archive(["i1", "i2", "i3"], [1.0, 2.0, 3.0], ["i1", "i2", "i3"], [30.0, 40.0, 22.0]),
+                "application/zip",
+            )
+        },
+        data={"project_id": project["id"]},
+    )
+    assert second.status_code == 201, second.text
+    assert any("People with interviews" in w for w in second.json()["warnings"]), second.json()
+
+    # Same dataset, same id, new figures - without anyone re-running the merge
+    again = client.get(f"/api/v1/datasets/{merged['id']}", headers=auth_headers).json()
+    assert again["id"] == merged["id"]
+    assert again["row_count"] == 3
+    assert again["version"] > version
+
+
+def test_a_label_written_on_a_source_reaches_the_merge_built_on_it(client, auth_headers):
+    """A merged dataset holds its own copy of the labels, and is usually the one
+    a dashboard points at - so a label written on the source and left behind is
+    invisible exactly where it was wanted."""
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Labels through a merge"}
+    ).json()
+    archive = _zip_bytes(
+        {
+            "label_main.dta": _stata_bytes(
+                pd.DataFrame({"interview__id": ["i1", "i2"], "DEM_SEX": [1.0, 2.0]})
+            ),
+            "label_people.dta": _stata_bytes(
+                pd.DataFrame({"interview__id": ["i1", "i2"], "age": [30.0, 40.0]})
+            ),
+        }
+    )
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("labels.zip", archive, "application/zip")},
+        data={"project_id": project["id"]},
+    ).json()
+    main_id = next(d["id"] for d in uploaded["datasets"] if d["name"] == "label_main")
+
+    client.post(f"/api/v1/relationships/detect?project_id={project['id']}", headers=auth_headers)
+    relationship = client.get(
+        f"/api/v1/relationships?project_id={project['id']}", headers=auth_headers
+    ).json()[0]
+    merged = client.post(
+        "/api/v1/relationships/merge",
+        headers=auth_headers,
+        json={"name": "Merged for labels", "relationship_id": relationship["id"]},
+    ).json()
+
+    client.patch(
+        f"/api/v1/datasets/{main_id}/variables/DEM_SEX",
+        headers=auth_headers,
+        json={"label": "Sex", "value_labels": {"1": "Male", "2": "Female"}},
+    )
+
+    downstream = client.get(f"/api/v1/datasets/{merged['id']}", headers=auth_headers).json()
+    variable = next(v for v in downstream["variables"] if v["name"] == "DEM_SEX")
+    assert variable["label"] == "Sex"
+    assert variable["value_labels"] == {"1": "Male", "2": "Female"}
+
+
+def test_a_project_s_datasets_can_be_deleted_in_one_go(client, auth_headers):
+    """An export makes eight datasets at once; clearing them one at a time is
+    eight confirmations for one decision."""
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Bulk delete"}
+    ).json()
+    other = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Left alone"}
+    ).json()
+
+    archive = _zip_bytes(
+        {
+            "bulk_main.dta": _stata_bytes(pd.DataFrame({"id": ["i1"], "age": [30.0]})),
+            "bulk_people.dta": _stata_bytes(pd.DataFrame({"pid": ["p1"], "sex": [1.0]})),
+        }
+    )
+    client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("bulk.zip", archive, "application/zip")},
+        data={"project_id": project["id"]},
+    )
+    keeper = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={"file": ("keeper.zip", archive, "application/zip")},
+        data={"project_id": other["id"]},
+    ).json()["datasets"]
+
+    response = client.post(
+        "/api/v1/datasets/delete", headers=auth_headers, json={"project_id": project["id"]}
+    )
+    assert response.status_code == 200, response.text
+    assert "2 dataset(s)" in response.json()["detail"]
+
+    listed = client.get("/api/v1/datasets?limit=200", headers=auth_headers).json()["items"]
+    assert not [d for d in listed if d["project_id"] == project["id"]]
+    # The other project is untouched
+    assert len([d for d in listed if d["project_id"] == other["id"]]) == len(keeper)
+
+
+def test_several_chosen_datasets_can_be_deleted_together(client, auth_headers):
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Pick and choose"}
+    ).json()
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "choose.zip",
+                _zip_bytes(
+                    {
+                        "choose_a.dta": _stata_bytes(pd.DataFrame({"id": ["a"], "v": [1.0]})),
+                        "choose_b.dta": _stata_bytes(pd.DataFrame({"pid": ["b"], "w": [2.0]})),
+                    }
+                ),
+                "application/zip",
+            )
+        },
+        data={"project_id": project["id"]},
+    ).json()["datasets"]
+
+    doomed = uploaded[0]
+    response = client.post(
+        "/api/v1/datasets/delete", headers=auth_headers, json={"ids": [doomed["id"]]}
+    )
+    assert response.status_code == 200, response.text
+
+    remaining = client.get("/api/v1/datasets?limit=200", headers=auth_headers).json()["items"]
+    names = {d["id"] for d in remaining if d["project_id"] == project["id"]}
+    assert doomed["id"] not in names
+    assert len(names) == len(uploaded) - 1
+
+
+def test_deleting_nothing_says_so_rather_than_reporting_success(client, auth_headers):
+    response = client.post(
+        "/api/v1/datasets/delete", headers=auth_headers, json={"ids": ["not-a-real-id"]}
+    )
+    assert response.status_code == 404
+
+
+def test_a_viewer_cannot_bulk_delete(client, auth_headers):
+    """The same rule as deleting one, which the bulk route must not slip past."""
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Viewer bulk"}
+    ).json()
+    client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "viewerbulk.zip",
+                _zip_bytes({"vb.dta": _stata_bytes(pd.DataFrame({"id": ["a"], "v": [1.0]}))}),
+                "application/zip",
+            )
+        },
+        data={"project_id": project["id"]},
+    )
+
+    created = client.post(
+        "/api/v1/users",
+        headers=auth_headers,
+        json={
+            "email": "bulkviewer@example.com",
+            "full_name": "Bulk Viewer",
+            "role": "viewer",
+            "password": "viewer-password-1",
+        },
+    )
+    assert created.status_code == 201, created.text
+    token = client.post(
+        "/api/v1/auth/login",
+        json={"email": "bulkviewer@example.com", "password": "viewer-password-1"},
+    ).json()["access_token"]
+
+    refused = client.post(
+        "/api/v1/datasets/delete",
+        headers={"Authorization": f"Bearer {token}"},
+        json={"project_id": project["id"]},
+    )
+    assert refused.status_code == 403
+
+
+def test_monitoring_quality_and_alerts_can_be_seen_one_project_at_a_time(
+    client, auth_headers
+):
+    """These all hang off a dataset, so a project filter is a question about
+    the dataset - one fact in one place, rather than a second project stored on
+    each of them that could disagree with it."""
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    def survey(name: str) -> tuple[str, str]:
+        project = client.post(
+            "/api/v1/projects", headers=auth_headers, json={"name": name}
+        ).json()
+        uploaded = client.post(
+            "/api/v1/datasets/upload",
+            headers=auth_headers,
+            files={
+                "file": (
+                    f"{name}.zip",
+                    _zip_bytes(
+                        {
+                            f"{name}.dta": _stata_bytes(
+                                pd.DataFrame(
+                                    {"interview__key": ["a", "b"], "age": [30.0, 40.0]}
+                                )
+                            )
+                        }
+                    ),
+                    "application/zip",
+                )
+            },
+            data={"project_id": project["id"]},
+        ).json()
+        return project["id"], uploaded["datasets"][0]["id"]
+
+    north, north_data = survey("scoped_north")
+    south, south_data = survey("scoped_south")
+
+    for label, dataset_id in (("North count", north_data), ("South count", south_data)):
+        client.post(
+            "/api/v1/monitoring/indicators",
+            headers=auth_headers,
+            json={
+                "name": label,
+                "dataset_id": dataset_id,
+                "spec": {"measures": [{"agg": "count"}]},
+            },
+        )
+        client.post(
+            "/api/v1/monitoring/quality-rules",
+            headers=auth_headers,
+            json={
+                "name": f"{label} completeness",
+                "dataset_id": dataset_id,
+                "check_type": "missing_rate",
+                "config": {"variable": "age", "threshold": 0.5},
+            },
+        )
+
+    indicators = client.get(
+        f"/api/v1/monitoring/indicators?project_id={north}", headers=auth_headers
+    ).json()
+    assert [i["name"] for i in indicators] == ["North count"]
+
+    values = client.get(
+        f"/api/v1/monitoring/indicators/values?project_id={south}", headers=auth_headers
+    ).json()
+    assert [v["name"] for v in values] == ["South count"]
+
+    rules = client.get(
+        f"/api/v1/monitoring/quality-rules?project_id={north}", headers=auth_headers
+    ).json()
+    assert [r["name"] for r in rules] == ["North count completeness"]
+
+    # No filter still shows both
+    everything = client.get("/api/v1/monitoring/indicators", headers=auth_headers).json()
+    assert {"North count", "South count"} <= {i["name"] for i in everything}
+
+
+def test_the_shared_area_is_a_place_a_filter_can_name(client, auth_headers):
+    """An empty project id means the shared area, not "no filter"."""
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Not shared"}
+    ).json()
+    frame = pd.DataFrame({"interview__key": ["a"], "age": [30.0]})
+
+    shared = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "sharedscope.zip",
+                _zip_bytes({"sharedscope.dta": _stata_bytes(frame)}),
+                "application/zip",
+            )
+        },
+    ).json()["datasets"][0]["id"]
+    owned = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "ownedscope.zip",
+                _zip_bytes({"ownedscope.dta": _stata_bytes(frame)}),
+                "application/zip",
+            )
+        },
+        data={"project_id": project["id"]},
+    ).json()["datasets"][0]["id"]
+
+    for label, dataset_id in (("Shared one", shared), ("Owned one", owned)):
+        client.post(
+            "/api/v1/monitoring/indicators",
+            headers=auth_headers,
+            json={
+                "name": label,
+                "dataset_id": dataset_id,
+                "spec": {"measures": [{"agg": "count"}]},
+            },
+        )
+
+    in_shared = {
+        i["name"]
+        for i in client.get(
+            "/api/v1/monitoring/indicators?project_id=", headers=auth_headers
+        ).json()
+    }
+    assert "Shared one" in in_shared
+    assert "Owned one" not in in_shared
+
+
+def _two_dataset_project(client, auth_headers, name: str) -> tuple[str, list[dict]]:
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": name}
+    ).json()
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                f"{name}.zip",
+                _zip_bytes(
+                    {
+                        f"{name}_main.dta": _stata_bytes(
+                            pd.DataFrame({"interview__id": ["i1", "i2"], "province": [1.0, 2.0]})
+                        ),
+                        f"{name}_people.dta": _stata_bytes(
+                            pd.DataFrame({"interview__id": ["i1", "i2"], "age": [30.0, 40.0]})
+                        ),
+                    }
+                ),
+                "application/zip",
+            )
+        },
+        data={"project_id": project["id"]},
+    ).json()
+    return project["id"], uploaded["datasets"]
+
+
+def test_relationships_can_be_cleared_and_detected_again(client, auth_headers):
+    """Detection is a guess, and a wrong guess is easier to clear out than to
+    correct one at a time."""
+    project, _ = _two_dataset_project(client, auth_headers, "clearable")
+
+    client.post(f"/api/v1/relationships/detect?project_id={project}", headers=auth_headers)
+    assert client.get(
+        f"/api/v1/relationships?project_id={project}", headers=auth_headers
+    ).json()
+
+    cleared = client.post(
+        f"/api/v1/relationships/clear?project_id={project}", headers=auth_headers
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert "relationship(s)" in cleared.json()["detail"]
+    assert (
+        client.get(
+            f"/api/v1/relationships?project_id={project}", headers=auth_headers
+        ).json()
+        == []
+    )
+
+    # And detection can be run again from a clean slate
+    client.post(f"/api/v1/relationships/detect?project_id={project}", headers=auth_headers)
+    assert client.get(
+        f"/api/v1/relationships?project_id={project}", headers=auth_headers
+    ).json()
+
+
+def test_clearing_only_the_guesses_keeps_what_was_made_by_hand(client, auth_headers):
+    """A hand-made link is not a guess, and clearing it loses work."""
+    project, datasets = _two_dataset_project(client, auth_headers, "handmade")
+    main = next(d for d in datasets if d["name"].endswith("_main"))
+    people = next(d for d in datasets if d["name"].endswith("_people"))
+
+    client.post(f"/api/v1/relationships/detect?project_id={project}", headers=auth_headers)
+    made = client.post(
+        "/api/v1/relationships",
+        headers=auth_headers,
+        json={
+            "left_dataset_id": main["id"],
+            "right_dataset_id": people["id"],
+            "left_variable": "province",
+            "right_variable": "age",
+            "cardinality": "one_to_many",
+        },
+    )
+    assert made.status_code == 201, made.text
+    assert made.json()["detected"] is False
+
+    cleared = client.post(
+        f"/api/v1/relationships/clear?project_id={project}&detected_only=true",
+        headers=auth_headers,
+    )
+    assert cleared.status_code == 200, cleared.text
+
+    left = client.get(
+        f"/api/v1/relationships?project_id={project}", headers=auth_headers
+    ).json()
+    assert [r["id"] for r in left] == [made.json()["id"]]
+
+
+def test_clearing_nothing_says_so(client, auth_headers):
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Nothing to clear"}
+    ).json()
+    response = client.post(
+        f"/api/v1/relationships/clear?project_id={project['id']}", headers=auth_headers
+    )
+    assert response.status_code == 404
+
+
+def test_a_relationship_can_be_made_by_hand_between_any_two_columns(client, auth_headers):
+    """Detection only finds the obvious keys; the analyst knows the rest."""
+    project, datasets = _two_dataset_project(client, auth_headers, "byhand")
+    main, people = datasets[0], datasets[1]
+
+    response = client.post(
+        "/api/v1/relationships",
+        headers=auth_headers,
+        json={
+            "left_dataset_id": main["id"],
+            "right_dataset_id": people["id"],
+            "left_variable": "interview__id",
+            "right_variable": "interview__id",
+            "cardinality": "one_to_many",
+        },
+    )
+    assert response.status_code == 201, response.text
+    body = response.json()
+    assert body["detected"] is False
+    assert body["left_variable"] == "interview__id"
+
+    # A column that is not there is refused rather than stored and failing later
+    bad = client.post(
+        "/api/v1/relationships",
+        headers=auth_headers,
+        json={
+            "left_dataset_id": main["id"],
+            "right_dataset_id": people["id"],
+            "left_variable": "not_a_column",
+            "right_variable": "interview__id",
+        },
+    )
+    assert bad.status_code == 422
+    assert "not_a_column" in bad.json()["detail"]
+
+
+def test_deleting_a_project_can_take_everything_with_it(client, auth_headers):
+    """A round that is finished with is finished with. Moving eight datasets to
+    the shared area to delete them one at a time is not tidying up."""
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Finished round"}
+    ).json()
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "finished.zip",
+                _zip_bytes(
+                    {
+                        "finished_main.dta": _stata_bytes(
+                            pd.DataFrame({"interview__id": ["i1"], "province": [1.0]})
+                        ),
+                        "finished_people.dta": _stata_bytes(
+                            pd.DataFrame({"interview__id": ["i1"], "age": [30.0]})
+                        ),
+                    }
+                ),
+                "application/zip",
+            )
+        },
+        data={"project_id": project["id"]},
+    ).json()
+    dataset_id = uploaded["datasets"][0]["id"]
+
+    # Everything a project accumulates
+    client.post(f"/api/v1/relationships/detect?project_id={project['id']}", headers=auth_headers)
+    chart = client.post(
+        "/api/v1/dashboards/charts",
+        headers=auth_headers,
+        json={
+            "name": "Doomed chart",
+            "dataset_id": dataset_id,
+            "chart_type": "bar",
+            "spec": {"query": {"measures": [{"agg": "count"}]}},
+        },
+    ).json()
+    indicator = client.post(
+        "/api/v1/monitoring/indicators",
+        headers=auth_headers,
+        json={
+            "name": "Doomed indicator",
+            "dataset_id": dataset_id,
+            "spec": {"measures": [{"agg": "count"}]},
+        },
+    ).json()
+    rule = client.post(
+        "/api/v1/monitoring/quality-rules",
+        headers=auth_headers,
+        json={
+            "name": "Doomed check",
+            "dataset_id": dataset_id,
+            "check_type": "missing_rate",
+            "config": {"variable": "province", "threshold": 0.5},
+        },
+    ).json()
+    dashboard = client.post(
+        "/api/v1/dashboards",
+        headers=auth_headers,
+        json={"name": "Doomed dashboard", "project_id": project["id"]},
+    ).json()
+
+    response = client.delete(
+        f"/api/v1/projects/{project['id']}?contents=delete", headers=auth_headers
+    )
+    assert response.status_code == 200, response.text
+    assert "2 dataset(s)" in response.json()["detail"]
+
+    # None of it survives, and none of it is left in the shared area
+    for path in (
+        f"/api/v1/datasets/{dataset_id}",
+        f"/api/v1/dashboards/{dashboard['id']}",
+        f"/api/v1/dashboards/charts/{chart['id']}",
+        f"/api/v1/monitoring/indicators/{indicator['id']}/refresh",
+    ):
+        assert client.get(path, headers=auth_headers).status_code in (404, 405), path
+    assert not [
+        d
+        for d in client.get("/api/v1/datasets?limit=200", headers=auth_headers).json()["items"]
+        if d["name"].startswith("finished_")
+    ]
+    assert rule["id"] not in {
+        r["id"]
+        for r in client.get("/api/v1/monitoring/quality-rules", headers=auth_headers).json()
+    }
+    # This project's relationships specifically; the suite has others of its own.
+    assert not [
+        r
+        for r in client.get("/api/v1/relationships", headers=auth_headers).json()
+        if r["left_name"].startswith("finished_") or r["right_name"].startswith("finished_")
+    ]
+
+
+def test_deleting_a_project_still_releases_its_data_by_default(client, auth_headers):
+    """The old behaviour, and the one somebody gets by not asking for the other."""
+    import pandas as pd
+
+    from tests.test_api_analytics import _stata_bytes, _zip_bytes
+
+    project = client.post(
+        "/api/v1/projects", headers=auth_headers, json={"name": "Dissolved only"}
+    ).json()
+    uploaded = client.post(
+        "/api/v1/datasets/upload",
+        headers=auth_headers,
+        files={
+            "file": (
+                "released.zip",
+                _zip_bytes(
+                    {"released.dta": _stata_bytes(pd.DataFrame({"id": ["a"], "v": [1.0]}))}
+                ),
+                "application/zip",
+            )
+        },
+        data={"project_id": project["id"]},
+    ).json()
+    dataset_id = uploaded["datasets"][0]["id"]
+
+    response = client.delete(f"/api/v1/projects/{project['id']}", headers=auth_headers)
+    assert response.status_code == 200
+    assert "moved to the shared area" in response.json()["detail"]
+
+    survivor = client.get(f"/api/v1/datasets/{dataset_id}", headers=auth_headers)
+    assert survivor.status_code == 200
+    assert survivor.json()["project_id"] is None

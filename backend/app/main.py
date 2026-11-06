@@ -1,0 +1,174 @@
+"""FastAPI application entry point."""
+
+from __future__ import annotations
+
+import time
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI, Request, status
+from fastapi.exceptions import RequestValidationError
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
+from fastapi.responses import JSONResponse
+from sqlalchemy import text
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm.exc import StaleDataError
+
+from app import __version__
+from app.core.config import settings
+from app.core.logging import configure_logging, get_logger
+from app.services import preferences
+from app.services.query_runtime import install_query_runtime
+
+# Install this before router imports. Endpoint modules import execute_query by
+# name, so they need to see the cached/configured function from the outset.
+install_query_runtime()
+
+from app.api.v1.router import api_router  # noqa: E402
+from app.db.init_db import initialise  # noqa: E402
+from app.db.session import engine  # noqa: E402
+from app.services.ingest import IngestError  # noqa: E402
+from app.services.query_engine import QueryError  # noqa: E402
+from app.services.survey_solutions import SurveySolutionsError  # noqa: E402
+
+configure_logging()
+logger = get_logger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    logger.info("Starting %s %s (%s)", settings.project_name, __version__, settings.environment)
+    initialise()
+    yield
+    logger.info("Shutting down")
+
+
+app = FastAPI(
+    title=settings.project_name,
+    version=__version__,
+    description=(
+        "Survey data monitoring platform: connect to Survey Solutions, import Stata "
+        "and other survey files, tabulate, chart and monitor field work."
+    ),
+    docs_url="/api/docs",
+    redoc_url="/api/redoc",
+    openapi_url="/api/openapi.json",
+    lifespan=lifespan,
+)
+
+app.add_middleware(GZipMiddleware, minimum_size=1024)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=settings.cors_origin_list,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+
+@app.middleware("http")
+async def refuse_oversized_upload(request: Request, call_next):  # type: ignore[no-untyped-def]
+    """Answer an over-limit upload before its body is read.
+
+    The size check used to live in the upload route, which runs only after the
+    whole multipart body has been received and parsed. So a file over the limit
+    was transferred in full, written to disk, and only then refused - and a
+    proxy in front, holding a body nobody was reading any more, reported the
+    whole thing as a bad gateway rather than as the size limit it was. Here it
+    is decided from the declared length, before any of it is read.
+    """
+    if request.method == "POST" and request.url.path.endswith("/datasets/upload"):
+        declared = request.headers.get("content-length", "")
+        limit = preferences.value("max_upload_mb") * 1024 * 1024
+        # A megabyte of slack for the form fields travelling with the file.
+        if declared.isdigit() and int(declared) > limit + 1024 * 1024:
+            return JSONResponse(
+                status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+                content={
+                    "detail": (
+                        f"This upload is {int(declared) / (1024 * 1024):,.0f} MB and "
+                        f"the limit is {preferences.upload_label()}. An "
+                        "administrator can raise it under Administration -> "
+                        "Settings, or upload the archive's files one at a time."
+                    )
+                },
+            )
+    return await call_next(request)
+
+
+@app.middleware("http")
+async def add_timing_header(request: Request, call_next):  # type: ignore[no-untyped-def]
+    started = time.perf_counter()
+    response = await call_next(request)
+    response.headers["X-Process-Time-Ms"] = f"{(time.perf_counter() - started) * 1000:.1f}"
+    return response
+
+
+@app.exception_handler(QueryError)
+async def handle_query_error(request: Request, exc: QueryError) -> JSONResponse:
+    return JSONResponse(status_code=400, content={"detail": str(exc)})
+
+
+@app.exception_handler(IngestError)
+async def handle_ingest_error(request: Request, exc: IngestError) -> JSONResponse:
+    return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+
+@app.exception_handler(SurveySolutionsError)
+async def handle_suso_error(request: Request, exc: SurveySolutionsError) -> JSONResponse:
+    return JSONResponse(status_code=502, content={"detail": str(exc)})
+
+
+@app.exception_handler(RequestValidationError)
+async def handle_validation_error(request: Request, exc: RequestValidationError) -> JSONResponse:
+    """Return validation problems in a shape the UI can show next to fields."""
+    errors = [
+        {
+            "field": ".".join(str(part) for part in error["loc"][1:]) or "body",
+            "message": error["msg"],
+        }
+        for error in exc.errors()
+    ]
+    return JSONResponse(
+        status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+        content={"detail": errors[0]["message"] if errors else "Invalid request", "errors": errors},
+    )
+
+
+app.include_router(api_router, prefix=settings.api_v1_prefix)
+
+
+@app.get("/health", tags=["system"])
+def health() -> dict[str, object]:
+    """Liveness and readiness probe used by Docker and load balancers."""
+    database_ok = True
+    try:
+        with engine.connect() as connection:
+            connection.execute(text("SELECT 1"))
+    except SQLAlchemyError:
+        database_ok = False
+    return {
+        "status": "ok" if database_ok else "degraded",
+        "version": __version__,
+        "database": "ok" if database_ok else "unreachable",
+    }
+
+
+@app.exception_handler(StaleDataError)
+async def concurrent_dataset_update(request: Request, exc: StaleDataError):
+    return JSONResponse(
+        status_code=409,
+        content={
+            "detail": ("This dataset changed during your update. Reload and retry; "
+                       "the previous version is retained.")
+        },
+    )
+
+
+from app.services.operation_lock import OperationBusy  # noqa: E402
+
+
+@app.exception_handler(OperationBusy)
+async def busy_operation(request: Request, exc: OperationBusy):
+    return JSONResponse(status_code=409, content={"detail": str(exc)})

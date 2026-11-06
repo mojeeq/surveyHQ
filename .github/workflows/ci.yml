@@ -1,0 +1,253 @@
+name: CI
+
+on:
+  push:
+    branches: [main, "claude/**"]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend (${{ matrix.database }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # SQLite is fast and needs no services. PostgreSQL is what production
+          # runs, and catches faults SQLite cannot - a shared enum type emitting
+          # CREATE TYPE twice, for one.
+          - database: sqlite
+            url: ""
+          - database: postgres
+            url: postgresql+psycopg2://surveyhq:surveyhq@127.0.0.1:5432/surveyhq_test
+
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: surveyhq
+          POSTGRES_PASSWORD: surveyhq
+          POSTGRES_DB: surveyhq_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U surveyhq"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    defaults:
+      run:
+        working-directory: backend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: backend/requirements-dev.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements-dev.txt
+
+      - name: Lint
+        run: ruff check app tests migrations
+
+      - name: Test
+        env:
+          DATABASE_URL_OVERRIDE: ${{ matrix.url }}
+        run: pytest tests -q
+
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci --no-audit --no-fund
+
+      # Through npm rather than npx: the prelint hook builds the in-app
+      # help from docs/, and the typecheck needs it to exist.
+      - name: Typecheck
+        run: npm run lint
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+  stack:
+    name: Stack starts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The default buildx driver is "docker", which cannot export a cache.
+      # This sets up a docker-container builder, which can.
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Generated the way the installer generates it, in particular the plain
+      # comma-separated CORS_ORIGINS. A bare "http://host:8080" there once
+      # killed the API at start-up and nginx answered 502 on everything; the
+      # images still built, so building them was never enough to catch it.
+      - name: Generate .env the way the installer does
+        run: |
+          cp .env.example .env
+          sed -i "s|^SECRET_KEY=.*|SECRET_KEY=$(openssl rand -hex 32)|" .env
+          sed -i "s|^ENCRYPTION_KEY=.*|ENCRYPTION_KEY=$(python3 -c 'import base64,os;print(base64.urlsafe_b64encode(os.urandom(32)).decode())')|" .env
+          sed -i "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$(openssl rand -hex 16)|" .env
+          sed -i "s|^FIRST_ADMIN_EMAIL=.*|FIRST_ADMIN_EMAIL=ci@example.org|" .env
+          sed -i "s|^FIRST_ADMIN_PASSWORD=.*|FIRST_ADMIN_PASSWORD=ci-password-12345|" .env
+          sed -i "s|^PUBLIC_URL=.*|PUBLIC_URL=http://localhost:8080|" .env
+          sed -i "s|^CORS_ORIGINS=.*|CORS_ORIGINS=http://localhost:8080|" .env
+          docker compose config --quiet
+
+      - name: Build and start the whole stack
+        run: docker compose up -d --build
+
+      - name: The API answers through nginx
+        run: |
+          for _ in $(seq 1 60); do
+            if curl -fsS http://localhost:8080/health | grep -q '"status":"ok"'; then
+              echo "health ok"
+              exit 0
+            fi
+            sleep 3
+          done
+          echo "the API never became healthy"
+          exit 1
+
+      # Proves more than a health probe: the schema was created, the bootstrap
+      # administrator exists, nginx proxies POSTs to the API, and the first
+      # sign-in leads somewhere.
+      #
+      # The password is changed before anything else is asked for, because a
+      # bootstrap administrator must set their own before any other route will
+      # answer them - which is the point of that rule, and which is what a real
+      # first sign-in does. Reading a dataset list on the token straight from
+      # the first login used to work and now returns 403, so this walks the
+      # same path a person does.
+      - name: The bootstrap administrator can sign in and set their password
+        run: |
+          login() {
+            curl -fsS -X POST http://localhost:8080/api/v1/auth/login \
+              -H 'Content-Type: application/json' \
+              -d "{\"email\":\"ci@example.org\",\"password\":\"$1\"}" \
+              | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])'
+          }
+          first=$(login 'ci-password-12345')
+          test -n "$first"
+          curl -fsS -X POST http://localhost:8080/api/v1/auth/change-password \
+            -H 'Content-Type: application/json' \
+            -H "Authorization: Bearer $first" \
+            -d '{"current_password":"ci-password-12345","new_password":"ci-password-67890"}' \
+            > /dev/null
+          token=$(login 'ci-password-67890')
+          test -n "$token"
+          curl -fsS http://localhost:8080/api/v1/datasets \
+            -H "Authorization: Bearer $token" > /dev/null
+          echo "signed in, set a password, and read an authenticated endpoint"
+
+      - name: The single page app is served
+        run: curl -fsS http://localhost:8080/ | grep -q '<div id="root">'
+
+      - name: The worker is running
+        run: docker compose ps --services --filter status=running | grep -qx worker
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install browser tests
+        working-directory: frontend
+        run: |
+          npm ci --no-audit --no-fund
+          npx playwright install --with-deps chromium
+
+      - name: Upload through anonymous sharing in a real browser
+        working-directory: frontend
+        run: npm run test:e2e
+
+      - name: Back up and restore the populated stack
+        run: |
+          ./scripts/backup.sh
+          archive=$(ls -1t backups/surveyhq-*.tar.gz | head -n 1)
+          printf 'restore\n' | ./scripts/restore.sh "$archive"
+          token=$(curl --retry 20 --retry-connrefused --retry-all-errors --retry-delay 2 -fsS \
+            -X POST http://localhost:8080/api/v1/auth/login -H 'Content-Type: application/json' \
+            -d '{"email":"ci@example.org","password":"ci-password-67890"}' \
+            | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+          curl -fsS http://localhost:8080/api/v1/datasets -H "Authorization: Bearer $token" \
+            | python3 -c 'import json,sys; data=json.load(sys.stdin); assert any(d["row_count"] == 60 for d in data["items"]), data'
+
+      - name: Browser traces on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-results
+          path: frontend/test-results/
+
+      - name: Container status and logs on failure
+        if: failure()
+        run: |
+          docker compose ps
+          docker compose logs --tail=120
+
+      - name: Stop the stack
+        if: always()
+        run: docker compose down -v
+
+  scripts:
+    name: Shell scripts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Every shell script in the repository. backend/sandbox/ was named here
+      # too until the R sandbox went; a glob that matches nothing is left
+      # unexpanded by the shell and then fails as a filename, so a directory
+      # named here has to be one that exists.
+      - name: Check syntax
+        run: for f in scripts/*.sh; do bash -n "$f"; done
+      - name: Shellcheck
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq shellcheck
+          shellcheck --severity=warning scripts/*.sh
+      # Production beside development has to be a compose project of its own,
+      # on ports and a staging folder of its own. Were the two ever to resolve
+      # to the same project, `make up STACK=prod` would rebuild development's
+      # containers over its data - and copy-prod-to-dev would restore
+      # production over itself.
+      - name: A production env file makes a stack of its own
+        run: |
+          ./scripts/setup-env.sh
+          ./scripts/setup-env.sh prod
+          docker compose --env-file .env config > dev.yml
+          docker compose --env-file .env.prod config > prod.yml
+          grep -qx 'name: surveyhq' dev.yml
+          grep -qx 'name: surveyhq-prod' prod.yml
+          grep -q 'name: surveyhq-prod_survey-data' prod.yml
+          grep -q 'published: "8081"' prod.yml
+          grep -q 'incoming-prod' prod.yml
+          ! grep -q 'incoming-prod' dev.yml
+          echo "development and production are separate stacks"
