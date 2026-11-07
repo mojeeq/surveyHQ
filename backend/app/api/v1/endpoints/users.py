@@ -116,7 +116,15 @@ def directory(
             max(1, min(limit, 500))
         )
     ).all()
-    return [UserDirectoryEntry.model_validate(person) for person in people]
+    return [
+        UserDirectoryEntry(
+            id=person.id,
+            username=person.username or "",
+            full_name=person.full_name,
+            email=person.email,
+        )
+        for person in people
+    ]
 
 
 @router.post("", response_model=UserOut, status_code=201)

@@ -14,6 +14,7 @@ from __future__ import annotations
 import pytest
 
 from app.core.config import settings
+from app.models import User
 from tests.conftest import sign_in
 
 
@@ -56,6 +57,24 @@ def test_the_directory_lists_people_by_name_and_address(client, auth_headers, co
     entry = next(p for p in listed.json() if p["id"] == colleague["id"])
     assert entry["full_name"] == "Mary Tabi"
     assert entry["email"] == "mary.tabi@example.com"
+
+
+def test_the_directory_handles_an_account_without_a_username(
+    client, auth_headers, colleague, db_session
+):
+    person = db_session.get(User, colleague["id"])
+    assert person is not None
+    username = person.username
+    person.username = None
+    db_session.commit()
+    try:
+        listed = _directory(client, auth_headers)
+        assert listed.status_code == 200, listed.text
+        entry = next(p for p in listed.json() if p["id"] == colleague["id"])
+        assert entry["username"] == ""
+    finally:
+        person.username = username
+        db_session.commit()
 
 
 def test_a_manager_who_is_not_an_administrator_can_read_it(
