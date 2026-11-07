@@ -136,7 +136,7 @@ class UserDirectoryEntry(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: str
-    username: str = ""
+    username: str | None = None
     full_name: str = ""
     email: str
 
