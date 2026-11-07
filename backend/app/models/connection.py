@@ -56,6 +56,17 @@ class SourceKind(str, enum.Enum):
 
     survey_solutions = "survey_solutions"
     folder = "folder"
+    odk_central = "odk_central"
+    surveycto = "surveycto"
+    cspro_csweb = "cspro_csweb"
+    google_sheets = "google_sheets"
+    kobotoolbox = "kobotoolbox"
+    sharepoint = "sharepoint"
+
+    @property
+    def is_link(self) -> bool:
+        """External links open in the browser; only native sources can sync."""
+        return self not in (SourceKind.survey_solutions, SourceKind.folder)
 
 
 class Connection(UUIDMixin, TimestampMixin, Base):
@@ -74,7 +85,7 @@ class Connection(UUIDMixin, TimestampMixin, Base):
     folder_path: Mapped[str] = mapped_column(
         String(500), default="", server_default=text("''")
     )
-    base_url: Mapped[str] = mapped_column(String(500), nullable=False)
+    base_url: Mapped[str] = mapped_column(String(2048), nullable=False)
     workspace: Mapped[str] = mapped_column(String(120), default="primary")
     username: Mapped[str] = mapped_column(String(200), default="")
     password_encrypted: Mapped[str] = mapped_column(Text, default="")

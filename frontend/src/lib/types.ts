@@ -429,7 +429,7 @@ export interface Connection {
    * The second exists because creating an API user is an administrator's
    * privilege on the survey server, and the answer is sometimes no.
    */
-  source_kind: 'survey_solutions' | 'folder'
+  source_kind: 'survey_solutions' | 'folder' | 'odk_central' | 'surveycto' | 'cspro_csweb' | 'google_sheets' | 'kobotoolbox' | 'sharepoint'
   /** For a folder connection: the directory read, inside an allowed root. */
   folder_path: string
   base_url: string

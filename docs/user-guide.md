@@ -454,6 +454,23 @@ Stata and SPSS files are recommended because they include variable and value
 labels, which are used throughout SurveyHQ. After the upload you are taken to the
 new dataset, which shows its row count, variables and detected types.
 
+### Saving links to other survey and document sources
+
+In **Connections → Add a connection**, choose **ODK Central**, **SurveyCTO**,
+**CSPro / CSWeb**, **Google Sheets**, **KoboToolbox**, or **SharePoint**. Give the
+connection a name, paste its HTTPS link, choose a project, and save it.
+For SharePoint, you can paste a folder or document-library link.
+
+These six options are **saved links**, not automatic data integrations. Their
+cards have an **Open** button that opens the provider in a new tab. Sign in
+there with your own account; SurveyHQ does not store credentials for these
+links. **Check link format** checks the address only, not sign-in or access.
+Use links for people with existing access when sharing private folders.
+
+To bring data into SurveyHQ, download a supported data export and upload it,
+or place it in an approved local import folder. Automatic API imports remain
+available for Survey Solutions; local folders also support scheduled imports.
+
 ### Importing from Survey Solutions
 
 See [survey-solutions.md](survey-solutions.md).

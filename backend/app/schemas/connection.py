@@ -15,7 +15,7 @@ class ConnectionBase(BaseModel):
     # second exists because creating an API user is an administrator's
     # privilege on the survey server and the answer is sometimes no.
     source_kind: SourceKind = SourceKind.survey_solutions
-    base_url: str = ""
+    base_url: str = Field(default="", max_length=2048)
     folder_path: str = ""
     workspace: str = "primary"
     username: str = ""
@@ -59,7 +59,9 @@ class ConnectionBase(BaseModel):
         if not value.startswith(("http://", "https://")):
             raise ValueError("The server URL must start with http:// or https://")
         # Reject a URL that already includes an API path; we build those ourselves
-        HttpUrl(value)
+        url = HttpUrl(value)
+        if url.username or url.password:
+            raise ValueError("Links must not contain a user name or password")
         return value
 
     @model_validator(mode="after")
@@ -75,11 +77,26 @@ class ConnectionBase(BaseModel):
                 raise ValueError("A folder connection needs the folder to read")
         elif not self.base_url.strip():
             raise ValueError("A server connection needs the server URL")
+        if self.source_kind.is_link:
+            if HttpUrl(self.base_url).scheme != "https":
+                raise ValueError("External connection links must use https://")
+            if self.sync_enabled:
+                raise ValueError(
+                    "This connection saves a link; automatic imports are not supported"
+                )
         return self
 
 
 class ConnectionCreate(ConnectionBase):
     password: str = ""
+
+    @model_validator(mode="after")
+    def _link_has_no_credentials(self) -> ConnectionCreate:
+        if self.source_kind.is_link and (self.username or self.password):
+            raise ValueError(
+                "Sign in on the provider's website; do not store credentials for links"
+            )
+        return self
 
 
 class ConnectionUpdate(BaseModel):
@@ -87,7 +104,7 @@ class ConnectionUpdate(BaseModel):
     # Without this the edit form could send a changed kind and be told the
     # save worked while the connection went on behaving as it did.
     source_kind: SourceKind | None = None
-    base_url: str | None = None
+    base_url: str | None = Field(default=None, max_length=2048)
     folder_path: str | None = None
     workspace: str | None = None
     username: str | None = None

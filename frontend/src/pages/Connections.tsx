@@ -6,6 +6,7 @@ import { useDialog } from '@/hooks/useDialog'
 import { useToast } from '@/hooks/useToast'
 import { relativeTime } from '@/lib/format'
 import type { Connection, SyncRun } from '@/lib/types'
+import { CONNECTION_SOURCES, externalConnectionUrl, isLinkConnection } from '@/lib/connection-sources'
 import ProjectPicker from '@/components/ProjectPicker'
 import QuestionnairePicker, { describeSelection } from '@/components/QuestionnairePicker'
 import {
@@ -45,7 +46,7 @@ const BLANK = {
   // A server, or a folder on the SurveyHQ host that exports are put in. The
   // second is for the offices whose server administrator will not create an
   // API user: somebody puts the export where this can read it.
-  source_kind: 'survey_solutions' as 'survey_solutions' | 'folder',
+  source_kind: 'survey_solutions' as Connection['source_kind'],
   folder_path: '',
   base_url: '',
   workspace: 'primary',
@@ -101,8 +102,8 @@ export default function Connections() {
   return (
     <>
       <PageHeader
-        title="Survey Solutions connections"
-        description="Link a headquarters server to import interview data automatically."
+        title="Connections"
+        description="Manage survey sources, spreadsheets and SharePoint folders. Survey Solutions and local folders support automatic imports."
         actions={
           can('manager') && (
             <button className="btn-primary" onClick={() => setCreating(true)}>
@@ -120,8 +121,8 @@ export default function Connections() {
         <Card>
           <EmptyState
             icon="⇄"
-            title="No servers connected"
-            description="Connect your Survey Solutions headquarters server with an API user account to pull interview data on a schedule."
+            title="No connections yet"
+            description="Add a survey server, spreadsheet, SharePoint folder or local import folder."
             action={
               can('manager') && (
                 <button className="btn-primary btn-sm" onClick={() => setCreating(true)}>
@@ -140,11 +141,22 @@ export default function Connections() {
               subtitle={
                 connection.source_kind === 'folder'
                   ? `Folder · ${connection.folder_path}`
-                  : `${connection.base_url} · workspace "${connection.workspace}"`
+                  : `${CONNECTION_SOURCES[connection.source_kind].label} · ${connection.base_url}`
               }
               actions={
                 <>
-                  <SyncBadge connection={connection} />
+                  {isLinkConnection(connection.source_kind) ? (
+                    <>
+                      <Badge tone="neutral">Saved link</Badge>
+                      {externalConnectionUrl(connection.base_url) && (
+                        <a className="btn-primary btn-sm" href={externalConnectionUrl(connection.base_url)}
+                          target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer">
+                          Open {CONNECTION_SOURCES[connection.source_kind].label}
+                        </a>
+                      )}
+                    </>
+                  ) : <SyncBadge connection={connection} />}
+                  {!isLinkConnection(connection.source_kind) && can('manager') && (
                   <button
                     className="btn-secondary btn-sm"
                     onClick={() => test.mutate(connection.id)}
@@ -152,14 +164,15 @@ export default function Connections() {
                   >
                     Test
                   </button>
+                  )}
                   {can('manager') && (
                     <>
-                      <button
+                      {!isLinkConnection(connection.source_kind) && <button
                         className="btn-primary btn-sm"
                         onClick={() => setImporting(connection)}
                       >
                         Import data
-                      </button>
+                      </button>}
                       <button className="btn-ghost btn-sm" onClick={() => setEditing(connection)}>
                         Edit
                       </button>
@@ -183,7 +196,11 @@ export default function Connections() {
                 </>
               }
             >
-              <dl className="grid gap-4 text-sm sm:grid-cols-4">
+              {isLinkConnection(connection.source_kind) ? (
+                <p className="text-sm text-ink-500">
+                  Opens in a new tab using your provider account. This saved link does not import or sync data.
+                </p>
+              ) : <dl className="grid gap-4 text-sm sm:grid-cols-4">
                 <div>
                   <dt className="text-xs uppercase text-ink-500">API user</dt>
                   <dd className="text-ink-700">{connection.username || 'not set'}</dd>
@@ -204,13 +221,13 @@ export default function Connections() {
                   <dt className="text-xs uppercase text-ink-500">Last sync</dt>
                   <dd className="text-ink-700">{relativeTime(connection.last_sync_at)}</dd>
                 </div>
-              </dl>
-              {connection.last_sync_error && (
+              </dl>}
+              {!isLinkConnection(connection.source_kind) && connection.last_sync_error && (
                 <p className="mt-3 rounded border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-700">
                   {connection.last_sync_error}
                 </p>
               )}
-              <SyncHistory connectionId={connection.id} />
+              {!isLinkConnection(connection.source_kind) && <SyncHistory connectionId={connection.id} />}
             </Card>
           ))}
         </div>
@@ -356,11 +373,13 @@ function ConnectionModal({
   })
   const [testResult, setTestResult] = useState<{ ok: boolean; message: string } | null>(null)
   const isFolder = form.source_kind === 'folder'
+  const isLink = isLinkConnection(form.source_kind)
+  const source = CONNECTION_SOURCES[form.source_kind]
 
   const update = (patch: Partial<typeof form>) => setForm({ ...form, ...patch })
 
   const testUnsaved = useMutation({
-    mutationFn: () => api.post<{ ok: boolean; message: string }>('/connections/test', form),
+    mutationFn: () => api.post<{ ok: boolean; message: string }>('/connections/test', { ...form, project_id: form.project_id || null }),
     onSuccess: setTestResult,
     onError: (error: Error) => setTestResult({ ok: false, message: error.message }),
   })
@@ -395,7 +414,7 @@ function ConnectionModal({
             disabled={testUnsaved.isPending}
           >
             {testUnsaved.isPending && <Spinner className="h-4 w-4" />}
-            Test connection
+            {isLink ? 'Check link format' : 'Test connection'}
           </button>
           <button className="btn-secondary" onClick={onClose}>
             Cancel
@@ -431,17 +450,22 @@ function ConnectionModal({
         </Field>
         <Field
           label="Where the data comes from"
-          hint="A folder is for a server you cannot be given an API user on."
+          hint="Choose a provider or a local import folder."
         >
           <select
             className="input"
             value={form.source_kind}
             onChange={(event) =>
-              update({ source_kind: event.target.value as typeof form.source_kind })
+              update({
+                source_kind: event.target.value as typeof form.source_kind,
+                base_url: '', folder_path: '', username: '', password: '',
+                workspace: 'primary', questionnaires: [], sync_enabled: false,
+              })
             }
           >
-            <option value="survey_solutions">A Survey Solutions server</option>
-            <option value="folder">A folder on this server</option>
+            {Object.entries(CONNECTION_SOURCES).map(([value, entry]) => (
+              <option key={value} value={value}>{entry.label}</option>
+            ))}
           </select>
         </Field>
 
@@ -461,16 +485,17 @@ function ConnectionModal({
         ) : (
           <>
             <Field
-              label="Server URL"
-              hint="The site root, e.g. https://demo.mysurvey.solutions"
+              label={isLink ? (form.source_kind === 'sharepoint' ? 'SharePoint folder link' : 'Source link') : 'Server URL'}
+              hint={source.hint}
             >
               <input
                 className="input"
                 value={form.base_url}
                 onChange={(event) => update({ base_url: event.target.value })}
-                placeholder="https://your-server.mysurvey.solutions"
+                placeholder={source.placeholder}
               />
             </Field>
+            {!isLink && <>
             <Field label="Workspace" hint="Usually 'primary'">
               <input
                 className="input"
@@ -488,9 +513,10 @@ function ConnectionModal({
                 onChange={(event) => update({ username: event.target.value })}
               />
             </Field>
+            </>}
           </>
         )}
-        {!isFolder && (
+        {!isFolder && !isLink && (
         <Field
           label="Password"
           hint={connection ? 'Leave blank to keep the stored password' : 'Encrypted at rest'}
@@ -503,7 +529,7 @@ function ConnectionModal({
           />
         </Field>
         )}
-        {!isFolder && (
+        {!isFolder && !isLink && (
         <Field label="Export format">
           <select
             className="input"
@@ -523,11 +549,11 @@ function ConnectionModal({
         <ProjectPicker
           value={form.project_id}
           onChange={(project_id) => update({ project_id })}
-          label="Default project for imports"
-          hint="Where this connection's data lands. A single import can be sent elsewhere."
+          label={isLink ? 'Project' : 'Default project for imports'}
+          hint={isLink ? 'Who can see this saved link is controlled by its project.' : "Where this connection's data lands. A single import can be sent elsewhere."}
         />
 
-        {!isFolder && (
+        {!isFolder && !isLink && (
         <Field label="Interview status to import">
           <select
             className="input"
@@ -549,6 +575,7 @@ function ConnectionModal({
           </select>
         </Field>
         )}
+        {!isLink && <>
         <Field label="Import automatically">
           <select
             className="input"
@@ -587,9 +614,18 @@ function ConnectionModal({
             </select>
           </Field>
         )}
+        </>}
       </div>
 
-      {form.sync_mode === 'daily' && (
+      {isLink && (
+        <p className="rounded border border-ink-200 bg-ink-50 px-3 py-2 text-sm text-ink-700">
+          Saves a link for your project. Sign in on the provider’s website when you open it.
+          Automatic imports are not available for this source.
+          Do not paste passwords or API tokens into the link.
+        </p>
+      )}
+
+      {!isLink && form.sync_mode === 'daily' && (
         <Field
           label="Import at"
           hint="24-hour times. The check runs every few minutes, so an import starts shortly after the time you set."
@@ -634,7 +670,7 @@ function ConnectionModal({
           say, so a connection could have automatic imports switched on and a
           schedule set and still never import anything: the scheduler skips a
           connection with nothing chosen, and said nothing about it. */}
-      {!isFolder && (
+      {!isFolder && !isLink && (
       <div className="border-t border-ink-200 pt-4">
         <Field
           label="Questionnaires to import automatically"
@@ -667,7 +703,7 @@ function ConnectionModal({
 
       {/* items-start: a Toggle is an inline-flex label, so two of them in a
           space-y column sat on one line and overlapped each other's text. */}
-      <div className="flex flex-col items-start gap-3 border-t border-ink-200 pt-4">
+      {!isLink && <div className="flex flex-col items-start gap-3 border-t border-ink-200 pt-4">
         <Toggle
           checked={form.sync_enabled}
           onChange={(value) => update({ sync_enabled: value })}
@@ -679,14 +715,14 @@ function ConnectionModal({
               : 'Import automatically on the schedule above'
           }
         />
-        {!isFolder && (
+        {!isFolder && !isLink && (
           <Toggle
             checked={form.verify_ssl}
             onChange={(value) => update({ verify_ssl: value })}
             label="Verify the server's TLS certificate (recommended)"
           />
         )}
-      </div>
+      </div>}
     </Modal>
   )
 }

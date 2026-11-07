@@ -7,6 +7,7 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import FileResponse
+from pydantic import ValidationError
 from slugify import slugify
 from sqlalchemy import select
 
@@ -69,6 +70,10 @@ def _to_out(connection: Connection) -> ConnectionOut:
 
 
 def _client(connection: Connection) -> SurveySolutionsClient:
+    if connection.source_kind != SourceKind.survey_solutions:
+        raise HTTPException(
+            status_code=400, detail="This source does not support Survey Solutions API operations"
+        )
     return SurveySolutionsClient(
         base_url=connection.base_url,
         username=connection.username,
@@ -105,9 +110,9 @@ def list_connections(db: DbSession, user: CurrentUser) -> list[ConnectionOut]:
     rows = db.scalars(
         # A connection carries the project its imports land in, so it is
         # scoped by that like everything else that has one.
-        restrict(
-            select(Connection), scope_for(db, user).filter(Connection.project_id)
-        ).order_by(Connection.created_at.desc())
+        restrict(select(Connection), scope_for(db, user).filter(Connection.project_id)).order_by(
+            Connection.created_at.desc()
+        )
     ).all()
     return [_to_out(c) for c in rows]
 
@@ -170,6 +175,30 @@ def update_connection(
 ) -> ConnectionOut:
     connection = _editable(connection_id, db, user)
     data = payload.model_dump(exclude_unset=True)
+    kind = data.get("source_kind") or connection.source_kind
+    changed_kind = kind != connection.source_kind
+    if changed_kind and kind.is_link:
+        # Never carry credentials or an old schedule into a browser link.
+        for field, default in {
+            "username": "",
+            "password": "",
+            "sync_enabled": False,
+            "questionnaires": [],
+            "folder_path": "",
+        }.items():
+            data.setdefault(field, default)
+    merged = {
+        field: getattr(connection, field)
+        for field in ConnectionCreate.model_fields
+        if field != "password"
+    }
+    merged.update(data)
+    try:
+        validated = ConnectionCreate.model_validate(merged)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()[0]["msg"]) from None
+    if "base_url" in data:
+        data["base_url"] = validated.base_url
     # What the connection will be once this patch lands, which is what decides
     # whether it has what it needs: a server without a URL, or a folder
     # without a folder, is not a connection.
@@ -182,9 +211,7 @@ def update_connection(
         except file_source.FolderError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from None
     elif not (url or "").strip():
-        raise HTTPException(
-            status_code=400, detail="A server connection needs the server URL"
-        )
+        raise HTTPException(status_code=400, detail="A server connection needs the server URL")
     password = data.pop("password", None)
     # Moving a connection is a write to where it is going as well as to where
     # it was, so both ends are checked.
@@ -193,6 +220,10 @@ def update_connection(
         raise HTTPException(status_code=404, detail="Project not found")
     for field, value in data.items():
         setattr(connection, field, value)
+    if changed_kind or kind.is_link:
+        connection.password_encrypted = ""
+        connection.server_info = {}
+        connection.last_sync_error = ""
     if password:
         connection.password_encrypted = encrypt(password)
     record(
@@ -274,12 +305,23 @@ def _test_folder(connection: Connection, db: DbSession) -> ConnectionTestResult:
     )
 
 
+def _test_link() -> ConnectionTestResult:
+    return ConnectionTestResult(
+        ok=True,
+        message="Link format is valid. Open the link to check access with your provider account. "
+        "SurveyHQ has not tested sign-in or data access; automatic imports are not supported.",
+        details={"mode": "link", "access_verified": False},
+    )
+
+
 @router.post("/{connection_id}/test", response_model=ConnectionTestResult)
 def test_connection(
     connection_id: str, db: DbSession, user: RequireManager
 ) -> ConnectionTestResult:
     connection = _editable(connection_id, db, user)
     _throttle_tests(user)
+    if connection.source_kind.is_link:
+        return _test_link()
     if connection.source_kind == SourceKind.folder:
         return _test_folder(connection, db)
     if not connection.username or not connection.password_encrypted:
@@ -315,6 +357,8 @@ def test_unsaved_connection(
 ) -> ConnectionTestResult:
     """Let the UI check what it has been given before the connection is saved."""
     _throttle_tests(user)
+    if payload.source_kind.is_link:
+        return _test_link()
     if payload.source_kind == SourceKind.folder:
         # Nothing is stored yet, so there is no history of imports to compare
         # against: the answer here is what is in the folder, full stop.
@@ -470,6 +514,11 @@ def trigger_sync(
 ) -> Job:
     """Queue an export + import run for the selected questionnaires."""
     connection = _editable(connection_id, db, user)
+    if connection.source_kind.is_link:
+        raise HTTPException(
+            status_code=400,
+            detail="This is a saved link; automatic imports are not supported.",
+        )
     if connection.source_kind == SourceKind.folder:
         return _queue_folder_import(connection, payload, db, user)
     if not connection.username or not connection.password_encrypted:

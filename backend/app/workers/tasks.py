@@ -92,6 +92,8 @@ def run_connection_sync(self: Any, job_id: str) -> dict[str, Any]:
             connection = db.get(Connection, connection_id)
             if connection is None:
                 raise SurveySolutionsError("The connection no longer exists")
+            if connection.source_kind != SourceKind.survey_solutions:
+                raise SurveySolutionsError("The connection type changed; this import cannot run")
             credentials = {
                 "base_url": connection.base_url,
                 "username": connection.username,
@@ -425,6 +427,8 @@ def run_folder_import(self: Any, job_id: str) -> dict[str, Any]:
             connection = db.get(Connection, connection_id)
             if connection is None:
                 raise file_source.FolderError("The connection no longer exists")
+            if connection.source_kind != SourceKind.folder:
+                raise file_source.FolderError("The connection type changed; this import cannot run")
             folder = file_source.resolve(connection.folder_path)
             connection.last_sync_status = SyncStatus.running
             connection_name = connection.name
@@ -774,6 +778,8 @@ def schedule_due_syncs() -> dict[str, Any]:
             )
         ).all()
         for connection in connections:
+            if connection.source_kind.is_link:
+                continue
             # A server connection with nothing ticked has nothing to ask for.
             # A folder connection does not choose questionnaires: what is in
             # the folder is what there is.
