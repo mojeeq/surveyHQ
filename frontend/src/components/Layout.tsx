@@ -168,7 +168,7 @@ function Brand({ compact }: { compact: boolean }) {
         <div className="min-w-0">
           <div className="text-[15px] font-bold tracking-tight text-[var(--sb-ink)]">SurveyHQ</div>
           <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-[var(--sb-faint)]">
-            Survey operations
+            Fieldwork monitoring
           </div>
         </div>
       )}
