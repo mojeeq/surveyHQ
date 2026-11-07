@@ -145,7 +145,9 @@ class DashboardUpdate(BaseModel):
     widgets: list[WidgetIn] | None = None
 
 
-class DashboardOut(BaseModel):
+class DashboardContentOut(BaseModel):
+    """Dashboard presentation fields, without alternate ways to access it."""
+
     model_config = ConfigDict(from_attributes=True)
 
     id: str
@@ -164,14 +166,23 @@ class DashboardOut(BaseModel):
     # [{"variable": "province", "label": "Province"}, ...]
     drilldown: list[dict[str, Any]] = Field(default_factory=list)
     is_public: bool = False
-    public_token: str | None = None
-    public_hostname: str | None = None
     refresh_interval_seconds: int = 0
     created_at: dt.datetime
     updated_at: dt.datetime
 
 
+class DashboardOut(DashboardContentOut):
+    public_token: str | None = None
+    public_hostname: str | None = None
+
+
 class DashboardDetail(DashboardOut):
+    widgets: list[WidgetOut] = Field(default_factory=list)
+
+
+class SharedDashboardDetail(DashboardContentOut):
+    """Public readers must not discover another link or its public hostname."""
+
     widgets: list[WidgetOut] = Field(default_factory=list)
 
 

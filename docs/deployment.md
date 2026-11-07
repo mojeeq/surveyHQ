@@ -506,6 +506,19 @@ These need a migration, so check the release notes before upgrading. If a column
 can't be added safely, an error is logged at start-up and the server keeps
 running. Check `make logs` after upgrading.
 
+### Shared-link security update (November 2026)
+
+Deploy the updated backend to every API worker together. Shared dashboard
+responses now omit alternate open-link tokens and hostnames, and password changes
+invalidate existing share grants immediately. An older worker would still accept
+the old grants. No database migration is needed for these changes.
+
+After the update, people viewing password-protected links must enter the password
+again once. Renaming a link or extending its expiry does not require another
+unlock. Open links remain public: disable or rotate an open link if its address
+has already reached an unintended audience. The update cannot retract addresses
+or data that recipients have already copied.
+
 ## Development and production on one server
 
 You can run two separate stacks on one server: a development stack for testing

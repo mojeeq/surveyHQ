@@ -13,9 +13,23 @@ morning, and a nightly sweep would leave it open until the sweep ran.
 from __future__ import annotations
 
 import datetime as dt
+import hmac
 
+from app.core.config import settings
 from app.db.base import utcnow
 from app.models import ShareLink
+
+
+def share_grant_revision(link: ShareLink) -> str:
+    """Bind a grant to the current password without exposing its bcrypt hash.
+
+    Password updates already create a newly salted hash, even when the same
+    password is set again. A keyed digest of that hash revokes earlier grants
+    without a schema migration or a bcrypt check on every dashboard request.
+    The link token and a purpose prefix keep this value specific to share grants.
+    """
+    message = f"share-grant-v1\0{link.token}\0{link.password_hash}".encode()
+    return hmac.new(settings.secret_key.encode(), message, "sha256").hexdigest()
 
 
 def as_utc(moment: dt.datetime | None) -> dt.datetime | None:

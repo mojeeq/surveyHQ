@@ -16,6 +16,8 @@ import datetime as dt
 
 import pytest
 
+from app.core.security import create_access_token
+
 PASSWORD = "labour-force-2026"
 
 
@@ -142,6 +144,126 @@ def test_a_grant_is_good_for_its_own_link_only(client, auth_headers, board):
     ).json()["grant"]
     assert opens(client, other["token"], grant) == 200
     assert opens(client, guarded["token"], grant) == 401
+
+
+@pytest.mark.parametrize("password", ["", PASSWORD])
+def test_shared_metadata_does_not_disclose_alternate_access(
+    client, auth_headers, board, db_session, password
+):
+    from app.models import Dashboard
+
+    open_token = client.post(
+        f"/api/v1/dashboards/{board}/share?enable=true", headers=auth_headers
+    ).json()["public_token"]
+    dashboard = db_session.get(Dashboard, board)
+    dashboard.public_hostname = f"{board}.example.test"
+    db_session.commit()
+    link = make_link(client, auth_headers, board, password=password)
+    grant = client.post(
+        f"/api/v1/public/dashboards/{link['token']}/unlock", json={"password": password}
+    ).json()["grant"]
+
+    for token in (link["token"], open_token):
+        response = client.get(
+            f"/api/v1/public/dashboards/{token}", headers={"X-Share-Grant": grant}
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["widgets"]
+        assert "public_token" not in response.json()
+        assert "public_hostname" not in response.json()
+        assert open_token not in response.text
+        assert dashboard.public_hostname not in response.text
+
+    # Authors still need these fields to manage the open link.
+    owned = client.get(f"/api/v1/dashboards/{board}", headers=auth_headers).json()
+    assert owned["public_token"] == open_token
+    assert owned["public_hostname"] == dashboard.public_hostname
+    client.patch(
+        f"/api/v1/dashboards/{board}/share-links/{link['id']}",
+        headers=auth_headers,
+        json={"is_active": False},
+    ).raise_for_status()
+    assert opens(client, link["token"], grant) == 404
+    assert opens(client, open_token) == 200
+
+
+@pytest.mark.parametrize("replacement", ["replacement-password", PASSWORD])
+def test_password_updates_revoke_grants_on_every_public_route(
+    client, auth_headers, board, replacement
+):
+    link = make_link(client, auth_headers, board, password=PASSWORD)
+    base = f"/api/v1/public/dashboards/{link['token']}"
+    grant = client.post(f"{base}/unlock", json={"password": PASSWORD}).json()["grant"]
+    assert opens(client, link["token"], grant) == 200
+    updated = client.patch(
+        f"/api/v1/dashboards/{board}/share-links/{link['id']}",
+        headers=auth_headers,
+        json={"password": replacement},
+    )
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["token"] == link["token"]
+
+    for method, suffix in [
+        ("GET", ""),
+        ("POST", "/data"),
+        ("GET", "/views"),
+        ("GET", "/background"),
+        ("GET", "/logo"),
+        ("GET", "/logo-right"),
+        ("GET", "/filter-values/region"),
+        ("GET", "/boundaries/unused-layer"),
+    ]:
+        response = client.request(method, base + suffix, headers={"X-Share-Grant": grant})
+        assert response.status_code == 401, (suffix, response.text)
+
+    if replacement != PASSWORD:
+        assert client.post(f"{base}/unlock", json={"password": PASSWORD}).status_code == 401
+    unlocked = client.post(f"{base}/unlock", json={"password": replacement})
+    assert unlocked.status_code == 200, unlocked.text
+    new_grant = unlocked.json()["grant"]
+    assert opens(client, link["token"], new_grant) == 200
+    assert client.post(f"{base}/data", headers={"X-Share-Grant": new_grant}).status_code == 200
+
+
+def test_removing_and_restoring_password_does_not_restore_old_grants(
+    client, auth_headers, board
+):
+    link = make_link(client, auth_headers, board, password=PASSWORD)
+    base = f"/api/v1/public/dashboards/{link['token']}"
+    grant = client.post(f"{base}/unlock", json={"password": PASSWORD}).json()["grant"]
+    for password in ("", PASSWORD):
+        client.patch(
+            f"/api/v1/dashboards/{board}/share-links/{link['id']}",
+            headers=auth_headers,
+            json={"password": password},
+        ).raise_for_status()
+        assert opens(client, link["token"], grant) == (401 if password else 200)
+
+
+@pytest.mark.parametrize("extra", [
+    {"type": "share"},  # Grants issued before this fix must require a new unlock.
+    {"type": "share", "password_revision": None},
+    {"type": "share", "password_revision": 1},
+    {"type": "share", "password_revision": "not-the-current-revision"},
+    {"type": "share", "password_revision": "\u00e9"},
+])
+def test_legacy_or_invalid_grant_revisions_fail_closed(client, auth_headers, board, extra):
+    link = make_link(client, auth_headers, board, password=PASSWORD)
+    grant = create_access_token(link["token"], extra=extra)
+    assert opens(client, link["token"], grant) == 401
+
+
+def test_renaming_or_extending_a_link_preserves_current_grants(client, auth_headers, board):
+    link = make_link(client, auth_headers, board, password=PASSWORD)
+    grant = client.post(
+        f"/api/v1/public/dashboards/{link['token']}/unlock", json={"password": PASSWORD}
+    ).json()["grant"]
+    client.patch(
+        f"/api/v1/dashboards/{board}/share-links/{link['id']}",
+        headers=auth_headers,
+        json={"name": "Renamed", "expires_at": _at(7)},
+    ).raise_for_status()
+    assert opens(client, link["token"], grant) == 200
 
 
 def test_every_route_behind_a_password_is_shut_not_just_the_first(

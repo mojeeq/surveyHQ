@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hmac
 from typing import Any
 
 import jwt
@@ -26,10 +27,10 @@ from app.core.security import (
 )
 from app.db.base import utcnow
 from app.models import Dashboard, DashboardView, ShareLink
-from app.schemas.analytics import DashboardDetail, DashboardViewOut
+from app.schemas.analytics import DashboardViewOut, SharedDashboardDetail
 from app.schemas.query import FilterGroup
 from app.services import preferences
-from app.services.sharing import link_is_open
+from app.services.sharing import link_is_open, share_grant_revision
 
 # The only unauthenticated routes in the platform, and the expensive one among
 # them scans a Parquet file per widget. A dashboard opening costs a handful of
@@ -118,7 +119,7 @@ def _get_shared(token: str, db: DbSession, request: Request | None = None) -> Da
             raise HTTPException(
                 status_code=404, detail="This shared dashboard is not available"
             )
-        if link.password_hash and not _granted(token, request):
+        if link.password_hash and not _granted(link, request):
             raise HTTPException(status_code=401, detail=LOCKED)
         dashboard = db.get(Dashboard, link.dashboard_id)
         if dashboard is None:
@@ -137,7 +138,7 @@ def _get_shared(token: str, db: DbSession, request: Request | None = None) -> Da
     return dashboard
 
 
-def _granted(token: str, request: Request | None) -> bool:
+def _granted(link: ShareLink, request: Request | None) -> bool:
     """Whether this request carries a valid grant for this link."""
     raw = (request.headers.get(GRANT_HEADER) if request else "") or ""
     if not raw:
@@ -146,7 +147,14 @@ def _granted(token: str, request: Request | None) -> bool:
         claims = decode_token(raw)
     except jwt.PyJWTError:
         return False
-    return claims.get("type") == "share" and claims.get("sub") == token
+    revision = claims.get("password_revision")
+    return (
+        claims.get("type") == "share"
+        and claims.get("sub") == link.token
+        and isinstance(revision, str)
+        and revision.isascii()
+        and hmac.compare_digest(revision, share_grant_revision(link))
+    )
 
 
 class Unlock(BaseModel):
@@ -172,17 +180,19 @@ def unlock_shared_dashboard(token: str, payload: Unlock, db: DbSession) -> dict[
         raise HTTPException(status_code=401, detail="That password is not right.")
     return {
         "grant": create_access_token(
-            token, extra={"type": "share"}, expires_minutes=GRANT_MINUTES
+            token,
+            extra={"type": "share", "password_revision": share_grant_revision(link)},
+            expires_minutes=GRANT_MINUTES,
         ),
         "required": True,
     }
 
 
-@router.get("/dashboards/{token}", response_model=DashboardDetail)
-def read_shared_dashboard(token: str, db: DbSession, request: Request) -> DashboardDetail:
+@router.get("/dashboards/{token}", response_model=SharedDashboardDetail)
+def read_shared_dashboard(token: str, db: DbSession, request: Request) -> SharedDashboardDetail:
     dashboard = _get_shared(token, db, request)
     _count_view(token, db)
-    return DashboardDetail.model_validate(dashboard)
+    return SharedDashboardDetail.model_validate(dashboard)
 
 
 def _count_view(token: str, db: DbSession) -> None:
