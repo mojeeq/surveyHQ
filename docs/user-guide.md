@@ -2623,6 +2623,25 @@ Go to **Administration → API keys** to create a key for scripts and
 integrations. The key is only shown once, so copy it straight away. See
 [api.md](api.md).
 
+## Background jobs and platform status
+
+**Administration → Background jobs** lists recent imports and scheduled work,
+with their status and result.
+
+At the top, **Platform status** shows whether background work is actually
+running. It checks every 30 seconds:
+
+| Item | What it shows |
+|---|---|
+| **Database** | Whether the database answers |
+| **Job queue** | Whether the queue answers, and how many jobs are waiting |
+| **Workers** | How many workers are answering, and any queue nobody is taking jobs from |
+| **Scheduler** | When the scheduler last sent work |
+
+If anything is wrong, it is listed in plain words above these, for example "No
+worker is taking jobs from the imports queue." Otherwise it says **Background
+work is running**. Only administrators can see this panel.
+
 ## Settings
 
 Administrators can change some settings in **Administration → Settings** without

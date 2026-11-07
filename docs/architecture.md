@@ -663,6 +663,8 @@ backend/app/
                   net_guard.py        what an outbound request may reach
                   mailer.py           alert email
                   audit.py            who did what
+                  platform_status.py  liveness, readiness, and whether the
+                                      workers and scheduler are running
 
                 the performance runtime (see below)
                   query_runtime.py    installs the fast paths at start-up

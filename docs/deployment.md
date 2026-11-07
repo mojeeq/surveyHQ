@@ -341,7 +341,7 @@ Whatever you choose, keep these paths open or share links will stop working:
 | `/shared/…` | the shared dashboard page |
 | `/assets/…` | scripts and styles for that page |
 | `/api/v1/public/…` | the shared dashboard's data, logos and boundaries |
-| `/health` | the health check, if you monitor it from outside |
+| `/health`, `/health/live`, `/health/ready` | the health checks, if you monitor them from outside |
 
 Dashboards on their own addresses (`*.DASHBOARD_DOMAIN`) are share links too.
 
@@ -554,14 +554,35 @@ development in `.env`.
 ## Checking the platform is running
 
 ```bash
-make ps                        # status of every container
-curl localhost:8080/health     # API and database status
-docker stats --no-stream       # resource use
-docker system df               # disk used by images and volumes
+make ps                          # status of every container
+curl localhost:8080/health/ready # can the API serve requests?
+docker stats --no-stream         # resource use
+docker system df                 # disk used by images and volumes
 ```
 
 Each service has a Docker health check, so `docker compose ps` shows `healthy` or
 `unhealthy`.
+
+**Health endpoints.** None of these need a sign-in.
+
+| Endpoint | Answers | Use it for |
+|---|---|---|
+| `/health/live` | Always 200 while the API process is running. Checks nothing else. | Deciding whether to restart the API. A database outage doesn't fail it, because restarting the API wouldn't fix that. |
+| `/health/ready` | 200 when the API can serve requests, **503** when the database is unreachable. Also reports whether the job queue (Redis) answers, without failing on it. | Uptime monitors, load balancers and the Docker health check. |
+| `/health` | The same as `/health/ready`. | Existing monitors. |
+
+**Background work.** A working API doesn't mean imports and scheduled checks are
+running. Administrators can see that under **Administration → Background jobs →
+Platform status**, which shows:
+
+- whether the database and job queue are reachable
+- how many jobs are waiting in each queue
+- which workers are answering, and any queue that has no worker taking from it
+- when the scheduler last sent work (it normally sends something at least every
+  ten minutes; after 20 minutes of silence it is reported as stopped)
+- any job that has been waiting more than 15 minutes to start
+
+The same information is available to administrators at `GET /api/v1/system/status`.
 
 ## Scaling
 

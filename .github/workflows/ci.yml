@@ -126,14 +126,18 @@ jobs:
 
       - name: The API answers through nginx
         run: |
+          # /health/ready answers 503 until the database is reachable, so -f
+          # is what makes this wait; /health/live only says the process is up.
           for _ in $(seq 1 60); do
-            if curl -fsS http://localhost:8080/health | grep -q '"status":"ok"'; then
-              echo "health ok"
+            if curl -fsS http://localhost:8080/health/ready | grep -q '"status":"ok"'; then
+              echo "ready"
+              curl -fsS http://localhost:8080/health/live | grep -q '"status":"ok"'
+              curl -fsS http://localhost:8080/health | grep -q '"status":"ok"'
               exit 0
             fi
             sleep 3
           done
-          echo "the API never became healthy"
+          echo "the API never became ready"
           exit 1
 
       # Proves more than a health probe: the schema was created, the bootstrap

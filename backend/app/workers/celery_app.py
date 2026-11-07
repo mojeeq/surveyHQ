@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from celery import Celery
 from celery.schedules import crontab
+from celery.signals import beat_init, before_task_publish
 
 from app.core.config import settings
 from app.core.logging import configure_logging
@@ -91,3 +92,25 @@ celery_app.conf.beat_schedule = {
         "schedule": crontab(minute=30, hour=3),
     },
 }
+
+
+# --- The scheduler's heartbeat -------------------------------------------------
+# Beat records each periodic task it sends, so an administrator can see when it
+# last did anything (Administration -> Background jobs). Only the beat process
+# records: the API and workers send tasks too, and they would mask a stopped
+# scheduler. A failed write is ignored; beat must never stop over a heartbeat.
+_IN_BEAT = False
+
+
+@beat_init.connect
+def _mark_beat_process(**_kwargs) -> None:
+    global _IN_BEAT
+    _IN_BEAT = True
+
+
+@before_task_publish.connect
+def _scheduler_heartbeat(sender: str | None = None, **_kwargs) -> None:
+    if _IN_BEAT:
+        from app.services.platform_status import record_scheduler_heartbeat
+
+        record_scheduler_heartbeat(sender or "")

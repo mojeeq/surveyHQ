@@ -20,7 +20,7 @@ from app.schemas.monitoring import (
     NotificationOut,
     ScheduledSync,
 )
-from app.services import preferences
+from app.services import platform_status, preferences
 from app.services.audit import record
 from app.services.hostnames import base_domain as dashboard_domain
 from app.services.projects import scope_for
@@ -127,6 +127,17 @@ def activity(db: DbSession, user: CurrentUser) -> ActivityOut:
             )
     upcoming.sort(key=lambda one: one.due_at)
     return ActivityOut(jobs=shown, upcoming=upcoming[:5])
+
+
+@router.get("/status", response_model=dict)
+def platform_status_report(db: DbSession, _admin: RequireAdmin) -> dict[str, Any]:
+    """Whether background work is running: workers, the queue and the scheduler.
+
+    For administrators only, because it names internal infrastructure. The
+    public readiness probe is /health/ready; this answers the question it
+    can't, which is whether imports and scheduled checks are actually happening.
+    """
+    return platform_status.operational_status(db)
 
 
 @router.get("/jobs/{job_id}", response_model=JobOut)
