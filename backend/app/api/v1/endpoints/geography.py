@@ -113,7 +113,7 @@ async def upload_layer(
     office to convert its frame before it can be used is how a feature goes
     unused. What is stored is one format, so nothing downstream has to care.
     """
-    if project_id and not can_edit(db, user, project_id, Role.manager):
+    if not can_edit(db, user, project_id or None, Role.manager):
         raise HTTPException(status_code=404, detail="Project not found")
 
     filename = file.filename or ""
@@ -174,8 +174,10 @@ def update_layer(
     layer_id: str, payload: BoundaryUpdate, db: DbSession, user: RequireManager
 ) -> BoundaryLayer:
     layer = _get(layer_id, db, user)
+    if not can_edit(db, user, layer.project_id, Role.manager):
+        raise HTTPException(status_code=404, detail="Boundary layer not found")
     changes = payload.model_dump(exclude_unset=True)
-    if changes.get("project_id") and not can_edit(
+    if "project_id" in changes and not can_edit(
         db, user, changes["project_id"], Role.manager
     ):
         raise HTTPException(status_code=404, detail="Project not found")
@@ -189,6 +191,8 @@ def update_layer(
 @router.delete("/{layer_id}", response_model=Message)
 def delete_layer(layer_id: str, db: DbSession, user: RequireManager) -> Message:
     layer = _get(layer_id, db, user)
+    if not can_edit(db, user, layer.project_id, Role.manager):
+        raise HTTPException(status_code=404, detail="Boundary layer not found")
     name = layer.name
     boundary_store.remove(layer.id)
     db.delete(layer)

@@ -167,6 +167,9 @@ class ShareLink(UUIDMixin, TimestampMixin, Base):
 class Dashboard(UUIDMixin, TimestampMixin, Base):
     __tablename__ = "dashboards"
 
+    # Written by source-access validation, never exposed as an editable field.
+    source_grants: Mapped[dict] = mapped_column(JSON, default=dict, server_default=text("'{}'"))
+
     name: Mapped[str] = mapped_column(String(200), nullable=False)
     slug: Mapped[str] = mapped_column(String(220), unique=True, index=True)
     description: Mapped[str] = mapped_column(Text, default="")

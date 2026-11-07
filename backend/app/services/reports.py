@@ -68,6 +68,9 @@ def values_for(db: Session, dashboard: Dashboard, variable: str) -> list[str]:
     variable alone, so the reports cover exactly the choices the board offers
     and arrive in the same order the dropdown lists them.
     """
+    from app.services.dashboard_access import require_sources
+
+    require_sources(db, dashboard)
     control = next(
         (
             one

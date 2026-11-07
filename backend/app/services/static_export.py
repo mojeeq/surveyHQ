@@ -901,6 +901,9 @@ def build_payload(
     their control, lose their cube column, and never have their other values
     computed. Left empty, nothing changes and the export is what it was.
     """
+    from app.services.dashboard_access import require_sources
+
+    require_sources(db, dashboard)
     pinned = {str(k): str(v) for k, v in (pinned or {}).items() if v not in (None, "")}
     controls = _filters_for(dashboard)
     for control in controls:

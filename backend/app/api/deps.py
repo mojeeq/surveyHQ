@@ -15,7 +15,7 @@ from app.db.base import utcnow
 from app.db.session import get_db
 from app.models import ApiKey, Dataset, Role, User
 from app.services.datasets import dataset_is_queryable
-from app.services.projects import can_view
+from app.services.projects import can_edit, can_view
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -109,7 +109,9 @@ RequireManager = Annotated[User, Depends(require_role(Role.manager))]
 RequireAdmin = Annotated[User, Depends(require_role(Role.admin))]
 
 
-def get_dataset(dataset_id: str, db: DbSession, user: User) -> Dataset:
+def get_dataset(
+    dataset_id: str, db: DbSession, user: User, *, minimum: Role | None = None
+) -> Dataset:
     """Fetch a dataset the caller is allowed to reach.
 
     Every route that touches a dataset - reading it, querying it, hanging an
@@ -121,11 +123,15 @@ def get_dataset(dataset_id: str, db: DbSession, user: User) -> Dataset:
     dataset = db.get(Dataset, dataset_id)
     if dataset is None or not can_view(db, user, dataset.project_id):
         raise HTTPException(status_code=404, detail="Dataset not found")
+    if minimum is not None and not can_edit(db, user, dataset.project_id, minimum):
+        raise HTTPException(status_code=404, detail="Dataset not found")
     return dataset
 
 
-def get_ready_dataset(dataset_id: str, db: DbSession, user: User) -> Dataset:
-    dataset = get_dataset(dataset_id, db, user)
+def get_ready_dataset(
+    dataset_id: str, db: DbSession, user: User, *, minimum: Role | None = None
+) -> Dataset:
+    dataset = get_dataset(dataset_id, db, user, minimum=minimum)
     if not dataset_is_queryable(dataset):
         raise HTTPException(
             status_code=409,

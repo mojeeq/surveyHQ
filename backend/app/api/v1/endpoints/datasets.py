@@ -695,7 +695,7 @@ def read_dataset(dataset_id: str, db: DbSession, user: CurrentUser) -> DatasetDe
 def update_dataset(
     dataset_id: str, payload: DatasetUpdate, db: DbSession, user: RequireManager
 ) -> Dataset:
-    dataset = get_dataset(dataset_id, db, user)
+    dataset = get_dataset(dataset_id, db, user, minimum=Role.manager)
     if payload.name is not None and payload.name != dataset.name:
         dataset.name = payload.name
         # The slug follows the name. It is the stem every download is named
@@ -847,7 +847,7 @@ def _remove_or_empty(db: DbSession, dataset: Dataset) -> tuple[str, dict[str, in
 
 @router.delete("/{dataset_id}", response_model=Message)
 def delete_dataset(dataset_id: str, db: DbSession, user: RequireManager) -> Message:
-    dataset = get_dataset(dataset_id, db, user)
+    dataset = get_dataset(dataset_id, db, user, minimum=Role.manager)
     name = dataset.name
     what, found = _remove_or_empty(db, dataset)
     record(
@@ -877,7 +877,7 @@ async def replace_dataset_data(
     file: Annotated[UploadFile, File()],
 ) -> DatasetDetail:
     """Refresh a dataset in place from a new file, keeping charts pointed at it."""
-    dataset = get_dataset(dataset_id, db, user)
+    dataset = get_dataset(dataset_id, db, user, minimum=Role.manager)
     filename = Path(file.filename or "upload.dat").name
     suffix = Path(filename).suffix.lower()
     if suffix not in SUPPORTED_EXTENSIONS:
@@ -911,7 +911,7 @@ async def append_to_dataset(
     file: Annotated[UploadFile, File()],
 ) -> DatasetDetail:
     """Add another round's rows to a dataset rather than replacing them."""
-    dataset = get_dataset(dataset_id, db, user)
+    dataset = get_dataset(dataset_id, db, user, minimum=Role.manager)
     filename = Path(file.filename or "upload.dat").name
     suffix = Path(filename).suffix.lower()
     if suffix not in SUPPORTED_EXTENSIONS and suffix != ".zip":

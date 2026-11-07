@@ -6,6 +6,20 @@ and backups explicit.
 
 ## Upgrade an existing installation
 
+The dashboard access-control update adds migration `20261107_24`. Widget and
+filter sources are now checked when saved and before data is rendered or
+exported. Project roles also govern dashboard publishing and edits to datasets,
+charts, monitoring rules, relationships and boundary layers.
+
+Existing dashboards using sources from their own project or the shared area
+continue working. An older dashboard using another project's sources must have
+its widget list and filters saved again by an editor with access to those sources.
+Until then its data and exports are refused. New approvals are held on the server;
+moving a source to another project or revoking the approving editor's access
+requires an authorised editor to review and save the sources again. Previously
+downloaded or externally published files are independent copies and are not
+retracted by this check.
+
 1. Keep a verified backup of the database, data volume and encryption key.
 2. Pull the new code and run `docker compose up -d --build`.
 3. Compose runs the one-shot `migrate` service before the API and workers start.

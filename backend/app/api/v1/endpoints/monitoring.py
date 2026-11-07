@@ -74,6 +74,7 @@ from app.services.monitoring import (
 )
 from app.services.projects import (
     alert_rule_clause,
+    can_edit,
     can_view,
     dataset_clause,
     in_project_clause,
@@ -129,7 +130,7 @@ def check_formula(
 def create_indicator(
     payload: IndicatorCreate, db: DbSession, user: RequireManager
 ) -> Indicator:
-    get_ready_dataset(payload.dataset_id, db, user)
+    get_ready_dataset(payload.dataset_id, db, user, minimum=Role.manager)
     indicator = Indicator(
         name=payload.name,
         description=payload.description,
@@ -166,12 +167,12 @@ def create_indicator(
 def update_indicator(
     indicator_id: str, payload: IndicatorUpdate, db: DbSession, user: RequireManager
 ) -> Indicator:
-    indicator = _get_indicator(indicator_id, db, user)
+    indicator = _get_indicator(indicator_id, db, user, edit=True)
     data = payload.model_dump(exclude_unset=True)
     if data.get("dataset_id") and data["dataset_id"] != indicator.dataset_id:
         # Moving it onto another dataset is a read of that dataset and a write
         # into whatever project holds it, so both ends are checked.
-        get_dataset(data["dataset_id"], db, user)
+        get_dataset(data["dataset_id"], db, user, minimum=Role.manager)
     if "spec" in data and data["spec"] is not None:
         data["spec"] = payload.spec.model_dump(mode="json") if payload.spec else {}
     if "formula" in data:
@@ -197,7 +198,7 @@ def update_indicator(
 
 @router.delete("/indicators/{indicator_id}", response_model=Message)
 def delete_indicator(indicator_id: str, db: DbSession, user: RequireManager) -> Message:
-    indicator = _get_indicator(indicator_id, db, user)
+    indicator = _get_indicator(indicator_id, db, user, edit=True)
     db.delete(indicator)
     db.commit()
     return Message(detail="Indicator deleted")
@@ -306,7 +307,9 @@ def refresh_single_indicator(
     )
 
 
-def _get_indicator(indicator_id: str, db: DbSession, user: User) -> Indicator:
+def _get_indicator(
+    indicator_id: str, db: DbSession, user: User, *, edit: bool = False
+) -> Indicator:
     """An indicator the caller may reach, by way of its dataset.
 
     Filtering the listing is not enough on its own: these routes take an id
@@ -316,14 +319,16 @@ def _get_indicator(indicator_id: str, db: DbSession, user: User) -> Indicator:
     indicator = db.get(Indicator, indicator_id)
     if indicator is None:
         raise HTTPException(status_code=404, detail="Indicator not found")
-    get_dataset(indicator.dataset_id, db, user)
+    get_dataset(indicator.dataset_id, db, user, minimum=Role.manager if edit else None)
     return indicator
 
 
 # --- alerts ----------------------------------------------------------------
 
 
-def _get_alert_rule(rule_id: str, db: DbSession, user: User) -> AlertRule:
+def _get_alert_rule(
+    rule_id: str, db: DbSession, user: User, *, edit: bool = False
+) -> AlertRule:
     """An alert rule the caller may reach, by way of what it watches.
 
     A rule hangs off an indicator, or off a dataset directly, or off neither -
@@ -338,14 +343,14 @@ def _get_alert_rule(rule_id: str, db: DbSession, user: User) -> AlertRule:
     if rule.indicator_id:
         indicator = db.get(Indicator, rule.indicator_id)
         if indicator is not None:
-            get_dataset(indicator.dataset_id, db, user)
+            get_dataset(indicator.dataset_id, db, user, minimum=Role.manager if edit else None)
             return rule
     if rule.dataset_id:
-        get_dataset(rule.dataset_id, db, user)
+        get_dataset(rule.dataset_id, db, user, minimum=Role.manager if edit else None)
         return rule
     # Tied to nothing in particular: a global rule, which lives in the shared
     # area and follows the same rule as an unassigned dataset.
-    if not can_view(db, user, None):
+    if not can_view(db, user, None) or (edit and not can_edit(db, user, None, Role.manager)):
         raise HTTPException(status_code=404, detail="Alert rule not found")
     return rule
 
@@ -375,10 +380,11 @@ def _get_alert(alert_id: str, db: DbSession, user: User) -> Alert:
 
 def _get_target_set(set_id: str, db: DbSession, user: User) -> TargetSet:
     found = db.get(TargetSet, set_id)
-    if found is None or not can_view(db, user, found.dataset_id):
+    if found is None:
         # Not found rather than forbidden, so a reader cannot learn which ids
         # exist in a project they are not in.
         raise HTTPException(status_code=404, detail="Target set not found")
+    get_dataset(found.dataset_id, db, user)
     return found
 
 
@@ -460,7 +466,7 @@ def list_target_sets(
 def create_target_set(
     payload: TargetSetCreate, db: DbSession, user: RequireManager
 ) -> TargetSet:
-    get_ready_dataset(payload.dataset_id, db, user)
+    get_ready_dataset(payload.dataset_id, db, user, minimum=Role.manager)
     created = TargetSet(
         name=payload.name,
         description=payload.description,
@@ -493,6 +499,7 @@ def update_target_set(
     set_id: str, payload: TargetSetUpdate, db: DbSession, user: RequireManager
 ) -> TargetSet:
     found = _get_target_set(set_id, db, user)
+    get_dataset(found.dataset_id, db, user, minimum=Role.manager)
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(found, field, value)
     record(
@@ -511,6 +518,7 @@ def update_target_set(
 @router.delete("/target-sets/{set_id}", response_model=Message)
 def delete_target_set(set_id: str, db: DbSession, user: RequireManager) -> Message:
     found = _get_target_set(set_id, db, user)
+    get_dataset(found.dataset_id, db, user, minimum=Role.manager)
     # The indicators reading it keep working: the link clears and each falls
     # back to whatever quotas it carries itself, which is nothing for most.
     using = db.scalars(
@@ -575,9 +583,14 @@ def create_alert_rule(
     payload: AlertRuleCreate, db: DbSession, user: RequireManager
 ) -> AlertRule:
     if payload.indicator_id:
-        _get_indicator(payload.indicator_id, db, user)
+        _get_indicator(payload.indicator_id, db, user, edit=True)
     if payload.dataset_id:
-        get_dataset(payload.dataset_id, db, user)
+        get_dataset(payload.dataset_id, db, user, minimum=Role.manager)
+    if (
+        not payload.indicator_id and not payload.dataset_id
+        and not can_edit(db, user, None, Role.manager)
+    ):
+        raise HTTPException(status_code=404, detail="Project not found")
     rule = AlertRule(**payload.model_dump())
     db.add(rule)
     record(db, user=user, action="create_alert_rule", entity_type="alert_rule")
@@ -590,16 +603,18 @@ def create_alert_rule(
 def update_alert_rule(
     rule_id: str, payload: AlertRuleUpdate, db: DbSession, user: RequireManager
 ) -> AlertRule:
-    rule = _get_alert_rule(rule_id, db, user)
+    rule = _get_alert_rule(rule_id, db, user, edit=True)
     changes = payload.model_dump(exclude_unset=True)
     # Moving a rule onto another project's indicator or dataset is a write to
     # that project, so it is checked against the destination as well.
     if changes.get("indicator_id"):
-        _get_indicator(changes["indicator_id"], db, user)
+        _get_indicator(changes["indicator_id"], db, user, edit=True)
     if changes.get("dataset_id"):
-        get_dataset(changes["dataset_id"], db, user)
+        get_dataset(changes["dataset_id"], db, user, minimum=Role.manager)
     for field, value in changes.items():
         setattr(rule, field, value)
+    # Clearing its last source moves a rule into the shared area too.
+    _get_alert_rule(rule_id, db, user, edit=True)
     db.commit()
     db.refresh(rule)
     return rule
@@ -607,7 +622,7 @@ def update_alert_rule(
 
 @router.delete("/alert-rules/{rule_id}", response_model=Message)
 def delete_alert_rule(rule_id: str, db: DbSession, user: RequireManager) -> Message:
-    rule = _get_alert_rule(rule_id, db, user)
+    rule = _get_alert_rule(rule_id, db, user, edit=True)
     db.delete(rule)
     db.commit()
     return Message(detail="Alert rule deleted")
@@ -616,7 +631,7 @@ def delete_alert_rule(rule_id: str, db: DbSession, user: RequireManager) -> Mess
 @router.post("/alert-rules/{rule_id}/test", response_model=dict)
 def test_alert_rule(rule_id: str, db: DbSession, user: RequireManager) -> dict[str, Any]:
     """Evaluate a rule right now without waiting for the scheduler."""
-    rule = _get_alert_rule(rule_id, db, user)
+    rule = _get_alert_rule(rule_id, db, user, edit=True)
     if rule.indicator_id:
         indicator = db.get(Indicator, rule.indicator_id)
         if indicator:
@@ -734,7 +749,7 @@ def _latest_results(db: Session, rule_ids: list[str]) -> dict[str, QualityResult
 def create_quality_rule(
     payload: QualityRuleCreate, db: DbSession, user: RequireManager
 ) -> QualityRule:
-    get_ready_dataset(payload.dataset_id, db, user)
+    get_ready_dataset(payload.dataset_id, db, user, minimum=Role.manager)
     rule = QualityRule(**payload.model_dump())
     db.add(rule)
     db.flush()
@@ -755,7 +770,7 @@ def update_quality_rule(
     # A rule is reachable through its dataset, like everything else that hangs
     # off one; without this, a rule on a dataset the caller cannot see is still
     # editable by id.
-    get_dataset(rule.dataset_id, db, user)
+    get_dataset(rule.dataset_id, db, user, minimum=Role.manager)
 
     for field, value in payload.model_dump(exclude_unset=True).items():
         setattr(rule, field, value)
@@ -780,7 +795,7 @@ def delete_quality_rule(rule_id: str, db: DbSession, user: RequireManager) -> Me
     rule = db.get(QualityRule, rule_id)
     if rule is None:
         raise HTTPException(status_code=404, detail="Quality rule not found")
-    get_dataset(rule.dataset_id, db, user)
+    get_dataset(rule.dataset_id, db, user, minimum=Role.manager)
     db.delete(rule)
     db.commit()
     return Message(detail="Quality rule deleted")

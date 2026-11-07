@@ -281,7 +281,7 @@ def create_publication(
     Nothing is kept unless the publish goes through: a refusal leaves no
     half-made publication behind to explain.
     """
-    dashboard = _get_dashboard(dashboard_id, db, user)
+    dashboard = _get_dashboard(dashboard_id, db, user, edit=True)
     target = _target(db, payload.target_id)
     view = None
     if payload.view_id:
@@ -356,7 +356,7 @@ def update_publication(
     db: DbSession,
     user: RequireAnalyst,
 ) -> PublicationOut:
-    dashboard = _get_dashboard(dashboard_id, db, user)
+    dashboard = _get_dashboard(dashboard_id, db, user, edit=True)
     publication = _publication(db, dashboard, publication_id)
     if payload.auto_republish is not None:
         publication.auto_republish = payload.auto_republish
@@ -376,7 +376,7 @@ def republish(
     user: RequireAnalyst,
 ) -> PublicationOut:
     """Bring the published copy up to date with the board as it is now."""
-    dashboard = _get_dashboard(dashboard_id, db, user)
+    dashboard = _get_dashboard(dashboard_id, db, user, edit=True)
     publication = _publication(db, dashboard, publication_id)
     try:
         publishing.publish(
@@ -416,7 +416,7 @@ def unpublish(
     leaves the publication where it is, so nothing is forgotten that is still
     online.
     """
-    dashboard = _get_dashboard(dashboard_id, db, user)
+    dashboard = _get_dashboard(dashboard_id, db, user, edit=True)
     publication = _publication(db, dashboard, publication_id)
     target = db.get(PublishTarget, publication.target_id)
     where = target.name if target else "the destination"

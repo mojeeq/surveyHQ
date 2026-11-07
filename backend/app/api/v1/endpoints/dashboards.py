@@ -21,6 +21,7 @@ from app.api.deps import (
     CurrentUser,
     DbSession,
     RequireAnalyst,
+    get_dataset,
     get_ready_dataset,
 )
 from app.core.logging import get_logger
@@ -98,6 +99,7 @@ from app.services import (
 )
 from app.services.audit import record
 from app.services.boundaries import Areas
+from app.services.dashboard_access import authorise_sources, require_sources
 from app.services.dashboard_assets import (
     APPEARANCE_KEYS,
     BackgroundError,
@@ -178,7 +180,7 @@ def list_charts(
 
 @router.post("/charts", response_model=ChartOut, status_code=201)
 def create_chart(payload: ChartCreate, db: DbSession, user: RequireAnalyst) -> Chart:
-    get_ready_dataset(payload.dataset_id, db, user)
+    get_ready_dataset(payload.dataset_id, db, user, minimum=Role.analyst)
     _validate_chart_spec(payload.spec)
     chart = Chart(
         name=payload.name,
@@ -204,6 +206,7 @@ def update_chart(
     chart_id: str, payload: ChartUpdate, db: DbSession, user: RequireAnalyst
 ) -> Chart:
     chart = _get_chart(chart_id, db, user)
+    get_dataset(chart.dataset_id, db, user, minimum=Role.analyst)
     data = payload.model_dump(exclude_unset=True)
     if "spec" in data:
         _validate_chart_spec(data["spec"])
@@ -217,6 +220,7 @@ def update_chart(
 @router.delete("/charts/{chart_id}", response_model=Message)
 def delete_chart(chart_id: str, db: DbSession, user: RequireAnalyst) -> Message:
     chart = _get_chart(chart_id, db, user)
+    get_dataset(chart.dataset_id, db, user, minimum=Role.analyst)
     db.delete(chart)
     db.commit()
     return Message(detail="Chart deleted")
@@ -755,7 +759,7 @@ def _shapes_of(db: DbSession, dashboard_ids: list[str]) -> dict[str, dict[str, A
 def create_dashboard(
     payload: DashboardCreate, db: DbSession, user: RequireAnalyst
 ) -> DashboardDetail:
-    if payload.project_id and not can_edit(db, user, payload.project_id, Role.analyst):
+    if not can_edit(db, user, payload.project_id, Role.analyst):
         # Same reasoning as everywhere else: do not confirm the project exists.
         raise HTTPException(status_code=404, detail="Project not found")
     dashboard = Dashboard(
@@ -772,6 +776,7 @@ def create_dashboard(
         appearance=payload.appearance,
         drilldown=payload.drilldown,
     )
+    authorise_sources(db, dashboard, user)
     db.add(dashboard)
     record(db, user=user, action="create_dashboard", entity_type="dashboard")
     db.commit()
@@ -803,9 +808,7 @@ def duplicate_dashboard(
     board's widget; editing the chart behind it changes both, which is what
     "the same chart" means everywhere else in the platform.
     """
-    original = _get_dashboard(dashboard_id, db, user)
-    if original.project_id and not can_edit(db, user, original.project_id, Role.analyst):
-        raise HTTPException(status_code=404, detail="Dashboard not found")
+    original = _get_dashboard(dashboard_id, db, user, edit=True)
 
     name = f"{original.name} (copy)"
     copy = Dashboard(
@@ -845,6 +848,9 @@ def duplicate_dashboard(
             )
         )
 
+    db.flush()
+    db.expire(copy, ["widgets"])
+    authorise_sources(db, copy, user)
     record(
         db,
         user=user,
@@ -867,7 +873,7 @@ def read_dashboard(dashboard_id: str, db: DbSession, user: CurrentUser) -> Dashb
 def update_dashboard(
     dashboard_id: str, payload: DashboardUpdate, db: DbSession, user: RequireAnalyst
 ) -> DashboardDetail:
-    dashboard = _get_dashboard(dashboard_id, db, user)
+    dashboard = _get_dashboard(dashboard_id, db, user, edit=True)
     data = payload.model_dump(exclude_unset=True)
     widgets = data.pop("widgets", None)
 
@@ -889,6 +895,11 @@ def update_dashboard(
             if widget.group_id and widget.group_id not in live:
                 widget.group_id = ""
 
+    if widgets is not None or "filters" in data:
+        db.flush()
+        db.expire(dashboard, ["widgets"])
+        authorise_sources(db, dashboard, user)
+
     record(
         db,
         user=user,
@@ -903,7 +914,7 @@ def update_dashboard(
 
 @router.delete("/{dashboard_id}", response_model=Message)
 def delete_dashboard(dashboard_id: str, db: DbSession, user: RequireAnalyst) -> Message:
-    dashboard = _get_dashboard(dashboard_id, db, user)
+    dashboard = _get_dashboard(dashboard_id, db, user, edit=True)
     name = dashboard.name
     # Its published copies come down with it. A board deleted here and left
     # on a ministry's website is the one thing nobody deleting it expects.
@@ -933,7 +944,7 @@ def delete_dashboard(dashboard_id: str, db: DbSession, user: RequireAnalyst) -> 
 def add_widget(
     dashboard_id: str, payload: WidgetIn, db: DbSession, user: RequireAnalyst
 ) -> DashboardDetail:
-    dashboard = _get_dashboard(dashboard_id, db, user)
+    dashboard = _get_dashboard(dashboard_id, db, user, edit=True)
     page = payload.page
     if payload.group_id:
         # The same invariant the patch above keeps, and for the same reason: a
@@ -959,6 +970,9 @@ def add_widget(
         group_id=payload.group_id,
     )
     db.add(widget)
+    db.flush()
+    db.expire(dashboard, ["widgets"])
+    authorise_sources(db, dashboard, user)
     db.commit()
     db.refresh(dashboard)
     return DashboardDetail.model_validate(dashboard)
@@ -968,7 +982,7 @@ def add_widget(
 def delete_widget(
     dashboard_id: str, widget_id: str, db: DbSession, user: RequireAnalyst
 ) -> DashboardDetail:
-    dashboard = _get_dashboard(dashboard_id, db, user)
+    dashboard = _get_dashboard(dashboard_id, db, user, edit=True)
     widget = db.get(Widget, widget_id)
     if widget is None or widget.dashboard_id != dashboard.id:
         raise HTTPException(status_code=404, detail="Widget not found")
@@ -993,7 +1007,7 @@ def update_widget(
     coordinates would drop it on top of another widget, or far below the last
     of them on a page that has less on it.
     """
-    dashboard = _get_dashboard(dashboard_id, db, user)
+    dashboard = _get_dashboard(dashboard_id, db, user, edit=True)
     widget = db.get(Widget, widget_id)
     if widget is None or widget.dashboard_id != dashboard.id:
         raise HTTPException(status_code=404, detail="Widget not found")
@@ -1029,6 +1043,8 @@ def update_widget(
             "h": int(was.get("h", placed["h"])),
         }
 
+    if {"chart_id", "indicator_id", "dataset_id", "config"} & data.keys():
+        authorise_sources(db, dashboard, user)
     db.commit()
     db.refresh(dashboard)
     return DashboardDetail.model_validate(dashboard)
@@ -1041,7 +1057,7 @@ async def upload_background(
     user: RequireAnalyst,
     file: Annotated[UploadFile, File(description="PNG, JPEG, GIF or WebP image")],
 ) -> Dashboard:
-    dashboard = _get_dashboard(dashboard_id, db, user)
+    dashboard = _get_dashboard(dashboard_id, db, user, edit=True)
     try:
         name = save_background(dashboard.id, await file.read())
     except BackgroundError as exc:
@@ -1066,7 +1082,7 @@ def read_background(dashboard_id: str, db: DbSession, user: CurrentUser) -> Resp
 
 @router.delete("/{dashboard_id}/background", response_model=DashboardOut)
 def delete_background(dashboard_id: str, db: DbSession, user: RequireAnalyst) -> Dashboard:
-    dashboard = _get_dashboard(dashboard_id, db, user)
+    dashboard = _get_dashboard(dashboard_id, db, user, edit=True)
     remove_background(dashboard.id)
     appearance = dict(dashboard.appearance or {})
     appearance.pop("background_image", None)
@@ -1117,7 +1133,7 @@ async def upload_logo(
     is theirs rather than the platform's. This is what puts the statistics
     office at the top of it rather than us.
     """
-    dashboard = _get_dashboard(dashboard_id, db, user)
+    dashboard = _get_dashboard(dashboard_id, db, user, edit=True)
     return _store_image(db, dashboard, "logo", await file.read())
 
 
@@ -1129,7 +1145,7 @@ def read_logo(dashboard_id: str, db: DbSession, user: CurrentUser) -> Response:
 
 @router.delete("/{dashboard_id}/logo", response_model=DashboardOut)
 def delete_logo(dashboard_id: str, db: DbSession, user: RequireAnalyst) -> Dashboard:
-    return _drop_image(db, _get_dashboard(dashboard_id, db, user), "logo")
+    return _drop_image(db, _get_dashboard(dashboard_id, db, user, edit=True), "logo")
 
 
 @router.put("/{dashboard_id}/logo-right", response_model=DashboardOut)
@@ -1144,7 +1160,7 @@ async def upload_logo_right(
     A dashboard published by two organisations can show both logos, one at
     each end, instead of having to choose one.
     """
-    dashboard = _get_dashboard(dashboard_id, db, user)
+    dashboard = _get_dashboard(dashboard_id, db, user, edit=True)
     return _store_image(db, dashboard, "logo_right", await file.read())
 
 
@@ -1156,7 +1172,7 @@ def read_logo_right(dashboard_id: str, db: DbSession, user: CurrentUser) -> Resp
 
 @router.delete("/{dashboard_id}/logo-right", response_model=DashboardOut)
 def delete_logo_right(dashboard_id: str, db: DbSession, user: RequireAnalyst) -> Dashboard:
-    return _drop_image(db, _get_dashboard(dashboard_id, db, user), "logo_right")
+    return _drop_image(db, _get_dashboard(dashboard_id, db, user, edit=True), "logo_right")
 
 
 def background_response(dashboard: Dashboard, kind: str = "background") -> Response:
@@ -1212,6 +1228,7 @@ def filter_values_response(
     lists what the dropdown was built to list and nothing else - the same rule
     the shared render already applies to filters arriving from outside.
     """
+    require_sources(db, dashboard)
     control = next(
         (
             item
@@ -1255,6 +1272,7 @@ def boundary_response(
     refresh of the widget data. Only a layer some widget here actually names is
     returned, so the route cannot be used to read another project's geography.
     """
+    require_sources(db, dashboard)
     named = {
         str((widget.config or {}).get("boundary_id") or "")
         for widget in dashboard.widgets
@@ -1469,7 +1487,7 @@ def start_report_burst(
     the dataset for every widget, so this is minutes of work and a request
     that waited for it would time out long before it finished.
     """
-    dashboard = _get_dashboard(dashboard_id, db, user)
+    dashboard = _get_dashboard(dashboard_id, db, user, edit=True)
     try:
         values = reports.values_for(db, dashboard, payload.variable)
     except LookupError as exc:
@@ -1582,7 +1600,7 @@ def set_snapshot_schedule(
     Turning it on with no time set would be a schedule that never fires and
     says it is on, so that is refused rather than stored.
     """
-    dashboard = _get_dashboard(dashboard_id, db, user)
+    dashboard = _get_dashboard(dashboard_id, db, user, edit=True)
     if payload.enabled and not payload.times:
         raise HTTPException(
             status_code=422,
@@ -1626,7 +1644,7 @@ def create_snapshot(
     dashboard_id: str, db: DbSession, user: RequireAnalyst
 ) -> DashboardSnapshot:
     """Keep a copy of the board as it stands, now."""
-    dashboard = _get_dashboard(dashboard_id, db, user)
+    dashboard = _get_dashboard(dashboard_id, db, user, edit=True)
     snapshot = snapshots.take(
         db,
         dashboard,
@@ -1672,7 +1690,7 @@ def read_snapshot_html(
 def delete_snapshot(
     dashboard_id: str, snapshot_id: str, db: DbSession, user: RequireAnalyst
 ) -> Message:
-    dashboard = _get_dashboard(dashboard_id, db, user)
+    dashboard = _get_dashboard(dashboard_id, db, user, edit=True)
     snapshot = db.get(DashboardSnapshot, snapshot_id)
     if snapshot is None or snapshot.dashboard_id != dashboard.id:
         raise HTTPException(status_code=404, detail="No such snapshot")
@@ -1704,7 +1722,7 @@ def create_share_link(
     A board goes to several audiences at once and they do not end together, so
     each gets its own link to close when it is done with.
     """
-    dashboard = _get_dashboard(dashboard_id, db, user)
+    dashboard = _get_dashboard(dashboard_id, db, user, edit=True)
     link = ShareLink(
         dashboard_id=dashboard.id,
         name=payload.name.strip() or "Shared link",
@@ -1743,7 +1761,7 @@ def update_share_link(
     db: DbSession,
     user: RequireAnalyst,
 ) -> ShareLinkOut:
-    dashboard = _get_dashboard(dashboard_id, db, user)
+    dashboard = _get_dashboard(dashboard_id, db, user, edit=True)
     link = db.get(ShareLink, link_id)
     if link is None or link.dashboard_id != dashboard.id:
         raise HTTPException(status_code=404, detail="Share link not found")
@@ -1772,7 +1790,7 @@ def delete_share_link(
     A deleted address can never be reopened; a closed one can, which matters
     when the link is already pasted into somebody's email.
     """
-    dashboard = _get_dashboard(dashboard_id, db, user)
+    dashboard = _get_dashboard(dashboard_id, db, user, edit=True)
     link = db.get(ShareLink, link_id)
     if link is None or link.dashboard_id != dashboard.id:
         raise HTTPException(status_code=404, detail="Share link not found")
@@ -1794,7 +1812,7 @@ def share_dashboard(
     dashboard_id: str, db: DbSession, user: RequireAnalyst, enable: bool = True
 ) -> Dashboard:
     """Enable or disable a read-only public link."""
-    dashboard = _get_dashboard(dashboard_id, db, user)
+    dashboard = _get_dashboard(dashboard_id, db, user, edit=True)
     dashboard.is_public = enable
     if enable and not dashboard.public_token:
         dashboard.public_token = new_public_token()
@@ -1864,7 +1882,7 @@ def create_view(
     view - those change what other people see.
     """
     dashboard = _get_dashboard(dashboard_id, db, user)
-    may_publish = user.role in (Role.analyst, Role.admin)
+    may_publish = can_edit(db, user, dashboard.project_id, Role.analyst)
     view = DashboardView(
         dashboard_id=dashboard.id,
         name=payload.name.strip(),
@@ -1894,7 +1912,7 @@ def update_view(
     dashboard = _get_dashboard(dashboard_id, db, user)
     view = _get_view(db, dashboard, view_id, user)
     changes = payload.model_dump(exclude_unset=True)
-    may_publish = user.role in (Role.analyst, Role.admin)
+    may_publish = can_edit(db, user, dashboard.project_id, Role.analyst)
     if "name" in changes:
         view.name = (changes["name"] or "").strip() or view.name
     if "description" in changes:
@@ -1940,7 +1958,9 @@ def _get_view(
         raise HTTPException(status_code=404, detail="View not found")
     # Your own to change, or anybody's if you may edit the board. A reader who
     # can only see it cannot rename or delete what somebody else published.
-    if view.created_by != user.id and user.role not in (Role.analyst, Role.admin):
+    if (view.created_by != user.id or view.is_shared or view.is_default) and not can_edit(
+        db, user, dashboard.project_id, Role.analyst
+    ):
         raise HTTPException(status_code=404, detail="View not found")
     return view
 
@@ -2095,7 +2115,7 @@ def delete_comment(
     comment = _get_comment(db, dashboard, comment_id)
     # Your own to withdraw, or anybody's if you may edit the board - somebody
     # has to be able to take down what should not have been posted.
-    if comment.created_by != user.id and user.role not in (Role.analyst, Role.admin):
+    if comment.created_by != user.id and not can_edit(db, user, dashboard.project_id, Role.analyst):
         raise HTTPException(status_code=403, detail="Only the author can delete this")
     db.delete(comment)
     db.commit()
@@ -2123,7 +2143,7 @@ def move_page(
     Both halves have to move together, which is why this is one call rather
     than a page list the browser rewrites.
     """
-    dashboard = _get_dashboard(dashboard_id, db, user)
+    dashboard = _get_dashboard(dashboard_id, db, user, edit=True)
     pages = list(dashboard.pages or [])
     if len(pages) < 2:
         raise HTTPException(status_code=409, detail="There is only one page to move")
@@ -2146,7 +2166,7 @@ def delete_page(
     dashboard_id: str, index: int, db: DbSession, user: RequireAnalyst
 ) -> Dashboard:
     """Remove a page, and renumber the ones after it along with their widgets."""
-    dashboard = _get_dashboard(dashboard_id, db, user)
+    dashboard = _get_dashboard(dashboard_id, db, user, edit=True)
     pages = list(dashboard.pages or [])
     if len(pages) < 2:
         raise HTTPException(
@@ -2239,7 +2259,7 @@ def set_hostname(
     label and the whole hostname are accepted, because both are what people
     paste.
     """
-    dashboard = _get_dashboard(dashboard_id, db, user)
+    dashboard = _get_dashboard(dashboard_id, db, user, edit=True)
 
     if not (payload.hostname or "").strip():
         dashboard.public_hostname = None
@@ -2286,10 +2306,14 @@ def set_hostname(
     return dashboard
 
 
-def _get_dashboard(dashboard_id: str, db: DbSession, user: User) -> Dashboard:
+def _get_dashboard(
+    dashboard_id: str, db: DbSession, user: User, *, edit: bool = False
+) -> Dashboard:
     dashboard = db.get(Dashboard, dashboard_id)
     # Out of scope reads as missing, not forbidden: see services.projects.
     if dashboard is None or not can_view(db, user, dashboard.project_id):
+        raise HTTPException(status_code=404, detail="Dashboard not found")
+    if edit and not can_edit(db, user, dashboard.project_id, Role.analyst):
         raise HTTPException(status_code=404, detail="Dashboard not found")
     return dashboard
 
@@ -2360,6 +2384,7 @@ def _render_widgets(
     rendered unfiltered, because it is the thing being clicked: narrowing it to
     the one bar just chosen would take away the means of choosing another.
     """
+    require_sources(db, dashboard)
     drill = Drill.of(dashboard, drill_level)
     payload: dict[str, Any] = {
         "dashboard_id": dashboard.id,
@@ -2423,8 +2448,8 @@ def _map_boundary(
     Not checked against the reader, for the same reason a widget's chart is
     not: the dashboard is the unit of access here, and what its author put on
     it is rendered with it. A shared dashboard has no reader to check anyway.
-    Which layers may be chosen is decided where they are offered, in the list
-    endpoint, which is scoped.
+    Source access is checked when saving the widget and by require_sources
+    before the dashboard is rendered or exported, including for public readers.
     """
     layer_id = str(config.get("boundary_id") or "")
     if not layer_id:

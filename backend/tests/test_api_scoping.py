@@ -268,10 +268,8 @@ def test_a_global_alert_rule_is_not_reachable_by_a_user_without_the_shared_area(
 ):
     """A rule tied to no dataset and no indicator belongs to the shared area.
 
-    This user is confined to their projects, so the rule is out of reach the
-    moment it is created - including to the hand that created it. Worth its own
-    test, because for a long time it was silently standing in for the one below
-    and that one never reached the check it was named after.
+    A restricted user cannot create it there. If an administrator creates it,
+    the restricted user still cannot change it by ID.
     """
     mine = client.post(
         "/api/v1/monitoring/alert-rules",
@@ -281,6 +279,12 @@ def test_a_global_alert_rule_is_not_reachable_by_a_user_without_the_shared_area(
             "condition": {"operator": "lt", "value": 5},
             "severity": "warning",
         },
+    )
+    assert mine.status_code == 404, mine.text
+    mine = client.post(
+        "/api/v1/monitoring/alert-rules",
+        headers=auth_headers,
+        json={"name": "Shared rule", "condition": {"operator": "lt", "value": 5}},
     )
     assert mine.status_code == 201, mine.text
     response = client.patch(

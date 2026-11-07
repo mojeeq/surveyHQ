@@ -14,7 +14,7 @@ from app.api.deps import (
     get_dataset,
     get_ready_dataset,
 )
-from app.models import Dataset, SavedQuery, User
+from app.models import Dataset, Role, SavedQuery, User
 from app.schemas.analytics import (
     QueryRequest,
     SavedQueryCreate,
@@ -232,7 +232,7 @@ def list_saved_queries(
 def create_saved_query(
     payload: SavedQueryCreate, db: DbSession, user: RequireAnalyst
 ) -> SavedQuery:
-    get_ready_dataset(payload.dataset_id, db, user)
+    get_ready_dataset(payload.dataset_id, db, user, minimum=Role.analyst)
     saved = SavedQuery(
         name=payload.name,
         description=payload.description,
@@ -252,7 +252,7 @@ def delete_saved_query(query_id: str, db: DbSession, user: RequireAnalyst) -> Me
     if saved is None:
         raise HTTPException(status_code=404, detail="Saved query not found")
     # It follows its dataset's project, like a chart does.
-    get_dataset(saved.dataset_id, db, user)
+    get_dataset(saved.dataset_id, db, user, minimum=Role.analyst)
     db.delete(saved)
     db.commit()
     return Message(detail="Saved query deleted")

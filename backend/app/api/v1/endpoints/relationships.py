@@ -81,6 +81,9 @@ def detect_relationships(
     db: DbSession, user: RequireManager, project_id: str = ""
 ) -> DetectionResult:
     """Propose links among a project's datasets by looking at the data."""
+    target = None if project_id in ("", "none") else project_id
+    if not can_edit(db, user, target, Role.manager):
+        raise HTTPException(status_code=404, detail="Project not found")
     scope = scope_for(db, user)
     statement = select(Dataset).where(
         Dataset.project_id.is_(None)
@@ -116,7 +119,7 @@ def detect_relationships(
 def create_relationship(
     payload: RelationshipIn, db: DbSession, user: RequireManager
 ) -> RelationshipOut:
-    left = get_dataset(payload.left_dataset_id, db, user)
+    left = get_dataset(payload.left_dataset_id, db, user, minimum=Role.manager)
     right = get_dataset(payload.right_dataset_id, db, user)
     if left.id == right.id:
         raise HTTPException(status_code=422, detail="A dataset cannot relate to itself")
@@ -277,7 +280,7 @@ def rebuild_derived_dataset(
     dataset_id: str, db: DbSession, user: RequireManager
 ) -> DatasetDetail:
     """Re-run the merge that produced this dataset, against current sources."""
-    dataset = get_dataset(dataset_id, db, user)
+    dataset = get_dataset(dataset_id, db, user, minimum=Role.manager)
     derivation = dataset.derivation or {}
     if derivation.get("type") != "merge":
         raise HTTPException(
@@ -330,7 +333,7 @@ def _get(relationship_id: str, db: DbSession, user: User) -> DatasetRelationship
     if relationship is None:
         raise HTTPException(status_code=404, detail="Relationship not found")
     # Both ends, so a relationship cannot be used to reach a dataset out of scope
-    get_dataset(relationship.left_dataset_id, db, user)
+    get_dataset(relationship.left_dataset_id, db, user, minimum=Role.manager)
     get_dataset(relationship.right_dataset_id, db, user)
     return relationship
 
