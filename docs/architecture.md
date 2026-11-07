@@ -662,7 +662,8 @@ backend/app/
                   accounts.py         usernames and account identity
                   archive.py          archiving a project: data goes, the
                                       rest stays
-                  operation_lock.py   locks held until the transaction ends
+                  dashboard_access.py dashboard sources a reader may use
+                  operation_lock.py  locks held until the transaction ends
                   net_guard.py        what an outbound request may reach
                   mailer.py           alert email
                   audit.py            who did what
