@@ -55,6 +55,7 @@ celery_app.conf.update(
         "app.workers.tasks.run_all_quality_checks": {"queue": "quality"},
         "app.workers.tasks.prune_history": {"queue": "maintenance"},
         "app.workers.tasks.reap_stale_jobs": {"queue": "maintenance"},
+        "app.workers.tasks.storage_cleanup": {"queue": "maintenance"},
     },
 )
 
@@ -90,6 +91,12 @@ celery_app.conf.beat_schedule = {
     "prune-old-records": {
         "task": "app.workers.tasks.prune_history",
         "schedule": crontab(minute=30, hour=3),
+    },
+    # After the records above. Reports unused dataset files, and removes them
+    # only when an administrator has turned that on.
+    "clean-up-dataset-storage": {
+        "task": "app.workers.tasks.storage_cleanup",
+        "schedule": crontab(minute=45, hour=3),
     },
 }
 

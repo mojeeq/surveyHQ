@@ -241,6 +241,15 @@ def operational_status(db, now: dt.datetime | None = None) -> dict[str, Any]:
                 "Scheduled imports, indicators and checks have stopped."
             )
 
+    from app.services.storage_retention import disk
+
+    space = disk()
+    if space.get("low"):
+        problems.append(
+            f"The disk holding the data is nearly full: {space['free_percent']}% "
+            f"({space['free_bytes'] // (1024 ** 3)} GB) free."
+        )
+
     jobs = _jobs(db) if database else None
     if jobs and jobs["oldest_queued_at"]:
         waited = now - dt.datetime.fromisoformat(jobs["oldest_queued_at"])
@@ -264,5 +273,6 @@ def operational_status(db, now: dt.datetime | None = None) -> dict[str, Any]:
         },
         "scheduler": scheduler,
         "jobs": jobs,
+        "disk": space,
         "took_ms": int((time.monotonic() - started) * 1000),
     }

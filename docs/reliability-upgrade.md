@@ -47,11 +47,25 @@ Previous versions are available on the dataset page under **Previous dataset
 versions**, or at `GET /api/v1/datasets/{id}/versions`. Restoring a version retains
 the current version too and rebuilds dependent merges.
 
-Retained snapshots are not automatically pruned in this release. Plan storage
-for repeated exports; do not delete files from the data volume while the service
-is running. Discarding a reviewed import removes its candidate files. Failed or
-abandoned preparations can leave unreferenced files; safe retention/garbage
-collection is a follow-up operational improvement.
+Each dataset keeps its newest restore points, 10 by default (**Restore points
+kept per dataset** in Administration → Settings, or `DATASET_VERSIONS_KEEP`; 0
+keeps every version). Discarding a reviewed import removes its candidate files.
+
+A storage check runs every night at 03:45. It works out which dataset files are
+no longer needed: restore points past the limit, files left by failed or
+abandoned imports, and the folders of datasets that no longer exist. A file is
+needed, and never removed, if a dataset reads it now, a listed restore point
+refers to it, or an import waiting for review will publish it. Unused files are
+left alone until they are older than **Leave new files alone for** (24 hours by
+default), so a file an import is still writing is never taken. References are
+read again just before anything is removed, a dataset that changes during the
+check is skipped, and only one clean-up runs at a time.
+
+By default the nightly check only reports. Read the report under
+Administration → Background jobs → Storage, then either click **Remove unused
+files** or turn on **Remove unused files every night**. The same check is
+available as `python -m app.cli storage-cleanup` (add `--delete` to remove).
+Do not delete files from the data volume by hand while the service is running.
 
 ## R execution
 

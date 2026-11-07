@@ -117,6 +117,11 @@ def healthy(monkeypatch):
         "_jobs",
         lambda _db: {"queued": 0, "running": 0, "oldest_queued_at": None},
     )
+    # The real disk is whatever this machine has; the low-disk test sets its own.
+    from app.services import storage_retention
+
+    state["disk"] = {"free_percent": 55.0, "free_bytes": 200 * 1024**3, "low": False}
+    monkeypatch.setattr(storage_retention, "disk", lambda: state["disk"])
     return state
 
 
@@ -206,6 +211,14 @@ def test_a_job_waiting_too_long_is_reported(healthy, db_session, monkeypatch):
         assert any(problem.startswith("A job has been waiting to start for") for problem in status["problems"])
     finally:
         db_session.rollback()
+
+
+def test_a_nearly_full_disk_is_reported(healthy, db_session):
+    healthy["disk"] = {"free_percent": 4.2, "free_bytes": 8 * 1024**3, "low": True}
+    status = platform_status.operational_status(db_session, now=NOW)
+    assert status["problems"] == [
+        "The disk holding the data is nearly full: 4.2% (8 GB) free."
+    ]
 
 
 def test_the_database_down(healthy, db_session, monkeypatch):

@@ -288,6 +288,35 @@ def import_files() -> None:
         print("\nThe source files were left where they are.")
 
 
+def storage_cleanup() -> None:
+    """Report, or with --delete remove, dataset files nothing needs any more."""
+    from app.services import storage_retention
+
+    delete = "--delete" in sys.argv[2:]
+    with SessionLocal() as db:
+        report = storage_retention.run(db, delete=delete).as_dict()
+    mb = 1024 * 1024
+    if delete:
+        print(
+            f"Removed {report['removed_files']} file(s), "
+            f"{report['removed_bytes'] / mb:.1f} MB."
+        )
+    else:
+        print(
+            f"Could remove {report['removable_files']} file(s), "
+            f"{report['removable_bytes'] / mb:.1f} MB. Nothing was removed; "
+            "run again with --delete to remove them."
+        )
+    print(f"Restore points past the limit: {report['pruned_versions']}.")
+    if report["recent_unused_files"]:
+        print(
+            f"{report['recent_unused_files']} newer unused file(s) are left alone until they "
+            f"are {report['grace_hours']} hours old."
+        )
+    if report["skipped_changed"]:
+        print(f"Skipped {len(report['skipped_changed'])} dataset(s) that changed meanwhile.")
+
+
 COMMANDS = {
     "migrate": migrate,
     "gen-encryption-key": gen_encryption_key,
@@ -295,6 +324,7 @@ COMMANDS = {
     "create-admin": create_admin,
     "reset-password": reset_password,
     "import": import_files,
+    "storage-cleanup": storage_cleanup,
 }
 
 

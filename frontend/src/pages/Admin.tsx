@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import PlatformStatus from '@/components/admin/PlatformStatus'
+import StorageCard from '@/components/admin/StorageCard'
 import { useState } from 'react'
 import PublishTargets from '@/components/admin/PublishTargets'
 import Settings from '@/components/admin/Settings'
@@ -319,6 +320,7 @@ function Jobs() {
   return (
     <div className="space-y-6">
       <PlatformStatus />
+      <StorageCard />
       <Card title="Background jobs" subtitle="Imports and scheduled work" bodyClassName="p-0">
         <table className="table-base">
           <thead>

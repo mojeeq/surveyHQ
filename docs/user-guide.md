@@ -604,6 +604,16 @@ Deleting an empty dataset a second time removes it completely.
 If you just want newer data, you don't need to delete anything: upload the
 export again and it replaces the data in place.
 
+### Previous versions of a dataset
+
+Each time a dataset's data is replaced, the previous version is kept. Open
+**Previous dataset versions** on the dataset page to see them, and click
+**Restore version** to go back to one. Restoring keeps the current version too,
+and rebuilds any merges that use the dataset.
+
+Each dataset keeps its newest 10 versions. An administrator can change this in
+**Administration → Settings → Restore points kept per dataset**.
+
 ## Looking at a dataset
 
 A dataset's page has four tabs:
@@ -2642,6 +2652,15 @@ If anything is wrong, it is listed in plain words above these, for example "No
 worker is taking jobs from the imports queue." Otherwise it says **Background
 work is running**. Only administrators can see this panel.
 
+Under it, **Storage** shows free disk space, how much space datasets and their
+restore points take, and which files are no longer needed: restore points past
+the limit, and files left by imports that failed or were abandoned. Click
+**Check now** to update it. Click **Remove unused files** to remove them. Files
+a dataset, a restore point or an import waiting for review still needs are never
+removed, and nor are files less than a day old. Nothing is removed
+automatically unless **Remove unused files every night** is turned on in
+Settings.
+
 ## Settings
 
 Administrators can change some settings in **Administration → Settings** without
@@ -2649,7 +2668,7 @@ restarting the server. There are five groups:
 
 | Group | Settings |
 |---|---|
-| **Files and uploads** | Maximum upload size, and how large a zip file can be once unpacked |
+| **Files and uploads** | Maximum upload size, how large a zip file can be once unpacked, how many restore points each dataset keeps, and whether unused files are removed every night |
 | **How often things run** | How often to look for due imports, recalculate indicators and check alert rules |
 | **Analytics and caching** | Whether to cache results in Redis and for how long, the file size above which delimited files are read by DuckDB, and whether to summarise fieldwork after each import |
 | **Email** | The mail server used for alerts and invitations. The password is stored encrypted and is never shown. Leave the box empty to keep the current password. |
