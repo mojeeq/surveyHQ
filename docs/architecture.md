@@ -644,7 +644,7 @@ backend/app/
                                       put there again after each import
                   hostnames.py        a dashboard's own subdomain
                   dashboard_assets.py background and logo images
-                  exporters.py        a result as CSV, Excel or Stata
+                  exporters.py         a result as CSV, Excel or Stata
                   download.py         a whole dataset as a file
 
                 the map

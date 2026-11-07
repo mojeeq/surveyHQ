@@ -67,7 +67,6 @@ def test_the_directory_includes_accounts_without_a_username(
     username = user.username
     user.username = None
     db_session.commit()
-
     try:
         listed = _directory(client, auth_headers)
         assert listed.status_code == 200, listed.text
