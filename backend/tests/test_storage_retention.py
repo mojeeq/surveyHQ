@@ -333,12 +333,66 @@ def test_two_clean_ups_cannot_run_at_once(client, db_session):
 
     holder = SessionLocal()
     try:
-        acquire(holder, "storage-cleanup")
+        acquire(holder, storage_retention.LOCK_KEY)
         with pytest.raises(storage_retention.CleanupBusy):
             storage_retention.run(db_session, delete=True, keep=1, grace=GRACE)
     finally:
         holder.rollback()
         holder.close()
+
+
+def test_a_skipped_dataset_keeps_every_restore_point_it_still_lists(
+    db_session, make_dataset, monkeypatch
+):
+    """Its list couldn't be saved, so nothing on it may be treated as let go."""
+    dataset = make_dataset(4)
+
+    def skipped(_db, _keep, report):
+        report.skipped_changed.append(dataset.id)
+        return set()
+
+    monkeypatch.setattr(storage_retention, "_prune_lists", skipped)
+    report = storage_retention.run(db_session, delete=True, keep=2, grace=GRACE)
+    assert dataset.id in report.skipped_changed
+    assert _theirs(report, dataset.id) == []
+    _, versions = _fresh(dataset.id)
+    assert versions == [4, 3, 2, 1]
+
+
+def test_a_restore_waits_for_a_clean_up_and_a_clean_up_for_a_restore(
+    client, auth_headers, db_session, make_dataset
+):
+    """Restoring makes an old file current again, so the two never overlap."""
+    from app.db.session import SessionLocal
+    from app.services.operation_lock import acquire
+
+    dataset = make_dataset(2)
+    cleaning = SessionLocal()
+    try:
+        acquire(cleaning, storage_retention.LOCK_KEY)
+        response = client.post(
+            f"/api/v1/datasets/{dataset.id}/versions/1/restore", headers=auth_headers
+        )
+        assert response.status_code == 409
+        assert response.json()["detail"] == storage_retention.RESTORE_BUSY
+    finally:
+        cleaning.rollback()
+        cleaning.close()
+
+    restoring = SessionLocal()
+    try:
+        acquire(restoring, storage_retention.LOCK_KEY, shared=True)
+        with pytest.raises(storage_retention.CleanupBusy):
+            storage_retention.run(db_session, delete=True, keep=1, grace=GRACE)
+        # Restores don't hold each other up.
+        response = client.post(
+            f"/api/v1/datasets/{dataset.id}/versions/1/restore", headers=auth_headers
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["row_count"] == 1
+    finally:
+        restoring.rollback()
+        restoring.close()
 
 
 # --- Usage and the admin endpoints ---------------------------------------------

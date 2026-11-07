@@ -51,6 +51,10 @@ logger = get_logger(__name__)
 
 #: The latest report, for Administration -> Background jobs -> Storage.
 REPORT_NAME = "storage-report.json"
+#: Held exclusively for a whole clean-up, and shared by anything that makes an
+#: existing file current again (restoring a version), so the two never overlap.
+LOCK_KEY = "dataset-files"
+RESTORE_BUSY = "A storage clean-up is running. Try again in a minute."
 #: Below this share of the disk free, administrators are warned.
 LOW_DISK_FREE_PERCENT = 10
 
@@ -181,11 +185,14 @@ class Needed:
     pruned_json: set[str]
 
 
-def needed_files(db: Session, keep: int) -> Needed:
+def needed_files(db: Session, keep: int, *, assume_pruned: bool = True) -> Needed:
     """Every file a dataset, a kept restore point or a pending review needs.
 
-    Restore points past the limit are counted as already let go, so a dry run
-    reports what a real run would remove.
+    With ``assume_pruned`` (a dry run), restore points past the limit are
+    counted as already let go, so the report says what a real run would
+    remove. A real run passes False: by then the lists have been saved, and
+    anything still listed - including a dataset whose list could not be
+    saved because it changed meanwhile - is needed.
     """
     from app.models import Dataset
 
@@ -199,7 +206,9 @@ def needed_files(db: Session, keep: int) -> Needed:
     ).all():
         ids.add(dataset.id)
         files.add(_key(dataset.storage_path))
-        dropping = {record.json_path for record in over_limit(dataset, keep)}
+        dropping = (
+            {record.json_path for record in over_limit(dataset, keep)} if assume_pruned else set()
+        )
         pruned |= {_key(path) for path in dropping}
         for record in _listed_versions(dataset):
             if record.json_path in dropping:
@@ -259,15 +268,18 @@ def plan(
     keep: int,
     grace: dt.timedelta,
     released: set[str] | None = None,
+    *,
+    assume_pruned: bool = True,
 ) -> Report:
     """What could be removed now, without removing anything.
 
     ``released`` is the restore-point records this run has already taken off
     their datasets' lists, so they are reported as past the limit.
+    ``assume_pruned`` is for a dry run only; see needed_files.
     """
     released = {_key(path) for path in (released or set())}
-    needed = needed_files(db, keep)
-    limit_parquet = _released_parquet(db, keep, released)
+    needed = needed_files(db, keep, assume_pruned=assume_pruned)
+    limit_parquet = _released_parquet(db, keep if assume_pruned else 0, released)
     report = Report(
         checked_at=now.isoformat(),
         deleted=False,
@@ -424,9 +436,13 @@ def run(
     holder = SessionLocal()
     try:
         try:
-            acquire(holder, "storage-cleanup")
+            # Exclusive: no other clean-up, and no restore in progress, which
+            # holds this shared while it makes an old file current again.
+            acquire(holder, LOCK_KEY)
         except OperationBusy as exc:
-            raise CleanupBusy("A storage clean-up is already running.") from exc
+            raise CleanupBusy(
+                "A storage clean-up or a restore is running. Try again in a minute."
+            ) from exc
 
         report = Report(
             checked_at=now.isoformat(),
@@ -440,9 +456,9 @@ def run(
         # anything is removed. Each read starts a new transaction, so what an
         # import committed in between is seen.
         db.rollback()
-        final = plan(db, now, keep, grace, released)
+        final = plan(db, now, keep, grace, released, assume_pruned=False)
         db.rollback()
-        still_needed = needed_files(db, keep).files
+        still_needed = needed_files(db, keep, assume_pruned=False).files
         removed: list[Removal] = []
         for item in final.removable:
             path = Path(item.path)

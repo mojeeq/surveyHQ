@@ -1187,6 +1187,18 @@ def restore_dataset_version(dataset_id: str, version: int, db: DbSession, user: 
     dataset = get_dataset(dataset_id, db, user)
     if not can_edit(db, user, dataset.project_id, Role.manager):
         raise HTTPException(status_code=404, detail="Dataset not found")
+    # Restoring makes an old file current again. Shared with other restores,
+    # exclusive with the storage clean-up, and held until this request
+    # commits, so the clean-up can't remove the file in between.
+    from app.services import storage_retention
+    from app.services.operation_lock import OperationBusy, acquire
+
+    try:
+        acquire(
+            db, storage_retention.LOCK_KEY, shared=True, busy=storage_retention.RESTORE_BUSY
+        )
+    except OperationBusy as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     snapshot = next((s for s in list_versions(dataset) if s["version"] == version), None)
     if snapshot is None:
         raise HTTPException(status_code=404, detail="Version not found")
