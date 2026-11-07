@@ -564,7 +564,7 @@ function Members({
 
 interface DirectoryEntry {
   id: string
-  username: string
+  username: string | null
   full_name: string
   email: string
 }
@@ -631,7 +631,7 @@ function AddMemberModal({
       !term ||
       person.full_name.toLowerCase().includes(term) ||
       person.email.toLowerCase().includes(term) ||
-      person.username.toLowerCase().includes(term),
+      (person.username ?? '').toLowerCase().includes(term),
   )
 
   const ready = byUsername ? username.trim().length >= 3 : chosen !== null

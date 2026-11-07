@@ -644,7 +644,6 @@ backend/app/
                                       put there again after each import
                   hostnames.py        a dashboard's own subdomain
                   dashboard_assets.py background and logo images
-                  dashboard_access.py authorisations for dashboard data sources
                   exporters.py         a result as CSV, Excel or Stata
                   download.py         a whole dataset as a file
 
@@ -663,7 +662,8 @@ backend/app/
                   accounts.py         usernames and account identity
                   archive.py          archiving a project: data goes, the
                                       rest stays
-                  operation_lock.py   locks held until the transaction ends
+                  dashboard_access.py dashboard sources a reader may use
+                  operation_lock.py  locks held until the transaction ends
                   net_guard.py        what an outbound request may reach
                   mailer.py           alert email
                   audit.py            who did what

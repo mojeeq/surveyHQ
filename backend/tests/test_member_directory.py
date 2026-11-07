@@ -59,21 +59,21 @@ def test_the_directory_lists_people_by_name_and_address(client, auth_headers, co
     assert entry["email"] == "mary.tabi@example.com"
 
 
-def test_the_directory_handles_an_account_without_a_username(
+def test_the_directory_includes_accounts_without_a_username(
     client, auth_headers, colleague, db_session
 ):
-    person = db_session.get(User, colleague["id"])
-    assert person is not None
-    username = person.username
-    person.username = None
+    user = db_session.get(User, colleague["id"])
+    assert user is not None
+    username = user.username
+    user.username = None
     db_session.commit()
     try:
         listed = _directory(client, auth_headers)
         assert listed.status_code == 200, listed.text
         entry = next(p for p in listed.json() if p["id"] == colleague["id"])
-        assert entry["username"] == ""
+        assert entry["username"] is None
     finally:
-        person.username = username
+        user.username = username
         db_session.commit()
 
 
