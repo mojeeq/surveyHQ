@@ -98,6 +98,44 @@ KNOBS: tuple[Knob, ...] = (
         ),
     ),
     Knob(
+        name="dataset_versions_keep",
+        group=FILES,
+        label="Restore points kept per dataset",
+        minimum=0,
+        maximum=1000,
+        about=(
+            "Each time a dataset's data is replaced, the version it replaced is "
+            "kept so it can be restored. Past this many, the oldest are removed "
+            "by the nightly storage check. 0 keeps every version."
+        ),
+    ),
+    Knob(
+        name="storage_cleanup_delete",
+        group=FILES,
+        kind="bool",
+        label="Remove unused files every night",
+        about=(
+            "Every night the platform works out which dataset files are no "
+            "longer needed: restore points past the limit above, and files left "
+            "by imports that failed or were abandoned. When this is off it only "
+            "reports them, under Administration > Background jobs > Storage. "
+            "Turn it on once that report looks right."
+        ),
+        warning="Removed files can't be recovered, except from a backup.",
+    ),
+    Knob(
+        name="storage_cleanup_grace_hours",
+        group=FILES,
+        label="Leave new files alone for",
+        unit="hours",
+        minimum=6,
+        maximum=24 * 30,
+        about=(
+            "A file nothing refers to yet may belong to an import that is still "
+            "running, so it is never removed until it is at least this old."
+        ),
+    ),
+    Knob(
         name="sync_tick_minutes",
         group=REFRESH,
         label="Look for due imports every",

@@ -1,4 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import PlatformStatus from '@/components/admin/PlatformStatus'
+import StorageCard from '@/components/admin/StorageCard'
 import { useState } from 'react'
 import PublishTargets from '@/components/admin/PublishTargets'
 import Settings from '@/components/admin/Settings'
@@ -316,53 +318,57 @@ function Jobs() {
   })
   if (jobs.isLoading) return <Loading />
   return (
-    <Card title="Background jobs" subtitle="Imports and scheduled work" bodyClassName="p-0">
-      <table className="table-base">
-        <thead>
-          <tr>
-            <th>Job</th>
-            <th>Type</th>
-            <th>Status</th>
-            <th>Started</th>
-            <th>Result</th>
-          </tr>
-        </thead>
-        <tbody>
-          {(jobs.data ?? []).map((job) => (
-            <tr key={job.id}>
-              <td className="font-medium">{job.title}</td>
-              <td className="text-ink-600">{job.job_type}</td>
-              <td>
-                <Badge
-                  tone={
-                    job.status === 'success'
-                      ? 'success'
-                      : job.status === 'failed'
-                        ? 'danger'
-                        : job.status === 'running'
-                          ? 'warning'
-                          : 'neutral'
-                  }
-                >
-                  {job.status}
-                </Badge>
-              </td>
-              <td className="text-xs text-ink-500">{relativeTime(job.started_at ?? job.created_at)}</td>
-              <td className="max-w-md truncate text-xs text-ink-600">
-                {job.error || JSON.stringify(job.result ?? {})}
-              </td>
-            </tr>
-          ))}
-          {!jobs.data?.length && (
+    <div className="space-y-6">
+      <PlatformStatus />
+      <StorageCard />
+      <Card title="Background jobs" subtitle="Imports and scheduled work" bodyClassName="p-0">
+        <table className="table-base">
+          <thead>
             <tr>
-              <td colSpan={5} className="py-8 text-center text-sm text-ink-500">
-                No jobs have run yet.
-              </td>
+              <th>Job</th>
+              <th>Type</th>
+              <th>Status</th>
+              <th>Started</th>
+              <th>Result</th>
             </tr>
-          )}
-        </tbody>
-      </table>
-    </Card>
+          </thead>
+          <tbody>
+            {(jobs.data ?? []).map((job) => (
+              <tr key={job.id}>
+                <td className="font-medium">{job.title}</td>
+                <td className="text-ink-600">{job.job_type}</td>
+                <td>
+                  <Badge
+                    tone={
+                      job.status === 'success'
+                        ? 'success'
+                        : job.status === 'failed'
+                          ? 'danger'
+                          : job.status === 'running'
+                            ? 'warning'
+                            : 'neutral'
+                    }
+                  >
+                    {job.status}
+                  </Badge>
+                </td>
+                <td className="text-xs text-ink-500">{relativeTime(job.started_at ?? job.created_at)}</td>
+                <td className="max-w-md truncate text-xs text-ink-600">
+                  {job.error || JSON.stringify(job.result ?? {})}
+                </td>
+              </tr>
+            ))}
+            {!jobs.data?.length && (
+              <tr>
+                <td colSpan={5} className="py-8 text-center text-sm text-ink-500">
+                  No jobs have run yet.
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </Card>
+    </div>
   )
 }
 

@@ -11,8 +11,6 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import JSONResponse
-from sqlalchemy import text
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm.exc import StaleDataError
 
 from app import __version__
@@ -27,7 +25,7 @@ install_query_runtime()
 
 from app.api.v1.router import api_router  # noqa: E402
 from app.db.init_db import initialise  # noqa: E402
-from app.db.session import engine  # noqa: E402
+from app.services import platform_status  # noqa: E402
 from app.services.ingest import IngestError  # noqa: E402
 from app.services.query_engine import QueryError  # noqa: E402
 from app.services.survey_solutions import SurveySolutionsError  # noqa: E402
@@ -139,20 +137,30 @@ async def handle_validation_error(request: Request, exc: RequestValidationError)
 app.include_router(api_router, prefix=settings.api_v1_prefix)
 
 
+@app.get("/health/live", tags=["system"])
+def liveness() -> dict[str, object]:
+    """The process is up and answering. Checks nothing else, by design.
+
+    For an orchestrator deciding whether to restart the API: a database outage
+    is not fixed by restarting the API, so it must not fail this.
+    """
+    return {"status": "ok", "version": __version__}
+
+
+@app.get("/health/ready", tags=["system"])
 @app.get("/health", tags=["system"])
-def health() -> dict[str, object]:
-    """Liveness and readiness probe used by Docker and load balancers."""
-    database_ok = True
-    try:
-        with engine.connect() as connection:
-            connection.execute(text("SELECT 1"))
-    except SQLAlchemyError:
-        database_ok = False
-    return {
-        "status": "ok" if database_ok else "degraded",
-        "version": __version__,
-        "database": "ok" if database_ok else "unreachable",
-    }
+def readiness() -> JSONResponse:
+    """Whether the API can serve requests: 200 when it can, 503 when it can't.
+
+    The database is required. The job queue is reported but does not fail
+    this; whether background work is running is in /api/v1/system/status.
+    ``/health`` is the same check, kept for monitors that already use it.
+    """
+    ready, body = platform_status.readiness()
+    return JSONResponse(
+        status_code=status.HTTP_200_OK if ready else status.HTTP_503_SERVICE_UNAVAILABLE,
+        content=body,
+    )
 
 
 @app.exception_handler(StaleDataError)

@@ -20,7 +20,7 @@ from app.schemas.monitoring import (
     NotificationOut,
     ScheduledSync,
 )
-from app.services import preferences
+from app.services import platform_status, preferences
 from app.services.audit import record
 from app.services.hostnames import base_domain as dashboard_domain
 from app.services.projects import scope_for
@@ -127,6 +127,64 @@ def activity(db: DbSession, user: CurrentUser) -> ActivityOut:
             )
     upcoming.sort(key=lambda one: one.due_at)
     return ActivityOut(jobs=shown, upcoming=upcoming[:5])
+
+
+@router.get("/status", response_model=dict)
+def platform_status_report(db: DbSession, _admin: RequireAdmin) -> dict[str, Any]:
+    """Whether background work is running: workers, the queue and the scheduler.
+
+    For administrators only, because it names internal infrastructure. The
+    public readiness probe is /health/ready; this answers the question it
+    can't, which is whether imports and scheduled checks are actually happening.
+    """
+    return platform_status.operational_status(db)
+
+
+@router.get("/storage", response_model=dict)
+def storage_report(db: DbSession, _admin: RequireAdmin) -> dict[str, Any]:
+    """The latest storage report, or a fresh check if there has not been one."""
+    from app.services import storage_retention
+
+    report = storage_retention.latest()
+    if report is None:
+        report = storage_retention.run(db, delete=False).as_dict()
+    report["cleanup_enabled"] = bool(preferences.value("storage_cleanup_delete"))
+    return report
+
+
+@router.post("/storage/check", response_model=dict)
+def storage_check(db: DbSession, _admin: RequireAdmin) -> dict[str, Any]:
+    """Work out now what could be removed. Removes nothing."""
+    from app.services import storage_retention
+
+    report = storage_retention.run(db, delete=False).as_dict()
+    report["cleanup_enabled"] = bool(preferences.value("storage_cleanup_delete"))
+    return report
+
+
+@router.post("/storage/cleanup", response_model=dict)
+def storage_cleanup_now(db: DbSession, admin: RequireAdmin) -> dict[str, Any]:
+    """Remove what the check reports, with the same safeguards as the nightly run."""
+    from app.services import storage_retention
+
+    try:
+        report = storage_retention.run(db, delete=True).as_dict()
+    except storage_retention.CleanupBusy as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    record(
+        db,
+        user=admin,
+        action="storage_cleanup",
+        entity_type="system",
+        detail={
+            "removed_files": report["removed_files"],
+            "removed_bytes": report["removed_bytes"],
+            "pruned_versions": report["pruned_versions"],
+        },
+    )
+    db.commit()
+    report["cleanup_enabled"] = bool(preferences.value("storage_cleanup_delete"))
+    return report
 
 
 @router.get("/jobs/{job_id}", response_model=JobOut)

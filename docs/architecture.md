@@ -582,6 +582,9 @@ backend/app/
                   archives.py         a zip -> one dataset per file in it
                   import_review.py    prepare candidates, publish the reviewed
                   dataset_versions.py retained versions of a dataset's data
+                  storage_retention.py
+                                      the restore-point limit, and removing
+                                      dataset files nothing needs any more
                   survey_solutions.py the CAPI server client
                   file_source.py      a folder of exports read as a
                                       source, and the fence around it
@@ -663,6 +666,8 @@ backend/app/
                   net_guard.py        what an outbound request may reach
                   mailer.py           alert email
                   audit.py            who did what
+                  platform_status.py  liveness, readiness, and whether the
+                                      workers and scheduler are running
 
                 the performance runtime (see below)
                   query_runtime.py    installs the fast paths at start-up

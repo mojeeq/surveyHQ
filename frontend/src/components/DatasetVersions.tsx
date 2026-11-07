@@ -38,6 +38,7 @@ export default function DatasetVersions({
       </summary>
       <p className="my-2 text-sm">
         Restoring creates a new current version and rebuilds dependent merges.
+        Only the newest versions are kept: an administrator sets how many.
       </p>
       {versions.data.map((v) => (
         <div

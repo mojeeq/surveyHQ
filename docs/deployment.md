@@ -49,13 +49,16 @@ All settings are in `.env`. The main ones are:
 | `WEB_PORT` | Port for the web interface. Default 8080. |
 | `MAX_UPLOAD_MB` | Maximum upload size. Default 20480 (20 GB). Larger uploads are refused before they are sent, with a message giving the size and the limit. It also limits how large a zip can be once unpacked: 20 times this value or `MAX_EXTRACTED_GB`, whichever is smaller. See *What a large upload costs* below before raising it. |
 | `MAX_EXTRACTED_GB` | Maximum size of an unpacked zip. Default 64. The error message says which of the two limits was reached. |
+| `DATASET_VERSIONS_KEEP` | Restore points kept per dataset. Default 10. 0 keeps every version. |
+| `STORAGE_CLEANUP_DELETE` | Whether the nightly storage check removes unused dataset files. Default `false`, which only reports them. See *Disk space* below. |
+| `STORAGE_CLEANUP_GRACE_HOURS` | How old an unused file must be before it can be removed. Default 24, minimum 6. |
 | `SIGNUP_ENABLED` | Lets people create their own account from the sign-in page. **Off by default.** Read the section below before turning it on. |
 | `RATE_LIMIT_ENABLED` | Limits sign-in attempts and requests to shared dashboards. Leave it on, unless all your users come from one IP address (for example behind a company proxy). |
 | `SYNC_TICK_MINUTES` | How often the scheduler checks for imports that are due. Scheduled times can't be more precise than this. |
 | `MONITOR_TICK_MINUTES` | How often indicators, alerts and checks are updated. |
 
 Administrators can also change some of these in **Administration → Settings**:
-the upload limit, the unpacked zip limit, the two scheduler intervals, the
+the upload limit, the unpacked zip limit, the three storage settings, the two scheduler intervals, the
 analytics cache, the DuckDB CSV threshold, the monitoring precompute, SMTP
 settings, sign-ups, the rate limit and the disclosure threshold. Values set there
 override `.env`, which keeps the defaults. The Settings page shows where each
@@ -341,7 +344,7 @@ Whatever you choose, keep these paths open or share links will stop working:
 | `/shared/…` | the shared dashboard page |
 | `/assets/…` | scripts and styles for that page |
 | `/api/v1/public/…` | the shared dashboard's data, logos and boundaries |
-| `/health` | the health check, if you monitor it from outside |
+| `/health`, `/health/live`, `/health/ready` | the health checks, if you monitor them from outside |
 
 Dashboards on their own addresses (`*.DASHBOARD_DOMAIN`) are share links too.
 
@@ -420,8 +423,10 @@ make restore FILE=backups/surveyhq-....tar.gz
 ```
 
 Each backup contains the database, everything on the data volume (Parquet
-datasets, uploads, export archives and dashboard images) and a copy of `.env`,
-which includes `ENCRYPTION_KEY`. Keep backups secure.
+datasets and their restore points, uploads, export archives and dashboard
+images) and a copy of `.env`, which includes `ENCRYPTION_KEY`. Keep backups
+secure. Restore points removed by the storage clean-up are no longer in the
+backups taken after that, which also makes the backups smaller.
 
 To back up every night at 02:00 (the 14 most recent are kept):
 
@@ -435,6 +440,43 @@ crontab -e
 
 Copy backups to another machine. A backup on the same disk won't help if the disk
 fails.
+
+## Disk space
+
+Every time a dataset's data is replaced, the previous version is kept as a
+restore point. Each dataset keeps its newest 10 (`DATASET_VERSIONS_KEEP`).
+
+Every night at 03:45 a storage check works out which dataset files are no
+longer needed:
+
+- restore points past the limit
+- files left behind by imports that failed or were abandoned
+- the folders of datasets that no longer exist
+
+A file is never removed if a dataset uses it now, a listed restore point refers
+to it, or an import waiting for review will publish it. Files newer than
+`STORAGE_CLEANUP_GRACE_HOURS` (24 by default) are left alone, in case an import
+is still writing them.
+
+By default the check only reports. To see the report, go to **Administration →
+Background jobs → Storage**. It shows free disk space, space used by datasets
+and restore points, and what could be removed. Then either:
+
+- click **Remove unused files** to remove them now, or
+- turn on **Remove unused files every night** in **Administration → Settings**
+  (or set `STORAGE_CLEANUP_DELETE=true`).
+
+From the command line:
+
+```bash
+docker compose exec api python -m app.cli storage-cleanup           # report only
+docker compose exec api python -m app.cli storage-cleanup --delete  # remove
+```
+
+The Platform status panel warns when less than 10% of the disk is free.
+
+Removed files can only be recovered from a backup, so make sure nightly backups
+are running before you turn on automatic removal.
 
 ## Upgrades
 
@@ -554,14 +596,35 @@ development in `.env`.
 ## Checking the platform is running
 
 ```bash
-make ps                        # status of every container
-curl localhost:8080/health     # API and database status
-docker stats --no-stream       # resource use
-docker system df               # disk used by images and volumes
+make ps                          # status of every container
+curl localhost:8080/health/ready # can the API serve requests?
+docker stats --no-stream         # resource use
+docker system df                 # disk used by images and volumes
 ```
 
 Each service has a Docker health check, so `docker compose ps` shows `healthy` or
 `unhealthy`.
+
+**Health endpoints.** None of these need a sign-in.
+
+| Endpoint | Answers | Use it for |
+|---|---|---|
+| `/health/live` | Always 200 while the API process is running. Checks nothing else. | Deciding whether to restart the API. A database outage doesn't fail it, because restarting the API wouldn't fix that. |
+| `/health/ready` | 200 when the API can serve requests, **503** when the database is unreachable. Also reports whether the job queue (Redis) answers, without failing on it. | Uptime monitors, load balancers and the Docker health check. |
+| `/health` | The same as `/health/ready`. | Existing monitors. |
+
+**Background work.** A working API doesn't mean imports and scheduled checks are
+running. Administrators can see that under **Administration → Background jobs →
+Platform status**, which shows:
+
+- whether the database and job queue are reachable
+- how many jobs are waiting in each queue
+- which workers are answering, and any queue that has no worker taking from it
+- when the scheduler last sent work (it normally sends something at least every
+  ten minutes; after 20 minutes of silence it is reported as stopped)
+- any job that has been waiting more than 15 minutes to start
+
+The same information is available to administrators at `GET /api/v1/system/status`.
 
 ## Scaling
 
@@ -810,6 +873,10 @@ deletes its files, and deleting a project with its contents deletes all of their
 files. Export archives (`sync-archives/`) can take a lot of space on a server with
 several busy connections. The five most recent for each connection are kept and
 older ones are deleted.
+
+Each dataset also keeps restore points (10 by default). Go to **Administration →
+Background jobs → Storage** to see how much space they and any unused files
+take, and click **Remove unused files** to free it. See *Disk space* above.
 
 **Resetting the administrator password**
 

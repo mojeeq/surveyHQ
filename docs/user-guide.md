@@ -39,6 +39,13 @@ list includes open alerts and anything else that is currently wrong:
 Each item links to the page where you can fix it, and disappears once it is
 fixed.
 
+The whole page refreshes every minute and when you come back to the tab. Click
+**Refresh** to update it straight away. If part of the page can't be loaded, that
+panel says so and has a **Try again** link. If a refresh fails, the figures from
+the last successful refresh stay on screen with a note saying how old they are.
+"Nothing is flagged right now" only appears when both alerts and problems were
+checked successfully.
+
 On a new installation, the Overview also shows a **Getting started** list with
 six steps: create a project, bring in your data, check its quality, track a
 number, build a dashboard and invite your team. Each step is ticked off
@@ -596,6 +603,16 @@ Deleting an empty dataset a second time removes it completely.
 
 If you just want newer data, you don't need to delete anything: upload the
 export again and it replaces the data in place.
+
+### Previous versions of a dataset
+
+Each time a dataset's data is replaced, the previous version is kept. Open
+**Previous dataset versions** on the dataset page to see them, and click
+**Restore version** to go back to one. Restoring keeps the current version too,
+and rebuilds any merges that use the dataset.
+
+Each dataset keeps its newest 10 versions. An administrator can change this in
+**Administration → Settings → Restore points kept per dataset**.
 
 ## Looking at a dataset
 
@@ -2616,6 +2633,34 @@ Go to **Administration → API keys** to create a key for scripts and
 integrations. The key is only shown once, so copy it straight away. See
 [api.md](api.md).
 
+## Background jobs and platform status
+
+**Administration → Background jobs** lists recent imports and scheduled work,
+with their status and result.
+
+At the top, **Platform status** shows whether background work is actually
+running. It checks every 30 seconds:
+
+| Item | What it shows |
+|---|---|
+| **Database** | Whether the database answers |
+| **Job queue** | Whether the queue answers, and how many jobs are waiting |
+| **Workers** | How many workers are answering, and any queue nobody is taking jobs from |
+| **Scheduler** | When the scheduler last sent work |
+
+If anything is wrong, it is listed in plain words above these, for example "No
+worker is taking jobs from the imports queue." Otherwise it says **Background
+work is running**. Only administrators can see this panel.
+
+Under it, **Storage** shows free disk space, how much space datasets and their
+restore points take, and which files are no longer needed: restore points past
+the limit, and files left by imports that failed or were abandoned. Click
+**Check now** to update it. Click **Remove unused files** to remove them. Files
+a dataset, a restore point or an import waiting for review still needs are never
+removed, and nor are files less than a day old. Nothing is removed
+automatically unless **Remove unused files every night** is turned on in
+Settings.
+
 ## Settings
 
 Administrators can change some settings in **Administration → Settings** without
@@ -2623,7 +2668,7 @@ restarting the server. There are five groups:
 
 | Group | Settings |
 |---|---|
-| **Files and uploads** | Maximum upload size, and how large a zip file can be once unpacked |
+| **Files and uploads** | Maximum upload size, how large a zip file can be once unpacked, how many restore points each dataset keeps, and whether unused files are removed every night |
 | **How often things run** | How often to look for due imports, recalculate indicators and check alert rules |
 | **Analytics and caching** | Whether to cache results in Redis and for how long, the file size above which delimited files are read by DuckDB, and whether to summarise fieldwork after each import |
 | **Email** | The mail server used for alerts and invitations. The password is stored encrypted and is never shown. Leave the box empty to keep the current password. |

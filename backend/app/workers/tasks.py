@@ -1211,6 +1211,31 @@ def record_task_failure(
         logger.exception("Could not record the failure of task %s", task_id)
 
 
+@celery_app.task(name="app.workers.tasks.storage_cleanup")
+def storage_cleanup() -> dict[str, Any]:
+    """Each night: restore points past the limit, and files nothing needs.
+
+    Only reports unless an administrator has turned removal on, so the report
+    can be read first. See services/storage_retention.py for the safeguards.
+    """
+    from app.services import preferences, storage_retention
+
+    delete = bool(preferences.value("storage_cleanup_delete"))
+    with session_scope() as db:
+        try:
+            report = storage_retention.run(db, delete=delete)
+        except storage_retention.CleanupBusy:
+            return {"skipped": "another clean-up is running"}
+    data = report.as_dict()
+    return {
+        "deleted": delete,
+        "removable_files": data["removable_files"],
+        "removed_files": data["removed_files"],
+        "removed_bytes": data["removed_bytes"],
+        "pruned_versions": data["pruned_versions"],
+    }
+
+
 @celery_app.task(name="app.workers.tasks.reap_stale_jobs")
 def reap_stale_jobs() -> dict[str, int]:
     """Fail jobs that cannot still be running, whatever happened to the worker.

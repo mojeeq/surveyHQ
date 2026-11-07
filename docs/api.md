@@ -822,8 +822,33 @@ GET  /system/settings        every setting an administrator may change here
 PUT  /system/settings        change some of them, as one transaction    [admin]
 DELETE /system/settings/{name}  put one back to what `.env` says        [admin]
 GET  /system/info            the platform's name and dashboard domain
-GET  /health                 no authentication, and outside /api/v1
+GET  /system/status          workers, job queue backlog and scheduler      [admin]
+GET  /system/storage         the latest storage report                      [admin]
+POST /system/storage/check   check now what could be removed; removes nothing
+                                                                [admin]
+POST /system/storage/cleanup remove unused dataset files now, with the same
+                             safeguards as the nightly run              [admin]
+GET  /health/live            the process is up; checks nothing else
+GET  /health/ready           200 if the API can serve requests, 503 if the
+                             database is unreachable
+GET  /health                 the same as /health/ready
 ```
+
+The three health endpoints need no authentication and are outside `/api/v1`.
+`/health/ready` returns `{"status": "ok" | "unavailable", "version", "database",
+"queue"}`. The job queue is reported, but a queue outage doesn't fail readiness.
+
+`/system/status` returns `ok`, a list of `problems` in plain language, and the
+detail behind them: `database`, `queue` (reachable, and jobs waiting per queue),
+`workers` (which answered, and `queues_without_worker`), `scheduler` (when it
+last sent work) and `jobs` (queued, running, oldest queued).
+
+The storage report gives `usage` (bytes in use, as restore points, and other),
+`disk` (total, free, `low`), `removable_files`, `removable_bytes` and
+`by_reason`, `recent_unused_files` (left alone until older than `grace_hours`),
+`pruned_versions` and, after a clean-up, `removed_files` and `removed_bytes`.
+`deleted` says whether the report is from a clean-up or a check. A clean-up
+returns 409 if another one is already running, and is recorded in the audit log.
 
 `/system/jobs` returns all jobs to administrators, and only the caller's own
 jobs to non-admin users.

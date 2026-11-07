@@ -118,6 +118,16 @@ class Settings(BaseSettings):
     # smaller of the two bounds wins, which leaves the proportional rule in
     # charge wherever it was already doing its job.
     max_extracted_gb: int = 64
+    # Restore points kept for each dataset (Previous dataset versions). Every
+    # refresh keeps the version it replaced; past this many, the oldest are
+    # let go. 0 keeps every one.
+    dataset_versions_keep: int = 10
+    # The nightly storage check always reports what it could remove. It only
+    # deletes when this is on, so the report can be read first.
+    storage_cleanup_delete: bool = False
+    # A file that nothing points at is left alone for this long, so a file an
+    # import is still writing is never taken. Longer than any job may run.
+    storage_cleanup_grace_hours: int = 24
 
     # Where a folder connection may read from.
     #
