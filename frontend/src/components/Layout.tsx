@@ -167,8 +167,10 @@ function Brand({ compact }: { compact: boolean }) {
       {!compact && (
         <div className="min-w-0">
           <div className="text-[15px] font-bold tracking-tight text-[var(--sb-ink)]">SurveyHQ</div>
-          <div className="text-[10px] font-medium uppercase tracking-[0.16em] text-[var(--sb-faint)]">
-            Fieldwork monitoring
+          <div className="mt-0.5 text-[10px] font-medium uppercase leading-[1.3] tracking-[0.16em] text-[var(--sb-faint)]">
+            Fieldwork
+            <br />
+            monitoring
           </div>
         </div>
       )}
