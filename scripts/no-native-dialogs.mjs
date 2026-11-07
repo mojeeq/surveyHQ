@@ -16,7 +16,7 @@ import { fileURLToPath } from 'node:url'
 const SRC = fileURLToPath(new URL('../frontend/src', import.meta.url))
 
 /** The hook itself has none; the escaping tests carry alert() inside strings. */
-const EXEMPT = [/hooks\/useDialog\.tsx$/, /__tests__\//]
+const EXEMPT = [/hooks\/useDialog\.tsx$/, /__tests__\//, /\.test\.tsx?$/]
 
 // A bare call or an explicit window. one. `ask.confirm(` has a dot and a word
 // character before it, so it does not match.
