@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
 import ReactECharts from '@/components/ReactECharts'
 import { api } from '@/lib/api'
@@ -9,72 +9,123 @@ import type { Alert, Dataset, IndicatorValue, MonitoringSummary, Page } from '@/
 import ProjectFilter, { projectParam } from '@/components/ProjectFilter'
 import IndicatorMovement from '@/components/monitoring/IndicatorMovement'
 import GettingStarted from '@/components/GettingStarted'
+import {
+  type AttentionItem,
+  NeedsAttentionBody,
+  PanelBody,
+  StaleNote,
+} from '@/components/overview/OverviewPanels'
 import { indicatorBadge } from '@/lib/indicator-status'
+import { attentionPanel, panelState } from '@/lib/panel-state'
 import { Badge, Card, EmptyState, ErrorNote, Loading, PageHeader, Stat } from '@/components/ui'
 
-
-/** Something that went wrong and is still wrong, from /monitoring/attention. */
-interface AttentionItem {
-  kind: string
-  severity: string
-  title: string
-  detail: string
-  link: string
-  at: string | null
-}
-
-const ATTENTION_KIND: Record<string, string> = {
-  quality: 'check failing',
-  import: 'import failed',
-  script: 'script stopped',
-  merge: 'not rebuilt',
-  linked: 'not brought in',
-}
+/** How often every panel on the page is refreshed together. */
+const REFRESH_MS = 60_000
 
 export default function Overview() {
   // Null is every project at once, which is what the page has always shown.
   const [project, setProject] = useState<string | null>(null)
   const scope = projectParam(project)
 
+  // The totals and the panels under them are refreshed together, on one
+  // timer and when the tab is returned to, so they can't disagree with each
+  // other for a minute at a time.
+  const live = { refetchOnWindowFocus: true } as const
   const summary = useQuery({
     queryKey: ['monitoring-summary', project],
     queryFn: () =>
       api.get<MonitoringSummary>(`/monitoring/summary?${scope.slice(1)}`),
-    refetchInterval: 60_000,
+    ...live,
   })
   const indicators = useQuery({
     queryKey: ['indicator-values', project],
     queryFn: () =>
       api.get<IndicatorValue[]>(`/monitoring/indicators/values?trend_points=30${scope}`),
+    ...live,
   })
   const datasets = useQuery({
     queryKey: ['datasets', 'recent', project],
     queryFn: () => api.get<Page<Dataset>>(`/datasets?limit=6${scope}`),
+    ...live,
   })
   const attention = useQuery({
     queryKey: ['attention', project],
     queryFn: () => api.get<AttentionItem[]>(`/monitoring/attention?limit=8${scope}`),
+    ...live,
   })
   const alerts = useQuery({
     queryKey: ['alerts', 'open', project],
     queryFn: () =>
       api.get<Alert[]>(`/monitoring/alerts?status=open&limit=5${scope}`),
+    ...live,
   })
 
-  if (summary.isLoading) return <Loading label="Loading your overview" />
-  if (summary.error) return <ErrorNote error={summary.error} retry={summary.refetch} />
+  const { refetch: refetchSummary } = summary
+  const { refetch: refetchIndicators } = indicators
+  const { refetch: refetchDatasets } = datasets
+  const { refetch: refetchAttention } = attention
+  const { refetch: refetchAlerts } = alerts
+  const refreshAll = useCallback(
+    () =>
+      Promise.all([
+        refetchSummary(),
+        refetchIndicators(),
+        refetchDatasets(),
+        refetchAttention(),
+        refetchAlerts(),
+      ]),
+    [refetchSummary, refetchIndicators, refetchDatasets, refetchAttention, refetchAlerts],
+  )
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      if (document.visibilityState === 'visible') void refreshAll()
+    }, REFRESH_MS)
+    return () => window.clearInterval(timer)
+  }, [refreshAll])
 
-  const stats = summary.data!
+  const refreshing = [summary, indicators, datasets, attention, alerts].some((q) => q.isFetching)
+
+  if (summary.data === undefined) {
+    if (summary.error) return <ErrorNote error={summary.error} retry={summary.refetch} />
+    return <Loading label="Loading your overview" />
+  }
+  const stats = summary.data
+
+  const indicatorPanel = panelState(indicators, (rows) => rows.length === 0)
+  const datasetPanel = panelState(datasets, (page) => page.items.length === 0)
+  const needsAttention = attentionPanel(
+    { label: 'problems', query: attention },
+    { label: 'open alerts', query: alerts },
+  )
 
   return (
     <>
       <PageHeader
         title="Overview"
         description="Field progress, indicator health and anything that needs attention."
-        actions={<ProjectFilter value={project} onChange={setProject} />}
+        actions={
+          <div className="flex items-center gap-2">
+            <span className="hidden text-xs text-ink-500 sm:inline" title="Refreshes every minute">
+              Updated {relativeTime(new Date(summary.dataUpdatedAt).toISOString())}
+            </span>
+            <button
+              type="button"
+              className="btn-secondary btn-sm"
+              onClick={() => void refreshAll()}
+              disabled={refreshing}
+            >
+              {refreshing ? 'Refreshing…' : 'Refresh'}
+            </button>
+            <ProjectFilter value={project} onChange={setProject} />
+          </div>
+        }
       />
 
       <GettingStarted />
+
+      {summary.error ? (
+        <StaleNote what="the totals" updatedAt={summary.dataUpdatedAt} retry={() => void refreshAll()} />
+      ) : null}
 
       <div className="mb-6 grid grid-cols-2 gap-4 lg:grid-cols-4">
         <Stat
@@ -113,26 +164,31 @@ export default function Overview() {
               </Link>
             }
           >
-            {indicators.isLoading ? (
-              <Loading />
-            ) : !indicators.data?.length ? (
-              <EmptyState
-                icon="◎"
-                title="No indicators yet"
-                description="Create indicators to track completion, response rates or any measure you monitor."
-                action={
-                  <Link to="/indicators" className="btn-primary btn-sm">
-                    Create an indicator
-                  </Link>
-                }
-              />
-            ) : (
-              <div className="grid gap-3 sm:grid-cols-2">
-                {indicators.data.map((indicator) => (
-                  <IndicatorTile key={indicator.indicator_id} indicator={indicator} />
-                ))}
-              </div>
-            )}
+            <PanelBody
+              panel={indicatorPanel}
+              what="indicators"
+              retry={() => void indicators.refetch()}
+              empty={
+                <EmptyState
+                  icon="◎"
+                  title="No indicators yet"
+                  description="Create indicators to track completion, response rates or any measure you monitor."
+                  action={
+                    <Link to="/indicators" className="btn-primary btn-sm">
+                      Create an indicator
+                    </Link>
+                  }
+                />
+              }
+            >
+              {(rows) => (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {rows.map((indicator) => (
+                    <IndicatorTile key={indicator.indicator_id} indicator={indicator} />
+                  ))}
+                </div>
+              )}
+            </PanelBody>
           </Card>
         </div>
 
@@ -145,65 +201,10 @@ export default function Overview() {
               </Link>
             }
           >
-            {!alerts.data?.length && !attention.data?.length ? (
-              <p className="py-6 text-center text-sm text-ink-500">
-                Nothing is flagged right now.
-              </p>
-            ) : (
-              <ul className="space-y-3">
-                {/* Failing checks, failed imports and the rest, beside the
-                    alerts: a count of four failing checks above a box saying
-                    nothing is flagged was the page contradicting itself. */}
-                {(attention.data ?? []).map((item, index) => (
-                  <li
-                    key={`${item.kind}-${index}`}
-                    className={`border-l-2 pl-3 ${
-                      item.severity === 'critical' ? 'border-red-400' : 'border-amber-400'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <Badge
-                        tone={item.severity === 'critical' ? 'danger' : 'warning'}
-                        icon={item.severity === 'critical' ? '■' : '▲'}
-                      >
-                        {ATTENTION_KIND[item.kind] ?? item.kind}
-                      </Badge>
-                      {item.at && (
-                        <span className="text-xs text-ink-500">{relativeTime(item.at)}</span>
-                      )}
-                    </div>
-                    <Link
-                      to={item.link}
-                      className="mt-1 block text-sm font-medium text-ink-800 hover:text-brand-700 hover:underline"
-                    >
-                      {item.title}
-                    </Link>
-                    {item.detail && (
-                      <p className="line-clamp-2 text-xs text-ink-600" title={item.detail}>
-                        {item.detail}
-                      </p>
-                    )}
-                  </li>
-                ))}
-                {(alerts.data ?? []).map((alert) => (
-                  <li key={alert.id} className="border-l-2 border-red-400 pl-3">
-                    <div className="flex items-center gap-2">
-                      <Badge
-                        tone={alert.severity === 'critical' ? 'danger' : 'warning'}
-                        icon={alert.severity === 'critical' ? '■' : '▲'}
-                      >
-                        {alert.severity}
-                      </Badge>
-                      <span className="text-xs text-ink-500">
-                        {relativeTime(alert.created_at)}
-                      </span>
-                    </div>
-                    <p className="mt-1 text-sm font-medium text-ink-800">{alert.title}</p>
-                    <p className="text-xs text-ink-500">{alert.message}</p>
-                  </li>
-                ))}
-              </ul>
-            )}
+            <NeedsAttentionBody
+              panel={needsAttention}
+              retry={() => void Promise.all([attention.refetch(), alerts.refetch()])}
+            />
           </Card>
 
           <Card
@@ -214,43 +215,50 @@ export default function Overview() {
               </Link>
             }
           >
-            {!datasets.data?.items.length ? (
-              <EmptyState
-                icon="▤"
-                title="No data yet"
-                description="Upload a Stata file or connect a Survey Solutions server."
-                action={
-                  <Link to="/datasets" className="btn-primary btn-sm">
-                    Add data
-                  </Link>
-                }
-              />
-            ) : (
-              <ul className="divide-y divide-ink-100">
-                {datasets.data.items.map((dataset) => (
-                  <li key={dataset.id}>
-                    <Link
-                      to={`/datasets/${dataset.id}`}
-                      className="-mx-2 flex items-center justify-between rounded px-2 py-2.5 hover:bg-ink-50"
-                    >
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-medium text-ink-800">
-                          {dataset.name}
-                        </p>
-                        <p className="text-xs text-ink-500">
-                          {formatNumber(dataset.row_count)} rows · {dataset.column_count} columns
-                        </p>
-                      </div>
-                      {dataset.status !== 'ready' && (
-                        <Badge tone={dataset.status === 'failed' ? 'danger' : 'warning'}>
-                          {dataset.status}
-                        </Badge>
-                      )}
+            <PanelBody
+              panel={datasetPanel}
+              what="datasets"
+              retry={() => void datasets.refetch()}
+              empty={
+                <EmptyState
+                  icon="▤"
+                  title="No data yet"
+                  description="Upload a Stata file or connect a Survey Solutions server."
+                  action={
+                    <Link to="/datasets" className="btn-primary btn-sm">
+                      Add data
                     </Link>
-                  </li>
-                ))}
-              </ul>
-            )}
+                  }
+                />
+              }
+            >
+              {(page) => (
+                <ul className="divide-y divide-ink-100">
+                  {page.items.map((dataset) => (
+                    <li key={dataset.id}>
+                      <Link
+                        to={`/datasets/${dataset.id}`}
+                        className="-mx-2 flex items-center justify-between rounded px-2 py-2.5 hover:bg-ink-50"
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-medium text-ink-800">
+                            {dataset.name}
+                          </p>
+                          <p className="text-xs text-ink-500">
+                            {formatNumber(dataset.row_count)} rows · {dataset.column_count} columns
+                          </p>
+                        </div>
+                        {dataset.status !== 'ready' && (
+                          <Badge tone={dataset.status === 'failed' ? 'danger' : 'warning'}>
+                            {dataset.status}
+                          </Badge>
+                        )}
+                      </Link>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </PanelBody>
           </Card>
         </div>
       </div>

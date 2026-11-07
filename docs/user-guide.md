@@ -39,6 +39,13 @@ list includes open alerts and anything else that is currently wrong:
 Each item links to the page where you can fix it, and disappears once it is
 fixed.
 
+The whole page refreshes every minute and when you come back to the tab. Click
+**Refresh** to update it straight away. If part of the page can't be loaded, that
+panel says so and has a **Try again** link. If a refresh fails, the figures from
+the last successful refresh stay on screen with a note saying how old they are.
+"Nothing is flagged right now" only appears when both alerts and problems were
+checked successfully.
+
 On a new installation, the Overview also shows a **Getting started** list with
 six steps: create a project, bring in your data, check its quality, track a
 number, build a dashboard and invite your team. Each step is ticked off
